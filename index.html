@@ -1,224 +1,152 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-br">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Admin - SaaS</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HotTrack - Painel de Controle</title>
     <style>
-        :root {
-            --bg: #000000; --bg-card: #111111; --border-color: #2a2a2a;
-            --text-primary: #f5f5f7; --text-secondary: #888888;
-            --accent: #ffffff; --accent-hover: #cccccc; --danger: #ff4d4d;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: var(--bg-card); }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); display: flex; font-size: 14px; }
-        #sidebar { width: 240px; background-color: var(--bg); padding: 2.5rem 1rem; height: 100vh; position: fixed; border-right: 1px solid var(--border-color); z-index: 10; }
-        #sidebar h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 2.5rem; padding: 0 0.5rem; }
-        .nav-link { display: flex; align-items: center; padding: 0.9rem 1rem; border-radius: 8px; color: var(--text-secondary); text-decoration: none; margin-bottom: 0.5rem; font-weight: 500; transition: all 0.2s; cursor: pointer; }
-        .nav-link i { width: 24px; text-align: center; margin-right: 1rem; font-size: 1rem; }
-        .nav-link:hover { color: var(--text-primary); }
-        .nav-link.is-active { color: var(--text-primary); background-color: var(--bg-card); }
-        #main-content { margin-left: 240px; width: calc(100% - 240px); padding: 2.5rem 3.5rem; }
-        .section-content { display: none; }
-        .section-content.is-active { display: block; }
-        .header-bar { margin-bottom: 2rem; }
-        .header-bar h2 { font-size: 2.2rem; font-weight: 700; }
-        .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
-        .kpi-card { background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-color); padding: 1.5rem; }
-        .kpi-card .heading { font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem; font-weight: 500; }
-        .kpi-card .value { font-size: 2.2rem; font-weight: 700; color: var(--text-primary); }
-        
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 1.25rem 1rem; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
-        th { font-weight: 600; color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; }
-        tbody tr:hover { background-color: #050505; }
-        .tag { display: inline-block; padding: 0.3rem 0.6rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
-        .tag.is-success { background-color: #0f2418; color: #28a745; border: 1px solid #28a745; }
-        .tag.is-danger { background-color: #2e1518; color: #ff4d4d; border: 1px solid #ff4d4d; }
-        .action-button { background: none; border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; width: 36px; height: 36px; border-radius: 8px; margin: 0 4px; transition: all 0.2s; }
-        .action-button:hover { color: var(--text-primary); border-color: var(--accent-hover); background-color: var(--bg-card); }
-        .action-button.danger:hover { color: var(--danger); border-color: var(--danger); }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #login-section, #dashboard-section { display: block; }
+        #dashboard-section { display: none; }
+        h1, h2 { color: #5a67d8; }
+        input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; background-color: #5a67d8; color: white; padding: 12px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        button:hover { background-color: #434190; }
+        #logout-button { background-color: #e53e3e; margin-top: 15px; }
+        #logout-button:hover { background-color: #c53030; }
+        #error-message { margin-top: 15px; padding: 10px; border-radius: 4px; background-color: #fde8e8; border: 1px solid #f29b9b; color: #a82c2c; }
+        pre { background-color: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
 <body>
-    <nav id="sidebar">
-        <h1>Admin</h1>
-        <a class="nav-link is-active" data-tab="dashboard"><i class="fas fa-chart-pie"></i> Dashboard</a>
-        <a class="nav-link" data-tab="sellers"><i class="fas fa-users-cog"></i> Vendedores</a>
-        <a class="nav-link" data-tab="ranking"><i class="fas fa-trophy"></i> Ranking</a>
-        <a class="nav-link" data-tab="usage"><i class="fas fa-chart-line"></i> Análise de Uso</a>
-    </nav>
 
-    <main id="main-content">
-        <section id="dashboard" class="section-content is-active">
-            <div class="header-bar"><h2>Dashboard</h2></div>
-            <div class="kpi-grid" id="dashboard-metrics"><p>Carregando...</p></div>
-        </section>
+    <div class="container">
+        <h1>Painel de Controle HotTrack</h1>
 
-        <section id="sellers" class="section-content">
-            <div class="header-bar"><h2>Gerenciar Vendedores</h2></div>
-             <table>
-                <thead><tr><th>Vendedor</th><th>Status</th><th>Ações</th></tr></thead>
-                <tbody id="sellers-body"></tbody>
-            </table>
-        </section>
-        
-        <section id="ranking" class="section-content">
-            <div class="header-bar"><h2>Ranking de Vendedores</h2></div>
-             <table>
-                <thead><tr><th>#</th><th>Nome</th><th>Email</th><th>Vendas Pagas</th><th>Faturamento Total</th></tr></thead>
-                <tbody id="ranking-body"></tbody>
-            </table>
-        </section>
+        <div id="login-section">
+            <h2>Login</h2>
+            <form id="login-form">
+                <input type="email" id="email" placeholder="Seu e-mail" required>
+                <input type="password" id="password" placeholder="Sua senha" required>
+                <button type="submit">Entrar</button>
+            </form>
+            <div id="error-message" style="display: none;"></div>
+        </div>
 
-        <section id="usage" class="section-content">
-            <div class="header-bar"><h2>Análise de Uso da API</h2></div>
-             <table>
-                <thead>
-                    <tr>
-                        <th>Vendedor</th>
-                        <th>Requisições (Última Hora)</th>
-                        <th>Requisições (Últimas 24h)</th>
-                    </tr>
-                </thead>
-                <tbody id="usage-body"></tbody>
-            </table>
-        </section>
-    </main>
+        <div id="dashboard-section">
+            <h2 id="welcome-message"></h2>
+            <h3>Suas Métricas</h3>
+            <pre id="api-response">Carregando dados...</pre>
+            <button id="logout-button">Sair</button>
+        </div>
+    </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            // URL ATUALIZADA PARA A SUA NOVA API
-            const API_BASE_URL = 'https://novaapi-one.vercel.app';
-            let ADMIN_API_KEY = sessionStorage.getItem('ADMIN_API_KEY');
+        // URL da sua API (JÁ CONFIGURADA!)
+        const API_URL = 'https://novaapi-one.vercel.app';
 
-            const apiFetch = async (endpoint, options = {}) => {
-                if (!ADMIN_API_KEY) {
-                    ADMIN_API_KEY = prompt('Por favor, insira sua Chave de API de Administrador:');
-                    if (!ADMIN_API_KEY) throw new Error('Chave de API não fornecida.');
-                    sessionStorage.setItem('ADMIN_API_KEY', ADMIN_API_KEY);
-                }
-                const headers = { 'Content-Type': 'application/json', 'x-admin-api-key': ADMIN_API_KEY, ...options.headers };
-                const response = await fetch(`${API_BASE_URL}/api/admin${endpoint}`, { ...options, headers });
-                if (response.status === 403) {
-                    sessionStorage.removeItem('ADMIN_API_KEY');
-                    throw new Error('Acesso negado. Chave de API inválida.');
-                }
+        const loginSection = document.getElementById('login-section');
+        const dashboardSection = document.getElementById('dashboard-section');
+        const loginForm = document.getElementById('login-form');
+        const errorMessage = document.getElementById('error-message');
+        const apiResponseEl = document.getElementById('api-response');
+        const welcomeMessageEl = document.getElementById('welcome-message');
+        const logoutButton = document.getElementById('logout-button');
+
+        // Função para fazer o login
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorMessage.style.display = 'none';
+
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_URL}/api/sellers/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
                 if (!response.ok) {
-                    const error = await response.json().catch(() => ({ message: `Erro ${response.status} na API.` }));
-                    throw new Error(error.message);
+                    throw new Error(data.message || 'Erro desconhecido');
                 }
-                return response.json();
-            };
-            
-            const formatCurrency = (value) => `R$ ${parseFloat(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-            const loadDashboard = async () => {
-                try {
-                    const data = await apiFetch('/dashboard');
-                    document.getElementById('dashboard-metrics').innerHTML = `
-                        <div class="kpi-card"><p class="heading">Faturamento Total</p><p class="value">${formatCurrency(data.total_revenue)}</p></div>
-                        <div class="kpi-card"><p class="heading">Vendedores</p><p class="value">${data.total_sellers}</p></div>
-                        <div class="kpi-card"><p class="heading">Vendas Pagas</p><p class="value">${data.total_paid_transactions}</p></div>
-                        <div class="kpi-card"><p class="heading">Lucro do SaaS</p><p class="value">${formatCurrency(data.saas_profit)}</p></div>
-                    `;
-                } catch (error) { if (error.message !== 'Chave de API não fornecida.') alert('Erro ao carregar dashboard: ' + error.message); }
-            };
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('seller', JSON.stringify(data.seller));
+                
+                showDashboard();
 
-            const loadSellers = async () => {
-                 try {
-                    const data = await apiFetch('/sellers');
-                    document.getElementById('sellers-body').innerHTML = data.map(seller => `
-                        <tr>
-                            <td><strong>${seller.name}</strong><br><small>${seller.email}</small></td>
-                            <td><span class="tag ${seller.is_active ? 'is-success' : 'is-danger'}">${seller.is_active ? 'Ativo' : 'Bloqueado'}</span></td>
-                            <td>
-                                <button title="${seller.is_active ? 'Bloquear' : 'Ativar'}" class="action-button ${seller.is_active ? 'danger' : ''}" onclick="toggleSellerActive(${seller.id}, ${!seller.is_active})"><i class="fas ${seller.is_active ? 'fa-lock' : 'fa-lock-open'}"></i></button>
-                                <button title="Alterar Senha" class="action-button" onclick="changeSellerPassword(${seller.id})"><i class="fas fa-key"></i></button>
-                            </td>
-                        </tr>`).join('');
-                } catch (error) { if (error.message !== 'Chave de API não fornecida.') alert('Erro ao carregar vendedores: ' + error.message); }
-            };
+            } catch (error) {
+                errorMessage.textContent = `Erro ao fazer login: ${error.message}`;
+                errorMessage.style.display = 'block';
+            }
+        });
 
-            const loadRanking = async () => {
-                try {
-                    const data = await apiFetch('/ranking');
-                    document.getElementById('ranking-body').innerHTML = data.map((seller, i) => `
-                        <tr>
-                            <th>${i + 1}</th><td>${seller.name}</td><td>${seller.email}</td>
-                            <td>${seller.total_sales}</td><td>${formatCurrency(seller.total_revenue)}</td>
-                        </tr>`).join('');
-                } catch (error) { if (error.message !== 'Chave de API não fornecida.') alert('Erro ao carregar ranking: ' + error.message); }
-            };
+        // Função para buscar dados do dashboard
+        async function fetchDashboardData() {
+            const token = localStorage.getItem('authToken');
+            if (!token) {
+                showLogin();
+                return;
+            }
 
-            const loadUsageAnalysis = async () => {
-                try {
-                    const data = await apiFetch('/usage-analysis');
-                    const usageBody = document.getElementById('usage-body');
-                    if (data.length === 0) {
-                        usageBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">Nenhuma requisição registrada nas últimas 24 horas.</td></tr>';
+            try {
+                const response = await fetch(`${API_URL}/api/dashboard/metrics`, {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    if (response.status === 403 || response.status === 401) { // Token expirado/inválido
+                        logout();
                         return;
                     }
-                    usageBody.innerHTML = data.map(user => `
-                        <tr>
-                            <td><strong>${user.name}</strong><br><small>${user.email}</small></td>
-                            <td>${user.requests_last_hour}</td>
-                            <td>${user.requests_last_24_hours}</td>
-                        </tr>`).join('');
-                } catch (error) {
-                     if (error.message !== 'Chave de API não fornecida.') {
-                        alert('Erro ao carregar análise de uso: ' + error.message);
-                     }
+                    throw new Error(data.message);
                 }
-            };
-            
-            const navLinks = document.querySelectorAll('.nav-link');
-            const sections = document.querySelectorAll('.section-content');
-            navLinks.forEach(link => {
-                link.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    if(link.classList.contains('is-active')) return;
-                    navLinks.forEach(item => item.classList.remove('is-active'));
-                    sections.forEach(item => item.classList.remove('is-active'));
-                    link.classList.add('is-active');
-                    const targetSection = document.getElementById(link.dataset.tab);
-                    if (targetSection) targetSection.classList.add('is-active');
 
-                    if (link.dataset.tab === 'dashboard') loadDashboard();
-                    else if (link.dataset.tab === 'sellers') loadSellers();
-                    else if (link.dataset.tab === 'ranking') loadRanking();
-                    else if (link.dataset.tab === 'usage') loadUsageAnalysis();
-                });
-            });
+                apiResponseEl.textContent = JSON.stringify(data, null, 2);
 
-            window.toggleSellerActive = async (id, isActive) => {
-                if (confirm(`Tem certeza que deseja ${isActive ? 'ativar' : 'bloquear'} este usuário?`)) {
-                    try {
-                        await apiFetch(`/sellers/${id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive }) });
-                        loadSellers();
-                    } catch (error) { alert('Erro ao alterar status: ' + error.message); }
-                }
-            };
+            } catch (error) {
+                apiResponseEl.textContent = `Erro ao carregar dados: ${error.message}`;
+            }
+        }
+        
+        // Função para mostrar o dashboard
+        function showDashboard() {
+            const seller = JSON.parse(localStorage.getItem('seller'));
+            if(seller) {
+                welcomeMessageEl.textContent = `Bem-vindo, ${seller.name}!`;
+            }
+            loginSection.style.display = 'none';
+            dashboardSection.style.display = 'block';
+            fetchDashboardData();
+        }
 
-            window.changeSellerPassword = async (id) => {
-                const newPassword = prompt('Digite a nova senha (mínimo 8 caracteres):');
-                if (newPassword && newPassword.length >= 8) {
-                    try {
-                        await apiFetch(`/sellers/${id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-                        alert('Senha alterada com sucesso!');
-                    } catch (error) { alert('Erro ao alterar senha: ' + error.message); }
-                } else if(newPassword) { alert('Senha inválida.'); }
-            };
-            
-            loadDashboard();
-        });
+        // Função para mostrar a tela de login
+        function showLogin() {
+            loginSection.style.display = 'block';
+            dashboardSection.style.display = 'none';
+        }
+
+        // Função de logout
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('seller');
+            showLogin();
+        }
+        logoutButton.addEventListener('click', logout);
+
+
+        // Verifica se o usuário já está logado ao carregar a página
+        if (localStorage.getItem('authToken')) {
+            showDashboard();
+        }
     </script>
 </body>
 </html>
