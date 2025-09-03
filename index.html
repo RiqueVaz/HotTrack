@@ -12,7 +12,8 @@
         :root {
             --bg: #111111; --surface: #1C1C1C; --border: #2D2D2D;
             --text-primary: #FFFFFF; --text-secondary: #A0A0A0;
-            --accent: #10B981; --danger: #F85149;
+            --accent: #9333EA; --accent-hover: #7E22CE;
+            --danger: #E11D48; --success: #22C55E;
         }
         * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; }
@@ -26,29 +27,25 @@
             font-weight: 500; border-radius: 6px; display: flex; align-items: center; gap: 10px;
             transition: background-color 0.2s, color 0.2s;
         }
-        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(16, 185, 129, 0.1); }
+        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(147, 51, 234, 0.1); }
         main { flex-grow: 1; padding: 20px; height: 100vh; overflow-y: auto; }
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.5s; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         input, button, select {
             font-family: 'Inter', sans-serif; border-radius: 6px; border: 1px solid var(--border);
             padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary);
         }
-        button { cursor: pointer; background-color: var(--accent); color: var(--bg); font-weight: 700; border-color: var(--accent); }
+        button { cursor: pointer; background-color: var(--accent); color: var(--primary); font-weight: 700; border-color: var(--accent); }
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
             display: none; align-items: center; justify-content: center; z-index: 1000;
         }
         .modal-content { background: var(--surface); padding: 30px; border-radius: 8px; width: 90%; max-width: 400px; }
-        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        .stat-card h3 { margin: 0; font-size: 14px; color: var(--text-secondary); font-weight: 500; }
-        .stat-card p { margin: 5px 0 0 0; font-size: 2.2em; font-weight: 700; color: var(--primary); }
-        .skeleton { background-color: #2a2a2a; border-radius: 4px; animation: pulse 1.5s infinite ease-in-out; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
 
         @media (max-width: 768px) {
             #sidebar { position: fixed; transform: translateX(-100%); z-index: 200; height: 100%; }
@@ -56,7 +53,8 @@
             main { padding: 15px; }
             #menu-toggle {
                 display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--primary);
+                background: var(--surface); border: 1px solid var(--border);
+                border-radius: 6px; padding: 8px; color: var(--primary);
             }
         }
     </style>
@@ -65,17 +63,17 @@
     <button id="menu-toggle" style="display: none;">☰</button>
     <div id="app-container">
         <aside id="sidebar">
-            <h2 style="font-weight: 700; color: var(--primary); text-align: center;">Command</h2>
+            <h2 style="font-weight: 700; color: var(--accent); text-align: center;">Nebula</h2>
             <nav style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
-                <a href="#transactions" class="nav-link">Transações</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
+                <a href="#transactions" class="nav-link">Transações</a>
             </nav>
         </aside>
         <main>
             <div id="dashboard" class="page active"></div>
-            <div id="transactions" class="page"></div>
             <div id="sellers" class="page"></div>
+            <div id="transactions" class="page"></div>
         </main>
     </div>
 
@@ -111,7 +109,7 @@
             hash = hash || '#dashboard';
             document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
             document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
-            const loaders = { '#dashboard': renderDashboardPage, '#transactions': renderTransactionsPage, '#sellers': renderSellersPage };
+            const loaders = { '#dashboard': renderDashboardPage, '#sellers': renderSellersPage, '#transactions': renderTransactionsPage };
             if (loaders[hash]) loaders[hash]();
         }
 
@@ -164,7 +162,6 @@
             const filteredSellers = filterDataByDate(appState.sellers, start, end);
             
             const totalRevenue = filteredTransactions.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
-            const totalProfit = totalRevenue * 0.0299;
             const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
             
             const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
@@ -173,23 +170,22 @@
                 const revenue = filteredTransactions.filter(tx => tx.seller_email === seller.email && tx.status === 'paid').reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
                 return { ...seller, total_revenue_period: revenue };
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
+            
+            const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
 
             page.innerHTML = `
                 <div class="card filters"><select id="dashboard-period" style="padding: 10px;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
-                <div class="card stat-grid">
-                    <div><h3>Faturamento</h3><p>R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
-                    <div><h3>Lucro SaaS</h3><p>R$ ${totalProfit.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
+                <div class="card grid">
+                    <div><h3>Faturamento</h3><p style="color:var(--success)">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
                     <div><h3>Vendas Pagas</h3><p>${paidSales}</p></div>
                     <div><h3>Novos Vendedores</h3><p>${filteredSellers.length}</p></div>
+                     <div><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}">${riskUsers}</p></div>
                 </div>
                 <div class="card">
                     <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
                     <div style="background: var(--border); border-radius: 10px; overflow: hidden;"><div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: var(--accent); height: 10px; border-radius: 10px;"></div></div>
                 </div>
-                <div class="card">
-                    <h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2>
-                    <table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody></table>
-                </div>`;
+                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody></table></div>`;
             document.getElementById('dashboard-period').value = period;
             document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
         }
@@ -212,20 +208,14 @@
         }
 
         function renderTransactionsTable(transactions) {
-            const tbody = document.getElementById('transactions-tbody');
-            if (!tbody) return;
-            tbody.innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
+            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
         }
         
         function renderSellersPage() {
             const page = document.getElementById('sellers');
             const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
             const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
-            const sellersData = appState.sellers.map(s => ({
-                ...s,
-                requests: usageMap.get(s.id) || 0,
-                revenue: rankingMap.get(s.id) || 0
-            }));
+            const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
             
             page.innerHTML = `
                 <div class="card">
@@ -241,14 +231,7 @@
         }
 
         function renderSellersTable(sellers) {
-            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `
-                <tr>
-                    <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
-                    <td>R$ ${s.revenue.toLocaleString('pt-BR')}</td>
-                    <td>${s.requests}</td>
-                    <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
-                    <td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
-                </tr>`).join('');
+            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${s.revenue.toLocaleString('pt-BR')}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
         }
         
         // ----- MODAL LOGIC -----
