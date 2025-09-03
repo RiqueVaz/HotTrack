@@ -3,124 +3,424 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Painel Administrativo</title>
+    <title>HotTrack - Painel Administrativo</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #1a202c; color: #edf2f7; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: #2d3748; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        #login-section, #dashboard-section { display: block; }
+        :root {
+            --bg-color: #121212;
+            --primary-color: #1e1e1e;
+            --secondary-color: #2a2a2a;
+            --text-color: #e0e0e0;
+            --accent-color: #bb86fc;
+            --accent-hover: #a053f0;
+            --success-color: #03dac6;
+            --error-color: #cf6679;
+            --border-color: #444;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: var(--primary-color);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.4);
+        }
+        #login-section { text-align: center; }
         #dashboard-section { display: none; }
-        h1, h2 { color: #9f7aea; border-bottom: 2px solid #9f7aea; padding-bottom: 10px; }
-        input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #4a5568; box-sizing: border-box; font-size: 16px; background-color: #1a202c; color: #edf2f7; }
-        button { width: 100%; background-color: #9f7aea; color: white; padding: 12px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; }
-        button:hover { background-color: #805ad5; }
-        #logout-button { background-color: #e53e3e; margin-top: 15px; }
-        #logout-button:hover { background-color: #c53030; }
-        #error-message { margin-top: 15px; padding: 10px; border-radius: 4px; background-color: #742a2a; border: 1px solid #f56565; color: #fed7d7; }
-        pre { background-color: #1a202c; padding: 15px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; border: 1px solid #4a5568; }
+        h1, h2 { color: var(--accent-color); border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        input[type="password"], input[type="text"] {
+            width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 4px;
+            border: 1px solid var(--border-color); box-sizing: border-box; font-size: 16px;
+            background-color: var(--secondary-color); color: var(--text-color);
+        }
+        button {
+            background-color: var(--accent-color); color: #121212; padding: 10px 15px; border: none;
+            border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; transition: background-color 0.2s;
+        }
+        button:hover { background-color: var(--accent-hover); }
+        .btn-danger { background-color: var(--error-color); }
+        .btn-danger:hover { background-color: #b04351; }
+        .btn-success { background-color: var(--success-color); }
+        .btn-success:hover { background-color: #01a393; }
+        .btn-sm { padding: 5px 10px; font-size: 12px; }
+        #error-message, .toast {
+            margin-top: 15px; padding: 12px; border-radius: 4px; display: none;
+            position: fixed; bottom: 20px; right: 20px; z-index: 1000;
+        }
+        .toast.show { display: block; }
+        .toast.success { background-color: var(--success-color); color: #121212; }
+        .toast.error { background-color: var(--error-color); color: #121212; }
+        .tabs { display: flex; border-bottom: 1px solid var(--border-color); margin-bottom: 20px; }
+        .tab-link { padding: 10px 20px; cursor: pointer; background: transparent; color: var(--text-color); font-size: 16px; }
+        .tab-link.active { border-bottom: 2px solid var(--accent-color); font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { background-color: var(--secondary-color); }
+        tr:hover { background-color: #252525; }
+        .pagination { margin-top: 20px; text-align: center; }
+        .pagination button { margin: 0 5px; }
+        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+        .kpi-card { background: var(--secondary-color); padding: 20px; border-radius: 8px; text-align: center; }
+        .kpi-card h3 { margin-top: 0; color: #aaa; }
+        .kpi-card p { font-size: 2em; margin-bottom: 0; color: var(--accent-color); font-weight: bold; }
+        .loader { text-align: center; padding: 40px; }
+        .actions { display: flex; gap: 10px; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h1>Painel Administrativo</h1>
+        <h1><span id="header-title">Acesso Restrito</span></h1>
 
         <div id="login-section">
-            <h2>Acesso Restrito</h2>
             <form id="login-form">
                 <input type="password" id="admin-key" placeholder="Sua ADMIN_API_KEY" required>
                 <button type="submit">Entrar</button>
             </form>
-            <div id="error-message" style="display: none;"></div>
         </div>
 
         <div id="dashboard-section">
-            <h2>Dashboard do Administrador</h2>
-            <pre id="api-response">Carregando dados...</pre>
-            <button id="logout-button">Sair</button>
+            <div class="tabs">
+                <button class="tab-link active" onclick="openTab(event, 'dashboard-tab')">Dashboard</button>
+                <button class="tab-link" onclick="openTab(event, 'sellers-tab')">Vendedores</button>
+                <button class="tab-link" onclick="openTab(event, 'transactions-tab')">Transações</button>
+                <button class="tab-link" onclick="openTab(event, 'ranking-tab')">Ranking</button>
+                <button class="tab-link" onclick="openTab(event, 'usage-tab')">Uso da API</button>
+                <button class="tab-link btn-danger" id="logout-button" style="margin-left: auto;">Sair</button>
+            </div>
+
+            <div id="dashboard-tab" class="tab-content active"></div>
+            <div id="sellers-tab" class="tab-content"></div>
+            <div id="transactions-tab" class="tab-content"></div>
+            <div id="ranking-tab" class="tab-content"></div>
+            <div id="usage-tab" class="tab-content"></div>
         </div>
     </div>
+    
+    <div id="toast" class="toast"></div>
 
     <script>
         const API_URL = 'https://novaapi-one.vercel.app';
+        let sellersCache = []; // Cache para a busca de vendedores
 
+        // Elementos da UI
         const loginSection = document.getElementById('login-section');
         const dashboardSection = document.getElementById('dashboard-section');
         const loginForm = document.getElementById('login-form');
-        const errorMessage = document.getElementById('error-message');
-        const apiResponseEl = document.getElementById('api-response');
         const logoutButton = document.getElementById('logout-button');
+        const headerTitle = document.getElementById('header-title');
 
-        // Função para tentar o login com a chave
-        loginForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const adminKey = document.getElementById('admin-key').value;
-            if (adminKey) {
-                // Salva a chave no navegador e tenta carregar o dashboard
-                localStorage.setItem('adminApiKey', adminKey);
-                showDashboard();
-            }
-        });
-
-        // Função para buscar dados do dashboard de admin
-        async function fetchAdminDashboardData() {
+        // Função para mostrar notificações
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast show ${type}`;
+            setTimeout(() => { toast.className = 'toast'; }, 3000);
+        }
+        
+        // Função genérica para chamadas à API
+        async function apiFetch(endpoint, options = {}) {
             const adminKey = localStorage.getItem('adminApiKey');
             if (!adminKey) {
-                showLogin();
-                return;
+                logout();
+                throw new Error('Chave de administrador não encontrada.');
             }
 
+            const headers = {
+                'Content-Type': 'application/json',
+                'x-admin-api-key': adminKey,
+                ...options.headers,
+            };
+            
+            const response = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+
+            if (response.status === 403) {
+                logout();
+                throw new Error('Acesso negado. Sua chave é inválida.');
+            }
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || `Erro ${response.status}`);
+            }
+            return response.json();
+        }
+
+        // Troca de Abas
+        function openTab(evt, tabName) {
+            document.querySelectorAll('.tab-content').forEach(tc => tc.style.display = "none");
+            document.querySelectorAll('.tab-link').forEach(tl => tl.classList.remove("active"));
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.classList.add("active");
+            
+            // Carrega o conteúdo da aba
+            switch(tabName) {
+                case 'dashboard-tab': loadDashboardTab(); break;
+                case 'sellers-tab': loadSellersTab(); break;
+                case 'transactions-tab': loadTransactionsTab(1); break;
+                case 'ranking-tab': loadRankingTab(); break;
+                case 'usage-tab': loadUsageTab(); break;
+            }
+        }
+
+        // Funções para carregar cada aba
+        function renderLoader(container) {
+            container.innerHTML = `<div class="loader">Carregando...</div>`;
+        }
+
+        async function loadDashboardTab() {
+            const container = document.getElementById('dashboard-tab');
+            renderLoader(container);
             try {
-                const response = await fetch(`${API_URL}/api/admin/dashboard`, {
-                    method: 'GET',
-                    headers: {
-                        'x-admin-api-key': adminKey // AQUI ESTÁ A AUTENTICAÇÃO
-                    }
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    // Se a chave for inválida (erro 403), desloga
-                    if (response.status === 403) {
-                        logout();
-                        errorMessage.textContent = 'Chave de Administrador inválida.';
-                        errorMessage.style.display = 'block';
-                        return;
-                    }
-                    throw new Error(data.message);
-                }
-                
-                errorMessage.style.display = 'none';
-                apiResponseEl.textContent = JSON.stringify(data, null, 2);
-
+                const data = await apiFetch('/api/admin/dashboard');
+                container.innerHTML = `
+                    <h2>Métricas Gerais</h2>
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <h3>Total de Vendedores</h3>
+                            <p>${data.total_sellers}</p>
+                        </div>
+                        <div class="kpi-card">
+                            <h3>Transações Pagas</h3>
+                            <p>${data.total_paid_transactions}</p>
+                        </div>
+                        <div class="kpi-card">
+                            <h3>Receita Total</h3>
+                            <p>R$ ${parseFloat(data.total_revenue).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                        </div>
+                        <div class="kpi-card">
+                            <h3>Lucro (SaaS)</h3>
+                            <p>R$ ${parseFloat(data.saas_profit).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                        </div>
+                    </div>
+                `;
             } catch (error) {
-                apiResponseEl.textContent = `Erro ao carregar dados: ${error.message}`;
+                container.innerHTML = `<p style="color: var(--error-color);">Erro ao carregar dashboard: ${error.message}</p>`;
+            }
+        }
+
+        async function loadSellersTab() {
+            const container = document.getElementById('sellers-tab');
+            renderLoader(container);
+            try {
+                const sellers = await apiFetch('/api/admin/sellers');
+                sellersCache = sellers; // Armazena no cache
+                
+                container.innerHTML = `
+                    <h2>Gerenciar Vendedores</h2>
+                    <input type="text" id="seller-search" onkeyup="filterSellers()" placeholder="Buscar por nome ou e-mail...">
+                    <table id="sellers-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>E-mail</th>
+                                <th>Status</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                `;
+                renderSellersTable(sellers);
+            } catch (error) {
+                container.innerHTML = `<p style="color: var(--error-color);">Erro ao carregar vendedores: ${error.message}</p>`;
             }
         }
         
-        // Função para mostrar o dashboard
-        function showDashboard() {
-            loginSection.style.display = 'none';
-            dashboardSection.style.display = 'block';
-            fetchAdminDashboardData();
+        function renderSellersTable(sellers) {
+            const tbody = document.querySelector('#sellers-table tbody');
+            tbody.innerHTML = sellers.map(seller => `
+                <tr>
+                    <td>${seller.name}</td>
+                    <td>${seller.email}</td>
+                    <td>${seller.is_active ? '<span style="color: var(--success-color);">Ativo</span>' : '<span style="color: var(--error-color);">Bloqueado</span>'}</td>
+                    <td class="actions">
+                        <button class="btn-sm ${seller.is_active ? 'btn-danger' : 'btn-success'}" onclick="toggleSellerStatus(${seller.id}, ${!seller.is_active})">${seller.is_active ? 'Bloquear' : 'Desbloquear'}</button>
+                        <button class="btn-sm" onclick="changeSellerPassword(${seller.id})">Alterar Senha</button>
+                    </td>
+                </tr>
+            `).join('');
         }
 
-        // Função para mostrar a tela de login
+        function filterSellers() {
+            const query = document.getElementById('seller-search').value.toLowerCase();
+            const filtered = sellersCache.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query));
+            renderSellersTable(filtered);
+        }
+
+        async function toggleSellerStatus(id, newStatus) {
+            if (!confirm(`Tem certeza que deseja ${newStatus ? 'desbloquear' : 'bloquear'} este usuário?`)) return;
+            try {
+                const result = await apiFetch(`/api/admin/sellers/${id}/toggle-active`, {
+                    method: 'POST',
+                    body: JSON.stringify({ isActive: newStatus })
+                });
+                showToast(result.message, 'success');
+                loadSellersTab();
+            } catch(error) {
+                showToast(`Erro: ${error.message}`, 'error');
+            }
+        }
+
+        async function changeSellerPassword(id) {
+            const newPassword = prompt('Digite a nova senha para este usuário (mínimo 8 caracteres):');
+            if (!newPassword || newPassword.length < 8) {
+                showToast('Senha inválida. A senha deve ter no mínimo 8 caracteres.', 'error');
+                return;
+            }
+            try {
+                const result = await apiFetch(`/api/admin/sellers/${id}/password`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ newPassword })
+                });
+                showToast(result.message, 'success');
+            } catch (error) {
+                showToast(`Erro: ${error.message}`, 'error');
+            }
+        }
+        
+        async function loadTransactionsTab(page = 1) {
+            const container = document.getElementById('transactions-tab');
+            renderLoader(container);
+            try {
+                const data = await apiFetch(`/api/admin/transactions?page=${page}&limit=15`);
+                container.innerHTML = `
+                    <h2>Últimas Transações</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Vendedor</th>
+                                <th>Status</th>
+                                <th>Valor</th>
+                                <th>Provedor</th>
+                                <th>Data</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.transactions.map(tx => `
+                                <tr>
+                                    <td>${tx.seller_name}<br><small>${tx.seller_email}</small></td>
+                                    <td><span style="color: ${tx.status === 'paid' ? 'var(--success-color)' : '#aaa'}">${tx.status}</span></td>
+                                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                    <td>${tx.provider}</td>
+                                    <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    <div class="pagination">
+                        <button ${page === 1 ? 'disabled' : ''} onclick="loadTransactionsTab(${page - 1})">Anterior</button>
+                        <span>Página ${page} de ${data.pages}</span>
+                        <button ${page === data.pages ? 'disabled' : ''} onclick="loadTransactionsTab(${page + 1})">Próxima</button>
+                    </div>
+                `;
+            } catch (error) {
+                container.innerHTML = `<p style="color: var(--error-color);">Erro ao carregar transações: ${error.message}</p>`;
+            }
+        }
+        
+        async function loadRankingTab() {
+            const container = document.getElementById('ranking-tab');
+            renderLoader(container);
+            try {
+                const ranking = await apiFetch('/api/admin/ranking');
+                 container.innerHTML = `
+                    <h2>Ranking de Vendedores</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Posição</th>
+                                <th>Vendedor</th>
+                                <th>Vendas Pagas</th>
+                                <th>Receita Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${ranking.map((seller, index) => `
+                                <tr>
+                                    <td>#${index + 1}</td>
+                                    <td>${seller.name}<br><small>${seller.email}</small></td>
+                                    <td>${seller.total_sales}</td>
+                                    <td><strong>R$ ${parseFloat(seller.total_revenue).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                 container.innerHTML = `<p style="color: var(--error-color);">Erro ao carregar ranking: ${error.message}</p>`;
+            }
+        }
+        
+        async function loadUsageTab() {
+            const container = document.getElementById('usage-tab');
+            renderLoader(container);
+            try {
+                const usage = await apiFetch('/api/admin/usage-analysis');
+                container.innerHTML = `
+                    <h2>Análise de Uso da API</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Vendedor</th>
+                                <th>Requisições (Última Hora)</th>
+                                <th>Requisições (Últimas 24h)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${usage.map(u => `
+                                <tr>
+                                    <td>${u.name}<br><small>${u.email}</small></td>
+                                    <td>${u.requests_last_hour}</td>
+                                    <td>${u.requests_last_24_hours}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                 container.innerHTML = `<p style="color: var(--error-color);">Erro ao carregar dados de uso: ${error.message}</p>`;
+            }
+        }
+
+        // Autenticação e Lógica de UI
+        function showDashboard() {
+            headerTitle.textContent = "Painel Administrativo";
+            loginSection.style.display = 'none';
+            dashboardSection.style.display = 'block';
+            document.querySelector('.tab-link').click(); // Abre a primeira aba
+        }
         function showLogin() {
+            headerTitle.textContent = "Acesso Restrito";
             loginSection.style.display = 'block';
             dashboardSection.style.display = 'none';
         }
-
-        // Função de logout
         function logout() {
             localStorage.removeItem('adminApiKey');
+            showToast('Sessão encerrada.', 'success');
             showLogin();
         }
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const adminKey = document.getElementById('admin-key').value;
+            localStorage.setItem('adminApiKey', adminKey);
+            showDashboard();
+        });
         logoutButton.addEventListener('click', logout);
-
-        // Verifica se o admin já tem uma chave guardada ao carregar a página
+        
+        // Inicialização
         if (localStorage.getItem('adminApiKey')) {
             showDashboard();
+        } else {
+            showLogin();
         }
     </script>
 </body>
