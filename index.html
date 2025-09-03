@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HotTrack Command Center</title>
+    
+    <link rel="manifest" href="manifest.json">
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -208,7 +211,9 @@
         }
 
         function renderTransactionsTable(transactions) {
-            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
+            const tbody = document.getElementById('transactions-tbody');
+            if (!tbody) return;
+            tbody.innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
         }
         
         function renderSellersPage() {
