@@ -6,11 +6,13 @@
     <title>HotTrack Command Center</title>
 
     <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="icon" href="SUA_URL_DO_ICONE/hottrack-icon-32x32.png" sizes="32x32" type="image/png">
-    <link rel="icon" href="SUA_URL_DO_ICONE/hottrack-icon-16x16.png" sizes="16x16" type="image/png">
-    <link rel="apple-touch-icon" href="SUA_URL_DO_ICONE/hottrack-icon-180x180.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16x16.png">
+    <link rel="apple-touch-icon" href="icons/icon-192x192.png">
+    
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -94,7 +96,7 @@
 <body>
     <div id="login-screen">
         <div id="login-box">
-            <h2 style="color: var(--accent);">HotTrack Command Center</h2>
+            <h2 style="color: var(--accent);">HotTrack</h2>
             <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
             <form id="login-form">
                 <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required style="width: 100%;">
@@ -164,7 +166,7 @@
             document.getElementById('app-container').style.visibility = 'visible';
 
             // Tenta reativar as notificações silenciosamente ao iniciar
-            await tryReactivatingNotifications(); // <-- NOVA CHAMADA AQUI
+            await tryReactivatingNotifications();
 
             await fetchAllInitialData();
 
@@ -262,22 +264,18 @@
             }
         }
 
-        // --- NOVA FUNÇÃO: Tenta reativar as notificações em segundo plano ---
+        // --- FUNÇÃO DE REATIVAÇÃO SILENCIOSA ---
         async function tryReactivatingNotifications() {
             if (!('serviceWorker' in navigator && 'PushManager' in window)) {
-                return; // Navegador não suporta notificações
+                return;
             }
             try {
                 const registration = await navigator.serviceWorker.register('sw.js');
                 const permission = await Notification.permission;
-
-                // Só continua se a permissão JÁ FOI DADA anteriormente
                 if (permission === 'granted') {
                     console.log("Permissão já concedida. Tentando reenviar inscrição...");
                     let subscription = await registration.pushManager.getSubscription();
-
                     if (subscription) {
-                        // Envia a inscrição existente para o servidor para garantir que ele "lembre"
                         await apiFetch('/api/admin/save-subscription', {
                             method: 'POST',
                             body: JSON.stringify(subscription),
@@ -289,8 +287,7 @@
                 console.error('Falha ao tentar reativar notificações silenciosamente:', error);
             }
         }
-        // ------------------------------------------------------------------
-
+        
         function renderSettingsPage() {
             document.getElementById('settings').innerHTML = `
                 <div class="card">
