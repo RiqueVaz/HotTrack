@@ -115,7 +115,6 @@
         // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
             const loginForm = document.getElementById('login-form');
-
             loginForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 const key = document.getElementById('admin-key-input').value;
@@ -133,7 +132,7 @@
         async function initializeApp() {
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('app-container').style.visibility = 'visible';
-
+            
             await fetchAllInitialData();
             
             const sidebar = document.getElementById('sidebar');
@@ -182,12 +181,34 @@
             const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
             const res = await fetch(`${API_URL}${endpoint}`, config);
             if (res.status === 403) { throw new Error("Chave de API inválida."); }
-            if (!res.ok) throw new Error((await res.json()).message || "Erro de rede.");
-            return res.json();
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || "Erro de rede.");
+            }
+            // Retorna texto se o content-type for text/plain, senão JSON
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                return res.json();
+            }
+            return res.text();
         }
 
-        // NOVO: LÓGICA DE NOTIFICAÇÕES
+        // --- LÓGICA DE NOTIFICAÇÕES (CORRIGIDA E MELHORADA) ---
+        
+        // Função para converter a chave VAPID para o formato correto
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
         async function setupPushNotifications() {
+            console.log("Iniciando configuração de notificações...");
             if (!('serviceWorker' in navigator && 'PushManager' in window)) {
                 alert('O seu navegador não suporta notificações.');
                 return;
@@ -195,33 +216,32 @@
             
             try {
                 const registration = await navigator.serviceWorker.register('sw.js');
+                console.log("Service Worker registado com sucesso.");
+
                 const permission = await window.Notification.requestPermission();
-                
                 if (permission !== 'granted') {
                     alert('Permissão para notificações negada.');
                     return;
                 }
+                console.log("Permissão concedida.");
                 
                 let subscription = await registration.pushManager.getSubscription();
                 if (subscription === null) {
-                    const response = await apiFetch('/api/admin/vapidPublicKey');
-                    const vapidPublicKey = await response.text(); // Corrigido para .text() se o servidor enviar texto
-                    
-                    const urlBase64ToUint8Array = base64String => {
-                        const padding = '='.repeat((4 - base64String.length % 4) % 4);
-                        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-                        const rawData = atob(base64);
-                        const outputArray = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) {
-                            outputArray[i] = rawData.charCodeAt(i);
-                        }
-                        return outputArray;
-                    };
+                    console.log("Nenhuma inscrição existente, a criar uma nova...");
+                    const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
+                    if (!vapidPublicKey) {
+                        throw new Error("Não foi possível obter a chave VAPID do servidor.");
+                    }
+                    console.log("Chave VAPID recebida do servidor.");
 
+                    const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
                     subscription = await registration.pushManager.subscribe({
                         userVisibleOnly: true,
-                        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+                        applicationServerKey: convertedVapidKey
                     });
+                    console.log("Inscrição criada com sucesso.");
+                } else {
+                    console.log("Inscrição já existente.");
                 }
                 
                 await apiFetch('/api/admin/save-subscription', {
@@ -229,10 +249,11 @@
                     body: JSON.stringify(subscription),
                 });
                 
+                console.log('Inscrição para notificações enviada ao servidor.');
                 alert('Notificações ativadas com sucesso!');
             } catch (error) {
                 console.error('Falha ao configurar notificações:', error);
-                alert('Ocorreu um erro ao ativar as notificações.');
+                alert('Ocorreu um erro ao ativar as notificações. Verifique o console para mais detalhes.');
             }
         }
         
