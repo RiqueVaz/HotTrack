@@ -10,9 +10,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0D1117; --surface: #161B22; --border: #30363D;
-            --text-primary: #E6EDF3; --text-secondary: #8B949E;
-            --accent: #58A6FF; --danger: #F85149; --success: #3FB950;
+            --bg: #111111; --surface: #1C1C1C; --border: #2D2D2D;
+            --text-primary: #FFFFFF; --text-secondary: #A0A0A0;
+            --accent: #10B981; --danger: #F85149;
         }
         * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; }
@@ -26,11 +26,11 @@
             font-weight: 500; border-radius: 6px; display: flex; align-items: center; gap: 10px;
             transition: background-color 0.2s, color 0.2s;
         }
-        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(88, 166, 255, 0.1); }
+        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(16, 185, 129, 0.1); }
         main { flex-grow: 1; padding: 20px; height: 100vh; overflow-y: auto; }
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.5s; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         input, button, select {
@@ -47,6 +47,8 @@
         .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
         .stat-card h3 { margin: 0; font-size: 14px; color: var(--text-secondary); font-weight: 500; }
         .stat-card p { margin: 5px 0 0 0; font-size: 2.2em; font-weight: 700; color: var(--primary); }
+        .skeleton { background-color: #2a2a2a; border-radius: 4px; animation: pulse 1.5s infinite ease-in-out; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
         @media (max-width: 768px) {
             #sidebar { position: fixed; transform: translateX(-100%); z-index: 200; height: 100%; }
@@ -54,8 +56,7 @@
             main { padding: 15px; }
             #menu-toggle {
                 display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border);
-                border-radius: 6px; padding: 8px; color: var(--primary);
+                background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--primary);
             }
         }
     </style>
@@ -78,13 +79,12 @@
         </main>
     </div>
 
-    <div id="seller-modal" class="modal">
-        </div>
+    <div id="seller-modal" class="modal"></div>
     
     <script>
         const API_URL = 'https://novaapi-one.vercel.app';
-        let appState = { sellers: [], allTransactions: [], allRanking: [], currentSeller: null };
-        const MONTHLY_GOAL = 50000; // Defina a sua meta de faturamento aqui
+        let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
+        const MONTHLY_GOAL = 50000;
 
         // ----- CORE APP & UI LOGIC -----
         document.addEventListener('DOMContentLoaded', () => {
@@ -96,16 +96,8 @@
             handleResize();
 
             menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
-            document.querySelector('main').addEventListener('click', () => sidebar.classList.remove('show'));
-
-            document.querySelectorAll('.nav-link').forEach(link => {
-                link.addEventListener('click', e => {
-                    e.preventDefault();
-                    window.location.hash = e.currentTarget.hash;
-                    if (window.innerWidth <= 768) sidebar.classList.remove('show');
-                });
-            });
-
+            document.querySelector('main').addEventListener('click', () => { if(sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
+            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
             
             if (!localStorage.getItem('adminApiKey')) {
@@ -125,32 +117,29 @@
 
         async function fetchAllInitialData() {
             try {
-                const [sellers, transactions, ranking] = await Promise.all([
+                const [sellers, transactions, ranking, usage] = await Promise.all([
                     apiFetch('/api/admin/sellers'),
-                    apiFetch('/api/admin/transactions?limit=5000'), // Pega um lote grande para filtros
-                    apiFetch('/api/admin/ranking')
+                    apiFetch('/api/admin/transactions?limit=5000'),
+                    apiFetch('/api/admin/ranking'),
+                    apiFetch('/api/admin/usage-analysis')
                 ]);
                 appState.sellers = sellers;
                 appState.allTransactions = transactions.transactions;
                 appState.allRanking = ranking;
+                appState.allUsage = usage;
             } catch (e) { alert(`Erro ao carregar dados iniciais: ${e.message}`); }
         }
         
         async function apiFetch(endpoint, options = {}) {
             const adminKey = localStorage.getItem('adminApiKey');
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
-            const config = {
-                method: 'GET', ...options,
-                headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers }
-            };
+            const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
             const res = await fetch(`${API_URL}${endpoint}`, config);
             if (res.status === 403) { localStorage.removeItem('adminApiKey'); throw new Error("Chave de API inválida."); }
             if (!res.ok) throw new Error((await res.json()).message || "Erro de rede.");
             return res.json();
         }
 
-        const renderLoader = (container) => { container.innerHTML = `<div class="card"><p>A carregar...</p></div>`; };
-        
         // ----- DATE & FILTER LOGIC -----
         function getDateRange(period) {
             const end = new Date();
@@ -163,10 +152,7 @@
 
         function filterDataByDate(data, startDate, endDate, dateKey = 'created_at') {
             if (!startDate || !endDate) return data;
-            return data.filter(item => {
-                const itemDate = new Date(item[dateKey]);
-                return itemDate >= startDate && itemDate <= endDate;
-            });
+            return data.filter(item => { const itemDate = new Date(item[dateKey]); return itemDate >= startDate && itemDate <= endDate; });
         }
         
         // ----- PAGE RENDERERS -----
@@ -181,26 +167,15 @@
             const totalProfit = totalRevenue * 0.0299;
             const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
             
-            const daysInMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
-            const remainingDays = Math.max(0, daysInMonth - end.getDate());
-            const remainingRevenue = Math.max(0, MONTHLY_GOAL - totalRevenue);
-            const dailyAverageNeeded = remainingDays > 0 && remainingRevenue > 0 ? remainingRevenue / remainingDays : 0;
             const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
 
             const rankingByPeriod = appState.allRanking.map(seller => {
-                const sellerSales = filteredTransactions.filter(tx => tx.seller_email === seller.email && tx.status === 'paid');
-                const revenue = sellerSales.reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
+                const revenue = filteredTransactions.filter(tx => tx.seller_email === seller.email && tx.status === 'paid').reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
                 return { ...seller, total_revenue_period: revenue };
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
 
             page.innerHTML = `
-                <div class="card filters">
-                    <select id="dashboard-period" style="padding: 10px;">
-                        <option value="month">Este Mês</option>
-                        <option value="7days">Últimos 7 Dias</option>
-                        <option value="today">Hoje</option>
-                    </select>
-                </div>
+                <div class="card filters"><select id="dashboard-period" style="padding: 10px;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
                 <div class="card stat-grid">
                     <div><h3>Faturamento</h3><p>R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
                     <div><h3>Lucro SaaS</h3><p>R$ ${totalProfit.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
@@ -209,17 +184,11 @@
                 </div>
                 <div class="card">
                     <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
-                    <div style="background: var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 10px;">
-                       <div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: var(--accent); height: 10px; border-radius: 10px;"></div>
-                    </div>
-                    <small style="color: var(--text-secondary);">Faltam R$ ${remainingRevenue.toLocaleString('pt-BR')} | Média diária necessária: R$ ${dailyAverageNeeded.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</small>
+                    <div style="background: var(--border); border-radius: 10px; overflow: hidden;"><div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: var(--accent); height: 10px; border-radius: 10px;"></div></div>
                 </div>
                 <div class="card">
                     <h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2>
-                    <table>
-                        <thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead>
-                        <tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody>
-                    </table>
+                    <table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody></table>
                 </div>`;
             document.getElementById('dashboard-period').value = period;
             document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
@@ -230,15 +199,8 @@
             page.innerHTML = `
                 <div class="card">
                     <h2>Transações</h2>
-                    <div class="filters">
-                        <input type="date" id="tx-start-date">
-                        <input type="date" id="tx-end-date">
-                        <button id="tx-filter-btn">Filtrar</button>
-                    </div>
-                    <table>
-                        <thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead>
-                        <tbody id="transactions-tbody"></tbody>
-                    </table>
+                    <div class="filters"><input type="date" id="tx-start-date"><input type="date" id="tx-end-date"><button id="tx-filter-btn">Filtrar</button></div>
+                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
                 </div>`;
             document.getElementById('tx-filter-btn').addEventListener('click', () => {
                 const start = new Date(document.getElementById('tx-start-date').value);
@@ -252,37 +214,38 @@
         function renderTransactionsTable(transactions) {
             const tbody = document.getElementById('transactions-tbody');
             if (!tbody) return;
-            tbody.innerHTML = transactions.slice(0, 100).map(tx => `
-                <tr>
-                    <td>${tx.seller_name}</td>
-                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
-                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td>
-                    <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
-                </tr>`).join('');
+            tbody.innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
         }
         
         function renderSellersPage() {
             const page = document.getElementById('sellers');
+            const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
+            const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
+            const sellersData = appState.sellers.map(s => ({
+                ...s,
+                requests: usageMap.get(s.id) || 0,
+                revenue: rankingMap.get(s.id) || 0
+            }));
+            
             page.innerHTML = `
                 <div class="card">
                     <h2>Gerir Vendedores</h2>
                     <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="width: 100%; margin-bottom: 20px;">
-                    <table>
-                        <thead><tr><th>Nome</th><th>Status</th><th>Ações</th></tr></thead>
-                        <tbody id="sellers-tbody"></tbody>
-                    </table>
+                    <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
                 </div>`;
             document.getElementById('seller-search').addEventListener('keyup', e => {
                 const query = e.target.value.toLowerCase();
-                renderSellersTable(appState.sellers.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
+                renderSellersTable(sellersData.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
             });
-            renderSellersTable(appState.sellers);
+            renderSellersTable(sellersData);
         }
 
         function renderSellersTable(sellers) {
             document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `
                 <tr>
                     <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
+                    <td>R$ ${s.revenue.toLocaleString('pt-BR')}</td>
+                    <td>${s.requests}</td>
                     <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
                     <td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
                 </tr>`).join('');
@@ -295,27 +258,18 @@
             const modal = document.getElementById('seller-modal');
             modal.innerHTML = `
                  <div class="modal-content">
-                    <h3 id="modal-seller-name" style="margin-top: 0;">${appState.currentSeller.name}</h3>
+                    <h3 style="margin-top: 0;">${appState.currentSeller.name}</h3>
                     <div style="display: flex; flex-direction: column; gap: 20px;">
-                        <div>
-                            <h4>Alterar Palavra-passe</h4>
-                            <input type="password" id="new-password" placeholder="Nova palavra-passe (mín. 8 caracteres)" style="width: 100%;">
-                            <button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar</button>
-                        </div>
-                        <div>
-                            <h4>Ações</h4>
-                            <button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear'}</button>
-                        </div>
+                        <div><h4>Alterar Palavra-passe</h4><input type="password" id="new-password" placeholder="Nova palavra-passe (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar</button></div>
+                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear'}</button></div>
                     </div>
                     <button onclick="closeModal()" style="margin-top: 20px; background: none; border-color: var(--text-secondary); color: var(--text-secondary); width: 100%;">Fechar</button>
-                </div>
-            `;
+                </div>`;
             document.getElementById('save-password-btn').addEventListener('click', savePassword);
             const statusBtn = document.getElementById('toggle-status-btn');
             statusBtn.addEventListener('click', toggleStatus);
             statusBtn.style.background = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
             statusBtn.style.borderColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
-
             modal.style.display = 'flex';
         }
 
@@ -325,9 +279,7 @@
             const newPassword = document.getElementById('new-password').value;
             if (!newPassword || newPassword.length < 8) return alert("A palavra-passe deve ter pelo menos 8 caracteres.");
             try {
-                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, {
-                    method: 'PUT', body: JSON.stringify({ newPassword })
-                });
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
                 alert('Palavra-passe alterada com sucesso!');
                 closeModal();
             } catch(e) { alert(`Erro: ${e.message}`); }
@@ -337,13 +289,11 @@
             const newStatus = !appState.currentSeller.is_active;
             if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
             try {
-                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, {
-                    method: 'POST', body: JSON.stringify({ isActive: newStatus })
-                });
-                alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
-                await fetchAllInitialData(); // Atualiza os dados
-                renderSellersPage();
-                closeModal();
+                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
+                 alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
+                 await fetchAllInitialData();
+                 renderSellersPage();
+                 closeModal();
             } catch(e) { alert(`Erro: ${e.message}`); }
         }
     </script>
