@@ -1,10 +1,10 @@
 {
   "name": "HotTrack Command Center",
   "short_name": "Command",
-  "start_url": "/admin.html",
+  "start_url": ".",
   "display": "standalone",
-  "background_color": "#0D1117",
-  "theme_color": "#161B22",
+  "background_color": "#111111",
+  "theme_color": "#1C1C1C",
   "orientation": "portrait-primary",
   "icons": [
     {
