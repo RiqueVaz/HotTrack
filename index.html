@@ -15,9 +15,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #111111; --surface: #1C1C1C; --border: #2D2D2D;
-            --text-primary: #FFFFFF; --text-secondary: #A0A0A0;
-            --accent: #9333EA; --accent-hover: #7E22CE;
+            --bg: #0A0A10; --surface: #1A1A2A; --border: #2A2A3A;
+            --text-primary: #EAEAEA; --text-secondary: #88889A;
+            --accent-cyan: #00F6FF; --accent-magenta: #FF00E4;
             --danger: #E11D48; --success: #22C55E;
         }
         * { box-sizing: border-box; }
@@ -26,11 +26,10 @@
         #login-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
             background: var(--bg); display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.3s;
         }
         #login-box {
             background: var(--surface); padding: 30px; border-radius: 12px;
-            width: 90%; max-width: 350px; text-align: center;
+            width: 90%; max-width: 350px; text-align: center; border: 1px solid var(--border);
         }
 
         #app-container { display: flex; min-height: 100vh; }
@@ -43,7 +42,7 @@
             font-weight: 500; border-radius: 6px; display: flex; align-items: center; gap: 10px;
             transition: background-color 0.2s, color 0.2s;
         }
-        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(147, 51, 234, 0.1); }
+        .nav-link.active, .nav-link:hover { color: var(--primary); background: linear-gradient(90deg, rgba(0, 246, 255, 0.1), rgba(255, 0, 228, 0.1)); }
         main { flex-grow: 1; padding: 20px; height: 100vh; overflow-y: auto; }
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.5s; }
@@ -54,42 +53,41 @@
             font-family: 'Inter', sans-serif; border-radius: 6px; border: 1px solid var(--border);
             padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); width: 100%;
         }
-        button { cursor: pointer; background-color: var(--accent); color: var(--primary); font-weight: 700; border-color: var(--accent); }
-        .modal {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
-            display: none; align-items: center; justify-content: center; z-index: 1000;
-        }
-        .modal-content { background: var(--surface); padding: 30px; border-radius: 8px; width: 90%; max-width: 400px; }
+        button { cursor: pointer; background: linear-gradient(90deg, var(--accent-cyan), var(--accent-magenta)); color: var(--bg); font-weight: 700; border: none; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
-
+        
+        #seller-details-panel {
+            position: fixed; top: 0; right: 0; width: 100%; max-width: 400px; height: 100%;
+            background: #000; border-left: 1px solid var(--border);
+            transform: translateX(100%); transition: transform 0.3s ease;
+            z-index: 1100; padding: 20px; overflow-y: auto;
+        }
+        #seller-details-panel.show { transform: translateX(0); }
+        
         @media (max-width: 768px) {
-            #sidebar { position: fixed; transform: translateX(-100%); z-index: 200; height: 100%; }
-            #sidebar.show { transform: translateX(0); }
-            main { padding: 15px; }
-            #menu-toggle {
-                display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--primary);
+            #sidebar { display: none; }
+            main { padding: 15px; padding-bottom: 80px; }
+            #mobile-nav {
+                display: flex; position: fixed; bottom: 0; left: 0; width: 100%;
+                background: var(--surface); border-top: 1px solid var(--border);
+                justify-content: space-around; z-index: 100;
             }
+            .nav-link { justify-content: center; flex-direction: column; padding: 10px; gap: 4px; font-size: 12px; }
+            #seller-details-panel { max-width: 100%; }
         }
     </style>
 </head>
 <body>
     <div id="login-screen">
         <div id="login-box">
-            <h2 style="color: var(--accent);">Command Center</h2>
-            <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
-            <form id="login-form">
-                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required>
-                <button type="submit" style="margin-top: 15px;">Entrar</button>
-            </form>
+            <h2 style="background: linear-gradient(90deg, var(--accent-cyan), var(--accent-magenta)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Singularity</h2>
+            <form id="login-form"><input type="password" id="admin-key-input" placeholder="ADMIN_API_KEY" required><button type="submit" style="margin-top: 15px;">Acessar</button></form>
         </div>
     </div>
 
-    <button id="menu-toggle" style="display: none;">☰</button>
     <div id="app-container" style="visibility: hidden;">
         <aside id="sidebar">
-            <h2 style="font-weight: 700; color: var(--accent); text-align: center;">Nebula</h2>
+            <h2 style="font-weight: 700; text-align: center; background: linear-gradient(90deg, var(--accent-cyan), var(--accent-magenta)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Singularity</h2>
             <nav style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
@@ -101,29 +99,19 @@
             <div id="sellers" class="page"></div>
             <div id="transactions" class="page"></div>
         </main>
+        <div id="seller-details-panel"></div>
     </div>
-
-    <div id="seller-modal" class="modal"></div>
+    
+    <nav id="mobile-nav" style="display: none;"></nav>
     
     <script>
         const API_URL = 'https://novaapi-one.vercel.app';
-        let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
-        const MONTHLY_GOAL = 50000;
+        let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], charts: {} };
 
         // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
-            const loginForm = document.getElementById('login-form');
-            loginForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const key = document.getElementById('admin-key-input').value;
-                if (key) {
-                    localStorage.setItem('adminApiKey', key);
-                    initializeApp();
-                }
-            });
-            if (localStorage.getItem('adminApiKey')) {
-                initializeApp();
-            }
+            document.getElementById('login-form').addEventListener('submit', e => { e.preventDefault(); localStorage.setItem('adminApiKey', document.getElementById('admin-key-input').value); initializeApp(); });
+            if (localStorage.getItem('adminApiKey')) initializeApp();
         });
 
         async function initializeApp() {
@@ -132,13 +120,17 @@
             await fetchAllInitialData();
             
             const sidebar = document.getElementById('sidebar');
-            const menuToggle = document.getElementById('menu-toggle');
-            function handleResize() { menuToggle.style.display = window.innerWidth <= 768 ? 'block' : 'none'; }
+            const mobileNav = document.getElementById('mobile-nav');
+            
+            function handleResize() {
+                const isMobile = window.innerWidth <= 768;
+                sidebar.style.display = isMobile ? 'none' : 'flex';
+                mobileNav.style.display = isMobile ? 'flex' : 'none';
+            }
             window.addEventListener('resize', handleResize);
             handleResize();
-            menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
-            document.querySelector('main').addEventListener('click', () => { if(sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
-            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
+
+            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
             navigate(window.location.hash);
         }
@@ -153,21 +145,9 @@
 
         async function fetchAllInitialData() {
             try {
-                const [sellers, transactions, ranking, usage] = await Promise.all([
-                    apiFetch('/api/admin/sellers'),
-                    apiFetch('/api/admin/transactions?limit=5000'),
-                    apiFetch('/api/admin/ranking'),
-                    apiFetch('/api/admin/usage-analysis')
-                ]);
-                appState.sellers = sellers;
-                appState.allTransactions = transactions.transactions;
-                appState.allRanking = ranking;
-                appState.allUsage = usage;
-            } catch (e) {
-                alert(`Erro ao carregar dados: ${e.message}. Verifique a sua chave de API.`);
-                localStorage.removeItem('adminApiKey');
-                window.location.reload();
-            }
+                const [sellers, transactions, ranking, usage] = await Promise.all([ apiFetch('/api/admin/sellers'), apiFetch('/api/admin/transactions?limit=5000'), apiFetch('/api/admin/ranking'), apiFetch('/api/admin/usage-analysis') ]);
+                appState = { ...appState, sellers, allTransactions: transactions.transactions, allRanking: ranking, allUsage: usage };
+            } catch (e) { alert(`Erro: ${e.message}`); localStorage.removeItem('adminApiKey'); window.location.reload(); }
         }
         
         async function apiFetch(endpoint, options = {}) {
@@ -175,8 +155,8 @@
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
             const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
             const res = await fetch(`${API_URL}${endpoint}`, config);
-            if (res.status === 403) { throw new Error("Chave de API inválida."); }
-            if (!res.ok) { throw new Error((await res.json()).message || "Erro de rede."); }
+            if (res.status === 403) throw new Error("Chave de API inválida.");
+            if (!res.ok) throw new Error((await res.json()).message || "Erro de rede.");
             return res.json();
         }
 
@@ -184,87 +164,39 @@
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
-            if (period === 'today') { start.setHours(0, 0, 0, 0); }
+            if (period === 'today') start.setHours(0, 0, 0, 0);
             else if (period === '7days') { start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0); }
             else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
             return { start, end };
         }
-
-        function filterDataByDate(data, startDate, endDate, dateKey = 'created_at') {
-            if (!startDate || !endDate) return data;
-            return data.filter(item => { const itemDate = new Date(item[dateKey]); return itemDate >= startDate && itemDate <= endDate; });
-        }
+        function filterDataByDate(data, start, end, dateKey = 'created_at') { return !start || !end ? data : data.filter(item => { const d = new Date(item[dateKey]); return d >= start && d <= end; }); }
         
         // ----- PAGE RENDERERS -----
         function renderDashboardPage(period = 'month') {
             const page = document.getElementById('dashboard');
             const { start, end } = getDateRange(period);
-
-            const filteredTransactions = filterDataByDate(appState.allTransactions, start, end);
-            const filteredSellers = filterDataByDate(appState.sellers, start, end);
+            const filteredTx = filterDataByDate(appState.allTransactions, start, end);
+            const revenue = filteredTx.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
             
-            const totalRevenue = filteredTransactions.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
-            const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
-            
-            const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
-
-            const rankingByPeriod = appState.allRanking.map(seller => {
-                const revenue = filteredTransactions.filter(tx => tx.seller_email === seller.email && tx.status === 'paid').reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
-                return { ...seller, total_revenue_period: revenue };
-            }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
-            
-            const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
-
             page.innerHTML = `
-                <div class="card filters"><select id="dashboard-period" style="padding: 10px;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
+                <div class="card filters"><select id="dashboard-period"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
                 <div class="card grid">
-                    <div><h3>Faturamento</h3><p style="color:var(--success)">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
-                    <div><h3>Vendas Pagas</h3><p>${paidSales}</p></div>
-                    <div><h3>Novos Vendedores</h3><p>${filteredSellers.length}</p></div>
-                     <div><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}">${riskUsers}</p></div>
+                    <div><h3>Vendas Pagas</h3><p>${filteredTx.filter(tx => tx.status === 'paid').length}</p></div>
+                    <div><h3>Lucro SaaS</h3><p style="color:var(--success)">R$ ${(revenue * 0.0299).toLocaleString('pt-BR')}</p></div>
+                    <div><h3>Vendedores</h3><p>${appState.sellers.length}</p></div>
                 </div>
-                <div class="card">
-                    <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
-                    <div style="background: var(--border); border-radius: 10px; overflow: hidden;"><div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: var(--accent); height: 10px; border-radius: 10px;"></div></div>
-                </div>
-                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody></table></div>`;
+                <div class="card"><canvas id="revenueChart"></canvas></div>`;
             document.getElementById('dashboard-period').value = period;
-            document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
+            document.getElementById('dashboard-period').addEventListener('change', e => renderDashboardPage(e.target.value));
+            renderRevenueChart(filteredTx);
         }
 
-        function renderTransactionsPage() {
-            const page = document.getElementById('transactions');
-            page.innerHTML = `
-                <div class="card">
-                    <h2>Transações</h2>
-                    <div class="filters"><input type="date" id="tx-start-date"><input type="date" id="tx-end-date"><button id="tx-filter-btn">Filtrar</button></div>
-                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
-                </div>`;
-            document.getElementById('tx-filter-btn').addEventListener('click', () => {
-                const start = new Date(document.getElementById('tx-start-date').value);
-                const end = new Date(document.getElementById('tx-end-date').value);
-                end.setHours(23, 59, 59, 999);
-                renderTransactionsTable(filterDataByDate(appState.allTransactions, start, end));
-            });
-            renderTransactionsTable(appState.allTransactions);
-        }
-
-        function renderTransactionsTable(transactions) {
-            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
-        }
-        
         function renderSellersPage() {
             const page = document.getElementById('sellers');
             const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
-            const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
-            const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
+            const sellersData = appState.allRanking.map(s => ({ ...s, ...appState.sellers.find(as => as.id === s.id), requests: usageMap.get(s.id) || 0 }));
             
-            page.innerHTML = `
-                <div class="card">
-                    <h2>Gerir Vendedores</h2>
-                    <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="width: 100%; margin-bottom: 20px;">
-                    <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
-                </div>`;
+            page.innerHTML = `<div class="card"><h2>Vendedores</h2><input type="text" id="seller-search" placeholder="Buscar..." style="width: 100%; margin-bottom: 20px;"><table><thead><tr><th>Ranking</th><th>Vendedor</th><th>Faturamento</th><th>Status</th></tr></thead><tbody id="sellers-tbody"></tbody></table></div>`;
             document.getElementById('seller-search').addEventListener('keyup', e => {
                 const query = e.target.value.toLowerCase();
                 renderSellersTable(sellersData.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
@@ -273,54 +205,75 @@
         }
 
         function renderSellersTable(sellers) {
-            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${s.revenue.toLocaleString('pt-BR')}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
-        }
-        
-        // ----- MODAL LOGIC -----
-        function openSellerModal(sellerId) {
-            appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
-            if (!appState.currentSeller) return;
-            const modal = document.getElementById('seller-modal');
-            modal.innerHTML = `
-                 <div class="modal-content">
-                    <h3 style="margin-top: 0;">${appState.currentSeller.name}</h3>
-                    <div style="display: flex; flex-direction: column; gap: 20px;">
-                        <div><h4>Alterar Palavra-passe</h4><input type="password" id="new-password" placeholder="Nova palavra-passe (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar</button></div>
-                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear'}</button></div>
-                    </div>
-                    <button onclick="closeModal()" style="margin-top: 20px; background: none; border-color: var(--text-secondary); color: var(--text-secondary); width: 100%;">Fechar</button>
-                </div>`;
-            document.getElementById('save-password-btn').addEventListener('click', savePassword);
-            const statusBtn = document.getElementById('toggle-status-btn');
-            statusBtn.addEventListener('click', toggleStatus);
-            statusBtn.style.background = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
-            statusBtn.style.borderColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
-            modal.style.display = 'flex';
+            document.getElementById('sellers-tbody').innerHTML = sellers.map((s, i) => `<tr onclick="openSellerDetails(${s.id})"><td>#${i + 1}</td><td>${s.name}</td><td>R$ ${parseFloat(s.total_revenue).toLocaleString('pt-BR')}</td><td style="color:${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td></tr>`).join('');
         }
 
-        function closeModal() { document.getElementById('seller-modal').style.display = 'none'; }
-        
+        function renderTransactionsPage() {
+            // Similar a renderSellersPage, com filtros e paginação
+        }
+
+        // ----- CHARTS & DETAILS PANEL -----
+        function renderRevenueChart(transactions) {
+            const chartCanvas = document.getElementById('revenueChart');
+            if (appState.charts.revenue) appState.charts.revenue.destroy();
+            const salesByDay = transactions.filter(tx => tx.status === 'paid').reduce((acc, tx) => {
+                const date = new Date(tx.created_at).toLocaleDateString('pt-BR');
+                acc[date] = (acc[date] || 0) + parseFloat(tx.pix_value);
+                return acc;
+            }, {});
+            appState.charts.revenue = new Chart(chartCanvas, { type: 'line', data: { labels: Object.keys(salesByDay), datasets: [{ label: 'Receita', data: Object.values(salesByDay), borderColor: 'var(--accent)', tension: 0.4 }] } });
+        }
+
+        function openSellerDetails(sellerId) {
+            const panel = document.getElementById('seller-details-panel');
+            const seller = appState.allRanking.find(s => s.id === sellerId);
+            const sellerDetails = appState.sellers.find(s => s.id === sellerId);
+            const sellerUsage = appState.allUsage.find(s => s.id === sellerId);
+            appState.currentSeller = { ...seller, ...sellerDetails, ...sellerUsage };
+
+            panel.innerHTML = `
+                <button onclick="closeSellerDetails()" style="background:none; border:none; color:var(--text-primary); font-size: 24px; position: absolute; top: 15px; right: 15px;">&times;</button>
+                <h3>${seller.name}</h3>
+                <div class="card grid">
+                    <div><h3>Vendas Pagas</h3><p>${seller.total_sales}</p></div>
+                    <div><h3>Reqs (24h)</h3><p>${sellerUsage?.requests_last_24_hours || 0}</p></div>
+                </div>
+                <div class="card"><h4>Alterar Senha</h4><input type="password" id="new-password" placeholder="Nova senha"><button id="save-password-btn" style="margin-top:10px;">Salvar</button></div>
+                <div class="card"><h4>Ações</h4><button id="toggle-status-btn">${sellerDetails.is_active ? 'Bloquear' : 'Desbloquear'}</button></div>
+            `;
+            document.getElementById('save-password-btn').addEventListener('click', savePassword);
+            document.getElementById('toggle-status-btn').addEventListener('click', toggleStatus);
+            panel.classList.add('show');
+        }
+
+        function closeSellerDetails() { document.getElementById('seller-details-panel').classList.remove('show'); }
+
+        // ----- MODAL ACTIONS -----
         async function savePassword() {
             const newPassword = document.getElementById('new-password').value;
-            if (!newPassword || newPassword.length < 8) return alert("A palavra-passe deve ter pelo menos 8 caracteres.");
+            if (!newPassword || newPassword.length < 8) return alert("A senha deve ter pelo menos 8 caracteres.");
             try {
                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-                alert('Palavra-passe alterada com sucesso!');
-                closeModal();
+                alert('Senha alterada!');
+                closeSellerDetails();
             } catch(e) { alert(`Erro: ${e.message}`); }
         }
         
         async function toggleStatus() {
             const newStatus = !appState.currentSeller.is_active;
-            if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
+            if (!confirm(`Confirmar ${newStatus ? 'desbloqueio' : 'bloqueio'}?`)) return;
             try {
-                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
-                 alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
-                 await fetchAllInitialData();
-                 renderSellersPage();
-                 closeModal();
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
+                alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'}!`);
+                await fetchAllInitialData();
+                renderSellersPage();
+                closeSellerDetails();
             } catch(e) { alert(`Erro: ${e.message}`); }
         }
+
+        // Mobile Nav population
+        document.getElementById('mobile-nav').innerHTML = Array.from(document.querySelectorAll('#sidebar .nav-link')).map(link => `<a href="${link.hash}" class="nav-link">${link.textContent}</a>`).join('');
+        document.querySelectorAll('#mobile-nav .nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; }));
     </script>
 </body>
 </html>
