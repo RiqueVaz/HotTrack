@@ -53,9 +53,6 @@
             border: 1px solid var(--border);
             border-radius: 12px; padding: 25px; margin-bottom: 20px;
         }
-        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        .stat-card h3 { margin: 0; color: var(--text-secondary); font-size: 14px; font-weight: 500; }
-        .stat-card p { margin: 5px 0 0 0; font-size: 2.2em; font-weight: 700; color: var(--primary); }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border); }
         th { color: var(--text-secondary); font-weight: 500; }
@@ -64,6 +61,7 @@
             padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary);
         }
         button { cursor: pointer; background-color: var(--accent); color: var(--primary); font-weight: 500; border-color: var(--accent); }
+        .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
@@ -122,7 +120,7 @@
     
     <script>
         const API_URL = 'https://novaapi-one.vercel.app';
-        let appState = { sellers: [], currentSeller: null, charts: {} };
+        let appState = { sellers: [], allTransactions: [], currentSeller: null, charts: {} };
 
         // ----- CORE APP & UI LOGIC -----
         document.addEventListener('DOMContentLoaded', () => {
@@ -177,6 +175,15 @@
         const renderLoader = (container) => { container.innerHTML = `<div class="card"><p>A carregar dados...</p></div>`; };
         const destroyChart = (chartId) => { if (appState.charts[chartId]) appState.charts[chartId].destroy(); };
 
+        // ----- DATE & TIMEZONE HELPER -----
+        function parseDateAndConvertToBrasiliaUTC(dateString) {
+            if (!dateString) return null;
+            // Cria a data em UTC e subtrai 3 horas para simular o fuso horário de Brasília
+            const date = new Date(dateString);
+            date.setUTCHours(date.getUTCHours() + 3);
+            return date;
+        }
+
         // ----- PAGE RENDERERS -----
         async function loadDashboardPage() {
             const page = document.getElementById('dashboard');
@@ -187,11 +194,11 @@
                     apiFetch('/api/admin/ranking')
                 ]);
                 page.innerHTML = `
-                    <div class="stat-grid">
-                        <div class="card stat-card"><h3>Faturamento SaaS</h3><p>R$ ${parseFloat(dashboard.total_revenue).toLocaleString('pt-BR')}</p></div>
-                        <div class="card stat-card"><h3>Lucro SaaS</h3><p>R$ ${parseFloat(dashboard.saas_profit).toLocaleString('pt-BR')}</p></div>
-                        <div class="card stat-card"><h3>Total de Vendedores</h3><p>${dashboard.total_sellers}</p></div>
-                        <div class="card stat-card"><h3>Vendas Pagas</h3><p>${dashboard.total_paid_transactions}</p></div>
+                    <div class="card stat-grid">
+                        <div class="stat-card"><h3>Faturamento SaaS</h3><p>R$ ${parseFloat(dashboard.total_revenue).toLocaleString('pt-BR')}</p></div>
+                        <div class="stat-card"><h3>Lucro SaaS</h3><p>R$ ${parseFloat(dashboard.saas_profit).toLocaleString('pt-BR')}</p></div>
+                        <div class="stat-card"><h3>Vendedores</h3><p>${dashboard.total_sellers}</p></div>
+                        <div class="stat-card"><h3>Vendas Pagas</h3><p>${dashboard.total_paid_transactions}</p></div>
                     </div>
                     <div class="card">
                         <h2>Leaderboard (Top 5)</h2>
@@ -230,10 +237,11 @@
             const page = document.getElementById('platform');
             renderLoader(page);
             try {
-                const [transactions, usage] = await Promise.all([
-                    apiFetch('/api/admin/transactions?limit=100'),
+                const [transactionsData, usage] = await Promise.all([
+                    apiFetch('/api/admin/transactions?limit=1000'), // Pega um lote grande para filtrar
                     apiFetch('/api/admin/usage-analysis')
                 ]);
+                appState.allTransactions = transactionsData.transactions;
                 page.innerHTML = `
                     <div class="card">
                         <h2>Monitor de Uso da API (Top 10 - 24h)</h2>
@@ -241,17 +249,19 @@
                     </div>
                     <div class="card">
                         <h2>Transações Recentes</h2>
+                        <div class="filters">
+                            <input type="date" id="start-date">
+                            <input type="date" id="end-date">
+                            <button id="filter-btn">Filtrar</button>
+                        </div>
                         <table>
                             <thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead>
-                            <tbody>${transactions.transactions.map(tx => `
-                                <tr>
-                                    <td>${tx.seller_name}</td>
-                                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
-                                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td>
-                                    <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
-                                </tr>`).join('')}</tbody>
+                            <tbody id="transactions-tbody"></tbody>
                         </table>
                     </div>`;
+                
+                document.getElementById('filter-btn').addEventListener('click', applyDateFilter);
+                renderTransactionsTable(appState.allTransactions);
                 renderUsageChart(usage);
             } catch(e) { page.innerHTML = `<div class="card"><p style="color: var(--danger);">${e.message}</p></div>`; }
         }
@@ -262,6 +272,36 @@
                     <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
                     <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
                     <td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
+                </tr>`).join('');
+        }
+
+        function applyDateFilter() {
+            const startDate = parseDateAndConvertToBrasiliaUTC(document.getElementById('start-date').value);
+            const endDateInput = document.getElementById('end-date').value;
+            let endDate = null;
+            if (endDateInput) {
+                endDate = parseDateAndConvertToBrasiliaUTC(endDateInput);
+                endDate.setUTCHours(23, 59, 59, 999); // Inclui o dia todo
+            }
+
+            const filtered = appState.allTransactions.filter(tx => {
+                const txDate = new Date(tx.created_at);
+                const isAfterStart = startDate ? txDate >= startDate : true;
+                const isBeforeEnd = endDate ? txDate <= endDate : true;
+                return isAfterStart && isBeforeEnd;
+            });
+            renderTransactionsTable(filtered);
+        }
+
+        function renderTransactionsTable(transactions) {
+            const tbody = document.getElementById('transactions-tbody');
+            if(!tbody) return;
+            tbody.innerHTML = transactions.slice(0, 100).map(tx => `
+                <tr>
+                    <td>${tx.seller_name}</td>
+                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
+                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td>
+                    <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
                 </tr>`).join('');
         }
 
