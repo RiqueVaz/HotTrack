@@ -21,7 +21,7 @@
             --danger: #E11D48; --success: #22C55E;
         }
         * { box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;}
         
         #login-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
@@ -30,47 +30,62 @@
         }
         #login-box {
             background: var(--surface); padding: 30px; border-radius: 12px;
-            width: 90%; max-width: 350px; text-align: center;
+            width: 90%; max-width: 350px; text-align: center; border: 1px solid var(--border);
         }
 
         #app-container { display: flex; min-height: 100vh; }
         #sidebar {
             width: 250px; background: var(--surface); border-right: 1px solid var(--border);
-            padding: 20px; display: flex; flex-direction: column; transition: transform 0.3s ease;
+            padding: 20px; display: flex; flex-direction: column; transition: transform 0.3s ease; position: fixed; height: 100%; z-index: 200;
         }
         .nav-link {
             padding: 12px 15px; text-decoration: none; color: var(--text-secondary);
-            font-weight: 500; border-radius: 6px; display: flex; align-items: center; gap: 10px;
+            font-weight: 500; border-radius: 8px; display: flex; align-items: center; gap: 10px;
             transition: background-color 0.2s, color 0.2s;
         }
-        .nav-link.active, .nav-link:hover { color: var(--primary); background-color: rgba(147, 51, 234, 0.1); }
-        main { flex-grow: 1; padding: 20px; height: 100vh; overflow-y: auto; }
+        .nav-link.active, .nav-link:hover { color: var(--text-primary); background-color: rgba(147, 51, 234, 0.2); }
+        main { flex-grow: 1; padding: 30px; margin-left: 250px; width: calc(100% - 250px); }
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.5s; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         input, button, select {
-            font-family: 'Inter', sans-serif; border-radius: 6px; border: 1px solid var(--border);
-            padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); width: 100%;
+            font-family: 'Inter', sans-serif; border-radius: 8px; border: 1px solid var(--border);
+            padding: 12px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); transition: all 0.2s;
         }
-        button { cursor: pointer; background-color: var(--accent); color: var(--primary); font-weight: 700; border-color: var(--accent); }
+        input:focus, select:focus { border-color: var(--accent); outline: none; }
+        button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
+        button:hover { background-color: var(--accent-hover); }
+        
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
             display: none; align-items: center; justify-content: center; z-index: 1000;
         }
-        .modal-content { background: var(--surface); padding: 30px; border-radius: 8px; width: 90%; max-width: 400px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        .modal-content { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 450px; border: 1px solid var(--border); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-secondary); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+        tbody tr:hover { background-color: rgba(255,255,255,0.03); }
+
+        .progress-bar { background: var(--border); border-radius: 10px; overflow: hidden; height: 12px; }
+        .progress-bar-inner { background: var(--accent); height: 100%; border-radius: 10px; transition: width 0.5s ease-out; }
+
+        #menu-toggle { display: none; }
 
         @media (max-width: 768px) {
-            #sidebar { position: fixed; transform: translateX(-100%); z-index: 200; height: 100%; }
-            #sidebar.show { transform: translateX(0); }
-            main { padding: 15px; }
+            #sidebar { transform: translateX(-100%); }
+            #sidebar.show { transform: translateX(0); box-shadow: 10px 0 20px rgba(0,0,0,0.2); }
+            main { margin-left: 0; width: 100%; padding: 20px; }
             #menu-toggle {
                 display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--primary);
+                background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text-primary);
             }
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -80,17 +95,17 @@
             <h2 style="color: var(--accent);">Command Center</h2>
             <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
             <form id="login-form">
-                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required>
-                <button type="submit" style="margin-top: 15px;">Entrar</button>
+                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required style="width: 100%;">
+                <button type="submit" style="margin-top: 15px; width: 100%;">Entrar</button>
             </form>
         </div>
     </div>
 
-    <button id="menu-toggle" style="display: none;">☰</button>
+    <button id="menu-toggle">☰</button>
     <div id="app-container" style="visibility: hidden;">
         <aside id="sidebar">
-            <h2 style="font-weight: 700; color: var(--accent); text-align: center;">Nebula</h2>
-            <nav style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
+            <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">Nebula</h2>
+            <nav style="display: flex; flex-direction: column; gap: 10px;">
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
                 <a href="#transactions" class="nav-link">Transações</a>
@@ -112,6 +127,19 @@
         let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
         const MONTHLY_GOAL = 50000;
 
+        // ----- TIMEZONE & FORMATTING HELPERS -----
+        function toBrasiliaTime(dateString) {
+            const date = new Date(dateString);
+            return new Date(date.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        }
+
+        function formatToBrasiliaString(date) {
+            return date.toLocaleString('pt-BR', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            }).replace(',', '');
+        }
+        
         // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
             const loginForm = document.getElementById('login-form');
@@ -137,15 +165,15 @@
             
             const sidebar = document.getElementById('sidebar');
             const menuToggle = document.getElementById('menu-toggle');
-            function handleResize() { menuToggle.style.display = window.innerWidth <= 768 ? 'block' : 'none'; }
+            function handleResize() { if (window.innerWidth > 768) sidebar.classList.remove('show'); }
             window.addEventListener('resize', handleResize);
             handleResize();
             menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
-            document.querySelector('main').addEventListener('click', () => { if(sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
+            document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
             document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
             
-            navigate(window.location.hash);
+            navigate(window.location.hash || '#dashboard');
         }
 
         function navigate(hash) {
@@ -185,103 +213,76 @@
                 const errText = await res.text();
                 throw new Error(errText || "Erro de rede.");
             }
-            // Retorna texto se o content-type for text/plain, senão JSON
             const contentType = res.headers.get("content-type");
-            if (contentType && contentType.indexOf("application/json") !== -1) {
-                return res.json();
-            }
-            return res.text();
+            return contentType?.includes("application/json") ? res.json() : res.text();
         }
 
-        // --- LÓGICA DE NOTIFICAÇÕES (CORRIGIDA E MELHORADA) ---
-        
-        // Função para converter a chave VAPID para o formato correto
+        // --- PUSH NOTIFICATIONS LOGIC ---
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
             const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
             const rawData = window.atob(base64);
             const outputArray = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; ++i) {
-                outputArray[i] = rawData.charCodeAt(i);
-            }
+            for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
             return outputArray;
         }
 
         async function setupPushNotifications() {
-            console.log("Iniciando configuração de notificações...");
             if (!('serviceWorker' in navigator && 'PushManager' in window)) {
                 alert('O seu navegador não suporta notificações.');
                 return;
             }
-            
             try {
                 const registration = await navigator.serviceWorker.register('sw.js');
-                console.log("Service Worker registado com sucesso.");
-
-                const permission = await window.Notification.requestPermission();
+                const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
                     alert('Permissão para notificações negada.');
                     return;
                 }
-                console.log("Permissão concedida.");
-                
                 let subscription = await registration.pushManager.getSubscription();
                 if (subscription === null) {
-                    console.log("Nenhuma inscrição existente, a criar uma nova...");
                     const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
-                    if (!vapidPublicKey) {
-                        throw new Error("Não foi possível obter a chave VAPID do servidor.");
-                    }
-                    console.log("Chave VAPID recebida do servidor.");
-
+                    if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID do servidor.");
                     const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
                     subscription = await registration.pushManager.subscribe({
                         userVisibleOnly: true,
                         applicationServerKey: convertedVapidKey
                     });
-                    console.log("Inscrição criada com sucesso.");
-                } else {
-                    console.log("Inscrição já existente.");
                 }
-                
-                await apiFetch('/api/admin/save-subscription', {
-                    method: 'POST',
-                    body: JSON.stringify(subscription),
-                });
-                
-                console.log('Inscrição para notificações enviada ao servidor.');
+                await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
                 alert('Notificações ativadas com sucesso!');
             } catch (error) {
                 console.error('Falha ao configurar notificações:', error);
-                alert('Ocorreu um erro ao ativar as notificações. Verifique o console para mais detalhes.');
+                alert('Ocorreu um erro ao ativar as notificações.');
             }
         }
         
         function renderSettingsPage() {
-            const page = document.getElementById('settings');
-            page.innerHTML = `
+            document.getElementById('settings').innerHTML = `
                 <div class="card">
                     <h2>Definições de Notificações</h2>
                     <p style="color:var(--text-secondary)">Receba um alerta a cada nova venda paga ou PIX gerado.</p>
                     <button id="enable-notifications-btn" style="max-width: 300px;">Ativar Notificações</button>
-                </div>
-            `;
+                </div>`;
             document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
         }
 
-        // O resto do seu JavaScript (renderers para outras páginas, etc.) permanece o mesmo
+        // --- RENDER FUNCTIONS FOR PAGES ---
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
             if (period === 'today') { start.setHours(0, 0, 0, 0); }
-            else if (period === '7days') { start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0); }
+            else if (period === '7days') { start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0); }
             else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
             return { start, end };
         }
 
         function filterDataByDate(data, startDate, endDate, dateKey = 'created_at') {
             if (!startDate || !endDate) return data;
-            return data.filter(item => { const itemDate = new Date(item[dateKey]); return itemDate >= startDate && itemDate <= endDate; });
+            return data.filter(item => {
+                const itemDate = toBrasiliaTime(item[dateKey]);
+                return itemDate >= startDate && itemDate <= endDate;
+            });
         }
         
         function renderDashboardPage(period = 'month') {
@@ -293,29 +294,30 @@
             
             const totalRevenue = filteredTransactions.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
             const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
-            
             const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
 
             const rankingByPeriod = appState.allRanking.map(seller => {
-                const revenue = filteredTransactions.filter(tx => tx.seller_email === seller.email && tx.status === 'paid').reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
+                const revenue = filteredTransactions
+                    .filter(tx => tx.seller_email === seller.email && tx.status === 'paid')
+                    .reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
                 return { ...seller, total_revenue_period: revenue };
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
             
             const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
 
             page.innerHTML = `
-                <div class="card filters"><select id="dashboard-period" style="padding: 10px;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
-                <div class="card grid">
-                    <div><h3>Faturamento</h3><p style="color:var(--success)">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
-                    <div><h3>Vendas Pagas</h3><p>${paidSales}</p></div>
-                    <div><h3>Novos Vendedores</h3><p>${filteredSellers.length}</p></div>
-                     <div><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}">${riskUsers}</p></div>
+                <div class="filters"><select id="dashboard-period" style="padding: 12px; width: auto;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
+                <div class="grid">
+                    <div class="card"><h3>Faturamento</h3><p style="color:var(--success); font-size: 24px; font-weight: 700;">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
+                    <div class="card"><h3>Vendas Pagas</h3><p style="font-size: 24px; font-weight: 700;">${paidSales}</p></div>
+                    <div class="card"><h3>Novos Vendedores</h3><p style="font-size: 24px; font-weight: 700;">${filteredSellers.length}</p></div>
+                    <div class="card"><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}; font-size: 24px; font-weight: 700;">${riskUsers}</p></div>
                 </div>
                 <div class="card">
                     <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
-                    <div style="background: var(--border); border-radius: 10px; overflow: hidden;"><div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: var(--accent); height: 10px; border-radius: 10px;"></div></div>
+                    <div class="progress-bar"><div class="progress-bar-inner" style="width: ${goalProgress > 100 ? 100 : goalProgress}%;"></div></div>
                 </div>
-                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR')}</td></tr>`).join('')}</tbody></table></div>`;
+                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td></tr>`).join('') || `<tr><td colspan="2" style="text-align:center; color: var(--text-secondary);">Nenhum dado para o período.</td></tr>`}</tbody></table></div>`;
             document.getElementById('dashboard-period').value = period;
             document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
         }
@@ -325,12 +327,20 @@
             page.innerHTML = `
                 <div class="card">
                     <h2>Transações</h2>
-                    <div class="filters"><input type="date" id="tx-start-date"><input type="date" id="tx-end-date"><button id="tx-filter-btn">Filtrar</button></div>
-                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
+                    <div class="filters">
+                        <input type="date" id="tx-start-date" style="flex-grow: 1;">
+                        <input type="date" id="tx-end-date" style="flex-grow: 1;">
+                        <button id="tx-filter-btn">Filtrar</button>
+                    </div>
+                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data (Brasília)</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
                 </div>`;
             document.getElementById('tx-filter-btn').addEventListener('click', () => {
-                const start = new Date(document.getElementById('tx-start-date').value);
-                const end = new Date(document.getElementById('tx-end-date').value);
+                const startStr = document.getElementById('tx-start-date').value;
+                const endStr = document.getElementById('tx-end-date').value;
+                if (!startStr || !endStr) return alert("Por favor, selecione as datas de início e fim.");
+                const start = new Date(startStr);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(endStr);
                 end.setHours(23, 59, 59, 999);
                 renderTransactionsTable(filterDataByDate(appState.allTransactions, start, end));
             });
@@ -338,7 +348,13 @@
         }
 
         function renderTransactionsTable(transactions) {
-            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
+            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `
+                <tr>
+                    <td>${tx.seller_name}</td>
+                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
+                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
+                    <td>${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
+                </tr>`).join('');
         }
         
         function renderSellersPage() {
@@ -361,7 +377,7 @@
         }
 
         function renderSellersTable(sellers) {
-            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${s.revenue.toLocaleString('pt-BR')}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
+            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${parseFloat(s.revenue).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
         }
         
         function openSellerModal(sellerId) {
@@ -372,15 +388,15 @@
                  <div class="modal-content">
                     <h3 style="margin-top: 0;">${appState.currentSeller.name}</h3>
                     <div style="display: flex; flex-direction: column; gap: 20px;">
-                        <div><h4>Alterar Palavra-passe</h4><input type="password" id="new-password" placeholder="Nova palavra-passe (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar</button></div>
-                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear'}</button></div>
+                        <div><h4>Alterar Senha</h4><input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar Senha</button></div>
+                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor'}</button></div>
                     </div>
-                    <button onclick="closeModal()" style="margin-top: 20px; background: none; border-color: var(--text-secondary); color: var(--text-secondary); width: 100%;">Fechar</button>
+                    <button onclick="closeModal()" style="margin-top: 20px; background: none; border: 1px solid var(--border); color: var(--text-secondary); width: 100%;">Fechar</button>
                 </div>`;
             document.getElementById('save-password-btn').addEventListener('click', savePassword);
             const statusBtn = document.getElementById('toggle-status-btn');
             statusBtn.addEventListener('click', toggleStatus);
-            statusBtn.style.background = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
+            statusBtn.style.backgroundColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
             statusBtn.style.borderColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
             modal.style.display = 'flex';
         }
@@ -389,10 +405,10 @@
         
         async function savePassword() {
             const newPassword = document.getElementById('new-password').value;
-            if (!newPassword || newPassword.length < 8) return alert("A palavra-passe deve ter pelo menos 8 caracteres.");
+            if (!newPassword || newPassword.length < 8) return alert("A senha deve ter pelo menos 8 caracteres.");
             try {
                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-                alert('Palavra-passe alterada com sucesso!');
+                alert('Senha alterada com sucesso!');
                 closeModal();
             } catch(e) { alert(`Erro: ${e.message}`); }
         }
