@@ -3,502 +3,409 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotTrack - Admin Console</title>
+    <title>HotTrack [God Mode]</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-dark: #111827;
-            --bg-light: #1F2937;
-            --sidebar-bg: #0c111d;
-            --border-color: #374151;
-            --text-primary: #F9FAFB;
-            --text-secondary: #9CA3AF;
-            --accent-purple: #8B5CF6;
-            --accent-purple-hover: #7C3AED;
-            --accent-green: #10B981;
-            --accent-red: #EF4444;
-            --accent-blue: #3B82F6;
-            --shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+            --bg-main: #0D0F18;
+            --bg-secondary: #1A1C2A;
+            --sidebar-bg: #111320;
+            --border-color: #2E3040;
+            --text-primary: #E0E5F0;
+            --text-secondary: #8C93A9;
+            --glow-cyan: #00F6FF;
+            --glow-magenta: #FF00E4;
+            --shadow-glow: 0 0 5px var(--glow-cyan), 0 0 10px var(--glow-cyan), 0 0 15px var(--glow-magenta);
         }
         * { box-sizing: border-box; }
         body {
             font-family: 'Roboto', sans-serif;
-            background-color: var(--bg-dark);
+            background-color: var(--bg-main);
             color: var(--text-primary);
             margin: 0;
-            overflow-x: hidden;
+            overflow: hidden;
         }
-        #app-wrapper {
-            display: flex;
-            transition: filter 0.3s ease-in-out;
-        }
+        h1, h2, h3 { font-family: 'Orbitron', sans-serif; text-transform: uppercase; }
         #login-overlay {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8);
-            backdrop-filter: blur(10px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 100;
-            transition: opacity 0.3s;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); backdrop-filter: blur(10px); z-index: 100;
+            display: flex; align-items: center; justify-content: center;
         }
         #login-box {
-            background: var(--bg-light);
-            padding: 40px;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 400px;
-            text-align: center;
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--glow-cyan);
+            box-shadow: var(--shadow-glow);
+            padding: 40px; border-radius: 8px; width: 90%; max-width: 400px;
+            text-align: center; background: var(--bg-secondary);
         }
+        #app-wrapper { display: flex; }
         #sidebar {
-            width: 250px;
-            background: var(--sidebar-bg);
-            padding: 20px;
-            height: 100vh;
-            position: fixed;
+            width: 260px; background: var(--sidebar-bg);
+            padding: 20px; height: 100vh; position: fixed;
             border-right: 1px solid var(--border-color);
         }
-        #sidebar h1 {
-            font-size: 1.5em;
-            color: var(--accent-purple);
-            text-align: center;
-            margin-bottom: 40px;
-        }
+        #sidebar-header { text-align: center; margin-bottom: 30px; }
+        #sidebar-header h1 { font-size: 1.8em; color: var(--glow-cyan); letter-spacing: 2px; }
+        #admin-level { background: linear-gradient(90deg, var(--glow-cyan), var(--glow-magenta)); color: black; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
         .nav-link {
-            display: flex;
-            align-items: center;
-            padding: 12px 15px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            transition: background-color 0.2s, color 0.2s;
+            display: flex; align-items: center; padding: 12px 15px; color: var(--text-secondary);
+            text-decoration: none; border-radius: 8px; margin-bottom: 10px;
+            transition: all 0.3s;
         }
         .nav-link:hover, .nav-link.active {
-            background-color: var(--accent-purple);
-            color: var(--text-primary);
-        }
-        .nav-link svg {
-            margin-right: 15px;
-            width: 20px;
-            height: 20px;
+            background-color: var(--glow-cyan); color: var(--bg-main);
+            transform: translateX(5px); box-shadow: 0 0 10px var(--glow-cyan);
         }
         main {
-            margin-left: 250px;
-            padding: 30px;
-            width: calc(100% - 250px);
+            margin-left: 260px; padding: 30px; width: calc(100% - 260px);
+            height: 100vh; overflow-y: auto;
         }
-        .page {
-            display: none;
+        .page { display: none; }
+        .page.active { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .card { background: var(--bg-secondary); padding: 25px; border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { font-family: 'Orbitron'; background: #222536; }
+        .achievements-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .achievement-card {
+            background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px;
+            padding: 20px; text-align: center; opacity: 0.4; transition: all 0.3s;
         }
-        .page.active {
-            display: block;
-            animation: fadeIn 0.5s;
-        }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
-        .kpi-card {
-            background: var(--bg-light);
-            padding: 25px;
-            border-radius: 12px;
-            border: 1px solid var(--border-color);
-        }
-        .kpi-card h3 { margin-top: 0; color: var(--text-secondary); font-weight: 500; }
-        .kpi-card .value { font-size: 2.2em; margin-bottom: 0; color: var(--text-primary); font-weight: 700; }
-        .chart-container {
-            background: var(--bg-light);
-            padding: 25px;
-            border-radius: 12px;
-            margin-top: 30px;
-            border: 1px solid var(--border-color);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        th, td {
-            padding: 15px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-        th {
-            background-color: #2a3649;
-            cursor: pointer;
-        }
-        tr:hover {
-            background-color: #2a3649;
-        }
-        .leaderboard-name {
-            display: flex;
-            align-items: center;
-        }
-        .leaderboard-name .medal {
-            font-size: 1.5em;
-            margin-right: 10px;
-        }
-        button, input {
-            font-family: 'Roboto', sans-serif;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            padding: 12px 15px;
-            font-size: 16px;
-        }
-        input {
-            width: 100%;
-            background-color: var(--bg-dark);
-            color: var(--text-primary);
-        }
-        button {
-            background-color: var(--accent-purple);
-            color: var(--text-primary);
-            font-weight: 700;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        button:hover {
-            background-color: var(--accent-purple-hover);
+        .achievement-card.unlocked { opacity: 1; border-color: var(--glow-cyan); box-shadow: 0 0 10px var(--glow-cyan); }
+        .achievement-card .icon { font-size: 3em; }
+        .achievement-card h3 { color: var(--glow-cyan); margin: 10px 0 5px 0; }
+        .filters { display: flex; gap: 15px; margin-bottom: 20px; align-items: center; }
+        input, select {
+            font-family: 'Roboto', sans-serif; border-radius: 8px; border: 1px solid var(--border-color);
+            padding: 12px 15px; font-size: 16px; background-color: var(--bg-main); color: var(--text-primary);
         }
     </style>
 </head>
 <body>
+
     <div id="login-overlay">
         <div id="login-box">
-            <h2>Admin Console</h2>
-            <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso restrito à plataforma.</p>
+            <h2>G O D - M O D E</h2>
+            <p style="color: var(--text-secondary);">Requisição de Chave de Acesso Mestra</p>
             <form id="login-form">
-                <input type="password" id="admin-key" placeholder="Sua Chave de API Secreta" required>
-                <button type="submit" style="width: 100%; margin-top: 10px;">Acessar</button>
+                <input type="password" id="admin-key" placeholder="API_KEY_ADMIN" required style="text-align: center;">
+                <button type="submit" style="width: 100%; margin-top: 15px; letter-spacing: 2px;">AUTENTICAR</button>
             </form>
         </div>
     </div>
 
     <div id="app-wrapper">
         <aside id="sidebar">
-            <h1>HotTrack</h1>
-            <a href="#dashboard" class="nav-link active">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path d="M5 3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2H5zm0 2h10v7h-2l-1 2H8l-1-2H5V5z"/></svg>
-                Dashboard
-            </a>
-            <a href="#sellers" class="nav-link">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zm-1.518 8.44a.498.498 0 00-.434.707C7.452 15.65 8.182 16 9.044 16h2.912c.862 0 1.592-.35 2.01-.843a.499.499 0 00-.434-.707C13.066 14.15 12.336 14 11.5 14h-2c-.836 0-1.566.15-2.018.44zM12 6a3 3 0 116 0 3 3 0 01-6 0z"/></svg>
-                Vendedores
-            </a>
-             <a href="#ranking" class="nav-link">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path d="M11.918 10.118c.246.069.493.13.74.182V12a1 1 0 01-1 1h-1v4a1 1 0 01-1 1H8a1 1 0 01-1-1v-4H6a1 1 0 01-1-1v-1.7c.247-.052.494-.113.74-.182A4.5 4.5 0 019 6a4.5 4.5 0 012.918 4.118zM15 10a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/></svg>
-                Leaderboard
-            </a>
-            <a href="#transactions" class="nav-link">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>
-                Transações
-            </a>
-            <a href="#usage" class="nav-link">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.96.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.532 1.532 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.532 1.532 0 01-.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>
-                Uso da API
-            </a>
-             <a href="#" id="logout-button" class="nav-link" style="margin-top: auto; color: var(--accent-red);">
-                <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V5h10a1 1 0 100-2H3zm12.293 4.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L16.586 13H9a1 1 0 110-2h7.586l-1.293-1.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-                Sair
-            </a>
+            <div id="sidebar-header">
+                <h1>HotTrack</h1>
+                <p>Nível Admin: <span id="admin-level">1</span></p>
+            </div>
+            <a href="#dashboard" class="nav-link active">Dashboard</a>
+            <a href="#achievements" class="nav-link">Conquistas</a>
+            <a href="#sellers" class="nav-link">Vendedores</a>
+            <a href="#ranking" class="nav-link">Leaderboard</a>
+            <a href="#transactions" class="nav-link">Transações</a>
+            <a href="#usage" class="nav-link">Uso da API</a>
+            <a href="#" id="logout-button" class="nav-link" style="margin-top: auto; color: #FF5575;">Desconectar</a>
         </aside>
 
         <main id="main-content">
-            <div id="dashboard" class="page active">
-                </div>
-            <div id="sellers" class="page">
-                </div>
-            <div id="ranking" class="page">
-                 </div>
-            <div id="transactions" class="page">
-                 </div>
-             <div id="usage" class="page">
-                 </div>
+            <div id="dashboard" class="page active"></div>
+            <div id="achievements" class="page"></div>
+            <div id="sellers" class="page"></div>
+            <div id="ranking" class="page"></div>
+            <div id="transactions" class="page"></div>
+            <div id="usage" class="page"></div>
         </main>
     </div>
 
 <script>
-    // ----- CONFIGURAÇÃO E LÓGICA PRINCIPAL -----
+    // ----- CONFIG & STATE -----
     const API_URL = 'https://novaapi-one.vercel.app';
-    const MONTHLY_REVENUE_GOAL = 50000; // Defina sua meta de receita aqui
-    
-    const mainContent = document.getElementById('main-content');
-    const loginOverlay = document.getElementById('login-overlay');
-    const loginForm = document.getElementById('login-form');
-    const logoutButton = document.getElementById('logout-button');
-    let currentChart = null; // Para destruir a instância do gráfico ao trocar de aba
+    let appState = {
+        sellers: [],
+        transactions: [],
+        ranking: [],
+        usage: [],
+        dashboard: {},
+        charts: {}
+    };
 
-    // ----- LÓGICA DE NAVEGAÇÃO -----
-    function navigate(hash) {
-        if (!localStorage.getItem('adminApiKey')) {
-            showLogin();
-            return;
-        }
-        hash = hash || '#dashboard'; // Página padrão
+    // ----- CORE APP LOGIC -----
+    document.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('hashchange', () => navigate(window.location.hash));
+        document.querySelectorAll('.nav-link').forEach(link => {
+            if (link.id === 'logout-button') return;
+            link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; });
+        });
+        document.getElementById('logout-button').addEventListener('click', logout);
+        document.getElementById('login-form').addEventListener('submit', handleLogin);
         
-        document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-        document.querySelector(`.nav-link[href="${hash}"]`).classList.add('active');
-        
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        const activePage = document.getElementById(hash.substring(1));
-        activePage.classList.add('active');
-        
-        // Carrega o conteúdo da página ativa
-        switch(hash) {
-            case '#dashboard': loadDashboardPage(); break;
-            case '#sellers': loadSellersPage(); break;
-            case '#ranking': loadRankingPage(); break;
-            case '#transactions': loadTransactionsPage(); break;
-            case '#usage': loadUsagePage(); break;
-        }
-    }
-
-    // ----- AUTENTICAÇÃO -----
-    function showLogin() {
-        loginOverlay.style.opacity = '1';
-        loginOverlay.style.pointerEvents = 'auto';
-    }
-
-    function hideLogin() {
-        loginOverlay.style.opacity = '0';
-        loginOverlay.style.pointerEvents = 'none';
-        navigate(window.location.hash);
-    }
-
-    loginForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const adminKey = document.getElementById('admin-key').value;
-        localStorage.setItem('adminApiKey', adminKey);
-        hideLogin();
+        localStorage.getItem('adminApiKey') ? hideLogin() : showLogin();
     });
 
-    logoutButton.addEventListener('click', (e) => {
+    function navigate(hash) {
+        hash = hash || '#dashboard';
+        document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
+        document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
+        
+        const pageLoaders = {
+            '#dashboard': loadDashboardPage, '#achievements': loadAchievementsPage,
+            '#sellers': loadSellersPage, '#ranking': loadRankingPage,
+            '#transactions': loadTransactionsPage, '#usage': loadUsagePage
+        };
+        if (pageLoaders[hash]) pageLoaders[hash]();
+    }
+    
+    // ----- AUTHENTICATION -----
+    function showLogin() { document.getElementById('login-overlay').style.display = 'flex'; }
+    function hideLogin() {
+        document.getElementById('login-overlay').style.display = 'none';
+        navigate(window.location.hash);
+    }
+    function handleLogin(e) {
+        e.preventDefault();
+        localStorage.setItem('adminApiKey', document.getElementById('admin-key').value);
+        hideLogin();
+    }
+    function logout(e) {
         e.preventDefault();
         localStorage.removeItem('adminApiKey');
         showLogin();
-    });
+    }
 
-    // ----- CHAMADAS À API -----
-    async function apiFetch(endpoint, options = {}) {
+    // ----- API FETCHER -----
+    async function apiFetch(endpoint) {
         const adminKey = localStorage.getItem('adminApiKey');
         if (!adminKey) { showLogin(); throw new Error("Não autenticado"); }
-
-        const response = await fetch(`${API_URL}${endpoint}`, {
-            ...options,
-            headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers }
-        });
-
-        if (response.status === 403) {
-            localStorage.removeItem('adminApiKey');
-            showLogin();
-            throw new Error("Chave de API inválida ou expirada.");
-        }
-        if (!response.ok) throw new Error((await response.json()).message);
-        return response.json();
-    }
-
-    // ----- RENDERIZAÇÃO DAS PÁGINAS -----
-    function renderLoader(container) {
-        container.innerHTML = `<p>Analisando dados...</p>`;
+        const res = await fetch(`${API_URL}${endpoint}`, { headers: { 'x-admin-api-key': adminKey } });
+        if (res.status === 403) { logout(); throw new Error("Chave de API inválida."); }
+        if (!res.ok) throw new Error((await res.json()).message);
+        return res.json();
     }
     
+    // ----- PAGE RENDERERS -----
+    const renderLoader = (container) => { container.innerHTML = `<p>Sincronizando com a Matrix...</p>`; };
+    const destroyChart = (chartId) => { if (appState.charts[chartId]) appState.charts[chartId].destroy(); };
+
     async function loadDashboardPage() {
         const page = document.getElementById('dashboard');
         renderLoader(page);
         try {
-            const [dashboardData, transactions] = await Promise.all([
+            const [dashboard, sellers, transactions] = await Promise.all([
                 apiFetch('/api/admin/dashboard'),
-                apiFetch('/api/admin/transactions?limit=1000') // Pega as últimas 1000 para o gráfico
+                apiFetch('/api/admin/sellers'),
+                apiFetch('/api/admin/transactions?limit=1000')
             ]);
+            appState.dashboard = dashboard;
             
-            const revenue = parseFloat(dashboardData.total_revenue);
-            const goalProgress = (revenue / MONTHLY_REVENUE_GOAL) * 100;
-
             page.innerHTML = `
-                <div class="kpi-grid">
-                    <div class="kpi-card">
-                        <h3>Receita Total</h3>
-                        <p class="value" style="color: var(--accent-green);">R$ ${revenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-                    </div>
-                    <div class="kpi-card">
-                        <h3>Lucro (SaaS)</h3>
-                        <p class="value" style="color: var(--accent-blue);">R$ ${parseFloat(dashboardData.saas_profit).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-                    </div>
-                    <div class="kpi-card">
-                        <h3>Vendedores Ativos</h3>
-                        <p class="value">${dashboardData.total_sellers}</p>
-                    </div>
-                    <div class="kpi-card">
-                        <h3>Vendas Pagas</h3>
-                        <p class="value">${dashboardData.total_paid_transactions}</p>
-                    </div>
+                <div class="grid card">
+                    <div><h3>Receita Total</h3><h2 style="color:var(--glow-cyan)">R$ ${parseFloat(dashboard.total_revenue).toLocaleString('pt-BR')}</h2></div>
+                    <div><h3>Lucro (SaaS)</h3><h2 style="color:var(--glow-magenta)">R$ ${parseFloat(dashboard.saas_profit).toLocaleString('pt-BR')}</h2></div>
+                    <div><h3>Vendedores</h3><h2>${dashboard.total_sellers}</h2></div>
+                    <div><h3>Vendas Pagas</h3><h2>${dashboard.total_paid_transactions}</h2></div>
                 </div>
-                <div style="background: var(--bg-light); padding: 25px; border-radius: 12px; margin-top: 30px; border: 1px solid var(--border-color);">
-                     <h3>Meta de Receita Mensal (R$ ${MONTHLY_REVENUE_GOAL.toLocaleString('pt-BR')})</h3>
-                     <div style="background: var(--bg-dark); border-radius: 10px; padding: 4px; overflow: hidden;">
-                        <div style="width: ${goalProgress > 100 ? 100 : goalProgress}%; background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple)); height: 20px; border-radius: 6px; text-align: center; color: white; font-weight: bold;">
-                           ${goalProgress.toFixed(1)}%
-                        </div>
-                     </div>
-                </div>
-                <div class="chart-container">
-                    <canvas id="revenueChart"></canvas>
+                <div class="grid">
+                    <div class="card"><canvas id="revenueChart"></canvas></div>
+                    <div class="card"><canvas id="sellersChart"></canvas></div>
                 </div>
             `;
+            
             renderRevenueChart(transactions.transactions);
-        } catch (e) {
-            page.innerHTML = `<p style="color: var(--accent-red)">Erro ao carregar dashboard: ${e.message}</p>`;
-        }
+            renderSellersChart(sellers);
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
+    }
+    
+    async function loadAchievementsPage() {
+        const page = document.getElementById('achievements');
+        renderLoader(page);
+        try {
+            if (!appState.dashboard.total_revenue) {
+                appState.dashboard = await apiFetch('/api/admin/dashboard');
+            }
+            const { total_revenue, total_sellers, total_paid_transactions } = appState.dashboard;
+            const achievements = [
+                { icon: '💰', title: 'Primeiros R$1.000', goal: 1000, value: total_revenue },
+                { icon: '🚀', title: 'R$10.000 em Vendas', goal: 10000, value: total_revenue },
+                { icon: '🔥', title: 'R$100.000 em Vendas', goal: 100000, value: total_revenue },
+                { icon: '⭐', title: '10 Vendedores', goal: 10, value: total_sellers },
+                { icon: '🏆', title: '100 Vendedores', goal: 100, value: total_sellers },
+                { icon: '💯', title: '100 Vendas Pagas', goal: 100, value: total_paid_transactions },
+            ];
+            
+            let unlockedCount = achievements.filter(a => parseFloat(a.value) >= a.goal).length;
+            document.getElementById('admin-level').textContent = 1 + unlockedCount;
+
+            page.innerHTML = `
+                <h2>Conquistas da Plataforma</h2>
+                <div class="achievements-grid">
+                    ${achievements.map(a => `
+                        <div class="achievement-card ${parseFloat(a.value) >= a.goal ? 'unlocked' : ''}">
+                           <div class="icon">${a.icon}</div>
+                           <h3>${a.title}</h3>
+                           <p>${parseFloat(a.value).toLocaleString('pt-BR')} / ${a.goal.toLocaleString('pt-BR')}</p>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
     }
 
     async function loadSellersPage() {
         const page = document.getElementById('sellers');
         renderLoader(page);
         try {
-            const sellers = await apiFetch('/api/admin/sellers');
+            appState.sellers = await apiFetch('/api/admin/sellers');
             page.innerHTML = `
                 <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail...">
                 <table>
-                    <thead><tr><th onclick="sortTable(0)">Nome</th><th onclick="sortTable(1)">E-mail</th><th onclick="sortTable(2)">Status</th><th>Ações</th></tr></thead>
+                    <thead><tr><th>Nome</th><th>E-mail</th><th>Status</th><th>Ações</th></tr></thead>
                     <tbody id="sellers-tbody"></tbody>
-                </table>
-            `;
-            document.getElementById('seller-search').addEventListener('keyup', (e) => renderSellersTable(sellers.filter(s => 
-                s.name.toLowerCase().includes(e.target.value.toLowerCase()) || 
-                s.email.toLowerCase().includes(e.target.value.toLowerCase())
-            )));
-            renderSellersTable(sellers);
-        } catch(e) {
-            page.innerHTML = `<p style="color: var(--accent-red)">Erro ao carregar vendedores: ${e.message}</p>`;
-        }
+                </table>`;
+            document.getElementById('seller-search').addEventListener('keyup', e => {
+                const query = e.target.value.toLowerCase();
+                renderSellersTable(appState.sellers.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
+            });
+            renderSellersTable(appState.sellers);
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
     }
 
-    function renderSellersTable(sellers) {
-        document.getElementById('sellers-tbody').innerHTML = sellers.map(seller => `
-            <tr>
-                <td>${seller.name}</td>
-                <td>${seller.email}</td>
-                <td><span style="color: ${seller.is_active ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight: 500;">${seller.is_active ? 'Ativo' : 'Bloqueado'}</span></td>
-                <td>
-                    <button onclick="toggleSellerStatus(${seller.id}, ${!seller.is_active})" style="background-color: ${seller.is_active ? 'var(--accent-red)' : 'var(--accent-green)'}; font-size: 12px; padding: 8px 12px;">
-                        ${seller.is_active ? 'Bloquear' : 'Desbloquear'}
-                    </button>
-                    <button onclick="changeSellerPassword(${seller.id})" style="font-size: 12px; padding: 8px 12px; margin-left: 10px;">Alterar Senha</button>
-                </td>
-            </tr>
-        `).join('');
-    }
-    
     async function loadRankingPage() {
         const page = document.getElementById('ranking');
         renderLoader(page);
         try {
-            const ranking = await apiFetch('/api/admin/ranking');
+            appState.ranking = await apiFetch('/api/admin/ranking');
             const medals = ['🥇', '🥈', '🥉'];
             page.innerHTML = `
                  <table>
-                    <thead><tr><th>Posição</th><th>Vendedor</th><th onclick="sortTable(2, 'number')">Vendas Pagas</th><th onclick="sortTable(3, 'number')">Receita Total</th></tr></thead>
-                    <tbody>
-                        ${ranking.map((s, i) => `
-                            <tr>
-                                <td>${i + 1}</td>
-                                <td class="leaderboard-name">${medals[i] ? `<span class="medal">${medals[i]}</span>` : ''} ${s.name}</td>
-                                <td>${s.total_sales}</td>
-                                <td><strong>R$ ${parseFloat(s.total_revenue).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</strong></td>
-                            </tr>
-                        `).join('')}
+                    <thead><tr><th>Pos.</th><th>Vendedor</th><th>Vendas</th><th>Receita</th></tr></thead>
+                    <tbody>${appState.ranking.map((s, i) => `
+                        <tr>
+                            <td>${medals[i] || i + 1}</td>
+                            <td>${s.name}</td>
+                            <td>${s.total_sales}</td>
+                            <td style="color:var(--glow-cyan); font-weight:bold;">R$ ${parseFloat(s.total_revenue).toLocaleString('pt-BR')}</td>
+                        </tr>`).join('')}
                     </tbody>
-                 </table>
-            `;
-        } catch(e) {
-             page.innerHTML = `<p style="color: var(--accent-red)">Erro ao carregar leaderboard: ${e.message}</p>`;
-        }
+                 </table>`;
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
     }
     
-    // As outras funções (loadTransactionsPage, loadUsagePage) e helpers (toggleSellerStatus, changeSellerPassword, sortTable, renderRevenueChart) iriam aqui.
-    // O código completo está abaixo.
+    async function loadTransactionsPage() {
+        const page = document.getElementById('transactions');
+        renderLoader(page);
+        try {
+            const data = await apiFetch('/api/admin/transactions?limit=200'); // Fetch more for better filtering
+            appState.transactions = data.transactions;
+            page.innerHTML = `
+                <div class="filters">
+                    <input type="text" id="tx-search" placeholder="Buscar por email do vendedor...">
+                    <select id="tx-status-filter">
+                        <option value="">Todos Status</option>
+                        <option value="paid">Paga</option>
+                        <option value="pending">Pendente</option>
+                    </select>
+                </div>
+                <table>
+                    <thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Provedor</th><th>Data</th></tr></thead>
+                    <tbody id="tx-tbody"></tbody>
+                </table>`;
+            
+            const searchInput = document.getElementById('tx-search');
+            const statusFilter = document.getElementById('tx-status-filter');
+            
+            const applyFilters = () => {
+                const query = searchInput.value.toLowerCase();
+                const status = statusFilter.value;
+                const filtered = appState.transactions.filter(tx => 
+                    (tx.seller_email.toLowerCase().includes(query)) &&
+                    (!status || tx.status === status)
+                );
+                renderTransactionsTable(filtered);
+            };
+
+            searchInput.addEventListener('keyup', applyFilters);
+            statusFilter.addEventListener('change', applyFilters);
+            renderTransactionsTable(appState.transactions);
+
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
+    }
     
-    // ----- FUNÇÕES HELPERS -----
-    async function toggleSellerStatus(id, newStatus) {
-        if (!confirm(`Confirmar ${newStatus ? 'desbloqueio' : 'bloqueio'}?`)) return;
+    async function loadUsagePage() {
+        const page = document.getElementById('usage');
+        renderLoader(page);
         try {
-            await apiFetch(`/api/admin/sellers/${id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
-            loadSellersPage();
-        } catch (e) { alert(`Erro: ${e.message}`); }
+            appState.usage = await apiFetch('/api/admin/usage-analysis');
+            page.innerHTML = `<div class="card"><canvas id="usageChart"></canvas></div>`;
+            renderUsageChart(appState.usage);
+        } catch(e) { page.innerHTML = `<p>${e.message}</p>`; }
     }
 
-    async function changeSellerPassword(id) {
-        const newPassword = prompt('Nova senha (mínimo 8 caracteres):');
-        if (!newPassword || newPassword.length < 8) return alert('Senha inválida.');
-        try {
-            await apiFetch(`/api/admin/sellers/${id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-            alert('Senha alterada com sucesso!');
-        } catch (e) { alert(`Erro: ${e.message}`); }
+    // ----- TABLE RENDERERS -----
+    function renderSellersTable(sellers) {
+        document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr>
+            <td>${s.name}</td><td>${s.email}</td>
+            <td style="color:${s.is_active ? 'var(--glow-cyan)' : '#FF5575'}">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
+            <td><button onclick="toggleSellerStatus(${s.id}, ${!s.is_active})">${s.is_active ? 'Bloquear' : 'Ativar'}</button></td>
+        </tr>`).join('');
     }
 
+    function renderTransactionsTable(transactions) {
+        document.getElementById('tx-tbody').innerHTML = transactions.map(tx => `<tr>
+            <td>${tx.seller_name}</td>
+            <td style="color:${tx.status === 'paid' ? 'var(--glow-cyan)' : 'var(--text-secondary)'}">${tx.status}</td>
+            <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td>
+            <td>${tx.provider}</td>
+            <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
+        </tr>`).join('');
+    }
+
+    // ----- CHART RENDERERS -----
     function renderRevenueChart(transactions) {
-        const ctx = document.getElementById('revenueChart').getContext('2d');
-        if (currentChart) {
-            currentChart.destroy();
-        }
-        
-        const salesByDay = transactions
-            .filter(tx => tx.status === 'paid')
-            .reduce((acc, tx) => {
-                const date = new Date(tx.created_at).toLocaleDateString('pt-BR');
-                acc[date] = (acc[date] || 0) + parseFloat(tx.pix_value);
-                return acc;
-            }, {});
-
-        const sortedDates = Object.keys(salesByDay).sort((a, b) => {
-            const [dayA, monthA, yearA] = a.split('/');
-            const [dayB, monthB, yearB] = b.split('/');
-            return new Date(`${yearA}-${monthA}-${dayA}`) - new Date(`${yearB}-${monthB}-${dayB}`);
-        });
-
-        const labels = sortedDates;
-        const data = sortedDates.map(date => salesByDay[date]);
-
-        currentChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Receita Diária',
-                    data: data,
-                    backgroundColor: 'rgba(139, 92, 246, 0.2)',
-                    borderColor: 'rgba(139, 92, 246, 1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: { scales: { y: { beginAtZero: true } } }
+        destroyChart('revenue');
+        const salesByDay = transactions.filter(tx => tx.status === 'paid').reduce((acc, tx) => {
+            const date = new Date(tx.created_at).toISOString().split('T')[0];
+            acc[date] = (acc[date] || 0) + parseFloat(tx.pix_value);
+            return acc;
+        }, {});
+        appState.charts.revenue = new Chart('revenueChart', {
+            type: 'line', data: {
+                labels: Object.keys(salesByDay).sort(),
+                datasets: [{ label: 'Receita Diária', data: Object.values(salesByDay), borderColor: 'var(--glow-cyan)', tension: 0.4 }]
+            }
         });
     }
 
-    // ----- INICIALIZAÇÃO -----
-    window.addEventListener('hashchange', () => navigate(window.location.hash));
-    window.addEventListener('DOMContentLoaded', () => {
-        document.querySelectorAll('.nav-link').forEach(link => {
-            link.addEventListener('click', (e) => {
-                if(e.currentTarget.id === 'logout-button') return;
-                e.preventDefault();
-                window.location.hash = e.currentTarget.hash;
-            });
+    function renderSellersChart(sellers) {
+        destroyChart('sellers');
+        const sellersByDay = sellers.reduce((acc, s) => {
+            const date = new Date(s.created_at).toISOString().split('T')[0];
+            acc[date] = (acc[date] || 0) + 1;
+            return acc;
+        }, {});
+        appState.charts.sellers = new Chart('sellersChart', {
+            type: 'bar', data: {
+                labels: Object.keys(sellersByDay).sort(),
+                datasets: [{ label: 'Novos Vendedores', data: Object.values(sellersByDay), backgroundColor: 'var(--glow-magenta)' }]
+            }
         });
+    }
 
-        if (localStorage.getItem('adminApiKey')) {
-            hideLogin();
-        } else {
-            showLogin();
-        }
-    });
+    function renderUsageChart(usage) {
+        destroyChart('usage');
+        const sortedUsage = usage.filter(u => parseInt(u.requests_last_24_hours) > 0).sort((a,b) => b.requests_last_24_hours - a.requests_last_24_hours).slice(0, 10);
+        appState.charts.usage = new Chart('usageChart', {
+            type: 'bar', data: {
+                labels: sortedUsage.map(u => u.name),
+                datasets: [{ label: 'Requisições API (24h)', data: sortedUsage.map(u => u.requests_last_24_hours), backgroundColor: 'var(--glow-cyan)' }]
+            }
+        });
+    }
 
 </script>
 </body>
