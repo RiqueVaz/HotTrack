@@ -4,11 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HotTrack Command Center</title>
-    
+
+    <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="manifest" href="manifest.json">
-
+    <link rel="icon" href="SUA_URL_DO_ICONE/hottrack-icon-32x32.png" sizes="32x32" type="image/png">
+    <link rel="icon" href="SUA_URL_DO_ICONE/hottrack-icon-16x16.png" sizes="16x16" type="image/png">
+    <link rel="apple-touch-icon" href="SUA_URL_DO_ICONE/hottrack-icon-180x180.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +24,7 @@
         }
         * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;}
-        
+
         #login-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
             background: var(--bg); display: flex; align-items: center; justify-content: center;
@@ -48,7 +50,7 @@
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.5s; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        
+
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         input, button, select {
@@ -58,7 +60,7 @@
         input:focus, select:focus { border-color: var(--accent); outline: none; }
         button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
         button:hover { background-color: var(--accent-hover); }
-        
+
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
@@ -66,7 +68,7 @@
         }
         .modal-content { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 450px; border: 1px solid var(--border); }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        
+
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border); }
         th { color: var(--text-secondary); font-weight: 500; font-size: 12px; text-transform: uppercase; }
@@ -92,7 +94,7 @@
 <body>
     <div id="login-screen">
         <div id="login-box">
-            <h2 style="color: var(--accent);">Command Center</h2>
+            <h2 style="color: var(--accent);">HotTrack Command Center</h2>
             <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
             <form id="login-form">
                 <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required style="width: 100%;">
@@ -104,7 +106,7 @@
     <button id="menu-toggle">☰</button>
     <div id="app-container" style="visibility: hidden;">
         <aside id="sidebar">
-            <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">Nebula</h2>
+            <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">HotTrack</h2>
             <nav style="display: flex; flex-direction: column; gap: 10px;">
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
@@ -121,7 +123,7 @@
     </div>
 
     <div id="seller-modal" class="modal"></div>
-    
+
     <script>
         const API_URL = 'https://novaapi-one.vercel.app';
         let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
@@ -139,7 +141,7 @@
                 hour: '2-digit', minute: '2-digit', second: '2-digit'
             }).replace(',', '');
         }
-        
+
         // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
             const loginForm = document.getElementById('login-form');
@@ -160,9 +162,12 @@
         async function initializeApp() {
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('app-container').style.visibility = 'visible';
-            
+
+            // Tenta reativar as notificações silenciosamente ao iniciar
+            await tryReactivatingNotifications(); // <-- NOVA CHAMADA AQUI
+
             await fetchAllInitialData();
-            
+
             const sidebar = document.getElementById('sidebar');
             const menuToggle = document.getElementById('menu-toggle');
             function handleResize() { if (window.innerWidth > 768) sidebar.classList.remove('show'); }
@@ -172,7 +177,7 @@
             document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
             document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
-            
+
             navigate(window.location.hash || '#dashboard');
         }
 
@@ -202,7 +207,7 @@
                 window.location.reload();
             }
         }
-        
+
         async function apiFetch(endpoint, options = {}) {
             const adminKey = localStorage.getItem('adminApiKey');
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
@@ -256,7 +261,36 @@
                 alert('Ocorreu um erro ao ativar as notificações.');
             }
         }
-        
+
+        // --- NOVA FUNÇÃO: Tenta reativar as notificações em segundo plano ---
+        async function tryReactivatingNotifications() {
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
+                return; // Navegador não suporta notificações
+            }
+            try {
+                const registration = await navigator.serviceWorker.register('sw.js');
+                const permission = await Notification.permission;
+
+                // Só continua se a permissão JÁ FOI DADA anteriormente
+                if (permission === 'granted') {
+                    console.log("Permissão já concedida. Tentando reenviar inscrição...");
+                    let subscription = await registration.pushManager.getSubscription();
+
+                    if (subscription) {
+                        // Envia a inscrição existente para o servidor para garantir que ele "lembre"
+                        await apiFetch('/api/admin/save-subscription', {
+                            method: 'POST',
+                            body: JSON.stringify(subscription),
+                        });
+                        console.log('Inscrição reenviada ao servidor com sucesso.');
+                    }
+                }
+            } catch (error) {
+                console.error('Falha ao tentar reativar notificações silenciosamente:', error);
+            }
+        }
+        // ------------------------------------------------------------------
+
         function renderSettingsPage() {
             document.getElementById('settings').innerHTML = `
                 <div class="card">
@@ -284,14 +318,14 @@
                 return itemDate >= startDate && itemDate <= endDate;
             });
         }
-        
+
         function renderDashboardPage(period = 'month') {
             const page = document.getElementById('dashboard');
             const { start, end } = getDateRange(period);
 
             const filteredTransactions = filterDataByDate(appState.allTransactions, start, end);
             const filteredSellers = filterDataByDate(appState.sellers, start, end);
-            
+
             const totalRevenue = filteredTransactions.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
             const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
             const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
@@ -302,7 +336,7 @@
                     .reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
                 return { ...seller, total_revenue_period: revenue };
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
-            
+
             const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
 
             page.innerHTML = `
@@ -356,13 +390,13 @@
                     <td>${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
                 </tr>`).join('');
         }
-        
+
         function renderSellersPage() {
             const page = document.getElementById('sellers');
             const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
             const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
             const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
-            
+
             page.innerHTML = `
                 <div class="card">
                     <h2>Gerir Vendedores</h2>
@@ -379,7 +413,7 @@
         function renderSellersTable(sellers) {
             document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${parseFloat(s.revenue).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
         }
-        
+
         function openSellerModal(sellerId) {
             appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
             if (!appState.currentSeller) return;
@@ -402,7 +436,7 @@
         }
 
         function closeModal() { document.getElementById('seller-modal').style.display = 'none'; }
-        
+
         async function savePassword() {
             const newPassword = document.getElementById('new-password').value;
             if (!newPassword || newPassword.length < 8) return alert("A senha deve ter pelo menos 8 caracteres.");
@@ -412,7 +446,7 @@
                 closeModal();
             } catch(e) { alert(`Erro: ${e.message}`); }
         }
-        
+
         async function toggleStatus() {
             const newStatus = !appState.currentSeller.is_active;
             if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
