@@ -1,6 +1,6 @@
 {
-  "name": "HotTrack Command Center",
-  "short_name": "Command",
+  "name": "Admin Command Center",
+  "short_name": "Admin",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#111111",
@@ -8,7 +8,7 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/8061/8061213.png",
+      "src": "URL_DO_SEU_ICONE_AQUI",
       "type": "image/png",
       "sizes": "512x512"
     }
