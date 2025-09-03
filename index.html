@@ -9,12 +9,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #111111;
-            --surface: #1C1C1C;
+            --bg: #0A0A0A;
+            --surface: #1A1A1A;
             --primary: #FFFFFF;
             --secondary: #A0A0A0;
-            --border: #2D2D2D;
+            --border: #2C2C2C;
             --danger: #FF4D4D;
+            --success: #34D399;
         }
         * { box-sizing: border-box; }
         body {
@@ -23,11 +24,7 @@
             color: var(--primary);
             margin: 0;
         }
-        #app-container {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
+        #app-container { min-height: 100vh; }
         header {
             background: var(--surface);
             border-bottom: 1px solid var(--border);
@@ -35,22 +32,17 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            position: sticky; top: 0; z-index: 100;
         }
         #nav-toggle { display: none; background: none; border: none; color: var(--primary); font-size: 24px; cursor: pointer; }
         nav { display: flex; gap: 20px; }
         .nav-link {
-            padding: 20px 10px;
-            text-decoration: none;
-            color: var(--secondary);
-            font-weight: 500;
-            border-bottom: 2px solid transparent;
+            padding: 20px 10px; text-decoration: none; color: var(--secondary);
+            font-weight: 500; border-bottom: 2px solid transparent;
             transition: color 0.2s, border-color 0.2s;
         }
-        .nav-link.active, .nav-link:hover {
-            color: var(--primary);
-            border-bottom-color: var(--primary);
-        }
-        main { padding: 20px; flex-grow: 1; }
+        .nav-link.active, .nav-link:hover { color: var(--primary); border-bottom-color: var(--primary); }
+        main { padding: 20px; }
         .page { display: none; }
         .page.active { display: block; animation: fadeIn 0.4s; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -59,12 +51,13 @@
         th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border); }
         th { color: var(--secondary); font-weight: 500; }
         input, button {
-            font-family: 'Inter', sans-serif;
-            border-radius: 6px; border: 1px solid var(--border);
-            padding: 10px 15px; font-size: 14px;
-            background-color: var(--bg); color: var(--primary);
+            font-family: 'Inter', sans-serif; border-radius: 6px; border: 1px solid var(--border);
+            padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--primary);
+            width: 100%;
         }
         button { cursor: pointer; background-color: var(--primary); color: var(--bg); font-weight: 700; }
+        .btn-danger { background: var(--danger); color: var(--primary); }
+        .btn-secondary { background: none; border-color: var(--secondary); color: var(--secondary); }
         .risk-high { color: var(--danger); font-weight: bold; }
 
         /* Modal Styles */
@@ -75,7 +68,7 @@
         }
         .modal-content {
             background: var(--surface); padding: 30px; border-radius: 8px;
-            width: 90%; max-width: 400px;
+            width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto;
         }
 
         /* Mobile Optimization */
@@ -87,9 +80,8 @@
                 flex-direction: column; padding: 10px;
             }
             nav.show { display: flex; }
-            .nav-link { width: 100%; }
             main { padding: 15px; }
-            td, th { padding: 10px 8px; font-size: 14px; }
+            h2 { font-size: 1.2em; }
         }
     </style>
 </head>
@@ -97,12 +89,13 @@
 
     <div id="app-container">
         <header>
-            <h2 style="font-weight: 700;">Admin</h2>
+            <h2>Admin</h2>
             <button id="nav-toggle">&#9776;</button>
             <nav id="navbar">
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#risk-analysis" class="nav-link">Análise de Risco</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
+                <a href="#transactions" class="nav-link">Transações</a>
             </nav>
         </header>
 
@@ -110,29 +103,42 @@
             <div id="dashboard" class="page active"></div>
             <div id="risk-analysis" class="page"></div>
             <div id="sellers" class="page"></div>
+            <div id="transactions" class="page"></div>
         </main>
     </div>
 
     <div id="seller-modal" class="modal">
         <div class="modal-content">
-            <h3 id="modal-seller-name"></h3>
-            <p><strong>Comissão de Split Atual:</strong> <span id="current-commission">N/A</span>%</p>
-            <div style="margin-top: 20px;">
-                <label for="new-commission">Nova Comissão (%)</label>
-                <input type="number" id="new-commission" placeholder="Ex: 2.99" step="0.01" style="width: 100%; margin-top: 5px;">
+            <h3 id="modal-seller-name" style="margin-top: 0;"></h3>
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div>
+                    <h4>Alterar Palavra-passe</h4>
+                    <input type="password" id="new-password" placeholder="Nova palavra-passe (mín. 8 caracteres)">
+                    <button id="save-password-btn" style="margin-top: 10px;">Salvar Palavra-passe</button>
+                </div>
+                <div>
+                    <h4>Gerir Credenciais</h4>
+                    <label>PushinPay Token</label>
+                    <input type="text" id="pushinpay-token" style="margin-top: 5px;">
+                    <label style="margin-top: 10px; display: block;">CNPay Public Key</label>
+                    <input type="text" id="cnpay-public" style="margin-top: 5px;">
+                    <label style="margin-top: 10px; display: block;">CNPay Secret Key</label>
+                    <input type="text" id="cnpay-secret" style="margin-top: 5px;">
+                    <button id="save-credentials-btn" style="margin-top: 10px;">Salvar Credenciais</button>
+                </div>
+                 <div>
+                    <h4>Zona de Perigo</h4>
+                    <button id="toggle-status-btn" class="btn-danger">Bloquear Vendedor</button>
+                </div>
             </div>
-            <div style="margin-top: 20px; display: flex; gap: 10px;">
-                <button id="save-commission-btn">Salvar Comissão</button>
-                <button onclick="closeModal()" style="background: none; border-color: var(--secondary); color: var(--secondary);">Fechar</button>
-            </div>
+            <button onclick="closeModal()" class="btn-secondary" style="margin-top: 20px;">Fechar</button>
         </div>
     </div>
     
     <script>
         // ----- APP STATE & CONFIG -----
         const API_URL = 'https://novaapi-one.vercel.app';
-        let appState = { sellers: [], usage: [], ranking: [] };
-        let currentSellerId = null;
+        let appState = { sellers: [], currentSeller: null };
 
         // ----- CORE APP LOGIC -----
         document.addEventListener('DOMContentLoaded', () => {
@@ -149,9 +155,9 @@
             });
 
             window.addEventListener('hashchange', () => navigate(window.location.hash));
-            // Simulação de login, assumindo que a chave está no localStorage
+            
             if (!localStorage.getItem('adminApiKey')) {
-                const key = prompt('Por favor, insira sua ADMIN_API_KEY:');
+                const key = prompt('Por favor, insira a sua ADMIN_API_KEY:');
                 if (key) localStorage.setItem('adminApiKey', key);
             }
             navigate(window.location.hash);
@@ -166,43 +172,65 @@
                 '#dashboard': loadDashboardPage,
                 '#risk-analysis': loadRiskAnalysisPage,
                 '#sellers': loadSellersPage,
+                '#transactions': loadTransactionsPage,
             };
             if(loaders[hash]) loaders[hash]();
         }
 
-        async function apiFetch(endpoint) {
+        async function apiFetch(endpoint, options = {}) {
             const adminKey = localStorage.getItem('adminApiKey');
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
-            const res = await fetch(`${API_URL}${endpoint}`, { headers: { 'x-admin-api-key': adminKey } });
+            
+            const config = {
+                method: 'GET',
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-api-key': adminKey,
+                    ...options.headers
+                }
+            };
+
+            const res = await fetch(`${API_URL}${endpoint}`, config);
             if (res.status === 403) throw new Error("Chave de API inválida.");
-            if (!res.ok) throw new Error("Erro de rede.");
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.message || "Erro de rede.");
+            }
             return res.json();
         }
 
         // ----- PAGE RENDERERS -----
-        const renderLoader = (container) => { container.innerHTML = `<p>Carregando...</p>`; };
+        const renderLoader = (container) => { container.innerHTML = `<div class="card"><p>A carregar...</p></div>`; };
 
         async function loadDashboardPage() {
             const page = document.getElementById('dashboard');
             renderLoader(page);
             try {
                 const data = await apiFetch('/api/admin/dashboard');
+                const ranking = await apiFetch('/api/admin/ranking');
                 page.innerHTML = `
                     <div class="card">
                         <h2>Visão Geral</h2>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; text-align: center;">
-                            <div>
-                                <p style="color: var(--secondary); margin: 0;">Receita Total</p>
-                                <p style="font-size: 2em; font-weight: 700; margin: 5px 0;">R$ ${parseFloat(data.total_revenue).toLocaleString('pt-BR')}</p>
-                            </div>
-                             <div>
-                                <p style="color: var(--secondary); margin: 0;">Vendedores</p>
-                                <p style="font-size: 2em; font-weight: 700; margin: 5px 0;">${data.total_sellers}</p>
-                            </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                            <div><p style="color: var(--secondary); margin: 0;">Receita Total</p><p style="font-size: 1.8em; font-weight: 700; margin: 5px 0;">R$ ${parseFloat(data.total_revenue).toLocaleString('pt-BR')}</p></div>
+                            <div><p style="color: var(--secondary); margin: 0;">Vendedores</p><p style="font-size: 1.8em; font-weight: 700; margin: 5px 0;">${data.total_sellers}</p></div>
+                            <div><p style="color: var(--secondary); margin: 0;">Vendas Pagas</p><p style="font-size: 1.8em; font-weight: 700; margin: 5px 0;">${data.total_paid_transactions}</p></div>
                         </div>
                     </div>
+                    <div class="card">
+                        <h2>Top Vendedores</h2>
+                        <table>
+                            <thead><tr><th>Nome</th><th>Receita</th></tr></thead>
+                            <tbody>
+                                ${ranking.slice(0, 5).map(s => `
+                                    <tr><td>${s.name}</td><td>R$ ${parseFloat(s.total_revenue).toLocaleString('pt-BR')}</td></tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
                 `;
-            } catch(e) { page.innerHTML = `<p style="color: var(--danger);">${e.message}</p>`; }
+            } catch(e) { page.innerHTML = `<div class="card"><p style="color: var(--danger);">${e.message}</p></div>`; }
         }
 
         async function loadRiskAnalysisPage() {
@@ -213,37 +241,27 @@
                     apiFetch('/api/admin/usage-analysis'),
                     apiFetch('/api/admin/ranking')
                 ]);
-
                 const salesMap = new Map(ranking.map(s => [s.id, s.total_sales]));
-                const mergedData = usage.map(u => ({
-                    ...u,
-                    total_sales: salesMap.get(u.id) || 0
-                }));
-                
-                // AQUI ESTÁ A LÓGICA DE DETEÇÃO DE ABUSO
-                const riskUsers = mergedData.filter(u => u.total_sales === 0 && u.requests_last_24_hours > 150);
-
+                const riskUsers = usage.filter(u => (salesMap.get(u.id) || 0) === 0 && u.requests_last_24_hours > 150);
                 page.innerHTML = `
                     <div class="card">
                         <h2>Análise de Risco de Abuso</h2>
-                        <p style="color: var(--secondary);">Utilizadores com alto volume de requisições e nenhuma venda são sinalizados.</p>
+                        <p style="color: var(--secondary);">Utilizadores com >150 requisições nas últimas 24h e 0 vendas.</p>
                         <table>
-                            <thead><tr><th>Vendedor</th><th>Requisições (24h)</th><th>Vendas Pagas</th><th>Status</th></tr></thead>
+                            <thead><tr><th>Vendedor</th><th>Requisições (24h)</th><th>Status</th></tr></thead>
                             <tbody>
                                 ${riskUsers.length > 0 ? riskUsers.map(u => `
                                     <tr>
                                         <td>${u.name}<br><small>${u.email}</small></td>
                                         <td>${u.requests_last_24_hours}</td>
-                                        <td>${u.total_sales}</td>
                                         <td class="risk-high">ALTO RISCO</td>
                                     </tr>
-                                `).join('') : '<tr><td colspan="4" style="text-align: center;">Nenhum utilizador de risco detetado.</td></tr>'}
+                                `).join('') : '<tr><td colspan="3" style="text-align: center;">Nenhum utilizador de risco detetado.</td></tr>'}
                             </tbody>
                         </table>
                     </div>
                 `;
-
-            } catch(e) { page.innerHTML = `<p style="color: var(--danger);">${e.message}</p>`; }
+            } catch(e) { page.innerHTML = `<div class="card"><p style="color: var(--danger);">${e.message}</p></div>`; }
         }
         
         async function loadSellersPage() {
@@ -260,30 +278,59 @@
                                 ${appState.sellers.map(s => `
                                     <tr>
                                         <td>${s.name}<br><small style="color: var(--secondary);">${s.email}</small></td>
-                                        <td style="color: ${s.is_active ? '#34D399' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
-                                        <td>
-                                            <button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button>
-                                        </td>
+                                        <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
+                                        <td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
                                     </tr>
                                 `).join('')}
                             </tbody>
                         </table>
                     </div>
                 `;
-            } catch(e) { page.innerHTML = `<p style="color: var(--danger);">${e.message}</p>`; }
+            } catch(e) { page.innerHTML = `<div class="card"><p style="color: var(--danger);">${e.message}</p></div>`; }
+        }
+
+        async function loadTransactionsPage() {
+            const page = document.getElementById('transactions');
+            renderLoader(page);
+            try {
+                const data = await apiFetch('/api/admin/transactions?limit=100');
+                page.innerHTML = `
+                     <div class="card">
+                        <h2>Últimas Transações</h2>
+                        <table>
+                            <thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead>
+                            <tbody>
+                                ${data.transactions.map(tx => `
+                                <tr>
+                                    <td>${tx.seller_name}</td>
+                                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--secondary)'}">${tx.status}</td>
+                                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td>
+                                    <td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td>
+                                </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } catch(e) { page.innerHTML = `<div class="card"><p style="color: var(--danger);">${e.message}</p></div>`; }
         }
 
         // ----- MODAL LOGIC -----
         function openSellerModal(sellerId) {
-            currentSellerId = sellerId;
-            const seller = appState.sellers.find(s => s.id === sellerId);
-            if (!seller) return;
+            appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
+            if (!appState.currentSeller) return;
+            
+            document.getElementById('modal-seller-name').textContent = appState.currentSeller.name;
+            const statusBtn = document.getElementById('toggle-status-btn');
+            statusBtn.textContent = appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor';
+            statusBtn.className = appState.currentSeller.is_active ? 'btn-danger' : 'btn-success';
 
-            document.getElementById('modal-seller-name').textContent = seller.name;
-            // O valor da comissão viria do objeto 'seller' se a API o retornasse.
-            // Por enquanto, usamos um valor padrão.
-            document.getElementById('current-commission').textContent = seller.commission_percentage || '2.99'; 
-            document.getElementById('new-commission').value = '';
+            // Limpa os campos
+            document.getElementById('new-password').value = '';
+            document.getElementById('pushinpay-token').value = appState.currentSeller.pushinpay_token || '';
+            document.getElementById('cnpay-public').value = appState.currentSeller.cnpay_public_key || '';
+            document.getElementById('cnpay-secret').value = appState.currentSeller.cnpay_secret_key || '';
+
             document.getElementById('seller-modal').style.display = 'flex';
         }
 
@@ -291,16 +338,43 @@
             document.getElementById('seller-modal').style.display = 'none';
         }
 
-        document.getElementById('save-commission-btn').addEventListener('click', async () => {
-            const newCommission = document.getElementById('new-commission').value;
-            if (!newCommission || isNaN(parseFloat(newCommission))) {
-                alert("Por favor, insira um valor de comissão válido.");
-                return;
-            }
-            alert(`Funcionalidade pendente!\nPara salvar a comissão de ${newCommission}%, você precisa atualizar o backend (server.js).\nVeja as instruções fornecidas.`);
-            // A chamada à API iria aqui se o endpoint existisse:
-            // await apiFetch(`/api/admin/sellers/${currentSellerId}/commission`, { method: 'PUT', body: JSON.stringify({ commission: newCommission }) });
-            closeModal();
+        document.getElementById('save-password-btn').addEventListener('click', async () => {
+            const newPassword = document.getElementById('new-password').value;
+            if (!newPassword || newPassword.length < 8) return alert("A palavra-passe deve ter pelo menos 8 caracteres.");
+            try {
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, {
+                    method: 'PUT', body: JSON.stringify({ newPassword })
+                });
+                alert('Palavra-passe alterada com sucesso!');
+                document.getElementById('new-password').value = '';
+            } catch(e) { alert(`Erro: ${e.message}`); }
+        });
+        
+        document.getElementById('save-credentials-btn').addEventListener('click', async () => {
+             const credentials = {
+                pushinpay_token: document.getElementById('pushinpay-token').value,
+                cnpay_public_key: document.getElementById('cnpay-public').value,
+                cnpay_secret_key: document.getElementById('cnpay-secret').value,
+            };
+            try {
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/credentials`, {
+                    method: 'PUT', body: JSON.stringify(credentials)
+                });
+                alert('Credenciais salvas com sucesso!');
+            } catch(e) { alert(`Erro: ${e.message}`); }
+        });
+
+        document.getElementById('toggle-status-btn').addEventListener('click', async () => {
+            const newStatus = !appState.currentSeller.is_active;
+            if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
+            try {
+                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, {
+                    method: 'POST', body: JSON.stringify({ isActive: newStatus })
+                });
+                alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
+                closeModal();
+                loadSellersPage(); // Recarrega a lista
+            } catch(e) { alert(`Erro: ${e.message}`); }
         });
 
     </script>
