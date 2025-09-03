@@ -94,12 +94,14 @@
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
                 <a href="#transactions" class="nav-link">Transações</a>
+                <a href="#settings" class="nav-link">Definições</a>
             </nav>
         </aside>
         <main>
             <div id="dashboard" class="page active"></div>
             <div id="sellers" class="page"></div>
             <div id="transactions" class="page"></div>
+            <div id="settings" class="page"></div>
         </main>
     </div>
 
@@ -112,8 +114,6 @@
 
         // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
-            const loginScreen = document.getElementById('login-screen');
-            const appContainer = document.getElementById('app-container');
             const loginForm = document.getElementById('login-form');
 
             loginForm.addEventListener('submit', (e) => {
@@ -133,9 +133,6 @@
         async function initializeApp() {
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('app-container').style.visibility = 'visible';
-            
-            // NOVO: Regista o service worker e pede permissão para notificações
-            await setupPushNotifications();
 
             await fetchAllInitialData();
             
@@ -156,7 +153,7 @@
             hash = hash || '#dashboard';
             document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
             document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
-            const loaders = { '#dashboard': renderDashboardPage, '#sellers': renderSellersPage, '#transactions': renderTransactionsPage };
+            const loaders = { '#dashboard': renderDashboardPage, '#sellers': renderSellersPage, '#transactions': renderTransactionsPage, '#settings': renderSettingsPage };
             if (loaders[hash]) loaders[hash]();
         }
 
@@ -191,43 +188,67 @@
 
         // NOVO: LÓGICA DE NOTIFICAÇÕES
         async function setupPushNotifications() {
-            if ('serviceWorker' in navigator && 'PushManager' in window) {
-                try {
-                    const registration = await navigator.serviceWorker.register('sw.js');
-                    await requestNotificationPermission(registration);
-                } catch (error) {
-                    console.error('Service Worker registration failed:', error);
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
+                alert('O seu navegador não suporta notificações.');
+                return;
+            }
+            
+            try {
+                const registration = await navigator.serviceWorker.register('sw.js');
+                const permission = await window.Notification.requestPermission();
+                
+                if (permission !== 'granted') {
+                    alert('Permissão para notificações negada.');
+                    return;
                 }
+                
+                let subscription = await registration.pushManager.getSubscription();
+                if (subscription === null) {
+                    const response = await apiFetch('/api/admin/vapidPublicKey');
+                    const vapidPublicKey = await response.text(); // Corrigido para .text() se o servidor enviar texto
+                    
+                    const urlBase64ToUint8Array = base64String => {
+                        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+                        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+                        const rawData = atob(base64);
+                        const outputArray = new Uint8Array(rawData.length);
+                        for (let i = 0; i < rawData.length; ++i) {
+                            outputArray[i] = rawData.charCodeAt(i);
+                        }
+                        return outputArray;
+                    };
+
+                    subscription = await registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+                    });
+                }
+                
+                await apiFetch('/api/admin/save-subscription', {
+                    method: 'POST',
+                    body: JSON.stringify(subscription),
+                });
+                
+                alert('Notificações ativadas com sucesso!');
+            } catch (error) {
+                console.error('Falha ao configurar notificações:', error);
+                alert('Ocorreu um erro ao ativar as notificações.');
             }
         }
         
-        async function requestNotificationPermission(registration) {
-            const permission = await window.Notification.requestPermission();
-            if (permission !== 'granted') {
-                console.log('Permissão para notificações negada.');
-                return;
-            }
-            console.log('Permissão para notificações concedida.');
-            
-            let subscription = await registration.pushManager.getSubscription();
-            if (subscription === null) {
-                const response = await fetch(`${API_URL}/api/admin/vapidPublicKey`);
-                const vapidPublicKey = await response.text();
-                subscription = await registration.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: vapidPublicKey
-                });
-            }
-            
-            await apiFetch('/api/admin/save-subscription', {
-                method: 'POST',
-                body: JSON.stringify(subscription),
-            });
-            console.log('Inscrição para notificações enviada ao servidor.');
+        function renderSettingsPage() {
+            const page = document.getElementById('settings');
+            page.innerHTML = `
+                <div class="card">
+                    <h2>Definições de Notificações</h2>
+                    <p style="color:var(--text-secondary)">Receba um alerta a cada nova venda paga ou PIX gerado.</p>
+                    <button id="enable-notifications-btn" style="max-width: 300px;">Ativar Notificações</button>
+                </div>
+            `;
+            document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
         }
 
-
-        // ----- O RESTO DO SEU CÓDIGO (renderers, etc) CONTINUA O MESMO -----
+        // O resto do seu JavaScript (renderers para outras páginas, etc.) permanece o mesmo
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
