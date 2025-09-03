@@ -3,47 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotTrack - Painel de Controle</title>
+    <title>Painel Administrativo</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; color: #333; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #1a202c; color: #edf2f7; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: #2d3748; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         #login-section, #dashboard-section { display: block; }
         #dashboard-section { display: none; }
-        h1, h2 { color: #5a67d8; }
-        input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
-        button { width: 100%; background-color: #5a67d8; color: white; padding: 12px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; }
-        button:hover { background-color: #434190; }
+        h1, h2 { color: #9f7aea; border-bottom: 2px solid #9f7aea; padding-bottom: 10px; }
+        input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #4a5568; box-sizing: border-box; font-size: 16px; background-color: #1a202c; color: #edf2f7; }
+        button { width: 100%; background-color: #9f7aea; color: white; padding: 12px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        button:hover { background-color: #805ad5; }
         #logout-button { background-color: #e53e3e; margin-top: 15px; }
         #logout-button:hover { background-color: #c53030; }
-        #error-message { margin-top: 15px; padding: 10px; border-radius: 4px; background-color: #fde8e8; border: 1px solid #f29b9b; color: #a82c2c; }
-        pre { background-color: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
+        #error-message { margin-top: 15px; padding: 10px; border-radius: 4px; background-color: #742a2a; border: 1px solid #f56565; color: #fed7d7; }
+        pre { background-color: #1a202c; padding: 15px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; border: 1px solid #4a5568; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h1>Painel de Controle HotTrack</h1>
+        <h1>Painel Administrativo</h1>
 
         <div id="login-section">
-            <h2>Login</h2>
+            <h2>Acesso Restrito</h2>
             <form id="login-form">
-                <input type="email" id="email" placeholder="Seu e-mail" required>
-                <input type="password" id="password" placeholder="Sua senha" required>
+                <input type="password" id="admin-key" placeholder="Sua ADMIN_API_KEY" required>
                 <button type="submit">Entrar</button>
             </form>
             <div id="error-message" style="display: none;"></div>
         </div>
 
         <div id="dashboard-section">
-            <h2 id="welcome-message"></h2>
-            <h3>Suas Métricas</h3>
+            <h2>Dashboard do Administrador</h2>
             <pre id="api-response">Carregando dados...</pre>
             <button id="logout-button">Sair</button>
         </div>
     </div>
 
     <script>
-        // URL da sua API (JÁ CONFIGURADA!)
         const API_URL = 'https://novaapi-one.vercel.app';
 
         const loginSection = document.getElementById('login-section');
@@ -51,65 +48,49 @@
         const loginForm = document.getElementById('login-form');
         const errorMessage = document.getElementById('error-message');
         const apiResponseEl = document.getElementById('api-response');
-        const welcomeMessageEl = document.getElementById('welcome-message');
         const logoutButton = document.getElementById('logout-button');
 
-        // Função para fazer o login
-        loginForm.addEventListener('submit', async (e) => {
+        // Função para tentar o login com a chave
+        loginForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            errorMessage.style.display = 'none';
-
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-
-            try {
-                const response = await fetch(`${API_URL}/api/sellers/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.message || 'Erro desconhecido');
-                }
-
-                localStorage.setItem('authToken', data.token);
-                localStorage.setItem('seller', JSON.stringify(data.seller));
-                
+            const adminKey = document.getElementById('admin-key').value;
+            if (adminKey) {
+                // Salva a chave no navegador e tenta carregar o dashboard
+                localStorage.setItem('adminApiKey', adminKey);
                 showDashboard();
-
-            } catch (error) {
-                errorMessage.textContent = `Erro ao fazer login: ${error.message}`;
-                errorMessage.style.display = 'block';
             }
         });
 
-        // Função para buscar dados do dashboard
-        async function fetchDashboardData() {
-            const token = localStorage.getItem('authToken');
-            if (!token) {
+        // Função para buscar dados do dashboard de admin
+        async function fetchAdminDashboardData() {
+            const adminKey = localStorage.getItem('adminApiKey');
+            if (!adminKey) {
                 showLogin();
                 return;
             }
 
             try {
-                const response = await fetch(`${API_URL}/api/dashboard/metrics`, {
+                const response = await fetch(`${API_URL}/api/admin/dashboard`, {
                     method: 'GET',
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: {
+                        'x-admin-api-key': adminKey // AQUI ESTÁ A AUTENTICAÇÃO
+                    }
                 });
 
                 const data = await response.json();
 
                 if (!response.ok) {
-                    if (response.status === 403 || response.status === 401) { // Token expirado/inválido
+                    // Se a chave for inválida (erro 403), desloga
+                    if (response.status === 403) {
                         logout();
+                        errorMessage.textContent = 'Chave de Administrador inválida.';
+                        errorMessage.style.display = 'block';
                         return;
                     }
                     throw new Error(data.message);
                 }
-
+                
+                errorMessage.style.display = 'none';
                 apiResponseEl.textContent = JSON.stringify(data, null, 2);
 
             } catch (error) {
@@ -119,13 +100,9 @@
         
         // Função para mostrar o dashboard
         function showDashboard() {
-            const seller = JSON.parse(localStorage.getItem('seller'));
-            if(seller) {
-                welcomeMessageEl.textContent = `Bem-vindo, ${seller.name}!`;
-            }
             loginSection.style.display = 'none';
             dashboardSection.style.display = 'block';
-            fetchDashboardData();
+            fetchAdminDashboardData();
         }
 
         // Função para mostrar a tela de login
@@ -136,15 +113,13 @@
 
         // Função de logout
         function logout() {
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('seller');
+            localStorage.removeItem('adminApiKey');
             showLogin();
         }
         logoutButton.addEventListener('click', logout);
 
-
-        // Verifica se o usuário já está logado ao carregar a página
-        if (localStorage.getItem('authToken')) {
+        // Verifica se o admin já tem uma chave guardada ao carregar a página
+        if (localStorage.getItem('adminApiKey')) {
             showDashboard();
         }
     </script>
