@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HotTrack Command Center</title>
     
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -20,6 +22,17 @@
         }
         * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; }
+        
+        #login-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
+            background: var(--bg); display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.3s;
+        }
+        #login-box {
+            background: var(--surface); padding: 30px; border-radius: 12px;
+            width: 90%; max-width: 350px; text-align: center;
+        }
+
         #app-container { display: flex; min-height: 100vh; }
         #sidebar {
             width: 250px; background: var(--surface); border-right: 1px solid var(--border);
@@ -39,7 +52,7 @@
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
         input, button, select {
             font-family: 'Inter', sans-serif; border-radius: 6px; border: 1px solid var(--border);
-            padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary);
+            padding: 10px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); width: 100%;
         }
         button { cursor: pointer; background-color: var(--accent); color: var(--primary); font-weight: 700; border-color: var(--accent); }
         .modal {
@@ -56,15 +69,25 @@
             main { padding: 15px; }
             #menu-toggle {
                 display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border);
-                border-radius: 6px; padding: 8px; color: var(--primary);
+                background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--primary);
             }
         }
     </style>
 </head>
 <body>
+    <div id="login-screen">
+        <div id="login-box">
+            <h2 style="color: var(--accent);">Command Center</h2>
+            <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
+            <form id="login-form">
+                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required>
+                <button type="submit" style="margin-top: 15px;">Entrar</button>
+            </form>
+        </div>
+    </div>
+
     <button id="menu-toggle" style="display: none;">☰</button>
-    <div id="app-container">
+    <div id="app-container" style="visibility: hidden;">
         <aside id="sidebar">
             <h2 style="font-weight: 700; color: var(--accent); text-align: center;">Nebula</h2>
             <nav style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
@@ -87,26 +110,47 @@
         let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
         const MONTHLY_GOAL = 50000;
 
-        // ----- CORE APP & UI LOGIC -----
+        // ----- AUTH & APP INITIALIZATION -----
         document.addEventListener('DOMContentLoaded', () => {
+            const loginScreen = document.getElementById('login-screen');
+            const appContainer = document.getElementById('app-container');
+            const loginForm = document.getElementById('login-form');
+
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const key = document.getElementById('admin-key-input').value;
+                if (key) {
+                    localStorage.setItem('adminApiKey', key);
+                    initializeApp();
+                }
+            });
+
+            if (localStorage.getItem('adminApiKey')) {
+                initializeApp();
+            }
+        });
+
+        async function initializeApp() {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app-container').style.visibility = 'visible';
+            
+            // NOVO: Regista o service worker e pede permissão para notificações
+            await setupPushNotifications();
+
+            await fetchAllInitialData();
+            
             const sidebar = document.getElementById('sidebar');
             const menuToggle = document.getElementById('menu-toggle');
-            
             function handleResize() { menuToggle.style.display = window.innerWidth <= 768 ? 'block' : 'none'; }
             window.addEventListener('resize', handleResize);
             handleResize();
-
             menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
             document.querySelector('main').addEventListener('click', () => { if(sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
             document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
             
-            if (!localStorage.getItem('adminApiKey')) {
-                const key = prompt('Por favor, insira a sua ADMIN_API_KEY:');
-                if (key) localStorage.setItem('adminApiKey', key);
-            }
-            fetchAllInitialData().then(() => navigate(window.location.hash));
-        });
+            navigate(window.location.hash);
+        }
 
         function navigate(hash) {
             hash = hash || '#dashboard';
@@ -128,7 +172,11 @@
                 appState.allTransactions = transactions.transactions;
                 appState.allRanking = ranking;
                 appState.allUsage = usage;
-            } catch (e) { alert(`Erro ao carregar dados iniciais: ${e.message}`); }
+            } catch (e) {
+                alert(`Erro ao carregar dados: ${e.message}. Verifique sua chave de API.`);
+                localStorage.removeItem('adminApiKey');
+                window.location.reload();
+            }
         }
         
         async function apiFetch(endpoint, options = {}) {
@@ -136,12 +184,50 @@
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
             const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
             const res = await fetch(`${API_URL}${endpoint}`, config);
-            if (res.status === 403) { localStorage.removeItem('adminApiKey'); throw new Error("Chave de API inválida."); }
+            if (res.status === 403) { throw new Error("Chave de API inválida."); }
             if (!res.ok) throw new Error((await res.json()).message || "Erro de rede.");
             return res.json();
         }
 
-        // ----- DATE & FILTER LOGIC -----
+        // NOVO: LÓGICA DE NOTIFICAÇÕES
+        async function setupPushNotifications() {
+            if ('serviceWorker' in navigator && 'PushManager' in window) {
+                try {
+                    const registration = await navigator.serviceWorker.register('sw.js');
+                    await requestNotificationPermission(registration);
+                } catch (error) {
+                    console.error('Service Worker registration failed:', error);
+                }
+            }
+        }
+        
+        async function requestNotificationPermission(registration) {
+            const permission = await window.Notification.requestPermission();
+            if (permission !== 'granted') {
+                console.log('Permissão para notificações negada.');
+                return;
+            }
+            console.log('Permissão para notificações concedida.');
+            
+            let subscription = await registration.pushManager.getSubscription();
+            if (subscription === null) {
+                const response = await fetch(`${API_URL}/api/admin/vapidPublicKey`);
+                const vapidPublicKey = await response.text();
+                subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: vapidPublicKey
+                });
+            }
+            
+            await apiFetch('/api/admin/save-subscription', {
+                method: 'POST',
+                body: JSON.stringify(subscription),
+            });
+            console.log('Inscrição para notificações enviada ao servidor.');
+        }
+
+
+        // ----- O RESTO DO SEU CÓDIGO (renderers, etc) CONTINUA O MESMO -----
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
@@ -156,7 +242,6 @@
             return data.filter(item => { const itemDate = new Date(item[dateKey]); return itemDate >= startDate && itemDate <= endDate; });
         }
         
-        // ----- PAGE RENDERERS -----
         function renderDashboardPage(period = 'month') {
             const page = document.getElementById('dashboard');
             const { start, end } = getDateRange(period);
@@ -211,9 +296,7 @@
         }
 
         function renderTransactionsTable(transactions) {
-            const tbody = document.getElementById('transactions-tbody');
-            if (!tbody) return;
-            tbody.innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
+            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `<tr><td>${tx.seller_name}</td><td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td><td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR')}</td><td>${new Date(tx.created_at).toLocaleString('pt-BR')}</td></tr>`).join('');
         }
         
         function renderSellersPage() {
@@ -239,7 +322,6 @@
             document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${s.revenue.toLocaleString('pt-BR')}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'};">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
         }
         
-        // ----- MODAL LOGIC -----
         function openSellerModal(sellerId) {
             appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
             if (!appState.currentSeller) return;
