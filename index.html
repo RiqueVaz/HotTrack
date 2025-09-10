@@ -30,7 +30,7 @@
         #login-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
             background: var(--bg); display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.3s;
+            transition: opacity: 0.3s;
         }
         #login-box {
             background: var(--surface); padding: 30px; border-radius: 12px;
@@ -62,6 +62,7 @@
         input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
         button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
         button:hover { background-color: var(--accent-hover); }
+        button:disabled { background-color: var(--border); color: var(--text-secondary); cursor: not-allowed; }
 
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -311,7 +312,7 @@
                 <div class="card">
                     <h2>Reenviar Eventos de Compra (Pixel Warming)</h2>
                     <p style="color:var(--text-secondary)">
-                        Esta ferramenta envia um lote de teste (5 eventos) com dados enriquecidos (nome, IP, user agent, etc.) para um novo Pixel da Meta, seguindo as melhores práticas para aquecimento e aumento da qualidade de correspondência.
+                        Esta ferramenta processa todos os eventos de compra encontrados para o período em lotes, enviando-os para a Meta com dados enriquecidos para maximizar a qualidade da correspondência.
                     </p>
                     <form id="resend-events-form">
                         <div class="form-group">
@@ -339,74 +340,101 @@
                                 <input type="date" id="end-date" required>
                             </div>
                         </div>
-                        <button type="submit" style="width: 100%; margin-top: 10px;">Iniciar Teste de Envio</button>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">Iniciar Envio Completo</button>
                     </form>
                 </div>
                 <div class="card" id="resend-results-container" style="display: none;">
-                    <h2>Resultados do Lote de Teste</h2>
+                    <h2>Resultados do Envio</h2>
                     <p id="resend-summary" class="result-summary"></p>
-                    <table id="resend-details-table">
-                        <thead><tr><th>ID da Transação</th><th>Status</th><th>Detalhes</th></tr></thead>
-                        <tbody></tbody>
-                    </table>
+                    <div id="resend-details-wrapper" style="max-height: 400px; overflow-y: auto; margin-top: 15px;">
+                        <table id="resend-details-table">
+                            <thead><tr><th>ID da Transação</th><th>Status</th><th>Detalhes</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
                 </div>`;
             document.getElementById('resend-events-form').addEventListener('submit', handleResendEvents);
         }
 
+        // --- LÓGICA FINAL DE ORQUESTRAÇÃO DE ENVIO ---
         async function handleResendEvents(event) {
             event.preventDefault();
             const form = event.target;
             const button = form.querySelector('button[type="submit"]');
             const resultsContainer = document.getElementById('resend-results-container');
-            
-            button.disabled = true;
-            button.textContent = 'Processando Lote...';
-            resultsContainer.style.display = 'none';
+            const summaryDiv = document.getElementById('resend-summary');
+            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
 
-            const body = {
+            button.disabled = true;
+            resultsContainer.style.display = 'block';
+            tbody.innerHTML = ''; 
+
+            const commonBody = {
                 target_pixel_id: document.getElementById('target-pixel-id').value,
                 target_meta_api_token: document.getElementById('target-meta-token').value,
                 seller_id: document.getElementById('resend-seller-id').value,
                 start_date: document.getElementById('start-date').value,
                 end_date: document.getElementById('end-date').value,
             };
-            if (body.seller_id) { body.seller_id = parseInt(body.seller_id, 10); }
+            if (commonBody.seller_id) { commonBody.seller_id = parseInt(commonBody.seller_id, 10); }
+
+            let currentPage = 1;
+            let totalPages = 1; // Começa com 1 para entrar no loop
 
             try {
-                const response = await apiFetch('/api/admin/resend-events', {
-                    method: 'POST', body: JSON.stringify(body),
-                });
-                
-                document.getElementById('resend-summary').textContent = response.summary;
-                const tbody = document.getElementById('resend-details-table').querySelector('tbody');
-                tbody.innerHTML = response.results.map(res => `
-                    <tr>
-                        <td>${res.transaction_id}</td>
-                        <td class="status-${res.status}">${res.status === 'success' ? 'Sucesso' : 'Falha'}</td>
-                        <td>
-                            <details>
-                                <summary>Ver dados</summary>
-                                <div class="details">
-                                    <strong>Payload Enviado:</strong>
-                                    ${JSON.stringify(res.payload_sent, null, 2)}
-                                    <hr style="border-color: var(--border); margin: 10px 0;">
-                                    <strong>Resposta da Meta:</strong>
-                                    ${JSON.stringify(res.meta_response, null, 2)}
-                                </div>
-                            </details>
-                        </td>
-                    </tr>
-                `).join('');
-                resultsContainer.style.display = 'block';
+                while (currentPage <= totalPages) {
+                    button.textContent = `Processando Lote ${currentPage} de ${totalPages}...`;
+                    summaryDiv.textContent = `Buscando e processando lote ${currentPage}...`;
 
+                    const response = await apiFetch('/api/admin/resend-events', {
+                        method: 'POST', 
+                        body: JSON.stringify({ ...commonBody, page: currentPage, limit: 50 }),
+                    });
+
+                    totalPages = response.total_pages || 0;
+                    summaryDiv.textContent = `Lote ${currentPage}/${totalPages} concluído. Total de eventos: ${response.total_events}.`;
+                    
+                    if (response.results && response.results.length > 0) {
+                        appendResultsToTable(response.results);
+                    }
+                    
+                    if(totalPages === 0) {
+                         summaryDiv.textContent = response.message || "Nenhum evento encontrado.";
+                         break;
+                    }
+
+                    currentPage++;
+                }
+                summaryDiv.textContent = `Processo concluído! Todos os ${totalPages} lotes foram processados.`;
             } catch (error) {
-                console.error('Erro ao reenviar eventos:', error);
-                document.getElementById('resend-summary').textContent = `Falha ao iniciar o reenvio: ${error.message}`;
-                resultsContainer.style.display = 'block';
+                console.error('Erro ao orquestrar o reenvio:', error);
+                summaryDiv.textContent = `Ocorreu um erro no Lote ${currentPage}: ${error.message}`;
             } finally {
                 button.disabled = false;
-                button.textContent = 'Iniciar Teste de Envio';
+                button.textContent = 'Iniciar Envio Completo';
             }
+        }
+
+        function appendResultsToTable(results) {
+            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
+            tbody.innerHTML += results.map(res => `
+                <tr>
+                    <td>${res.transaction_id}</td>
+                    <td class="status-${res.status}">${res.status === 'success' ? 'Sucesso' : 'Falha'}</td>
+                    <td>
+                        <details>
+                            <summary>Ver dados</summary>
+                            <div class="details">
+                                <strong>Payload Enviado:</strong>
+                                ${JSON.stringify(res.payload_sent, null, 2)}
+                                <hr style="border-color: var(--border); margin: 10px 0;">
+                                <strong>Resposta da Meta:</strong>
+                                ${JSON.stringify(res.meta_response, null, 2)}
+                            </div>
+                        </details>
+                    </td>
+                </tr>
+            `).join('');
         }
         
         function getDateRange(period) {
