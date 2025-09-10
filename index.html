@@ -54,11 +54,11 @@
 
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
         .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
-        input, button, select {
+        input, button, select, textarea {
             font-family: 'Inter', sans-serif; border-radius: 8px; border: 1px solid var(--border);
             padding: 12px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); transition: all 0.2s;
         }
-        input:focus, select:focus { border-color: var(--accent); outline: none; }
+        input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
         button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
         button:hover { background-color: var(--accent-hover); }
 
@@ -77,6 +77,9 @@
 
         .progress-bar { background: var(--border); border-radius: 10px; overflow: hidden; height: 12px; }
         .progress-bar-inner { background: var(--accent); height: 100%; border-radius: 10px; transition: width 0.5s ease-out; }
+
+        .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
 
         #menu-toggle { display: none; }
 
@@ -112,6 +115,7 @@
                 <a href="#dashboard" class="nav-link active">Dashboard</a>
                 <a href="#sellers" class="nav-link">Vendedores</a>
                 <a href="#transactions" class="nav-link">Transações</a>
+                <a href="#tools" class="nav-link">Ferramentas</a>
                 <a href="#settings" class="nav-link">Definições</a>
             </nav>
         </aside>
@@ -119,6 +123,7 @@
             <div id="dashboard" class="page active"></div>
             <div id="sellers" class="page"></div>
             <div id="transactions" class="page"></div>
+            <div id="tools" class="page"></div>
             <div id="settings" class="page"></div>
         </main>
     </div>
@@ -163,10 +168,7 @@
         async function initializeApp() {
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('app-container').style.visibility = 'visible';
-
-            // Tenta reativar as notificações silenciosamente ao iniciar
             await tryReactivatingNotifications();
-
             await fetchAllInitialData();
 
             const sidebar = document.getElementById('sidebar');
@@ -178,7 +180,6 @@
             document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
             document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
             window.addEventListener('hashchange', () => navigate(window.location.hash));
-
             navigate(window.location.hash || '#dashboard');
         }
 
@@ -186,7 +187,15 @@
             hash = hash || '#dashboard';
             document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
             document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
-            const loaders = { '#dashboard': renderDashboardPage, '#sellers': renderSellersPage, '#transactions': renderTransactionsPage, '#settings': renderSettingsPage };
+            // INÍCIO DA NOVA FUNCIONALIDADE
+            const loaders = { 
+                '#dashboard': renderDashboardPage, 
+                '#sellers': renderSellersPage, 
+                '#transactions': renderTransactionsPage, 
+                '#tools': renderToolsPage, 
+                '#settings': renderSettingsPage 
+            };
+            // FIM DA NOVA FUNCIONALIDADE
             if (loaders[hash]) loaders[hash]();
         }
 
@@ -216,8 +225,8 @@
             const res = await fetch(`${API_URL}${endpoint}`, config);
             if (res.status === 403) { throw new Error("Chave de API inválida."); }
             if (!res.ok) {
-                const errText = await res.text();
-                throw new Error(errText || "Erro de rede.");
+                const errJson = await res.json().catch(() => ({ message: "Erro desconhecido." }));
+                throw new Error(errJson.message || "Erro de rede.");
             }
             const contentType = res.headers.get("content-type");
             return contentType?.includes("application/json") ? res.json() : res.text();
@@ -263,11 +272,8 @@
             }
         }
 
-        // --- FUNÇÃO DE REATIVAÇÃO SILENCIOSA ---
         async function tryReactivatingNotifications() {
-            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
-                return;
-            }
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) { return; }
             try {
                 const registration = await navigator.serviceWorker.register('sw.js');
                 const permission = await Notification.permission;
@@ -275,18 +281,14 @@
                     console.log("Permissão já concedida. Tentando reenviar inscrição...");
                     let subscription = await registration.pushManager.getSubscription();
                     if (subscription) {
-                        await apiFetch('/api/admin/save-subscription', {
-                            method: 'POST',
-                            body: JSON.stringify(subscription),
-                        });
+                        await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
                         console.log('Inscrição reenviada ao servidor com sucesso.');
                     }
                 }
-            } catch (error) {
-                console.error('Falha ao tentar reativar notificações silenciosamente:', error);
-            }
+            } catch (error) { console.error('Falha ao tentar reativar notificações silenciosamente:', error); }
         }
         
+        // --- RENDER FUNCTIONS FOR PAGES ---
         function renderSettingsPage() {
             document.getElementById('settings').innerHTML = `
                 <div class="card">
@@ -297,7 +299,90 @@
             document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
         }
 
-        // --- RENDER FUNCTIONS FOR PAGES ---
+        // --- INÍCIO DA NOVA FUNCIONALIDADE ---
+        function renderToolsPage() {
+            const page = document.getElementById('tools');
+            const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
+            page.innerHTML = `
+                <div class="card">
+                    <h2>Reenviar Eventos de Compra (Purchase)</h2>
+                    <p style="color:var(--text-secondary)">
+                        Esta ferramenta envia eventos de compra históricos do seu banco de dados para um novo Pixel da Meta. 
+                        Útil para "aquecer" um pixel novo ou para recuperação após bloqueios.
+                    </p>
+                    <form id="resend-events-form">
+                        <div class="form-group">
+                            <label for="target-pixel-id">ID do Pixel de Destino (Obrigatório)</label>
+                            <input type="text" id="target-pixel-id" placeholder="123456789012345" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="target-meta-token">Token de Acesso da API da Meta (Obrigatório)</label>
+                            <input type="text" id="target-meta-token" placeholder="EAA..." required>
+                        </div>
+                        <div class="form-group">
+                            <label for="resend-seller-id">Vendedor (Opcional)</label>
+                            <select id="resend-seller-id">
+                                <option value="">Todos os Vendedores</option>
+                                ${sellerOptions}
+                            </select>
+                        </div>
+                        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="form-group">
+                                <label for="start-date">Data de Início (Obrigatório)</label>
+                                <input type="date" id="start-date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="end-date">Data de Fim (Obrigatório)</label>
+                                <input type="date" id="end-date" required>
+                            </div>
+                        </div>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">Iniciar Reenvio de Eventos</button>
+                    </form>
+                </div>`;
+            document.getElementById('resend-events-form').addEventListener('submit', handleResendEvents);
+        }
+
+        async function handleResendEvents(event) {
+            event.preventDefault();
+            const form = event.target;
+            const pixelId = document.getElementById('target-pixel-id').value;
+            const apiToken = document.getElementById('target-meta-token').value;
+            const sellerId = document.getElementById('resend-seller-id').value;
+            const startDate = document.getElementById('start-date').value;
+            const endDate = document.getElementById('end-date').value;
+
+            if (!pixelId || !apiToken || !startDate || !endDate) {
+                return alert('Por favor, preencha todos os campos obrigatórios.');
+            }
+
+            if (!confirm("Você tem certeza que deseja iniciar o reenvio de eventos? Esta ação não pode ser desfeita e pode levar vários minutos para ser concluída.")) {
+                return;
+            }
+
+            const body = {
+                target_pixel_id: pixelId,
+                target_meta_api_token: apiToken,
+                start_date: startDate,
+                end_date: endDate,
+            };
+            if (sellerId) {
+                body.seller_id = parseInt(sellerId, 10);
+            }
+
+            try {
+                const response = await apiFetch('/api/admin/resend-events', {
+                    method: 'POST',
+                    body: JSON.stringify(body),
+                });
+                alert(response.message || 'Processo de reenvio iniciado com sucesso! Acompanhe o progresso pelos logs do servidor.');
+                form.reset();
+            } catch (error) {
+                console.error('Erro ao reenviar eventos:', error);
+                alert(`Falha ao iniciar o reenvio: ${error.message}`);
+            }
+        }
+        // --- FIM DA NOVA FUNCIONALIDADE ---
+
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
@@ -319,16 +404,17 @@
             const page = document.getElementById('dashboard');
             const { start, end } = getDateRange(period);
 
-            const filteredTransactions = filterDataByDate(appState.allTransactions, start, end);
-            const filteredSellers = filterDataByDate(appState.sellers, start, end);
+            const filteredTransactions = filterDataByDate(appState.allTransactions, start, end, 'created_at');
+            const filteredPaidTransactions = filterDataByDate(appState.allTransactions.filter(t => t.status === 'paid'), start, end, 'paid_at');
+            const filteredSellers = filterDataByDate(appState.sellers, start, end, 'created_at');
 
-            const totalRevenue = filteredTransactions.reduce((sum, tx) => tx.status === 'paid' ? sum + parseFloat(tx.pix_value) : sum, 0);
-            const paidSales = filteredTransactions.filter(tx => tx.status === 'paid').length;
+            const totalRevenue = filteredPaidTransactions.reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
+            const paidSales = filteredPaidTransactions.length;
             const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
 
             const rankingByPeriod = appState.allRanking.map(seller => {
-                const revenue = filteredTransactions
-                    .filter(tx => tx.seller_email === seller.email && tx.status === 'paid')
+                const revenue = filteredPaidTransactions
+                    .filter(tx => tx.seller_email === seller.email)
                     .reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
                 return { ...seller, total_revenue_period: revenue };
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
