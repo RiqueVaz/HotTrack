@@ -7,6 +7,7 @@
 
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1C1C1C">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="icon" href="https://i.postimg.cc/ZnHB6HB5/icon-512x512.png">
@@ -81,13 +82,11 @@
         .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
         label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
 
-        /* --- INÍCIO DA NOVA FUNCIONALIDADE (CSS para resultados) --- */
         #resend-results-container { margin-top: 20px; }
         .result-summary { padding: 15px; border-radius: 8px; font-weight: 500; border: 1px solid var(--border); }
         .details { background-color: var(--bg); padding: 15px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
         .status-success { color: var(--success); }
         .status-failure { color: var(--danger); }
-        /* --- FIM DA NOVA FUNCIONALIDADE --- */
 
         #menu-toggle { display: none; }
 
@@ -139,14 +138,172 @@
     <div id="seller-modal" class="modal"></div>
 
     <script>
-        // API_URL corrigida na etapa anterior
-        const API_URL = '';
+        const API_URL = 'https://novaapi-one.vercel.app';
         let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
         const MONTHLY_GOAL = 50000;
 
-        // ... (o resto do seu JavaScript até a função renderToolsPage permanece o mesmo) ...
+        // ----- TIMEZONE & FORMATTING HELPERS -----
+        function toBrasiliaTime(dateString) {
+            const date = new Date(dateString);
+            return new Date(date.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        }
 
-        // --- INÍCIO DA NOVA FUNCIONALIDADE ---
+        function formatToBrasiliaString(date) {
+            return date.toLocaleString('pt-BR', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            }).replace(',', '');
+        }
+
+        // ----- AUTH & APP INITIALIZATION -----
+        document.addEventListener('DOMContentLoaded', () => {
+            const loginForm = document.getElementById('login-form');
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const key = document.getElementById('admin-key-input').value;
+                if (key) {
+                    localStorage.setItem('adminApiKey', key);
+                    initializeApp();
+                }
+            });
+
+            if (localStorage.getItem('adminApiKey')) {
+                initializeApp();
+            }
+        });
+
+        async function initializeApp() {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app-container').style.visibility = 'visible';
+            await tryReactivatingNotifications();
+            await fetchAllInitialData();
+
+            const sidebar = document.getElementById('sidebar');
+            const menuToggle = document.getElementById('menu-toggle');
+            function handleResize() { if (window.innerWidth > 768) sidebar.classList.remove('show'); }
+            window.addEventListener('resize', handleResize);
+            handleResize();
+            menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
+            document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
+            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
+            window.addEventListener('hashchange', () => navigate(window.location.hash));
+            navigate(window.location.hash || '#dashboard');
+        }
+
+        function navigate(hash) {
+            hash = hash || '#dashboard';
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
+            document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
+            const loaders = { 
+                '#dashboard': renderDashboardPage, 
+                '#sellers': renderSellersPage, 
+                '#transactions': renderTransactionsPage, 
+                '#tools': renderToolsPage, 
+                '#settings': renderSettingsPage 
+            };
+            if (loaders[hash]) loaders[hash]();
+        }
+
+        async function fetchAllInitialData() {
+            try {
+                const [sellers, transactions, ranking, usage] = await Promise.all([
+                    apiFetch('/api/admin/sellers'),
+                    apiFetch('/api/admin/transactions?limit=5000'),
+                    apiFetch('/api/admin/ranking'),
+                    apiFetch('/api/admin/usage-analysis')
+                ]);
+                appState.sellers = sellers;
+                appState.allTransactions = transactions.transactions;
+                appState.allRanking = ranking;
+                appState.allUsage = usage;
+            } catch (e) {
+                alert(`Erro ao carregar dados: ${e.message}. Verifique sua chave de API.`);
+                localStorage.removeItem('adminApiKey');
+                window.location.reload();
+            }
+        }
+
+        async function apiFetch(endpoint, options = {}) {
+            const adminKey = localStorage.getItem('adminApiKey');
+            if (!adminKey) throw new Error("Chave de Admin não encontrada.");
+            const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
+            const res = await fetch(`${API_URL}${endpoint}`, config);
+            if (res.status === 403) { throw new Error("Chave de API inválida."); }
+            if (!res.ok) {
+                const errJson = await res.json().catch(() => ({ message: "Erro desconhecido." }));
+                throw new Error(errJson.message || "Erro de rede.");
+            }
+            const contentType = res.headers.get("content-type");
+            return contentType?.includes("application/json") ? res.json() : res.text();
+        }
+
+        // --- PUSH NOTIFICATIONS LOGIC ---
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
+            return outputArray;
+        }
+
+        async function setupPushNotifications() {
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
+                alert('O seu navegador não suporta notificações.');
+                return;
+            }
+            try {
+                const registration = await navigator.serviceWorker.register('sw.js');
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    alert('Permissão para notificações negada.');
+                    return;
+                }
+                let subscription = await registration.pushManager.getSubscription();
+                if (subscription === null) {
+                    const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
+                    if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID do servidor.");
+                    const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+                    subscription = await registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: convertedVapidKey
+                    });
+                }
+                await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
+                alert('Notificações ativadas com sucesso!');
+            } catch (error) {
+                console.error('Falha ao configurar notificações:', error);
+                alert('Ocorreu um erro ao ativar as notificações.');
+            }
+        }
+
+        async function tryReactivatingNotifications() {
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) { return; }
+            try {
+                const registration = await navigator.serviceWorker.register('sw.js');
+                const permission = await Notification.permission;
+                if (permission === 'granted') {
+                    console.log("Permissão já concedida. Tentando reenviar inscrição...");
+                    let subscription = await registration.pushManager.getSubscription();
+                    if (subscription) {
+                        await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
+                        console.log('Inscrição reenviada ao servidor com sucesso.');
+                    }
+                }
+            } catch (error) { console.error('Falha ao tentar reativar notificações silenciosamente:', error); }
+        }
+        
+        // --- RENDER FUNCTIONS FOR PAGES ---
+        function renderSettingsPage() {
+            document.getElementById('settings').innerHTML = `
+                <div class="card">
+                    <h2>Definições de Notificações</h2>
+                    <p style="color:var(--text-secondary)">Receba um alerta a cada nova venda paga ou PIX gerado.</p>
+                    <button id="enable-notifications-btn" style="max-width: 300px;">Ativar Notificações</button>
+                </div>`;
+            document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
+        }
+
         function renderToolsPage() {
             const page = document.getElementById('tools');
             const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
@@ -251,9 +408,7 @@
                 button.textContent = 'Iniciar Teste de Envio';
             }
         }
-        // --- FIM DA NOVA FUNCIONALIDADE ---
         
-        // ... (o resto do seu código a partir daqui permanece o mesmo) ...
         function getDateRange(period) {
             const end = new Date();
             const start = new Date();
