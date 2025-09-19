@@ -83,7 +83,6 @@
         .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
         label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
 
-        #resend-results-container { margin-top: 20px; }
         .result-summary { padding: 15px; border-radius: 8px; font-weight: 500; border: 1px solid var(--border); }
         .details { background-color: var(--bg); padding: 15px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
         .status-success { color: var(--success); }
@@ -305,10 +304,32 @@
             document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
         }
 
+        // **ATUALIZADO**: Adicionada a nova ferramenta Utmify
         function renderToolsPage() {
             const page = document.getElementById('tools');
             const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
             page.innerHTML = `
+                <div class="card">
+                    <h2>Corrigir e Reenviar Eventos para Utmify</h2>
+                    <p style="color:var(--text-secondary)">
+                        Use esta ferramenta para corrigir pressels que foram criadas sem uma conta Utmify vinculada. Ela associará a conta à pressel e reenviará todos os eventos de vendas passadas.
+                    </p>
+                    <form id="resend-utmify-form">
+                        <div class="form-group">
+                            <label for="utmify-pressel-id">ID da Pressel a ser Corrigida</label>
+                            <input type="number" id="utmify-pressel-id" placeholder="Ex: 67" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="utmify-integration-id">ID da Integração Utmify de Destino</label>
+                            <input type="number" id="utmify-integration-id" placeholder="Ex: 1" required>
+                        </div>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">Corrigir e Reenviar Eventos</button>
+                    </form>
+                    <div id="utmify-results-container" style="display: none; margin-top: 20px;">
+                         <p id="utmify-summary" class="result-summary"></p>
+                    </div>
+                </div>
+
                 <div class="card">
                     <h2>Reenviar Eventos de Compra (Pixel Warming)</h2>
                     <p style="color:var(--text-secondary)">
@@ -344,7 +365,7 @@
                     </form>
                 </div>
                 <div class="card" id="resend-results-container" style="display: none;">
-                    <h2>Resultados do Envio</h2>
+                    <h2>Resultados do Envio (Pixel Warming)</h2>
                     <p id="resend-summary" class="result-summary"></p>
                     <div id="resend-details-wrapper" style="max-height: 400px; overflow-y: auto; margin-top: 15px;">
                         <table id="resend-details-table">
@@ -354,9 +375,49 @@
                     </div>
                 </div>`;
             document.getElementById('resend-events-form').addEventListener('submit', handleResendEvents);
+            // **NOVO**: Adiciona o event listener para a nova ferramenta
+            document.getElementById('resend-utmify-form').addEventListener('submit', handleResendUtmifyEvents);
         }
 
-        // --- LÓGICA FINAL DE ORQUESTRAÇÃO DE ENVIO ---
+        // **NOVO**: Handler para o formulário de reenvio da Utmify
+        async function handleResendUtmifyEvents(event) {
+            event.preventDefault();
+            const form = event.target;
+            const button = form.querySelector('button[type="submit"]');
+            const resultsContainer = document.getElementById('utmify-results-container');
+            const summaryDiv = document.getElementById('utmify-summary');
+
+            button.disabled = true;
+            button.textContent = 'Processando...';
+            resultsContainer.style.display = 'block';
+            summaryDiv.textContent = 'Iniciando processo...';
+            summaryDiv.className = 'result-summary';
+
+            try {
+                const body = {
+                    pressel_id: parseInt(document.getElementById('utmify-pressel-id').value, 10),
+                    utmify_integration_id: parseInt(document.getElementById('utmify-integration-id').value, 10)
+                };
+
+                const response = await apiFetch('/api/admin/resend-utmify-events', {
+                    method: 'POST', 
+                    body: JSON.stringify(body),
+                });
+                
+                summaryDiv.textContent = response.message;
+                summaryDiv.classList.add('status-success');
+
+            } catch (error) {
+                console.error('Erro ao reenviar eventos Utmify:', error);
+                summaryDiv.textContent = `Erro: ${error.message}`;
+                summaryDiv.classList.add('status-failure');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Corrigir e Reenviar Eventos';
+            }
+        }
+
+        // --- LÓGICA FINAL DE ORQUESTRAÇÃO DE ENVIO (Pixel Warming) ---
         async function handleResendEvents(event) {
             event.preventDefault();
             const form = event.target;
