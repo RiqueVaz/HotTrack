@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotTrack Command Center</title>
+    <title>HotTrack Command Center 2.0</title>
 
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1C1C1C">
@@ -13,121 +13,102 @@
     <link rel="icon" href="https://i.postimg.cc/ZnHB6HB5/icon-512x512.png">
     <link rel="apple-touch-icon" href="https://i.postimg.cc/ZnHB6HB5/icon-512x512.png">
     
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+
     <style>
         :root {
             --bg: #111111; --surface: #1C1C1C; --border: #2D2D2D;
             --text-primary: #FFFFFF; --text-secondary: #A0A0A0;
             --accent: #9333EA; --accent-hover: #7E22CE;
-            --danger: #E11D48; --success: #22C55E;
+            --danger: #E11D48; --success: #22C55E; --warning: #F59E0B;
         }
         * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;}
-
-        #login-screen {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
-            background: var(--bg); display: flex; align-items: center; justify-content: center;
-            transition: opacity: 0.3s;
-        }
-        #login-box {
-            background: var(--surface); padding: 30px; border-radius: 12px;
-            width: 90%; max-width: 350px; text-align: center; border: 1px solid var(--border);
-        }
-
-        #app-container { display: flex; min-height: 100vh; }
-        #sidebar {
-            width: 250px; background: var(--surface); border-right: 1px solid var(--border);
-            padding: 20px; display: flex; flex-direction: column; transition: transform 0.3s ease; position: fixed; height: 100%; z-index: 200;
-        }
-        .nav-link {
-            padding: 12px 15px; text-decoration: none; color: var(--text-secondary);
-            font-weight: 500; border-radius: 8px; display: flex; align-items: center; gap: 10px;
-            transition: background-color 0.2s, color 0.2s;
-        }
-        .nav-link.active, .nav-link:hover { color: var(--text-primary); background-color: rgba(147, 51, 234, 0.2); }
-        main { flex-grow: 1; padding: 30px; margin-left: 250px; width: calc(100% - 250px); }
+        
         .page { display: none; }
-        .page.active { display: block; animation: fadeIn 0.5s; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .page.active { display: block; animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
+        /* Layout */
+        #app-container { display: flex; min-height: 100vh; visibility: hidden; }
+        #sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; position: fixed; height: 100%; z-index: 200; transition: transform 0.3s ease; }
+        main { flex-grow: 1; padding: 30px; margin-left: 240px; width: calc(100% - 240px); }
+
+        /* Components */
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
-        .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
-        input, button, select, textarea {
-            font-family: 'Inter', sans-serif; border-radius: 8px; border: 1px solid var(--border);
-            padding: 12px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); transition: all 0.2s;
-        }
-        input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
-        button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
-        button:hover { background-color: var(--accent-hover); }
+        .nav-link { padding: 12px 15px; text-decoration: none; color: var(--text-secondary); font-weight: 500; border-radius: 8px; display: flex; align-items: center; gap: 12px; transition: background-color 0.2s, color 0.2s; }
+        .nav-link.active, .nav-link:hover { color: var(--text-primary); background-color: rgba(147, 51, 234, 0.15); }
+        .nav-link i { width: 18px; height: 18px; }
+        
+        /* Forms & Inputs */
+        input, button, select, textarea { font-family: 'Inter', sans-serif; border-radius: 8px; border: 1px solid var(--border); padding: 12px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); transition: all 0.2s; width: 100%; }
+        input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.2); }
+        button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 600; border-color: var(--accent); }
+        button:hover:not(:disabled) { background-color: var(--accent-hover); }
         button:disabled { background-color: var(--border); color: var(--text-secondary); cursor: not-allowed; }
-
-        .modal {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
-            display: none; align-items: center; justify-content: center; z-index: 1000;
-        }
-        .modal-content { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 450px; border: 1px solid var(--border); }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-
+        .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
+        
+        /* Table */
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border); }
         th { color: var(--text-secondary); font-weight: 500; font-size: 12px; text-transform: uppercase; }
         tbody tr:hover { background-color: rgba(255,255,255,0.03); }
 
-        .progress-bar { background: var(--border); border-radius: 10px; overflow: hidden; height: 12px; }
-        .progress-bar-inner { background: var(--accent); height: 100%; border-radius: 10px; transition: width 0.5s ease-out; }
+        /* Login Screen */
+        #login-screen { position: fixed; inset: 0; z-index: 2000; background: var(--bg); display: flex; align-items: center; justify-content: center; transition: opacity 0.3s; }
+        #login-box { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; border: 1px solid var(--border); }
 
-        .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
-        label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
-
-        .result-summary { padding: 15px; border-radius: 8px; font-weight: 500; border: 1px solid var(--border); }
-        .details { background-color: var(--bg); padding: 15px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
-        .status-success { color: var(--success); }
-        .status-failure { color: var(--danger); }
-
+        /* Modal */
+        #modal-container { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(5px); display: none; align-items: center; justify-content: center; z-index: 1000; opacity: 0; transition: opacity 0.2s; }
+        #modal-container.show { display: flex; opacity: 1; }
+        .modal-content { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 450px; border: 1px solid var(--border); transform: scale(0.95); transition: transform 0.2s; }
+        #modal-container.show .modal-content { transform: scale(1); }
+        
+        /* Toasts (Notifications) */
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 3000; display: flex; flex-direction: column; gap: 10px; }
+        .toast { padding: 12px 18px; border-radius: 8px; color: white; font-weight: 500; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); animation: slideIn 0.3s ease-out forwards; }
+        .toast.success { background-color: var(--success); }
+        .toast.error { background-color: var(--danger); }
+        .toast.warning { background-color: var(--warning); color: #111; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        
+        /* Mobile */
         #menu-toggle { display: none; }
-
         @media (max-width: 768px) {
             #sidebar { transform: translateX(-100%); }
             #sidebar.show { transform: translateX(0); box-shadow: 10px 0 20px rgba(0,0,0,0.2); }
             main { margin-left: 0; width: 100%; padding: 20px; }
-            #menu-toggle {
-                display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
-                background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text-primary);
-            }
-            .grid { grid-template-columns: 1fr; }
+            #menu-toggle { display: block; position: fixed; top: 15px; left: 15px; z-index: 300; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text-primary); }
         }
     </style>
 </head>
 <body>
     <div id="login-screen">
         <div id="login-box">
-            <h2 style="color: var(--accent);">HotTrack</h2>
-            <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
+            <h2 style="color: var(--accent); margin-bottom: 5px;">HotTrack</h2>
+            <p style="color: var(--text-secondary); margin-top: 0; margin-bottom: 25px;">Acesso de Administrador</p>
             <form id="login-form">
-                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required style="width: 100%;">
-                <button type="submit" style="margin-top: 15px; width: 100%;">Entrar</button>
+                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required>
+                <button type="submit" style="margin-top: 15px;">Entrar</button>
             </form>
         </div>
     </div>
 
-    <button id="menu-toggle">☰</button>
-    <div id="app-container" style="visibility: hidden;">
+    <button id="menu-toggle">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+    </button>
+    
+    <div id="app-container">
         <aside id="sidebar">
             <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">HotTrack</h2>
-            <nav style="display: flex; flex-direction: column; gap: 10px;">
-                <a href="#dashboard" class="nav-link active">Dashboard</a>
-                <a href="#sellers" class="nav-link">Vendedores</a>
-                <a href="#transactions" class="nav-link">Transações</a>
-                <a href="#tools" class="nav-link">Ferramentas</a>
-                <a href="#settings" class="nav-link">Definições</a>
-            </nav>
+            <nav id="main-nav" style="display: flex; flex-direction: column; gap: 10px;"></nav>
         </aside>
-        <main>
-            <div id="dashboard" class="page active"></div>
+        <main id="main-content">
+            <div id="dashboard" class="page"></div>
             <div id="sellers" class="page"></div>
             <div id="transactions" class="page"></div>
             <div id="tools" class="page"></div>
@@ -135,301 +116,357 @@
         </main>
     </div>
 
-    <div id="seller-modal" class="modal"></div>
+    <div id="modal-container"></div>
+    <div id="toast-container"></div>
 
     <script>
-        const API_URL = 'https://novaapi-one.vercel.app';
-        let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
-        const MONTHLY_GOAL = 50000;
+    // --- CONFIG & STATE ---
+    const CONFIG = {
+        API_URL: 'https://novaapi-one.vercel.app',
+        MONTHLY_GOAL: 50000,
+        NAV_ITEMS: [
+            { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+            { id: 'sellers', label: 'Vendedores', icon: 'users' },
+            { id: 'transactions', label: 'Transações', icon: 'arrow-left-right' },
+            { id: 'tools', label: 'Ferramentas', icon: 'wrench' },
+            { id: 'settings', label: 'Definições', icon: 'settings' },
+        ]
+    };
 
-        // ----- TIMEZONE & FORMATTING HELPERS -----
-        function toBrasiliaTime(dateString) {
-            const date = new Date(dateString);
-            return new Date(date.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const appState = {
+        sellers: [], allTransactions: [], allRanking: [], allUsage: [],
+        currentSeller: null,
+    };
+
+    function setState(newState) {
+        Object.assign(appState, newState);
+    }
+
+    // --- DOM ELEMENTS CACHE ---
+    const DOM = {
+        loginScreen: document.getElementById('login-screen'),
+        appContainer: document.getElementById('app-container'),
+        loginForm: document.getElementById('login-form'),
+        adminKeyInput: document.getElementById('admin-key-input'),
+        sidebar: document.getElementById('sidebar'),
+        menuToggle: document.getElementById('menu-toggle'),
+        mainNav: document.getElementById('main-nav'),
+        mainContent: document.getElementById('main-content'),
+        modalContainer: document.getElementById('modal-container'),
+        toastContainer: document.getElementById('toast-container'),
+    };
+
+    // --- UTILS ---
+    const toBrasiliaTime = (dateString) => new Date(new Date(dateString).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const formatToBrasiliaString = (date) => date.toLocaleString('pt-BR', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const formatCurrency = (value) => (value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const urlBase64ToUint8Array = (base64String) => {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        return Uint8Array.from(rawData, char => char.charCodeAt(0));
+    };
+
+    // --- UI COMPONENTS ---
+    function showToast(message, type = 'success', duration = 4000) {
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.innerHTML = `<span>${message}</span>`;
+        DOM.toastContainer.appendChild(toast);
+        setTimeout(() => toast.remove(), duration);
+    }
+
+    function showModal(contentHTML) {
+        DOM.modalContainer.innerHTML = `<div class="modal-content">${contentHTML}</div>`;
+        DOM.modalContainer.classList.add('show');
+    }
+
+    function closeModal() {
+        DOM.modalContainer.classList.remove('show');
+        DOM.modalContainer.innerHTML = '';
+    }
+
+    // --- API ---
+    async function apiFetch(endpoint, options = {}) {
+        const adminKey = localStorage.getItem('adminApiKey');
+        if (!adminKey) throw new Error("Chave de Admin não encontrada.");
+        const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
+        const res = await fetch(`${CONFIG.API_URL}${endpoint}`, config);
+        if (res.status === 403) throw new Error("Chave de API inválida ou expirada.");
+        if (!res.ok) {
+            const errJson = await res.json().catch(() => ({ message: "Erro desconhecido na resposta da API." }));
+            throw new Error(errJson.message || "Erro de rede.");
         }
+        const contentType = res.headers.get("content-type");
+        return contentType?.includes("application/json") ? res.json() : res.text();
+    }
 
-        function formatToBrasiliaString(date) {
-            return date.toLocaleString('pt-BR', {
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', second: '2-digit'
-            }).replace(',', '');
-        }
+    // --- PAGE RENDERERS ---
+    function renderNav() {
+        DOM.mainNav.innerHTML = CONFIG.NAV_ITEMS.map(item => `
+            <a href="#${item.id}" class="nav-link" data-page="${item.id}">
+                <i data-lucide="${item.icon}"></i> ${item.label}
+            </a>
+        `).join('');
+        lucide.createIcons();
+    }
 
-        // ----- AUTH & APP INITIALIZATION -----
-        document.addEventListener('DOMContentLoaded', () => {
-            const loginForm = document.getElementById('login-form');
-            loginForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const key = document.getElementById('admin-key-input').value;
-                if (key) {
-                    localStorage.setItem('adminApiKey', key);
-                    initializeApp();
-                }
-            });
+    function renderPage(pageId, content) {
+        const pageElement = document.getElementById(pageId);
+        if (pageElement) pageElement.innerHTML = content;
+    }
 
-            if (localStorage.getItem('adminApiKey')) {
-                initializeApp();
-            }
-        });
+    function renderDashboardPage(period = 'month') {
+        const { start, end } = getDateRange(period);
+        const filteredPaidTransactions = filterDataByDate(appState.allTransactions.filter(t => t.status === 'paid'), start, end, 'paid_at');
+        const filteredSellers = filterDataByDate(appState.sellers, start, end, 'created_at');
+        const totalRevenue = filteredPaidTransactions.reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
+        const rankingByPeriod = appState.allRanking.map(seller => ({
+            ...seller,
+            total_revenue_period: filteredPaidTransactions
+                .filter(tx => tx.seller_email === seller.email)
+                .reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0)
+        })).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
+        const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
 
-        async function initializeApp() {
-            document.getElementById('login-screen').style.display = 'none';
-            document.getElementById('app-container').style.visibility = 'visible';
-            await tryReactivatingNotifications();
-            await fetchAllInitialData();
+        const content = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin:0;">Dashboard</h2>
+                <select id="dashboard-period" style="width: auto;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                <div class="card"><h3>Faturamento</h3><p style="color:var(--success); font-size: 24px; font-weight: 700;">${formatCurrency(totalRevenue)}</p></div>
+                <div class="card"><h3>Vendas Pagas</h3><p style="font-size: 24px; font-weight: 700;">${filteredPaidTransactions.length}</p></div>
+                <div class="card"><h3>Novos Vendedores</h3><p style="font-size: 24px; font-weight: 700;">${filteredSellers.length}</p></div>
+                <div class="card"><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}; font-size: 24px; font-weight: 700;">${riskUsers}</p></div>
+            </div>
+            <div class="card">
+                <h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2>
+                <table><thead><tr><th>Vendedor</th><th>Receita</th></tr></thead><tbody>
+                    ${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>${formatCurrency(s.total_revenue_period)}</td></tr>`).join('') || `<tr><td colspan="2" style="text-align:center;">Nenhum dado.</td></tr>`}
+                </tbody></table>
+            </div>`;
+        renderPage('dashboard', content);
+        document.getElementById('dashboard-period').value = period;
+    }
+    
+    function renderSellersPage() {
+        const content = `
+            <div class="card">
+                <h2>Gerir Vendedores</h2>
+                <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="margin-bottom: 20px;">
+                <div style="max-height: 60vh; overflow-y: auto;">
+                <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
+                </div>
+            </div>`;
+        renderPage('sellers', content);
+        renderSellersTable();
+    }
 
-            const sidebar = document.getElementById('sidebar');
-            const menuToggle = document.getElementById('menu-toggle');
-            function handleResize() { if (window.innerWidth > 768) sidebar.classList.remove('show'); }
-            window.addEventListener('resize', handleResize);
-            handleResize();
-            menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
-            document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
-            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
-            window.addEventListener('hashchange', () => navigate(window.location.hash));
-            navigate(window.location.hash || '#dashboard');
-        }
-
-        function navigate(hash) {
-            hash = hash || '#dashboard';
-            document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
-            document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
-            const loaders = { 
-                '#dashboard': renderDashboardPage, 
-                '#sellers': renderSellersPage, 
-                '#transactions': renderTransactionsPage, 
-                '#tools': renderToolsPage, 
-                '#settings': renderSettingsPage 
-            };
-            if (loaders[hash]) loaders[hash]();
-        }
-
-        async function fetchAllInitialData() {
-            try {
-                const [sellers, transactions, ranking, usage] = await Promise.all([
-                    apiFetch('/api/admin/sellers'),
-                    apiFetch('/api/admin/transactions?limit=5000'),
-                    apiFetch('/api/admin/ranking'),
-                    apiFetch('/api/admin/usage-analysis')
-                ]);
-                appState.sellers = sellers;
-                appState.allTransactions = transactions.transactions;
-                appState.allRanking = ranking;
-                appState.allUsage = usage;
-            } catch (e) {
-                alert(`Erro ao carregar dados: ${e.message}. Verifique sua chave de API.`);
-                localStorage.removeItem('adminApiKey');
-                window.location.reload();
-            }
-        }
-
-        async function apiFetch(endpoint, options = {}) {
-            const adminKey = localStorage.getItem('adminApiKey');
-            if (!adminKey) throw new Error("Chave de Admin não encontrada.");
-            const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
-            const res = await fetch(`${API_URL}${endpoint}`, config);
-            if (res.status === 403) { throw new Error("Chave de API inválida."); }
-            if (!res.ok) {
-                const errJson = await res.json().catch(() => ({ message: "Erro desconhecido." }));
-                throw new Error(errJson.message || "Erro de rede.");
-            }
-            const contentType = res.headers.get("content-type");
-            return contentType?.includes("application/json") ? res.json() : res.text();
-        }
-
-        // --- PUSH NOTIFICATIONS LOGIC ---
-        function urlBase64ToUint8Array(base64String) {
-            const padding = '='.repeat((4 - base64String.length % 4) % 4);
-            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-            const rawData = window.atob(base64);
-            const outputArray = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
-            return outputArray;
-        }
-
-        async function setupPushNotifications() {
-            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
-                alert('O seu navegador não suporta notificações.');
-                return;
-            }
-            try {
-                const registration = await navigator.serviceWorker.register('sw.js');
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') {
-                    alert('Permissão para notificações negada.');
-                    return;
-                }
-                let subscription = await registration.pushManager.getSubscription();
-                if (subscription === null) {
-                    const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
-                    if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID do servidor.");
-                    const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
-                    subscription = await registration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: convertedVapidKey
-                    });
-                }
-                await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
-                alert('Notificações ativadas com sucesso!');
-            } catch (error) {
-                console.error('Falha ao configurar notificações:', error);
-                alert('Ocorreu um erro ao ativar as notificações.');
-            }
-        }
-
-        async function tryReactivatingNotifications() {
-            if (!('serviceWorker' in navigator && 'PushManager' in window)) { return; }
-            try {
-                const registration = await navigator.serviceWorker.register('sw.js');
-                const permission = await Notification.permission;
-                if (permission === 'granted') {
-                    console.log("Permissão já concedida. Tentando reenviar inscrição...");
-                    let subscription = await registration.pushManager.getSubscription();
-                    if (subscription) {
-                        await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
-                        console.log('Inscrição reenviada ao servidor com sucesso.');
-                    }
-                }
-            } catch (error) { console.error('Falha ao tentar reativar notificações silenciosamente:', error); }
-        }
+    function renderSellersTable(filteredSellers = null) {
+        const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
+        const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
+        let sellersData = filteredSellers || appState.sellers;
         
-        // --- RENDER FUNCTIONS FOR PAGES ---
-        function renderSettingsPage() {
-            document.getElementById('settings').innerHTML = `
-                <div class="card">
-                    <h2>Definições de Notificações</h2>
-                    <p style="color:var(--text-secondary)">Receba um alerta a cada nova venda paga ou PIX gerado.</p>
-                    <button id="enable-notifications-btn" style="max-width: 300px;">Ativar Notificações</button>
-                </div>`;
-            document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
-        }
+        const tbody = document.getElementById('sellers-tbody');
+        if (!tbody) return;
+        
+        tbody.innerHTML = sellersData.map(s => {
+            const revenue = rankingMap.get(s.id) || 0;
+            const requests = usageMap.get(s.id) || 0;
+            return `<tr>
+                <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
+                <td>${formatCurrency(revenue)}</td>
+                <td>${requests}</td>
+                <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
+                <td><button data-action="manage-seller" data-seller-id="${s.id}" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
+            </tr>`
+        }).join('');
+    }
 
-        // **ATUALIZADO**: Adicionada a nova ferramenta Utmify
-        function renderToolsPage() {
-            const page = document.getElementById('tools');
-            const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
-            page.innerHTML = `
-                <div class="card">
-                    <h2>Corrigir e Reenviar Eventos para Utmify</h2>
-                    <p style="color:var(--text-secondary)">
-                        Use esta ferramenta para corrigir pressels que foram criadas sem uma conta Utmify vinculada. Ela associará a conta à pressel e reenviará todos os eventos de vendas passadas.
-                    </p>
-                    <form id="resend-utmify-form">
-                        <div class="form-group">
-                            <label for="utmify-pressel-id">ID da Pressel a ser Corrigida</label>
-                            <input type="number" id="utmify-pressel-id" placeholder="Ex: 67" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="utmify-integration-id">ID da Integração Utmify de Destino</label>
-                            <input type="number" id="utmify-integration-id" placeholder="Ex: 1" required>
-                        </div>
-                        <button type="submit" style="width: 100%; margin-top: 10px;">Corrigir e Reenviar Eventos</button>
-                    </form>
-                    <div id="utmify-results-container" style="display: none; margin-top: 20px;">
-                         <p id="utmify-summary" class="result-summary"></p>
-                    </div>
+    function renderTransactionsPage() {
+        const content = `
+            <div class="card">
+                <h2>Transações</h2>
+                <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+                    <input type="date" id="tx-start-date">
+                    <input type="date" id="tx-end-date">
+                    <button id="tx-filter-btn" style="width: auto; white-space: nowrap;">Filtrar</button>
                 </div>
-
-                <div class="card">
-                    <h2>Reenviar Eventos de Compra (Pixel Warming)</h2>
-                    <p style="color:var(--text-secondary)">
-                        Esta ferramenta processa todos os eventos de compra encontrados para o período em lotes, enviando-os para a Meta com dados enriquecidos para maximizar a qualidade da correspondência.
-                    </p>
-                    <form id="resend-events-form">
-                        <div class="form-group">
-                            <label for="target-pixel-id">ID do Pixel de Destino (Obrigatório)</label>
-                            <input type="text" id="target-pixel-id" placeholder="123456789012345" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="target-meta-token">Token de Acesso da API da Meta (Obrigatório)</label>
-                            <input type="text" id="target-meta-token" placeholder="EAA..." required>
-                        </div>
-                        <div class="form-group">
-                            <label for="resend-seller-id">Vendedor (Opcional)</label>
-                            <select id="resend-seller-id">
-                                <option value="">Todos os Vendedores</option>
-                                ${sellerOptions}
-                            </select>
-                        </div>
-                        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 15px;">
-                            <div class="form-group">
-                                <label for="start-date">Data de Início (Obrigatório)</label>
-                                <input type="date" id="start-date" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="end-date">Data de Fim (Obrigatório)</label>
-                                <input type="date" id="end-date" required>
-                            </div>
-                        </div>
-                        <button type="submit" style="width: 100%; margin-top: 10px;">Iniciar Envio Completo</button>
-                    </form>
+                <div style="max-height: 60vh; overflow-y: auto;">
+                <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
                 </div>
-                <div class="card" id="resend-results-container" style="display: none;">
-                    <h2>Resultados do Envio (Pixel Warming)</h2>
-                    <p id="resend-summary" class="result-summary"></p>
-                    <div id="resend-details-wrapper" style="max-height: 400px; overflow-y: auto; margin-top: 15px;">
-                        <table id="resend-details-table">
-                            <thead><tr><th>ID da Transação</th><th>Status</th><th>Detalhes</th></tr></thead>
-                            <tbody></tbody>
-                        </table>
+            </div>`;
+        renderPage('transactions', content);
+        renderTransactionsTable(appState.allTransactions);
+    }
+    
+    function renderTransactionsTable(transactions) {
+        const tbody = document.getElementById('transactions-tbody');
+        if (!tbody) return;
+        tbody.innerHTML = transactions.slice(0, 150).map(tx => `
+            <tr>
+                <td>${tx.seller_name || 'N/A'}</td>
+                <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
+                <td>${formatCurrency(tx.pix_value)}</td>
+                <td>${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
+            </tr>`).join('');
+    }
+
+    function renderToolsPage() {
+        const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
+        const content = `
+            <div class="card">
+                <h2>Corrigir Eventos para Utmify</h2>
+                <p style="color:var(--text-secondary)">Associe uma conta Utmify a uma pressel e reenvie todos os eventos de vendas passadas.</p>
+                <form id="resend-utmify-form" style="margin-top: 1.5em;">
+                    <div class="form-group"><label for="utmify-pressel-id">ID da Pressel</label><input type="number" id="utmify-pressel-id" placeholder="Ex: 67" required></div>
+                    <div class="form-group"><label for="utmify-integration-id">ID da Integração Utmify</label><input type="number" id="utmify-integration-id" placeholder="Ex: 1" required></div>
+                    <button type="submit">Corrigir e Reenviar</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>Reenviar Eventos (Pixel Warming)</h2>
+                <p style="color:var(--text-secondary)">Envie eventos de compra para a Meta com dados enriquecidos para maximizar a correspondência.</p>
+                <form id="resend-events-form" style="margin-top: 1.5em;">
+                    <div class="form-group"><label for="target-pixel-id">ID do Pixel de Destino</label><input type="text" id="target-pixel-id" placeholder="123456789012345" required></div>
+                    <div class="form-group"><label for="target-meta-token">Token de Acesso da API da Meta</label><input type="text" id="target-meta-token" placeholder="EAA..." required></div>
+                    <div class="form-group"><label for="resend-seller-id">Vendedor (Opcional)</label><select id="resend-seller-id"><option value="">Todos</option>${sellerOptions}</select></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="form-group"><label for="start-date">Data de Início</label><input type="date" id="start-date" required></div>
+                        <div class="form-group"><label for="end-date">Data de Fim</label><input type="date" id="end-date" required></div>
                     </div>
-                </div>`;
-            document.getElementById('resend-events-form').addEventListener('submit', handleResendEvents);
-            // **NOVO**: Adiciona o event listener para a nova ferramenta
-            document.getElementById('resend-utmify-form').addEventListener('submit', handleResendUtmifyEvents);
+                    <button type="submit">Iniciar Envio</button>
+                </form>
+            </div>`;
+        renderPage('tools', content);
+    }
+    
+    function renderSettingsPage() {
+        const content = `
+            <div class="card">
+                <h2>Notificações Push</h2>
+                <p style="color:var(--text-secondary)">Receba um alerta no seu dispositivo a cada nova venda.</p>
+                <button id="enable-notifications-btn" style="max-width: 250px; margin-top: 1em;">Ativar Notificações</button>
+            </div>`;
+        renderPage('settings', content);
+    }
+
+    // --- EVENT HANDLERS ---
+    function handleNavigation(hash) {
+        hash = hash || '#dashboard';
+        const pageId = hash.substring(1);
+        
+        DOM.mainNav.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
+        document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === pageId));
+        
+        const renderFunction = {
+            'dashboard': renderDashboardPage, 'sellers': renderSellersPage,
+            'transactions': renderTransactionsPage, 'tools': renderToolsPage, 'settings': renderSettingsPage
+        }[pageId];
+        
+        if (renderFunction) renderFunction();
+    }
+
+    async function handleLogin(e) {
+        e.preventDefault();
+        const key = DOM.adminKeyInput.value;
+        if (key) {
+            localStorage.setItem('adminApiKey', key);
+            await initializeApp();
         }
+    }
 
-        // **NOVO**: Handler para o formulário de reenvio da Utmify
-        async function handleResendUtmifyEvents(event) {
-            event.preventDefault();
-            const form = event.target;
-            const button = form.querySelector('button[type="submit"]');
-            const resultsContainer = document.getElementById('utmify-results-container');
-            const summaryDiv = document.getElementById('utmify-summary');
+    function handleSellerSearch(e) {
+        const query = e.target.value.toLowerCase();
+        const filtered = appState.sellers.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query));
+        renderSellersTable(filtered);
+    }
 
-            button.disabled = true;
-            button.textContent = 'Processando...';
-            resultsContainer.style.display = 'block';
-            summaryDiv.textContent = 'Iniciando processo...';
-            summaryDiv.className = 'result-summary';
+    function handleManageSeller(sellerId) {
+        const seller = appState.sellers.find(s => s.id === parseInt(sellerId));
+        if (!seller) return;
+        setState({ currentSeller: seller });
 
+        showModal(`
+            <h3 style="margin-top: 0;">${seller.name}</h3>
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div>
+                    <h4>Alterar Senha</h4>
+                    <input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)">
+                    <button data-action="save-password" style="margin-top: 10px;">Salvar Senha</button>
+                </div>
+                <div>
+                    <h4>Ações</h4>
+                    <button data-action="toggle-status" style="background-color: ${seller.is_active ? 'var(--warning)' : 'var(--success)'}; color: ${seller.is_active ? '#111' : '#fff'};">
+                        ${seller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor'}
+                    </button>
+                </div>
+            </div>
+            <button data-action="close-modal" style="margin-top: 20px; background: none; border: 1px solid var(--border); color: var(--text-secondary);">Fechar</button>
+        `);
+    }
+
+    async function handleModalClick(e) {
+        const action = e.target.dataset.action;
+        if (!action) return;
+
+        if (action === 'close-modal') closeModal();
+
+        if (action === 'save-password') {
+            const newPassword = document.getElementById('new-password').value;
+            if (!newPassword || newPassword.length < 8) return showToast("A senha deve ter pelo menos 8 caracteres.", 'warning');
             try {
-                const body = {
-                    pressel_id: parseInt(document.getElementById('utmify-pressel-id').value, 10),
-                    utmify_integration_id: parseInt(document.getElementById('utmify-integration-id').value, 10)
-                };
-
-                const response = await apiFetch('/api/admin/resend-utmify-events', {
-                    method: 'POST', 
-                    body: JSON.stringify(body),
-                });
-                
-                summaryDiv.textContent = response.message;
-                summaryDiv.classList.add('status-success');
-
-            } catch (error) {
-                console.error('Erro ao reenviar eventos Utmify:', error);
-                summaryDiv.textContent = `Erro: ${error.message}`;
-                summaryDiv.classList.add('status-failure');
-            } finally {
-                button.disabled = false;
-                button.textContent = 'Corrigir e Reenviar Eventos';
-            }
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
+                showToast('Senha alterada com sucesso!');
+                closeModal();
+            } catch(err) { showToast(`Erro: ${err.message}`, 'error'); }
         }
 
-        // --- LÓGICA FINAL DE ORQUESTRAÇÃO DE ENVIO (Pixel Warming) ---
-        async function handleResendEvents(event) {
-            event.preventDefault();
-            const form = event.target;
-            const button = form.querySelector('button[type="submit"]');
-            const resultsContainer = document.getElementById('resend-results-container');
-            const summaryDiv = document.getElementById('resend-summary');
-            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
+        if (action === 'toggle-status') {
+            const newStatus = !appState.currentSeller.is_active;
+            if (!confirm(`Tem certeza que deseja ${newStatus ? 'desbloquear' : 'bloquear'} este vendedor?`)) return;
+            try {
+                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
+                 showToast(`Vendedor ${newStatus ? 'desbloqueado' : 'bloqueado'}!`);
+                 await fetchAllInitialData();
+                 renderSellersPage();
+                 closeModal();
+            } catch(err) { showToast(`Erro: ${err.message}`, 'error'); }
+        }
+    }
+    
+    async function handleResendUtmifyEvents(e) {
+        e.preventDefault();
+        const form = e.target;
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Processando...';
+        try {
+            const body = {
+                pressel_id: parseInt(document.getElementById('utmify-pressel-id').value, 10),
+                utmify_integration_id: parseInt(document.getElementById('utmify-integration-id').value, 10)
+            };
+            const response = await apiFetch('/api/admin/resend-utmify-events', { method: 'POST', body: JSON.stringify(body) });
+            showToast(response.message || 'Eventos enviados com sucesso!');
+            form.reset();
+        } catch (error) {
+            showToast(`Erro: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Corrigir e Reenviar';
+        }
+    }
 
-            button.disabled = true;
-            resultsContainer.style.display = 'block';
-            tbody.innerHTML = ''; 
+    async function handleResendEvents(e) {
+        e.preventDefault();
+        const form = e.target;
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Iniciando...';
+        showToast('Iniciando processo de reenvio em lotes...', 'warning');
 
+        try {
             const commonBody = {
                 target_pixel_id: document.getElementById('target-pixel-id').value,
                 target_meta_api_token: document.getElementById('target-meta-token').value,
@@ -437,224 +474,174 @@
                 start_date: document.getElementById('start-date').value,
                 end_date: document.getElementById('end-date').value,
             };
-            if (commonBody.seller_id) { commonBody.seller_id = parseInt(commonBody.seller_id, 10); }
+            if (commonBody.seller_id) commonBody.seller_id = parseInt(commonBody.seller_id, 10);
 
             let currentPage = 1;
-            let totalPages = 1; // Começa com 1 para entrar no loop
-
-            try {
-                while (currentPage <= totalPages) {
-                    button.textContent = `Processando Lote ${currentPage} de ${totalPages}...`;
-                    summaryDiv.textContent = `Buscando e processando lote ${currentPage}...`;
-
-                    const response = await apiFetch('/api/admin/resend-events', {
-                        method: 'POST', 
-                        body: JSON.stringify({ ...commonBody, page: currentPage, limit: 50 }),
-                    });
-
-                    totalPages = response.total_pages || 0;
-                    summaryDiv.textContent = `Lote ${currentPage}/${totalPages} concluído. Total de eventos: ${response.total_events}.`;
-                    
-                    if (response.results && response.results.length > 0) {
-                        appendResultsToTable(response.results);
-                    }
-                    
-                    if(totalPages === 0) {
-                         summaryDiv.textContent = response.message || "Nenhum evento encontrado.";
-                         break;
-                    }
-
-                    currentPage++;
+            let totalPages = 1;
+            while (currentPage <= totalPages) {
+                button.textContent = `Processando Lote ${currentPage}/${totalPages}...`;
+                const response = await apiFetch('/api/admin/resend-events', { method: 'POST', body: JSON.stringify({ ...commonBody, page: currentPage, limit: 50 }) });
+                totalPages = response.total_pages || 0;
+                if (totalPages === 0) {
+                    showToast(response.message || "Nenhum evento encontrado para o período.", 'warning');
+                    break;
                 }
-                summaryDiv.textContent = `Processo concluído! Todos os ${totalPages} lotes foram processados.`;
-            } catch (error) {
-                console.error('Erro ao orquestrar o reenvio:', error);
-                summaryDiv.textContent = `Ocorreu um erro no Lote ${currentPage}: ${error.message}`;
-            } finally {
-                button.disabled = false;
-                button.textContent = 'Iniciar Envio Completo';
+                showToast(`Lote ${currentPage}/${totalPages} concluído.`, 'success');
+                currentPage++;
             }
+             showToast('Processo de reenvio finalizado!', 'success');
+             form.reset();
+        } catch (error) {
+            showToast(`Erro no processo: ${error.message}`, 'error');
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Iniciar Envio';
         }
+    }
+    
+    // --- PUSH NOTIFICATIONS ---
+    async function setupPushNotifications() {
+        if (!('serviceWorker' in navigator && 'PushManager' in window)) return showToast('Seu navegador não suporta notificações.', 'error');
+        try {
+            const registration = await navigator.serviceWorker.register('sw.js');
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') return showToast('Permissão para notificações negada.', 'warning');
+            
+            let subscription = await registration.pushManager.getSubscription();
+            if (subscription === null) {
+                const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
+                if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID.");
+                subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+                });
+            }
+            await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
+            showToast('Notificações ativadas com sucesso!');
+        } catch (error) {
+            console.error('Falha ao configurar notificações:', error);
+            showToast('Ocorreu um erro ao ativar as notificações.', 'error');
+        }
+    }
 
-        function appendResultsToTable(results) {
-            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
-            tbody.innerHTML += results.map(res => `
-                <tr>
-                    <td>${res.transaction_id}</td>
-                    <td class="status-${res.status}">${res.status === 'success' ? 'Sucesso' : 'Falha'}</td>
-                    <td>
-                        <details>
-                            <summary>Ver dados</summary>
-                            <div class="details">
-                                <strong>Payload Enviado:</strong>
-                                ${JSON.stringify(res.payload_sent, null, 2)}
-                                <hr style="border-color: var(--border); margin: 10px 0;">
-                                <strong>Resposta da Meta:</strong>
-                                ${JSON.stringify(res.meta_response, null, 2)}
-                            </div>
-                        </details>
-                    </td>
-                </tr>
-            `).join('');
+    async function tryReactivatingNotifications() {
+        if (!('serviceWorker' in navigator && 'PushManager' in window)) return;
+        try {
+            const registration = await navigator.serviceWorker.register('sw.js');
+            if (await Notification.permission === 'granted') {
+                const subscription = await registration.pushManager.getSubscription();
+                if (subscription) await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
+            }
+        } catch (error) { console.error('Falha ao reativar notificações:', error); }
+    }
+
+    // --- DATA HELPERS ---
+    const getDateRange = (period) => {
+        const end = new Date();
+        const start = new Date();
+        if (period === 'today') start.setHours(0, 0, 0, 0);
+        else if (period === '7days') { start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0); }
+        else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
+        return { start, end };
+    };
+
+    const filterDataByDate = (data, startDate, endDate, dateKey = 'created_at') => {
+        if (!startDate || !endDate || !Array.isArray(data)) return data || [];
+        return data.filter(item => {
+            const itemDate = toBrasiliaTime(item[dateKey]);
+            return itemDate >= startDate && itemDate <= endDate;
+        });
+    };
+    
+    // --- APP INITIALIZATION ---
+    async function fetchAllInitialData() {
+        try {
+            const [sellers, transactions, ranking, usage] = await Promise.all([
+                apiFetch('/api/admin/sellers'),
+                apiFetch('/api/admin/transactions?limit=5000'),
+                apiFetch('/api/admin/ranking'),
+                apiFetch('/api/admin/usage-analysis')
+            ]);
+            setState({
+                sellers: sellers || [],
+                allTransactions: transactions?.transactions || [],
+                allRanking: ranking || [],
+                allUsage: usage || []
+            });
+        } catch (e) {
+            showToast(`Erro ao carregar dados: ${e.message}`, 'error');
+            localStorage.removeItem('adminApiKey');
+            setTimeout(() => window.location.reload(), 2000);
         }
+    }
+
+    function setupEventListeners() {
+        // Global Listeners
+        window.addEventListener('hashchange', () => handleNavigation(window.location.hash));
+        DOM.loginForm.addEventListener('submit', handleLogin);
         
-        function getDateRange(period) {
-            const end = new Date();
-            const start = new Date();
-            if (period === 'today') { start.setHours(0, 0, 0, 0); }
-            else if (period === '7days') { start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0); }
-            else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
-            return { start, end };
+        // Mobile Menu
+        DOM.menuToggle.addEventListener('click', () => DOM.sidebar.classList.toggle('show'));
+        DOM.mainContent.addEventListener('click', () => DOM.sidebar.classList.remove('show'));
+        DOM.mainNav.addEventListener('click', e => {
+            if (e.target.closest('.nav-link')) {
+                window.location.hash = e.target.closest('.nav-link').hash;
+                DOM.sidebar.classList.remove('show');
+            }
+        });
+
+        // Delegated listeners for dynamic content
+        DOM.mainContent.addEventListener('change', e => {
+            if (e.target.id === 'dashboard-period') renderDashboardPage(e.target.value);
+        });
+
+        DOM.mainContent.addEventListener('keyup', e => {
+            if (e.target.id === 'seller-search') handleSellerSearch(e);
+        });
+        
+        DOM.mainContent.addEventListener('click', e => {
+            const button = e.target.closest('button');
+            if (!button) return;
+
+            if (button.id === 'tx-filter-btn') {
+                const start = document.getElementById('tx-start-date').value;
+                const end = document.getElementById('tx-end-date').value;
+                if (!start || !end) return showToast("Selecione data de início e fim.", 'warning');
+                const filtered = filterDataByDate(appState.allTransactions, new Date(start), new Date(end));
+                renderTransactionsTable(filtered);
+            }
+            if (button.id === 'enable-notifications-btn') setupPushNotifications();
+            if (button.dataset.action === 'manage-seller') handleManageSeller(button.dataset.sellerId);
+        });
+
+        DOM.mainContent.addEventListener('submit', e => {
+             e.preventDefault();
+             if (e.target.id === 'resend-utmify-form') handleResendUtmifyEvents(e);
+             if (e.target.id === 'resend-events-form') handleResendEvents(e);
+        });
+
+        DOM.modalContainer.addEventListener('click', handleModalClick);
+    }
+
+    async function initializeApp() {
+        DOM.loginScreen.style.display = 'none';
+        DOM.appContainer.style.visibility = 'visible';
+        
+        renderNav();
+        setupEventListeners();
+        await tryReactivatingNotifications();
+        await fetchAllInitialData();
+        
+        handleNavigation(window.location.hash);
+    }
+
+    // --- START ---
+    document.addEventListener('DOMContentLoaded', () => {
+        if (localStorage.getItem('adminApiKey')) {
+            initializeApp();
         }
+    });
 
-        function filterDataByDate(data, startDate, endDate, dateKey = 'created_at') {
-            if (!startDate || !endDate) return data;
-            return data.filter(item => {
-                const itemDate = toBrasiliaTime(item[dateKey]);
-                return itemDate >= startDate && itemDate <= endDate;
-            });
-        }
-
-        function renderDashboardPage(period = 'month') {
-            const page = document.getElementById('dashboard');
-            const { start, end } = getDateRange(period);
-
-            const filteredTransactions = filterDataByDate(appState.allTransactions, start, end, 'created_at');
-            const filteredPaidTransactions = filterDataByDate(appState.allTransactions.filter(t => t.status === 'paid'), start, end, 'paid_at');
-            const filteredSellers = filterDataByDate(appState.sellers, start, end, 'created_at');
-
-            const totalRevenue = filteredPaidTransactions.reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
-            const paidSales = filteredPaidTransactions.length;
-            const goalProgress = (totalRevenue / MONTHLY_GOAL) * 100;
-
-            const rankingByPeriod = appState.allRanking.map(seller => {
-                const revenue = filteredPaidTransactions
-                    .filter(tx => tx.seller_email === seller.email)
-                    .reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
-                return { ...seller, total_revenue_period: revenue };
-            }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
-
-            const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
-
-            page.innerHTML = `
-                <div class="filters"><select id="dashboard-period" style="padding: 12px; width: auto;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
-                <div class="grid">
-                    <div class="card"><h3>Faturamento</h3><p style="color:var(--success); font-size: 24px; font-weight: 700;">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
-                    <div class="card"><h3>Vendas Pagas</h3><p style="font-size: 24px; font-weight: 700;">${paidSales}</p></div>
-                    <div class="card"><h3>Novos Vendedores</h3><p style="font-size: 24px; font-weight: 700;">${filteredSellers.length}</p></div>
-                    <div class="card"><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}; font-size: 24px; font-weight: 700;">${riskUsers}</p></div>
-                </div>
-                <div class="card">
-                    <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
-                    <div class="progress-bar"><div class="progress-bar-inner" style="width: ${goalProgress > 100 ? 100 : goalProgress}%;"></div></div>
-                </div>
-                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td></tr>`).join('') || `<tr><td colspan="2" style="text-align:center; color: var(--text-secondary);">Nenhum dado para o período.</td></tr>`}</tbody></table></div>`;
-            document.getElementById('dashboard-period').value = period;
-            document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
-        }
-
-        function renderTransactionsPage() {
-            const page = document.getElementById('transactions');
-            page.innerHTML = `
-                <div class="card">
-                    <h2>Transações</h2>
-                    <div class="filters">
-                        <input type="date" id="tx-start-date" style="flex-grow: 1;">
-                        <input type="date" id="tx-end-date" style="flex-grow: 1;">
-                        <button id="tx-filter-btn">Filtrar</button>
-                    </div>
-                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data (Brasília)</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
-                </div>`;
-            document.getElementById('tx-filter-btn').addEventListener('click', () => {
-                const startStr = document.getElementById('tx-start-date').value;
-                const endStr = document.getElementById('tx-end-date').value;
-                if (!startStr || !endStr) return alert("Por favor, selecione as datas de início e fim.");
-                const start = new Date(startStr);
-                start.setHours(0, 0, 0, 0);
-                const end = new Date(endStr);
-                end.setHours(23, 59, 59, 999);
-                renderTransactionsTable(filterDataByDate(appState.allTransactions, start, end));
-            });
-            renderTransactionsTable(appState.allTransactions);
-        }
-
-        function renderTransactionsTable(transactions) {
-            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `
-                <tr>
-                    <td>${tx.seller_name}</td>
-                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
-                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
-                    <td>${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
-                </tr>`).join('');
-        }
-
-        function renderSellersPage() {
-            const page = document.getElementById('sellers');
-            const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
-            const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
-            const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
-
-            page.innerHTML = `
-                <div class="card">
-                    <h2>Gerir Vendedores</h2>
-                    <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="width: 100%; margin-bottom: 20px;">
-                    <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
-                </div>`;
-            document.getElementById('seller-search').addEventListener('keyup', e => {
-                const query = e.target.value.toLowerCase();
-                renderSellersTable(sellersData.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
-            });
-            renderSellersTable(sellersData);
-        }
-
-        function renderSellersTable(sellers) {
-            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${parseFloat(s.revenue).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
-        }
-
-        function openSellerModal(sellerId) {
-            appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
-            if (!appState.currentSeller) return;
-            const modal = document.getElementById('seller-modal');
-            modal.innerHTML = `
-                 <div class="modal-content">
-                    <h3 style="margin-top: 0;">${appState.currentSeller.name}</h3>
-                    <div style="display: flex; flex-direction: column; gap: 20px;">
-                        <div><h4>Alterar Senha</h4><input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar Senha</button></div>
-                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor'}</button></div>
-                    </div>
-                    <button onclick="closeModal()" style="margin-top: 20px; background: none; border: 1px solid var(--border); color: var(--text-secondary); width: 100%;">Fechar</button>
-                </div>`;
-            document.getElementById('save-password-btn').addEventListener('click', savePassword);
-            const statusBtn = document.getElementById('toggle-status-btn');
-            statusBtn.addEventListener('click', toggleStatus);
-            statusBtn.style.backgroundColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
-            statusBtn.style.borderColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
-            modal.style.display = 'flex';
-        }
-
-        function closeModal() { document.getElementById('seller-modal').style.display = 'none'; }
-
-        async function savePassword() {
-            const newPassword = document.getElementById('new-password').value;
-            if (!newPassword || newPassword.length < 8) return alert("A senha deve ter pelo menos 8 caracteres.");
-            try {
-                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-                alert('Senha alterada com sucesso!');
-                closeModal();
-            } catch(e) { alert(`Erro: ${e.message}`); }
-        }
-
-        async function toggleStatus() {
-            const newStatus = !appState.currentSeller.is_active;
-            if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
-            try {
-                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
-                 alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
-                 await fetchAllInitialData();
-                 renderSellersPage();
-                 closeModal();
-            } catch(e) { alert(`Erro: ${e.message}`); }
-        }
     </script>
 </body>
 </html>
