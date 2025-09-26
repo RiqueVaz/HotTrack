@@ -331,78 +331,7 @@
             appState.isDataLoading = true;
             renderCurrentPage(); // Show loaders
             try {
-                const [sellers, transactions, ranking, usage] = await Promise.all([
-                    apiFetch('/api/admin/sellers'),
-                    apiFetch('/api/admin/transactions?limit=5000'),
-                    apiFetch('/api/admin/ranking'),
-                    apiFetch('/api/admin/usage-analysis')
-                ]);
-                appState.sellers = sellers;
-                appState.allTransactions = transactions.transactions;
-                appState.allRanking = ranking;
-                appState.allUsage = usage;
-                appState.isDataLoading = false;
-                renderCurrentPage(); // Re-render with data
-            } catch (e) {
-                Toast(`Erro ao carregar dados: ${e.message}`, 'error');
-                logout();
-            }
-        }
-        
-        function logout() {
-            localStorage.removeItem('adminApiKey');
-            window.location.reload();
-        }
-
-        // --- NAVIGATION & ROUTING ---
-        function setupEventListeners() {
-            $('#menu-toggle').addEventListener('click', toggleSidebar);
-            $('#sidebar-overlay').addEventListener('click', toggleSidebar);
-            window.addEventListener('hashchange', () => navigate(window.location.hash.substring(1)));
-            
-            // Delegated navigation click
-            $('#main-nav').addEventListener('click', (e) => {
-                const navLink = e.target.closest('.nav-link');
-                if (navLink) {
-                    e.preventDefault();
-                    window.location.hash = navLink.dataset.page;
-                    if (window.innerWidth < 768) {
-                       toggleSidebar();
-                    }
-                }
-            });
-        }
-
-        function toggleSidebar() {
-            $('#sidebar').classList.toggle('-translate-x-full');
-            $('#sidebar-overlay').classList.toggle('hidden');
-        }
-        
-        function navigate(page) {
-            appState.currentPage = page || 'dashboard';
-            
-            // Update nav active state
-            $$('#main-nav .nav-link').forEach(link => {
-                link.classList.toggle('bg-purple-600/20', link.dataset.page === appState.currentPage);
-                link.classList.toggle('text-white', link.dataset.page === appState.currentPage);
-            });
-
-            // Update page title for mobile
-            const navItem = NAV_ITEMS.find(item => item.id === appState.currentPage);
-            if (navItem) {
-                $('#page-title').textContent = navItem.label;
-            }
-            
-            renderCurrentPage();
-        }
-
-        // --- PUSH NOTIFICATIONS ---
-        async function setupPushNotifications() {
-            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
-                return Toast('O seu navegador não suporta notificações.', 'error');
-            }
-            try {
-                const registration = await navigator.serviceWorker.register('sw.js');
+                const registration = await navigator.serviceWorker.register('./sw.js');
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
                     return Toast('Permissão para notificações negada.', 'warning');
@@ -428,7 +357,7 @@
         async function tryReactivatingNotifications() {
             if (!('serviceWorker' in navigator && 'PushManager' in window)) return;
             try {
-                const registration = await navigator.serviceWorker.register('sw.js');
+                const registration = await navigator.serviceWorker.register('./sw.js');
                 const permission = await Notification.permission;
                 if (permission === 'granted') {
                     let subscription = await registration.pushManager.getSubscription();
@@ -474,16 +403,17 @@
             lucide.createIcons();
             setTimeout(() => pageContainer.classList.remove('page-enter-active'), 300);
 
-            // Attach page-specific event listeners
-             const postRenderActions = {
-                'dashboard': setupDashboardListeners,
-                'sellers': setupSellersListeners,
-                'transactions': setupTransactionsListeners,
-                'tools': setupToolsListeners,
-                'settings': setupSettingsListeners,
-            };
-            if(postRenderActions[appState.currentPage]) postRenderActions[appState.currentPage]();
-
+            // Attach page-specific event listeners only when data has finished loading
+            if (!appState.isDataLoading) {
+                const postRenderActions = {
+                    'dashboard': setupDashboardListeners,
+                    'sellers': setupSellersListeners,
+                    'transactions': setupTransactionsListeners,
+                    'tools': setupToolsListeners,
+                    'settings': setupSettingsListeners,
+                };
+                if(postRenderActions[appState.currentPage]) postRenderActions[appState.currentPage]();
+            }
         }
 
         // --- DASHBOARD PAGE ---
@@ -1087,3 +1017,4 @@
     </script>
 </body>
 </html>
+
