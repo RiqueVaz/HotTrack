@@ -3,285 +3,226 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotTrack Command Center 2.0</title>
+    <title>HotTrack Command Center</title>
 
-    <!-- PWA and Mobile Meta Tags -->
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#111827">
+    <meta name="theme-color" content="#1C1C1C">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="icon" href="https://placehold.co/512x512/9333EA/FFFFFF?text=HT">
-    <link rel="apple-touch-icon" href="https://placehold.co/512x512/9333EA/FFFFFF?text=HT">
+    <link rel="icon" href="https://i.postimg.cc/ZnHB6HB5/icon-512x512.png">
+    <link rel="apple-touch-icon" href="https://i.postimg.cc/ZnHB6HB5/icon-512x512.png">
     
-    <!-- Scripts -->
-    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-
-    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --accent: #9333EA;
-            --accent-hover: #7E22CE;
+            --bg: #111111; --surface: #1C1C1C; --border: #2D2D2D;
+            --text-primary: #FFFFFF; --text-secondary: #A0A0A0;
+            --accent: #9333EA; --accent-hover: #7E22CE;
+            --danger: #E11D48; --success: #22C55E;
         }
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #030712;
-            color: #f9fafb;
-            overflow-x: hidden;
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;}
+
+        #login-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2000;
+            background: var(--bg); display: flex; align-items: center; justify-content: center;
+            transition: opacity: 0.3s;
         }
-        /* Custom scrollbar for a more modern look */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #1f2937; }
-        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
-        
-        /* Glassmorphism effect for cards and surfaces */
-        .glass-effect {
-            background: rgba(17, 24, 39, 0.6);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(55, 65, 81, 0.4);
+        #login-box {
+            background: var(--surface); padding: 30px; border-radius: 12px;
+            width: 90%; max-width: 350px; text-align: center; border: 1px solid var(--border);
         }
 
-        /* Page transition animation */
-        .page-enter-active {
-            animation: fadeIn 0.3s ease-out forwards;
+        #app-container { display: flex; min-height: 100vh; }
+        #sidebar {
+            width: 250px; background: var(--surface); border-right: 1px solid var(--border);
+            padding: 20px; display: flex; flex-direction: column; transition: transform 0.3s ease; position: fixed; height: 100%; z-index: 200;
         }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+        .nav-link {
+            padding: 12px 15px; text-decoration: none; color: var(--text-secondary);
+            font-weight: 500; border-radius: 8px; display: flex; align-items: center; gap: 10px;
+            transition: background-color 0.2s, color 0.2s;
         }
+        .nav-link.active, .nav-link:hover { color: var(--text-primary); background-color: rgba(147, 51, 234, 0.2); }
+        main { flex-grow: 1; padding: 30px; margin-left: 250px; width: calc(100% - 250px); }
+        .page { display: none; }
+        .page.active { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* Aurora background effect */
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: 
-                radial-gradient(circle at 10% 20%, rgba(147, 51, 234, 0.15), transparent 30%),
-                radial-gradient(circle at 80% 90%, rgba(59, 130, 246, 0.15), transparent 30%);
-            animation: aurora 20s infinite linear;
-            z-index: -1;
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 25px; margin-bottom: 20px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; align-items: center; }
+        input, button, select, textarea {
+            font-family: 'Inter', sans-serif; border-radius: 8px; border: 1px solid var(--border);
+            padding: 12px 15px; font-size: 14px; background-color: var(--bg); color: var(--text-primary); transition: all 0.2s;
         }
-        @keyframes aurora {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
+        button { cursor: pointer; background-color: var(--accent); color: var(--text-primary); font-weight: 700; border-color: var(--accent); }
+        button:hover { background-color: var(--accent-hover); }
+        button:disabled { background-color: var(--border); color: var(--text-secondary); cursor: not-allowed; }
 
-        /* Custom Chart.js tooltip */
-        .chartjs-tooltip {
-            background: rgba(17, 24, 39, 0.8) !important;
-            border: 1px solid #374151 !important;
-            border-radius: 8px !important;
+        .modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
+            display: none; align-items: center; justify-content: center; z-index: 1000;
+        }
+        .modal-content { background: var(--surface); padding: 30px; border-radius: 12px; width: 90%; max-width: 450px; border: 1px solid var(--border); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-secondary); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+        tbody tr:hover { background-color: rgba(255,255,255,0.03); }
+
+        .progress-bar { background: var(--border); border-radius: 10px; overflow: hidden; height: 12px; }
+        .progress-bar-inner { background: var(--accent); height: 100%; border-radius: 10px; transition: width 0.5s ease-out; }
+
+        .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        label { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
+
+        .result-summary { padding: 15px; border-radius: 8px; font-weight: 500; border: 1px solid var(--border); }
+        .details { background-color: var(--bg); padding: 15px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+        .status-success { color: var(--success); }
+        .status-failure { color: var(--danger); }
+
+        #menu-toggle { display: none; }
+
+        @media (max-width: 768px) {
+            #sidebar { transform: translateX(-100%); }
+            #sidebar.show { transform: translateX(0); box-shadow: 10px 0 20px rgba(0,0,0,0.2); }
+            main { margin-left: 0; width: 100%; padding: 20px; }
+            #menu-toggle {
+                display: block; position: fixed; top: 15px; left: 15px; z-index: 300;
+                background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text-primary);
+            }
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
-<body class="antialiased">
-
-    <!-- Login Screen -->
-    <div id="login-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/80 backdrop-blur-sm transition-opacity duration-300">
-        <div class="glass-effect w-full max-w-sm rounded-2xl p-8 shadow-2xl">
-            <div class="text-center">
-                <h1 class="text-3xl font-bold text-white flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-500"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg>
-                    <span>HotTrack</span>
-                </h1>
-                <p class="mt-2 text-gray-400">Command Center 2.0</p>
-            </div>
-            <form id="login-form" class="mt-8 space-y-6">
-                <div>
-                    <label for="admin-key-input" class="sr-only">Sua ADMIN_API_KEY</label>
-                    <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required class="w-full bg-gray-900/50 border-2 border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all">
-                </div>
-                <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition-transform duration-150 ease-in-out hover:scale-105 active:scale-100 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                    Entrar
-                </button>
+<body>
+    <div id="login-screen">
+        <div id="login-box">
+            <h2 style="color: var(--accent);">HotTrack</h2>
+            <p style="color: var(--text-secondary); margin-top: -10px; margin-bottom: 20px;">Acesso de Administrador</p>
+            <form id="login-form">
+                <input type="password" id="admin-key-input" placeholder="Sua ADMIN_API_KEY" required style="width: 100%;">
+                <button type="submit" style="margin-top: 15px; width: 100%;">Entrar</button>
             </form>
         </div>
     </div>
 
-    <!-- Main App Container -->
-    <div id="app-container" class="hidden">
-        <!-- Sidebar -->
-        <aside id="sidebar" class="fixed inset-y-0 left-0 z-30 w-64 glass-effect transform -translate-x-full transition-transform duration-300 ease-in-out md:translate-x-0 md:flex flex-col">
-            <div class="p-6 text-center border-b border-gray-700/50">
-                <h1 class="text-2xl font-bold text-white flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-purple-500"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg>
-                    <span>HotTrack</span>
-                </h1>
-            </div>
-            <nav id="main-nav" class="flex-1 p-4 space-y-2">
-                <!-- Nav links will be injected by JS -->
+    <button id="menu-toggle">☰</button>
+    <div id="app-container" style="visibility: hidden;">
+        <aside id="sidebar">
+            <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">HotTrack</h2>
+            <nav style="display: flex; flex-direction: column; gap: 10px;">
+                <a href="#dashboard" class="nav-link active">Dashboard</a>
+                <a href="#sellers" class="nav-link">Vendedores</a>
+                <a href="#transactions" class="nav-link">Transações</a>
+                <a href="#tools" class="nav-link">Ferramentas</a>
+                <a href="#settings" class="nav-link">Definições</a>
             </nav>
         </aside>
-
-        <!-- Main Content -->
-        <main id="main-content" class="md:ml-64 transition-all duration-300 ease-in-out">
-            <header class="sticky top-0 z-20 glass-effect p-4 flex items-center justify-between md:hidden">
-                <button id="menu-toggle" class="p-2 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
-                </button>
-                <h2 id="page-title" class="text-lg font-semibold text-white">Dashboard</h2>
-            </header>
-            <div id="page-content" class="p-4 sm:p-6 lg:p-8">
-                <!-- Page content will be injected by JS -->
-            </div>
+        <main>
+            <div id="dashboard" class="page active"></div>
+            <div id="sellers" class="page"></div>
+            <div id="transactions" class="page"></div>
+            <div id="tools" class="page"></div>
+            <div id="settings" class="page"></div>
         </main>
     </div>
-    
-    <!-- Mobile Sidebar Overlay -->
-    <div id="sidebar-overlay" class="fixed inset-0 bg-black/60 z-20 hidden md:hidden"></div>
-    
-    <!-- Modal Container -->
-    <div id="modal-container"></div>
-    
-    <!-- Toast Notifications Container -->
-    <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-3"></div>
+
+    <div id="seller-modal" class="modal"></div>
 
     <script>
-        // --- CONFIG & GLOBAL STATE ---
         const API_URL = 'https://novaapi-one.vercel.app';
+        let appState = { sellers: [], allTransactions: [], allRanking: [], allUsage: [], currentSeller: null };
         const MONTHLY_GOAL = 50000;
-        const appState = {
-            sellers: [],
-            allTransactions: [],
-            allRanking: [],
-            allUsage: [],
-            currentSeller: null,
-            currentPage: 'dashboard',
-            isDataLoading: true,
-            charts: {},
-        };
 
-        const NAV_ITEMS = [
-            { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
-            { id: 'sellers', label: 'Vendedores', icon: 'users' },
-            { id: 'transactions', label: 'Transações', icon: 'arrow-left-right' },
-            { id: 'tools', label: 'Ferramentas', icon: 'wrench' },
-            { id: 'settings', label: 'Definições', icon: 'settings' },
-        ];
-        
-        // --- UTILITIES & HELPERS ---
-        const toBrasiliaTime = (dateString) => new Date(new Date(dateString).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-        const formatToBrasiliaString = (date) => date.toLocaleString('pt-BR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
-        const formatCurrency = (value) => (value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-        const urlBase64ToUint8Array = (base64String) => {
-            const padding = '='.repeat((4 - base64String.length % 4) % 4);
-            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-            const rawData = window.atob(base64);
-            const outputArray = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
-            return outputArray;
-        };
+        // ----- TIMEZONE & FORMATTING HELPERS -----
+        function toBrasiliaTime(dateString) {
+            const date = new Date(dateString);
+            return new Date(date.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        }
 
-        // --- DOM ELEMENTS ---
-        const $ = (selector) => document.querySelector(selector);
-        const $$ = (selector) => document.querySelectorAll(selector);
+        function formatToBrasiliaString(date) {
+            return date.toLocaleString('pt-BR', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            }).replace(',', '');
+        }
 
-        // --- DYNAMIC UI COMPONENTS ---
-        const Icon = (name, classes = 'w-5 h-5') => `<i data-lucide="${name}" class="${classes}"></i>`;
-
-        const Toast = (message, type = 'info', duration = 3000) => {
-            const toastId = `toast-${Date.now()}`;
-            const colors = {
-                success: 'bg-green-500',
-                error: 'bg-red-500',
-                info: 'bg-blue-500',
-                warning: 'bg-yellow-500'
-            };
-            const icons = {
-                success: 'check-circle',
-                error: 'alert-circle',
-                info: 'info',
-                warning: 'alert-triangle'
-            };
-            const toastEl = document.createElement('div');
-            toastEl.id = toastId;
-            toastEl.className = `flex items-center gap-3 ${colors[type]} text-white text-sm font-semibold px-4 py-3 rounded-lg shadow-lg transform transition-all duration-300 translate-x-full opacity-0`;
-            toastEl.innerHTML = `
-                ${Icon(icons[type], 'w-5 h-5')}
-                <span>${message}</span>
-            `;
-            $('#toast-container').appendChild(toastEl);
-            
-            setTimeout(() => {
-                toastEl.classList.remove('translate-x-full', 'opacity-0');
-                toastEl.classList.add('translate-x-0', 'opacity-100');
-            }, 10);
-            
-            setTimeout(() => {
-                toastEl.classList.add('translate-x-full', 'opacity-0');
-                toastEl.addEventListener('transitionend', () => toastEl.remove());
-            }, duration);
-        };
-        
-        const Modal = ({ title, content, actions }) => {
-            const modalId = `modal-${Date.now()}`;
-            const modalEl = document.createElement('div');
-            modalEl.id = modalId;
-            modalEl.className = 'fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4';
-            modalEl.innerHTML = `
-                <div class="glass-effect rounded-2xl w-full max-w-md shadow-2xl animate-fadeIn">
-                    <div class="p-6 border-b border-gray-700/50 flex justify-between items-center">
-                        <h3 class="text-xl font-bold text-white">${title}</h3>
-                        <button class="modal-close p-1 rounded-full text-gray-400 hover:bg-gray-700 hover:text-white transition-colors">
-                            ${Icon('x', 'w-6 h-6')}
-                        </button>
-                    </div>
-                    <div class="p-6">${content}</div>
-                    <div class="p-4 bg-gray-900/50 rounded-b-2xl flex justify-end gap-3">
-                        ${actions.map(action => `
-                            <button class="px-4 py-2 rounded-lg font-semibold transition-all ${action.classes}" data-action="${action.id}">
-                                ${action.label}
-                            </button>
-                        `).join('')}
-                    </div>
-                </div>`;
-            
-            $('#modal-container').appendChild(modalEl);
-            lucide.createIcons();
-
-            const closeModal = () => {
-                modalEl.classList.add('opacity-0');
-                modalEl.addEventListener('transitionend', () => modalEl.remove());
-            };
-            
-            modalEl.querySelector('.modal-close').onclick = closeModal;
-            
-            actions.forEach(action => {
-                modalEl.querySelector(`[data-action="${action.id}"]`).onclick = () => {
-                    action.callback();
-                    closeModal();
-                };
+        // ----- AUTH & APP INITIALIZATION -----
+        document.addEventListener('DOMContentLoaded', () => {
+            const loginForm = document.getElementById('login-form');
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const key = document.getElementById('admin-key-input').value;
+                if (key) {
+                    localStorage.setItem('adminApiKey', key);
+                    initializeApp();
+                }
             });
-        };
 
-        const confirmAction = ({ title, message, confirmLabel, onConfirm }) => {
-            Modal({
-                title,
-                content: `<p class="text-gray-300">${message}</p>`,
-                actions: [
-                    { id: 'cancel', label: 'Cancelar', classes: 'bg-gray-700 hover:bg-gray-600 text-white' , callback: () => {} },
-                    { id: 'confirm', label: confirmLabel, classes: 'bg-red-600 hover:bg-red-700 text-white', callback: onConfirm }
-                ]
-            });
-        };
+            if (localStorage.getItem('adminApiKey')) {
+                initializeApp();
+            }
+        });
 
-        const SkeletonLoader = (count = 1) => {
-            const singleSkeleton = `<div class="glass-effect rounded-lg p-4 animate-pulse"><div class="h-24 bg-gray-700 rounded"></div></div>`;
-            return Array(count).fill(singleSkeleton).join('');
-        };
-        
-        // --- API & DATA HANDLING ---
+        async function initializeApp() {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app-container').style.visibility = 'visible';
+            await tryReactivatingNotifications();
+            await fetchAllInitialData();
+
+            const sidebar = document.getElementById('sidebar');
+            const menuToggle = document.getElementById('menu-toggle');
+            function handleResize() { if (window.innerWidth > 768) sidebar.classList.remove('show'); }
+            window.addEventListener('resize', handleResize);
+            handleResize();
+            menuToggle.addEventListener('click', () => sidebar.classList.toggle('show'));
+            document.querySelector('main').addEventListener('click', () => { if(window.innerWidth <= 768 && sidebar.classList.contains('show')) sidebar.classList.remove('show'); });
+            document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', e => { e.preventDefault(); window.location.hash = e.currentTarget.hash; if (window.innerWidth <= 768) sidebar.classList.remove('show'); }));
+            window.addEventListener('hashchange', () => navigate(window.location.hash));
+            navigate(window.location.hash || '#dashboard');
+        }
+
+        function navigate(hash) {
+            hash = hash || '#dashboard';
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.hash === hash));
+            document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', `#${p.id}` === hash));
+            const loaders = { 
+                '#dashboard': renderDashboardPage, 
+                '#sellers': renderSellersPage, 
+                '#transactions': renderTransactionsPage, 
+                '#tools': renderToolsPage, 
+                '#settings': renderSettingsPage 
+            };
+            if (loaders[hash]) loaders[hash]();
+        }
+
+        async function fetchAllInitialData() {
+            try {
+                const [sellers, transactions, ranking, usage] = await Promise.all([
+                    apiFetch('/api/admin/sellers'),
+                    apiFetch('/api/admin/transactions?limit=5000'),
+                    apiFetch('/api/admin/ranking'),
+                    apiFetch('/api/admin/usage-analysis')
+                ]);
+                appState.sellers = sellers;
+                appState.allTransactions = transactions.transactions;
+                appState.allRanking = ranking;
+                appState.allUsage = usage;
+            } catch (e) {
+                alert(`Erro ao carregar dados: ${e.message}. Verifique sua chave de API.`);
+                localStorage.removeItem('adminApiKey');
+                window.location.reload();
+            }
+        }
+
         async function apiFetch(endpoint, options = {}) {
             const adminKey = localStorage.getItem('adminApiKey');
             if (!adminKey) throw new Error("Chave de Admin não encontrada.");
@@ -296,50 +237,32 @@
             return contentType?.includes("application/json") ? res.json() : res.text();
         }
 
-        // --- AUTH & INITIALIZATION ---
-        document.addEventListener('DOMContentLoaded', () => {
-            lucide.createIcons();
-            $('#login-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                const key = $('#admin-key-input').value;
-                if (key) {
-                    localStorage.setItem('adminApiKey', key);
-                    initializeApp();
-                }
-            });
-
-            if (localStorage.getItem('adminApiKey')) {
-                initializeApp();
-            }
-        });
-
-        async function initializeApp() {
-            $('#login-screen').classList.add('opacity-0', 'pointer-events-none');
-            $('#app-container').classList.remove('hidden');
-            
-            renderNav();
-            setupEventListeners();
-            
-            await tryReactivatingNotifications();
-            await fetchAllInitialData();
-            
-            const hash = window.location.hash.substring(1) || 'dashboard';
-            navigate(hash);
+        // --- PUSH NOTIFICATIONS LOGIC ---
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
+            return outputArray;
         }
-        
-        async function fetchAllInitialData() {
-            appState.isDataLoading = true;
-            renderCurrentPage(); // Show loaders
+
+        async function setupPushNotifications() {
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) {
+                alert('O seu navegador não suporta notificações.');
+                return;
+            }
             try {
-                const registration = await navigator.serviceWorker.register('./sw.js');
+                const registration = await navigator.serviceWorker.register('sw.js');
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
-                    return Toast('Permissão para notificações negada.', 'warning');
+                    alert('Permissão para notificações negada.');
+                    return;
                 }
                 let subscription = await registration.pushManager.getSubscription();
                 if (subscription === null) {
                     const vapidPublicKey = await apiFetch('/api/admin/vapidPublicKey');
-                    if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID.");
+                    if (!vapidPublicKey) throw new Error("Não foi possível obter a chave VAPID do servidor.");
                     const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
                     subscription = await registration.pushManager.subscribe({
                         userVisibleOnly: true,
@@ -347,84 +270,257 @@
                     });
                 }
                 await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
-                Toast('Notificações ativadas com sucesso!', 'success');
+                alert('Notificações ativadas com sucesso!');
             } catch (error) {
                 console.error('Falha ao configurar notificações:', error);
-                Toast('Ocorreu um erro ao ativar as notificações.', 'error');
+                alert('Ocorreu um erro ao ativar as notificações.');
             }
         }
 
         async function tryReactivatingNotifications() {
-            if (!('serviceWorker' in navigator && 'PushManager' in window)) return;
+            if (!('serviceWorker' in navigator && 'PushManager' in window)) { return; }
             try {
-                const registration = await navigator.serviceWorker.register('./sw.js');
+                const registration = await navigator.serviceWorker.register('sw.js');
                 const permission = await Notification.permission;
                 if (permission === 'granted') {
+                    console.log("Permissão já concedida. Tentando reenviar inscrição...");
                     let subscription = await registration.pushManager.getSubscription();
                     if (subscription) {
                         await apiFetch('/api/admin/save-subscription', { method: 'POST', body: JSON.stringify(subscription) });
+                        console.log('Inscrição reenviada ao servidor com sucesso.');
                     }
                 }
-            } catch (error) { console.error('Falha ao tentar reativar notificações:', error); }
-        }
-
-        // --- PAGE RENDERING LOGIC ---
-        function renderNav() {
-            $('#main-nav').innerHTML = NAV_ITEMS.map(item => `
-                <a href="#" class="nav-link flex items-center gap-3 px-4 py-3 rounded-lg text-gray-300 hover:bg-gray-700/50 hover:text-white transition-colors" data-page="${item.id}">
-                    ${Icon(item.icon)}
-                    <span class="font-semibold">${item.label}</span>
-                </a>
-            `).join('');
-            lucide.createIcons();
+            } catch (error) { console.error('Falha ao tentar reativar notificações silenciosamente:', error); }
         }
         
-        function renderCurrentPage() {
-            const pageContainer = $('#page-content');
-            pageContainer.innerHTML = ''; // Clear previous content
-            
-            const pageRenderers = {
-                'dashboard': renderDashboardPage,
-                'sellers': renderSellersPage,
-                'transactions': renderTransactionsPage,
-                'tools': renderToolsPage,
-                'settings': renderSettingsPage
-            };
-            
-            const renderer = pageRenderers[appState.currentPage];
-            if (renderer) {
-                pageContainer.innerHTML = renderer();
-            } else {
-                pageContainer.innerHTML = `<p>Página não encontrada</p>`;
-            }
+        // --- RENDER FUNCTIONS FOR PAGES ---
+        function renderSettingsPage() {
+            document.getElementById('settings').innerHTML = `
+                <div class="card">
+                    <h2>Definições de Notificações</h2>
+                    <p style="color:var(--text-secondary)">Receba um alerta a cada nova venda paga ou PIX gerado.</p>
+                    <button id="enable-notifications-btn" style="max-width: 300px;">Ativar Notificações</button>
+                </div>`;
+            document.getElementById('enable-notifications-btn').addEventListener('click', setupPushNotifications);
+        }
 
-            // Apply animations and create icons
-            pageContainer.classList.add('page-enter-active');
-            lucide.createIcons();
-            setTimeout(() => pageContainer.classList.remove('page-enter-active'), 300);
+        // **ATUALIZADO**: Adicionada a nova ferramenta Utmify
+        function renderToolsPage() {
+            const page = document.getElementById('tools');
+            const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
+            page.innerHTML = `
+                <div class="card">
+                    <h2>Corrigir e Reenviar Eventos para Utmify</h2>
+                    <p style="color:var(--text-secondary)">
+                        Use esta ferramenta para corrigir pressels que foram criadas sem uma conta Utmify vinculada. Ela associará a conta à pressel e reenviará todos os eventos de vendas passadas.
+                    </p>
+                    <form id="resend-utmify-form">
+                        <div class="form-group">
+                            <label for="utmify-pressel-id">ID da Pressel a ser Corrigida</label>
+                            <input type="number" id="utmify-pressel-id" placeholder="Ex: 67" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="utmify-integration-id">ID da Integração Utmify de Destino</label>
+                            <input type="number" id="utmify-integration-id" placeholder="Ex: 1" required>
+                        </div>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">Corrigir e Reenviar Eventos</button>
+                    </form>
+                    <div id="utmify-results-container" style="display: none; margin-top: 20px;">
+                         <p id="utmify-summary" class="result-summary"></p>
+                    </div>
+                </div>
 
-            // Attach page-specific event listeners only when data has finished loading
-            if (!appState.isDataLoading) {
-                const postRenderActions = {
-                    'dashboard': setupDashboardListeners,
-                    'sellers': setupSellersListeners,
-                    'transactions': setupTransactionsListeners,
-                    'tools': setupToolsListeners,
-                    'settings': setupSettingsListeners,
+                <div class="card">
+                    <h2>Reenviar Eventos de Compra (Pixel Warming)</h2>
+                    <p style="color:var(--text-secondary)">
+                        Esta ferramenta processa todos os eventos de compra encontrados para o período em lotes, enviando-os para a Meta com dados enriquecidos para maximizar a qualidade da correspondência.
+                    </p>
+                    <form id="resend-events-form">
+                        <div class="form-group">
+                            <label for="target-pixel-id">ID do Pixel de Destino (Obrigatório)</label>
+                            <input type="text" id="target-pixel-id" placeholder="123456789012345" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="target-meta-token">Token de Acesso da API da Meta (Obrigatório)</label>
+                            <input type="text" id="target-meta-token" placeholder="EAA..." required>
+                        </div>
+                        <div class="form-group">
+                            <label for="resend-seller-id">Vendedor (Opcional)</label>
+                            <select id="resend-seller-id">
+                                <option value="">Todos os Vendedores</option>
+                                ${sellerOptions}
+                            </select>
+                        </div>
+                        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="form-group">
+                                <label for="start-date">Data de Início (Obrigatório)</label>
+                                <input type="date" id="start-date" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="end-date">Data de Fim (Obrigatório)</label>
+                                <input type="date" id="end-date" required>
+                            </div>
+                        </div>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">Iniciar Envio Completo</button>
+                    </form>
+                </div>
+                <div class="card" id="resend-results-container" style="display: none;">
+                    <h2>Resultados do Envio (Pixel Warming)</h2>
+                    <p id="resend-summary" class="result-summary"></p>
+                    <div id="resend-details-wrapper" style="max-height: 400px; overflow-y: auto; margin-top: 15px;">
+                        <table id="resend-details-table">
+                            <thead><tr><th>ID da Transação</th><th>Status</th><th>Detalhes</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>`;
+            document.getElementById('resend-events-form').addEventListener('submit', handleResendEvents);
+            // **NOVO**: Adiciona o event listener para a nova ferramenta
+            document.getElementById('resend-utmify-form').addEventListener('submit', handleResendUtmifyEvents);
+        }
+
+        // **NOVO**: Handler para o formulário de reenvio da Utmify
+        async function handleResendUtmifyEvents(event) {
+            event.preventDefault();
+            const form = event.target;
+            const button = form.querySelector('button[type="submit"]');
+            const resultsContainer = document.getElementById('utmify-results-container');
+            const summaryDiv = document.getElementById('utmify-summary');
+
+            button.disabled = true;
+            button.textContent = 'Processando...';
+            resultsContainer.style.display = 'block';
+            summaryDiv.textContent = 'Iniciando processo...';
+            summaryDiv.className = 'result-summary';
+
+            try {
+                const body = {
+                    pressel_id: parseInt(document.getElementById('utmify-pressel-id').value, 10),
+                    utmify_integration_id: parseInt(document.getElementById('utmify-integration-id').value, 10)
                 };
-                if(postRenderActions[appState.currentPage]) postRenderActions[appState.currentPage]();
+
+                const response = await apiFetch('/api/admin/resend-utmify-events', {
+                    method: 'POST', 
+                    body: JSON.stringify(body),
+                });
+                
+                summaryDiv.textContent = response.message;
+                summaryDiv.classList.add('status-success');
+
+            } catch (error) {
+                console.error('Erro ao reenviar eventos Utmify:', error);
+                summaryDiv.textContent = `Erro: ${error.message}`;
+                summaryDiv.classList.add('status-failure');
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Corrigir e Reenviar Eventos';
             }
         }
 
-        // --- DASHBOARD PAGE ---
-        function renderDashboardPage() {
-            if(appState.isDataLoading) return SkeletonLoader(5);
-            
-            const period = document.getElementById('dashboard-period')?.value || 'month';
+        // --- LÓGICA FINAL DE ORQUESTRAÇÃO DE ENVIO (Pixel Warming) ---
+        async function handleResendEvents(event) {
+            event.preventDefault();
+            const form = event.target;
+            const button = form.querySelector('button[type="submit"]');
+            const resultsContainer = document.getElementById('resend-results-container');
+            const summaryDiv = document.getElementById('resend-summary');
+            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
+
+            button.disabled = true;
+            resultsContainer.style.display = 'block';
+            tbody.innerHTML = ''; 
+
+            const commonBody = {
+                target_pixel_id: document.getElementById('target-pixel-id').value,
+                target_meta_api_token: document.getElementById('target-meta-token').value,
+                seller_id: document.getElementById('resend-seller-id').value,
+                start_date: document.getElementById('start-date').value,
+                end_date: document.getElementById('end-date').value,
+            };
+            if (commonBody.seller_id) { commonBody.seller_id = parseInt(commonBody.seller_id, 10); }
+
+            let currentPage = 1;
+            let totalPages = 1; // Começa com 1 para entrar no loop
+
+            try {
+                while (currentPage <= totalPages) {
+                    button.textContent = `Processando Lote ${currentPage} de ${totalPages}...`;
+                    summaryDiv.textContent = `Buscando e processando lote ${currentPage}...`;
+
+                    const response = await apiFetch('/api/admin/resend-events', {
+                        method: 'POST', 
+                        body: JSON.stringify({ ...commonBody, page: currentPage, limit: 50 }),
+                    });
+
+                    totalPages = response.total_pages || 0;
+                    summaryDiv.textContent = `Lote ${currentPage}/${totalPages} concluído. Total de eventos: ${response.total_events}.`;
+                    
+                    if (response.results && response.results.length > 0) {
+                        appendResultsToTable(response.results);
+                    }
+                    
+                    if(totalPages === 0) {
+                         summaryDiv.textContent = response.message || "Nenhum evento encontrado.";
+                         break;
+                    }
+
+                    currentPage++;
+                }
+                summaryDiv.textContent = `Processo concluído! Todos os ${totalPages} lotes foram processados.`;
+            } catch (error) {
+                console.error('Erro ao orquestrar o reenvio:', error);
+                summaryDiv.textContent = `Ocorreu um erro no Lote ${currentPage}: ${error.message}`;
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Iniciar Envio Completo';
+            }
+        }
+
+        function appendResultsToTable(results) {
+            const tbody = document.getElementById('resend-details-table').querySelector('tbody');
+            tbody.innerHTML += results.map(res => `
+                <tr>
+                    <td>${res.transaction_id}</td>
+                    <td class="status-${res.status}">${res.status === 'success' ? 'Sucesso' : 'Falha'}</td>
+                    <td>
+                        <details>
+                            <summary>Ver dados</summary>
+                            <div class="details">
+                                <strong>Payload Enviado:</strong>
+                                ${JSON.stringify(res.payload_sent, null, 2)}
+                                <hr style="border-color: var(--border); margin: 10px 0;">
+                                <strong>Resposta da Meta:</strong>
+                                ${JSON.stringify(res.meta_response, null, 2)}
+                            </div>
+                        </details>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        function getDateRange(period) {
+            const end = new Date();
+            const start = new Date();
+            if (period === 'today') { start.setHours(0, 0, 0, 0); }
+            else if (period === '7days') { start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0); }
+            else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
+            return { start, end };
+        }
+
+        function filterDataByDate(data, startDate, endDate, dateKey = 'created_at') {
+            if (!startDate || !endDate) return data;
+            return data.filter(item => {
+                const itemDate = toBrasiliaTime(item[dateKey]);
+                return itemDate >= startDate && itemDate <= endDate;
+            });
+        }
+
+        function renderDashboardPage(period = 'month') {
+            const page = document.getElementById('dashboard');
             const { start, end } = getDateRange(period);
-            
-            const paidTransactions = appState.allTransactions.filter(t => t.status === 'paid');
-            const filteredPaidTransactions = filterDataByDate(paidTransactions, start, end, 'paid_at');
+
+            const filteredTransactions = filterDataByDate(appState.allTransactions, start, end, 'created_at');
+            const filteredPaidTransactions = filterDataByDate(appState.allTransactions.filter(t => t.status === 'paid'), start, end, 'paid_at');
             const filteredSellers = filterDataByDate(appState.sellers, start, end, 'created_at');
 
             const totalRevenue = filteredPaidTransactions.reduce((sum, tx) => sum + parseFloat(tx.pix_value), 0);
@@ -439,582 +535,126 @@
             }).sort((a, b) => b.total_revenue_period - a.total_revenue_period);
 
             const riskUsers = appState.allUsage.filter(u => (appState.allRanking.find(r => r.id === u.id)?.total_sales || 0) === 0 && u.requests_last_24_hours > 150).length;
-            
-            const card = (icon, title, value, colorClass = 'text-white') => `
-                <div class="glass-effect rounded-2xl p-6 flex items-start gap-4">
-                    <div class="p-3 rounded-lg bg-gray-700/50">${Icon(icon, `w-6 h-6 ${colorClass}`)}</div>
-                    <div>
-                        <p class="text-sm font-medium text-gray-400">${title}</p>
-                        <p class="text-3xl font-bold ${colorClass}">${value}</p>
-                    </div>
-                </div>`;
 
-            return `
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-3xl font-bold text-white">Dashboard</h2>
-                    <select id="dashboard-period" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="month">Este Mês</option>
-                        <option value="7days">Últimos 7 Dias</option>
-                        <option value="today">Hoje</option>
-                    </select>
+            page.innerHTML = `
+                <div class="filters"><select id="dashboard-period" style="padding: 12px; width: auto;"><option value="month">Este Mês</option><option value="7days">Últimos 7 Dias</option><option value="today">Hoje</option></select></div>
+                <div class="grid">
+                    <div class="card"><h3>Faturamento</h3><p style="color:var(--success); font-size: 24px; font-weight: 700;">R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
+                    <div class="card"><h3>Vendas Pagas</h3><p style="font-size: 24px; font-weight: 700;">${paidSales}</p></div>
+                    <div class="card"><h3>Novos Vendedores</h3><p style="font-size: 24px; font-weight: 700;">${filteredSellers.length}</p></div>
+                    <div class="card"><h3>Risco de Abuso</h3><p style="color: ${riskUsers > 0 ? 'var(--danger)' : 'var(--success)'}; font-size: 24px; font-weight: 700;">${riskUsers}</p></div>
                 </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-                    ${card('dollar-sign', 'Faturamento', formatCurrency(totalRevenue), 'text-green-400')}
-                    ${card('shopping-cart', 'Vendas Pagas', paidSales, 'text-blue-400')}
-                    ${card('user-plus', 'Novos Vendedores', filteredSellers.length, 'text-indigo-400')}
-                    ${card('shield-alert', 'Risco de Abuso', riskUsers, riskUsers > 0 ? 'text-red-400' : 'text-green-400')}
+                <div class="card">
+                    <h3>Meta Mensal (R$ ${MONTHLY_GOAL.toLocaleString('pt-BR')})</h3>
+                    <div class="progress-bar"><div class="progress-bar-inner" style="width: ${goalProgress > 100 ? 100 : goalProgress}%;"></div></div>
                 </div>
-                
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div class="lg:col-span-2 glass-effect rounded-2xl p-6">
-                        <h3 class="text-lg font-semibold mb-4">Performance de Vendas</h3>
-                        <canvas id="sales-chart"></canvas>
-                    </div>
-                    <div class="glass-effect rounded-2xl p-6">
-                        <h3 class="text-lg font-semibold mb-4">Leaderboard (${period === 'month' ? 'do Mês' : 'Período'})</h3>
-                        <div class="space-y-4">
-                            ${rankingByPeriod.slice(0, 5).map((s, i) => `
-                                <div class="flex items-center gap-4">
-                                    <span class="font-bold text-gray-400">${i + 1}</span>
-                                    <div class="flex-1">
-                                        <p class="font-semibold truncate">${s.name}</p>
-                                        <p class="text-sm text-green-400">${formatCurrency(s.total_revenue_period)}</p>
-                                    </div>
-                                </div>
-                            `).join('') || `<p class="text-gray-500 text-center py-4">Nenhum dado para o período.</p>`}
-                        </div>
-                    </div>
-                </div>
-            `;
+                <div class="card"><h2>Leaderboard (${period === 'month' ? 'do Mês' : 'do Período'})</h2><table><thead><tr><th>Vendedor</th><th>Receita no Período</th></tr></thead><tbody>${rankingByPeriod.slice(0, 5).map(s => `<tr><td>${s.name}</td><td>R$ ${s.total_revenue_period.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td></tr>`).join('') || `<tr><td colspan="2" style="text-align:center; color: var(--text-secondary);">Nenhum dado para o período.</td></tr>`}</tbody></table></div>`;
+            document.getElementById('dashboard-period').value = period;
+            document.getElementById('dashboard-period').addEventListener('change', (e) => renderDashboardPage(e.target.value));
         }
 
-        function setupDashboardListeners() {
-            $('#dashboard-period').value = new URLSearchParams(window.location.search).get('period') || 'month';
-            $('#dashboard-period').addEventListener('change', (e) => renderCurrentPage());
-            
-            // Charts
-            const period = $('#dashboard-period')?.value || 'month';
-            const { start, end } = getDateRange(period);
-            const filteredPaidTransactions = filterDataByDate(appState.allTransactions.filter(t => t.status === 'paid'), start, end, 'paid_at');
-            
-            const salesChartCtx = document.getElementById('sales-chart')?.getContext('2d');
-            if(salesChartCtx) {
-                const { labels, data } = groupDataForChart(filteredPaidTransactions, period);
-
-                if (appState.charts.sales) appState.charts.sales.destroy();
-                appState.charts.sales = new Chart(salesChartCtx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Faturamento',
-                            data: data,
-                            backgroundColor: 'rgba(147, 51, 234, 0.2)',
-                            borderColor: 'rgba(147, 51, 234, 1)',
-                            borderWidth: 2,
-                            tension: 0.4,
-                            pointBackgroundColor: 'rgba(147, 51, 234, 1)',
-                            pointRadius: 0,
-                            pointHoverRadius: 6,
-                        }]
-                    },
-                    options: chartOptions('R$')
-                });
-            }
-        }
-        
-        // --- SELLERS PAGE ---
-        function renderSellersPage() {
-             if(appState.isDataLoading) return SkeletonLoader(1);
-            const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
-            const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
-            const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
-            const searchQuery = $('#seller-search')?.value || '';
-            const filteredSellers = searchQuery
-                ? sellersData.filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.email.toLowerCase().includes(searchQuery.toLowerCase()))
-                : sellersData;
-                
-            return `
-                <h2 class="text-3xl font-bold text-white mb-6">Gerir Vendedores</h2>
-                <div class="glass-effect rounded-2xl">
-                    <div class="p-6">
-                        <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all">
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left">
-                            <thead class="border-b border-gray-700/50">
-                                <tr>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Vendedor</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Faturamento Total</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Reqs (24h)</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Status</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody id="sellers-tbody">
-                            ${filteredSellers.map(s => `
-                                <tr class="border-b border-gray-800 hover:bg-gray-800/50">
-                                    <td class="p-4">
-                                        <p class="font-semibold">${s.name}</p>
-                                        <p class="text-sm text-gray-400">${s.email}</p>
-                                    </td>
-                                    <td class="p-4 text-green-400 font-semibold">${formatCurrency(s.revenue)}</td>
-                                    <td class="p-4">${s.requests}</td>
-                                    <td class="p-4">
-                                        <span class="px-2 py-1 text-xs font-semibold rounded-full ${s.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">
-                                            ${s.is_active ? 'Ativo' : 'Bloqueado'}
-                                        </span>
-                                    </td>
-                                    <td class="p-4">
-                                        <button class="manage-seller-btn bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-3 rounded-lg flex items-center gap-2" data-seller-id="${s.id}">
-                                            ${Icon('sliders-horizontal', 'w-4 h-4')} Gerir
-                                        </button>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-
-        function setupSellersListeners() {
-            $('#seller-search').addEventListener('keyup', renderCurrentPage);
-            $$('.manage-seller-btn').forEach(btn => btn.addEventListener('click', (e) => {
-                const sellerId = parseInt(e.currentTarget.dataset.sellerId, 10);
-                openSellerModal(sellerId);
-            }));
-        }
-        
-        // --- Transactions PAGE ---
         function renderTransactionsPage() {
-            if(appState.isDataLoading) return SkeletonLoader(1);
-            return `
-                 <h2 class="text-3xl font-bold text-white mb-6">Transações</h2>
-                <div class="glass-effect rounded-2xl p-6 mb-6">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <input type="date" id="tx-start-date" class="form-input">
-                        <input type="date" id="tx-end-date" class="form-input">
-                        <button id="tx-filter-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition-transform duration-150 ease-in-out hover:scale-105 active:scale-100">Filtrar</button>
+            const page = document.getElementById('transactions');
+            page.innerHTML = `
+                <div class="card">
+                    <h2>Transações</h2>
+                    <div class="filters">
+                        <input type="date" id="tx-start-date" style="flex-grow: 1;">
+                        <input type="date" id="tx-end-date" style="flex-grow: 1;">
+                        <button id="tx-filter-btn">Filtrar</button>
                     </div>
-                </div>
-                <div class="glass-effect rounded-2xl overflow-hidden">
-                     <div class="overflow-x-auto">
-                        <table class="w-full text-left">
-                            <thead class="border-b border-gray-700/50">
-                                <tr>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Vendedor</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Status</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Valor</th>
-                                    <th class="p-4 text-sm font-semibold text-gray-400">Data (Brasília)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="transactions-tbody"></tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-
-        function setupTransactionsListeners(){
-             $('#tx-filter-btn').addEventListener('click', () => {
-                const startStr = $('#tx-start-date').value;
-                const endStr = $('#tx-end-date').value;
-                if (!startStr || !endStr) return Toast("Por favor, selecione as datas de início e fim.", 'warning');
-                const start = new Date(startStr); start.setHours(0, 0, 0, 0);
-                const end = new Date(endStr); end.setHours(23, 59, 59, 999);
+                    <table><thead><tr><th>Vendedor</th><th>Status</th><th>Valor</th><th>Data (Brasília)</th></tr></thead><tbody id="transactions-tbody"></tbody></table>
+                </div>`;
+            document.getElementById('tx-filter-btn').addEventListener('click', () => {
+                const startStr = document.getElementById('tx-start-date').value;
+                const endStr = document.getElementById('tx-end-date').value;
+                if (!startStr || !endStr) return alert("Por favor, selecione as datas de início e fim.");
+                const start = new Date(startStr);
+                start.setHours(0, 0, 0, 0);
+                const end = new Date(endStr);
+                end.setHours(23, 59, 59, 999);
                 renderTransactionsTable(filterDataByDate(appState.allTransactions, start, end));
             });
             renderTransactionsTable(appState.allTransactions);
         }
 
-        // --- TOOLS PAGE ---
-        function renderToolsPage() {
-            if(appState.isDataLoading) return SkeletonLoader(2);
-            const sellerOptions = appState.sellers.map(s => `<option value="${s.id}">${s.name} (${s.email})</option>`).join('');
-            
-             return `
-                <h2 class="text-3xl font-bold text-white mb-6">Ferramentas Administrativas</h2>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <!-- Utmify Tool -->
-                    <div class="glass-effect rounded-2xl p-6">
-                        <h3 class="text-lg font-semibold text-white mb-2 flex items-center gap-2">${Icon('send', 'w-5 h-5 text-purple-400')} Corrigir Eventos Utmify</h3>
-                        <p class="text-sm text-gray-400 mb-4">Associe uma conta Utmify a uma pressel e reenviará todos os eventos de vendas passadas.</p>
-                        <form id="resend-utmify-form" class="space-y-4">
-                             <div>
-                                <label for="utmify-pressel-id" class="form-label">ID da Pressel</label>
-                                <input type="number" id="utmify-pressel-id" placeholder="Ex: 67" required class="form-input">
-                            </div>
-                            <div>
-                                <label for="utmify-integration-id" class="form-label">ID da Integração Utmify</label>
-                                <input type="number" id="utmify-integration-id" placeholder="Ex: 1" required class="form-input">
-                            </div>
-                            <button type="submit" class="form-button w-full">Corrigir e Reenviar</button>
-                        </form>
-                        <div id="utmify-results-container" class="mt-4"></div>
-                    </div>
-                    
-                    <!-- Pixel Warming Tool -->
-                    <div class="glass-effect rounded-2xl p-6">
-                        <h3 class="text-lg font-semibold text-white mb-2 flex items-center gap-2">${Icon('activity', 'w-5 h-5 text-purple-400')} Reenviar Eventos (Pixel Warming)</h3>
-                        <p class="text-sm text-gray-400 mb-4">Envie eventos de compra para a Meta com dados enriquecidos para maximizar a qualidade da correspondência.</p>
-                        <form id="resend-events-form" class="space-y-4">
-                            <div>
-                                <label for="target-pixel-id" class="form-label">ID do Pixel de Destino</label>
-                                <input type="text" id="target-pixel-id" placeholder="123456789012345" required class="form-input">
-                            </div>
-                             <div>
-                                <label for="target-meta-token" class="form-label">Token de Acesso da Meta</label>
-                                <input type="text" id="target-meta-token" placeholder="EAA..." required class="form-input">
-                            </div>
-                            <div>
-                                <label for="resend-seller-id" class="form-label">Vendedor (Opcional)</label>
-                                <select id="resend-seller-id" class="form-input">
-                                    <option value="">Todos os Vendedores</option>
-                                    ${sellerOptions}
-                                </select>
-                            </div>
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label for="start-date" class="form-label">Data de Início</label>
-                                    <input type="date" id="start-date" required class="form-input">
-                                </div>
-                                <div>
-                                    <label for="end-date" class="form-label">Data de Fim</label>
-                                    <input type="date" id="end-date" required class="form-input">
-                                </div>
-                            </div>
-                            <button type="submit" class="form-button w-full">Iniciar Envio Completo</button>
-                        </form>
-                    </div>
-                </div>
-                 <div id="resend-results-container" class="glass-effect rounded-2xl p-6 mt-6 hidden">
-                    <h3 class="text-lg font-semibold text-white mb-4">Resultados do Envio (Pixel Warming)</h3>
-                    <div id="resend-summary" class="mb-4"></div>
-                    <div class="max-h-96 overflow-y-auto">
-                        <table class="w-full text-left">
-                            <thead class="sticky top-0 bg-gray-800">
-                                <tr>
-                                    <th class="p-3 text-sm font-semibold text-gray-400">Transação ID</th>
-                                    <th class="p-3 text-sm font-semibold text-gray-400">Status</th>
-                                    <th class="p-3 text-sm font-semibold text-gray-400">Detalhes</th>
-                                </tr>
-                            </thead>
-                            <tbody id="resend-details-tbody"></tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-
-        function setupToolsListeners(){
-            $('#resend-utmify-form').addEventListener('submit', handleResendUtmifyEvents);
-            $('#resend-events-form').addEventListener('submit', handleResendEvents);
-            
-            // Add common input styles for this page
-            const style = document.createElement('style');
-            style.innerHTML = `
-                .form-label { display: block; font-size: 0.875rem; font-medium; color: #9ca3af; margin-bottom: 0.5rem; }
-                .form-input { width: 100%; background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.5rem; padding: 0.75rem 1rem; color: white; transition: all 0.2s; }
-                .form-input:focus { outline: none; border-color: var(--accent); ring: 2px; ring-color: var(--accent); }
-                .form-button { background-color: var(--accent); color: white; font-weight: 700; border-radius: 0.5rem; padding: 0.75rem 1rem; cursor: pointer; transition: background-color 0.2s; }
-                .form-button:hover { background-color: var(--accent-hover); }
-                .form-button:disabled { background-color: #4b5563; color: #9ca3af; cursor: not-allowed; }
-            `;
-            $('#tools')?.appendChild(style);
-        }
-
-        // --- SETTINGS PAGE ---
-        function renderSettingsPage() {
-            return `
-                <h2 class="text-3xl font-bold text-white mb-6">Definições</h2>
-                <div class="glass-effect rounded-2xl p-6 max-w-2xl">
-                    <h3 class="text-lg font-semibold text-white mb-2 flex items-center gap-2">${Icon('bell', 'w-5 h-5 text-purple-400')} Notificações Push</h3>
-                    <p class="text-sm text-gray-400 mb-4">Receba um alerta em tempo real a cada nova venda paga ou PIX gerado no sistema.</p>
-                    <button id="enable-notifications-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-transform duration-150 ease-in-out hover:scale-105 active:scale-100 flex items-center gap-2">
-                        ${Icon('radio-tower', 'w-5 h-5')} Ativar Notificações
-                    </button>
-                </div>
-            `;
-        }
-        function setupSettingsListeners(){
-             $('#enable-notifications-btn')?.addEventListener('click', setupPushNotifications);
-        }
-
-        // --- DATA & UI HELPERS FOR PAGES ---
-        
-        // -- Transactions Table
         function renderTransactionsTable(transactions) {
-            $('#transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `
-                <tr class="border-b border-gray-800 hover:bg-gray-800/50">
-                    <td class="p-4">${tx.seller_name}</td>
-                    <td class="p-4">
-                        <span class="px-2 py-1 text-xs font-semibold rounded-full ${tx.status === 'paid' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}">
-                            ${tx.status}
-                        </span>
-                    </td>
-                    <td class="p-4 font-semibold">${formatCurrency(parseFloat(tx.pix_value))}</td>
-                    <td class="p-4 text-gray-400">${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
+            document.getElementById('transactions-tbody').innerHTML = transactions.slice(0, 100).map(tx => `
+                <tr>
+                    <td>${tx.seller_name}</td>
+                    <td style="color:${tx.status === 'paid' ? 'var(--success)' : 'var(--text-secondary)'}">${tx.status}</td>
+                    <td>R$ ${parseFloat(tx.pix_value).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
+                    <td>${formatToBrasiliaString(toBrasiliaTime(tx.created_at))}</td>
                 </tr>`).join('');
         }
-        
-        // -- Seller Modal
+
+        function renderSellersPage() {
+            const page = document.getElementById('sellers');
+            const usageMap = new Map(appState.allUsage.map(u => [u.id, u.requests_last_24_hours]));
+            const rankingMap = new Map(appState.allRanking.map(r => [r.id, r.total_revenue]));
+            const sellersData = appState.sellers.map(s => ({...s, requests: usageMap.get(s.id) || 0, revenue: rankingMap.get(s.id) || 0 }));
+
+            page.innerHTML = `
+                <div class="card">
+                    <h2>Gerir Vendedores</h2>
+                    <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="width: 100%; margin-bottom: 20px;">
+                    <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
+                </div>`;
+            document.getElementById('seller-search').addEventListener('keyup', e => {
+                const query = e.target.value.toLowerCase();
+                renderSellersTable(sellersData.filter(s => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query)));
+            });
+            renderSellersTable(sellersData);
+        }
+
+        function renderSellersTable(sellers) {
+            document.getElementById('sellers-tbody').innerHTML = sellers.map(s => `<tr><td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td><td>R$ ${parseFloat(s.revenue).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td><td>${s.requests}</td><td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td><td><button onclick="openSellerModal(${s.id})" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td></tr>`).join('');
+        }
+
         function openSellerModal(sellerId) {
             appState.currentSeller = appState.sellers.find(s => s.id === sellerId);
             if (!appState.currentSeller) return;
-
-            const modalContent = `
-                <div class="space-y-6">
-                    <div>
-                        <h4 class="font-semibold text-white mb-2">Alterar Senha</h4>
-                        <input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)" class="form-input w-full">
-                        <button id="save-password-btn" class="form-button w-full mt-2">Salvar Senha</button>
+            const modal = document.getElementById('seller-modal');
+            modal.innerHTML = `
+                 <div class="modal-content">
+                    <h3 style="margin-top: 0;">${appState.currentSeller.name}</h3>
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <div><h4>Alterar Senha</h4><input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)" style="width: 100%;"><button id="save-password-btn" style="margin-top: 10px; width: 100%;">Salvar Senha</button></div>
+                        <div><h4>Ações</h4><button id="toggle-status-btn" style="width: 100%;">${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor'}</button></div>
                     </div>
-                    <div>
-                        <h4 class="font-semibold text-white mb-2">Ações de Vendedor</h4>
-                        <button id="toggle-status-btn" class="w-full font-bold py-2 px-4 rounded-lg transition-colors ${appState.currentSeller.is_active ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white">
-                            ${appState.currentSeller.is_active ? 'Bloquear Vendedor' : 'Desbloquear Vendedor'}
-                        </button>
-                    </div>
+                    <button onclick="closeModal()" style="margin-top: 20px; background: none; border: 1px solid var(--border); color: var(--text-secondary); width: 100%;">Fechar</button>
                 </div>`;
-            
-            const modalEl = document.createElement('div');
-            modalEl.innerHTML = modalContent;
-            // Hack to add styles since they are created dynamically
-            const style = document.createElement('style');
-            style.innerHTML = `
-                .form-input { width: 100%; background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.5rem; padding: 0.75rem 1rem; color: white; }
-                .form-button { background-color: var(--accent); color: white; font-weight: 700; border-radius: 0.5rem; padding: 0.75rem 1rem; cursor: pointer; }
-            `;
-            modalEl.appendChild(style);
-
-            Modal({
-                title: `Gerir: ${appState.currentSeller.name}`,
-                content: modalEl.innerHTML,
-                actions: [{ id: 'close', label: 'Fechar', classes: 'bg-gray-700 hover:bg-gray-600 text-white', callback: () => {} }]
-            });
-            
-            $('#save-password-btn').onclick = savePassword;
-            $('#toggle-status-btn').onclick = toggleStatus;
+            document.getElementById('save-password-btn').addEventListener('click', savePassword);
+            const statusBtn = document.getElementById('toggle-status-btn');
+            statusBtn.addEventListener('click', toggleStatus);
+            statusBtn.style.backgroundColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
+            statusBtn.style.borderColor = appState.currentSeller.is_active ? 'var(--danger)' : 'var(--success)';
+            modal.style.display = 'flex';
         }
-        
+
+        function closeModal() { document.getElementById('seller-modal').style.display = 'none'; }
+
         async function savePassword() {
-            const newPassword = $('#new-password').value;
-            if (!newPassword || newPassword.length < 8) return Toast("A senha deve ter pelo menos 8 caracteres.", 'warning');
+            const newPassword = document.getElementById('new-password').value;
+            if (!newPassword || newPassword.length < 8) return alert("A senha deve ter pelo menos 8 caracteres.");
             try {
                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
-                Toast('Senha alterada com sucesso!', 'success');
-            } catch(e) { Toast(`Erro: ${e.message}`, 'error'); }
+                alert('Senha alterada com sucesso!');
+                closeModal();
+            } catch(e) { alert(`Erro: ${e.message}`); }
         }
 
         async function toggleStatus() {
             const newStatus = !appState.currentSeller.is_active;
-            confirmAction({
-                title: `${newStatus ? 'Desbloquear' : 'Bloquear'} Utilizador`,
-                message: `Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} ${appState.currentSeller.name}?`,
-                confirmLabel: newStatus ? 'Desbloquear' : 'Bloquear',
-                onConfirm: async () => {
-                     try {
-                        await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
-                        Toast(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`, 'success');
-                        await fetchAllInitialData(); // Refresh data
-                    } catch(e) { Toast(`Erro: ${e.message}`, 'error'); }
-                }
-            });
-        }
-        
-        // -- Tools handlers
-        async function handleResendUtmifyEvents(event) {
-            event.preventDefault();
-            const form = event.target;
-            const button = form.querySelector('button[type="submit"]');
-            const resultsContainer = $('#utmify-results-container');
-            
-            button.disabled = true;
-            button.textContent = 'Processando...';
-            resultsContainer.innerHTML = `<p class="text-blue-400">Iniciando processo...</p>`;
-            
+            if (!confirm(`Tem a certeza que quer ${newStatus ? 'desbloquear' : 'bloquear'} este utilizador?`)) return;
             try {
-                const body = {
-                    pressel_id: parseInt($('#utmify-pressel-id').value, 10),
-                    utmify_integration_id: parseInt($('#utmify-integration-id').value, 10)
-                };
-                const response = await apiFetch('/api/admin/resend-utmify-events', { method: 'POST', body: JSON.stringify(body) });
-                resultsContainer.innerHTML = `<p class="text-green-400 font-semibold">${response.message}</p>`;
-            } catch (error) {
-                resultsContainer.innerHTML = `<p class="text-red-400 font-semibold">Erro: ${error.message}</p>`;
-            } finally {
-                button.disabled = false;
-                button.textContent = 'Corrigir e Reenviar Eventos';
-            }
-        }
-        
-        async function handleResendEvents(event) {
-            event.preventDefault();
-            const form = event.target;
-            const button = form.querySelector('button[type="submit"]');
-            
-            $('#resend-results-container').classList.remove('hidden');
-            $('#resend-details-tbody').innerHTML = '';
-
-            const commonBody = {
-                target_pixel_id: $('#target-pixel-id').value,
-                target_meta_api_token: $('#target-meta-token').value,
-                seller_id: $('#resend-seller-id').value,
-                start_date: $('#start-date').value,
-                end_date: $('#end-date').value,
-            };
-            if (commonBody.seller_id) { commonBody.seller_id = parseInt(commonBody.seller_id, 10); }
-
-            let currentPage = 1;
-            let totalPages = 1;
-
-            try {
-                while (currentPage <= totalPages) {
-                    button.textContent = `Processando Lote ${currentPage} de ${totalPages}...`;
-                    $('#resend-summary').innerHTML = `<p class="text-blue-400">Buscando e processando lote ${currentPage}...</p>`;
-
-                    const response = await apiFetch('/api/admin/resend-events', {
-                        method: 'POST', 
-                        body: JSON.stringify({ ...commonBody, page: currentPage, limit: 50 }),
-                    });
-
-                    totalPages = response.total_pages || 0;
-                     $('#resend-summary').innerHTML = `<p class="text-gray-300">Lote ${currentPage}/${totalPages} concluído. Total de eventos: ${response.total_events}.</p>`;
-                    
-                    if (response.results && response.results.length > 0) {
-                        appendResultsToTable(response.results);
-                    }
-                    if(totalPages === 0) {
-                        $('#resend-summary').innerHTML = `<p class="text-yellow-400">${response.message || "Nenhum evento encontrado."}</p>`;
-                        break;
-                    }
-                    currentPage++;
-                }
-                 $('#resend-summary').innerHTML = `<p class="text-green-400 font-semibold">Processo concluído! Todos os ${totalPages} lotes foram processados.</p>`;
-            } catch (error) {
-                $('#resend-summary').innerHTML = `<p class="text-red-400 font-semibold">Ocorreu um erro no Lote ${currentPage}: ${error.message}</p>`;
-            } finally {
-                button.disabled = false;
-                button.textContent = 'Iniciar Envio Completo';
-            }
-        }
-        
-        function appendResultsToTable(results) {
-            const tbody = $('#resend-details-tbody');
-            tbody.innerHTML += results.map(res => `
-                <tr class="border-b border-gray-800">
-                    <td class="p-3">${res.transaction_id}</td>
-                    <td class="p-3">
-                        <span class="font-semibold ${res.status === 'success' ? 'text-green-400' : 'text-red-400'}">
-                            ${res.status === 'success' ? 'Sucesso' : 'Falha'}
-                        </span>
-                    </td>
-                    <td class="p-3">
-                         <details>
-                            <summary class="cursor-pointer text-sm text-gray-400 hover:text-white">Ver dados</summary>
-                            <div class="mt-2 p-2 bg-gray-900 rounded-md text-xs text-gray-300 max-h-40 overflow-auto">
-                                <pre><code>${JSON.stringify({ payload_sent: res.payload_sent, meta_response: res.meta_response }, null, 2)}</code></pre>
-                            </div>
-                        </details>
-                    </td>
-                </tr>`).join('');
-        }
-        
-        // -- Date helpers for filtering
-        const getDateRange = (period) => {
-            const end = new Date();
-            const start = new Date();
-            if (period === 'today') { start.setHours(0, 0, 0, 0); }
-            else if (period === '7days') { start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0); }
-            else if (period === 'month') { start.setDate(1); start.setHours(0, 0, 0, 0); }
-            return { start, end };
-        };
-
-        const filterDataByDate = (data, startDate, endDate, dateKey = 'created_at') => {
-            if (!startDate || !endDate) return data;
-            return data.filter(item => {
-                const itemDate = toBrasiliaTime(item[dateKey]);
-                return itemDate >= startDate && itemDate <= endDate;
-            });
-        };
-
-        // --- CHART HELPERS ---
-        const chartOptions = (prefix = '') => ({
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: { color: '#9ca3af', callback: (value) => prefix + value },
-                    grid: { color: 'rgba(55, 65, 81, 0.5)' }
-                },
-                x: {
-                    ticks: { color: '#9ca3af' },
-                    grid: { display: false }
-                }
-            },
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    enabled: false,
-                    external: (context) => {
-                         let tooltipEl = document.getElementById('chartjs-tooltip');
-                        if (!tooltipEl) {
-                            tooltipEl = document.createElement('div');
-                            tooltipEl.id = 'chartjs-tooltip';
-                            tooltipEl.className = 'chartjs-tooltip p-2 rounded-md shadow-lg';
-                            document.body.appendChild(tooltipEl);
-                        }
-                        const tooltipModel = context.tooltip;
-                        if (tooltipModel.opacity === 0) {
-                            tooltipEl.style.opacity = 0;
-                            return;
-                        }
-                        const bodyLines = tooltipModel.body.map(b => b.lines);
-                        let innerHtml = '<div class="text-xs">';
-                        bodyLines.forEach((body, i) => {
-                             const label = tooltipModel.dataPoints[i].label;
-                             const value = tooltipModel.dataPoints[i].formattedValue;
-                             innerHtml += `<div class="font-semibold">${label}</div>`;
-                             innerHtml += `<div><span class="text-green-400 font-bold">${value}</span></div>`;
-                        });
-                        innerHtml += '</div>';
-                        tooltipEl.innerHTML = innerHtml;
-
-                        const position = context.chart.canvas.getBoundingClientRect();
-                        tooltipEl.style.opacity = 1;
-                        tooltipEl.style.position = 'absolute';
-                        tooltipEl.style.left = position.left + window.pageXOffset + tooltipModel.caretX + 'px';
-                        tooltipEl.style.top = position.top + window.pageYOffset + tooltipModel.caretY + 'px';
-                        tooltipEl.style.pointerEvents = 'none';
-                    }
-                }
-            }
-        });
-        
-        function groupDataForChart(transactions, period) {
-            const grouped = {};
-            
-            const getLabel = (date) => {
-                if (period === 'today') return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-            };
-
-            transactions.forEach(tx => {
-                const date = toBrasiliaTime(tx.paid_at);
-                const label = getLabel(date);
-                if (!grouped[label]) grouped[label] = 0;
-                grouped[label] += parseFloat(tx.pix_value);
-            });
-            
-            const labels = Object.keys(grouped);
-            const data = Object.values(grouped);
-            return { labels, data };
+                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/toggle-active`, { method: 'POST', body: JSON.stringify({ isActive: newStatus }) });
+                 alert(`Utilizador ${newStatus ? 'desbloqueado' : 'bloqueado'} com sucesso!`);
+                 await fetchAllInitialData();
+                 renderSellersPage();
+                 closeModal();
+            } catch(e) { alert(`Erro: ${e.message}`); }
         }
     </script>
 </body>
 </html>
-
