@@ -431,8 +431,8 @@
             try {
                 await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/commission`, { method: 'PUT', body: JSON.stringify({ commission_rate }) });
                 showToast('Comissão alterada com sucesso!');
-                await fetchAllInitialData(); // <-- CORREÇÃO AQUI
-                renderSellersTable();       // <-- CORREÇÃO AQUI
+                await fetchAllInitialData();
+                renderSellersTable();
                 closeModal();
             } catch(err) { showToast(`Erro: ${err.message}`, 'error'); }
         }
