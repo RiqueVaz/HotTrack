@@ -256,7 +256,7 @@
                 <h2>Gerir Vendedores</h2>
                 <input type="text" id="seller-search" placeholder="Buscar por nome ou e-mail..." style="margin-bottom: 20px;">
                 <div style="max-height: 60vh; overflow-y: auto;">
-                <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
+                <table><thead><tr><th>Vendedor</th><th>Faturamento Total</th><th>Comissão</th><th>Reqs (24h)</th><th>Status</th><th>Ações</th></tr></thead><tbody id="sellers-tbody"></tbody></table>
                 </div>
             </div>`;
         renderPage('sellers', content);
@@ -274,9 +274,11 @@
         tbody.innerHTML = sellersData.map(s => {
             const revenue = rankingMap.get(s.id) || 0;
             const requests = usageMap.get(s.id) || 0;
+            const commission = ((s.commission_rate || 0.0299) * 100).toFixed(2);
             return `<tr>
                 <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
                 <td>${formatCurrency(revenue)}</td>
+                <td>${commission}%</td>
                 <td>${requests}</td>
                 <td style="color: ${s.is_active ? 'var(--success)' : 'var(--danger)'}; font-weight: bold;">${s.is_active ? 'Ativo' : 'Bloqueado'}</td>
                 <td><button data-action="manage-seller" data-seller-id="${s.id}" style="font-size: 12px; padding: 6px 10px;">Gerir</button></td>
@@ -387,10 +389,17 @@
         const seller = appState.sellers.find(s => s.id === parseInt(sellerId));
         if (!seller) return;
         setState({ currentSeller: seller });
+        
+        const currentCommission = ((seller.commission_rate || 0.0299) * 100).toFixed(2);
 
         showModal(`
             <h3 style="margin-top: 0;">${seller.name}</h3>
             <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div>
+                    <h4>Alterar Comissão (%)</h4>
+                    <input type="number" id="new-commission-rate" step="0.01" placeholder="Ex: 2.99" value="${currentCommission}">
+                    <button data-action="save-commission" style="margin-top: 10px;">Salvar Comissão</button>
+                </div>
                 <div>
                     <h4>Alterar Senha</h4>
                     <input type="password" id="new-password" placeholder="Nova senha (mín. 8 caracteres)">
@@ -412,6 +421,21 @@
         if (!action) return;
 
         if (action === 'close-modal') closeModal();
+        
+        if (action === 'save-commission') {
+            const newCommissionPercent = parseFloat(document.getElementById('new-commission-rate').value);
+            if (isNaN(newCommissionPercent) || newCommissionPercent < 0 || newCommissionPercent > 100) {
+                return showToast("Insira um valor de comissão válido (ex: 2.99).", 'warning');
+            }
+            const commission_rate = newCommissionPercent / 100;
+            try {
+                await apiFetch(`/api/admin/sellers/${appState.currentSeller.id}/commission`, { method: 'PUT', body: JSON.stringify({ commission_rate }) });
+                showToast('Comissão alterada com sucesso!');
+                await fetchAllInitialData();
+                renderSellersTable();
+                closeModal();
+            } catch(err) { showToast(`Erro: ${err.message}`, 'error'); }
+        }
 
         if (action === 'save-password') {
             const newPassword = document.getElementById('new-password').value;
