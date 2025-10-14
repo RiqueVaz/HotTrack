@@ -1,0 +1,20 @@
+{
+  "name": "hottrack-saas-api",
+  "version": "2.0.0",
+  "description": "API SAAS para tracking de leads e conversões.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.4",
+    "axios": "^1.7.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "twilio": "^4.20.0",
+    "uuid": "^10.0.0",
+    "web-push": "^3.6.7"
+  }
+}
