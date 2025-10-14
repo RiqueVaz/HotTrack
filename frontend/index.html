@@ -1429,7 +1429,7 @@
 
         const API_BASE_URL = App.state.API_BASE_URL; // Usa a URL do App principal
         const api = axios.create({ baseURL: API_BASE_URL });
-
+        
         api.interceptors.request.use(
             config => {
                 const token = localStorage.getItem('hottrack_token'); // USA O TOKEN DO HOTTRACK
@@ -1459,80 +1459,72 @@
     };
 
     function AppHotBot() {
-      
-      const [isLoading, setIsLoading] = useState(true);
-      const [currentPage, setCurrentPage] = useState('bots');
-      const [editingFlow, setEditingFlow] = useState(null);
-      const [bots, setBots] = useState([]);
-      const [importingFlowLink, setImportingFlowLink] = useState(null);
+            // --- ALTERAÇÃO AQUI: LÓGICA DE LOGIN REMOVIDA ---
+            const [isLoading, setIsLoading] = useState(true);
+            const [currentPage, setCurrentPage] = useState('bots');
+            const [editingFlow, setEditingFlow] = useState(null);
+            const [bots, setBots] = useState([]);
+            const [importingFlowLink, setImportingFlowLink] = useState(null);
 
-      const fetchInitialData = useCallback(() => {
-        const token = localStorage.getItem('hottrack_token');
-        if (token) {
-            setIsLoading(true);
-            api.get('/dashboard/data')
-                .then((res) => {
-                    setIsAuthenticated(true);
-                    setBots(res.data.bots || []);
-                })
-                .catch(() => {
-                    localStorage.removeItem('hottrack_token');
-                    setIsAuthenticated(false);
-                })
-                .finally(() => setIsLoading(false));
-        } else {
-            setIsAuthenticated(false);
-            setIsLoading(false);
+            const fetchInitialData = useCallback(() => {
+                setIsLoading(true);
+                api.get('/api/dashboard/data') // Note: Adicionei '/api' se sua rota for essa
+                    .then((res) => {
+                        setBots(res.data.bots || []);
+                    })
+                    .catch((err) => {
+                        console.error("Erro ao buscar dados do HotBot:", err);
+                        // Chama o logout global se a API falhar (ex: token expirado)
+                        App.logout(); 
+                    })
+                    .finally(() => setIsLoading(false));
+            }, []);
+
+            useEffect(() => {
+                fetchInitialData();
+                const urlParams = new URLSearchParams(window.location.search);
+                const shareLink = urlParams.get('link');
+                if (shareLink) {
+                    setImportingFlowLink(shareLink);
+                    setCurrentPage('import-flow');
+                }
+            }, [fetchInitialData]);
+            
+            const handleLogout = () => {
+                // Chama o logout da aplicação principal
+                App.logout(); 
+            };
+
+            const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+            
+            if (isLoading) return <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'white'}}>Carregando dados do HotBot...</div>;
+            
+      
+      
+            const PageComponent = {
+                bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+                flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
+                chat: <LiveChatPage bots={bots} />,
+                contacts: <ContactsPage bots={bots} />,
+                media: <MediaLibraryPage />,
+                disparos: <DisparosPage bots={bots} />,
+                'disparos-history': <DisparosHistoryPage />,
+                integrations: <SettingsPage />,
+                'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+                'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+            }[currentPage];
+
+            return (
+                <div className="hotbot-page-container">
+                    <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} onLogout={handleLogout} />
+                    <main className="hotbot-main-content">
+                        <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
+                            {PageComponent}
+                        </div>
+                    </main>
+                </div>
+            );
         }
-      }, []);
-
-      useEffect(() => {
-          fetchInitialData();
-          
-          const urlParams = new URLSearchParams(window.location.search);
-          const shareLink = urlParams.get('link');
-
-          if (shareLink) {
-              setImportingFlowLink(shareLink);
-              setCurrentPage('import-flow');
-          }
-      }, []);
-
-
-      
-      const handleLogout = () => {
-          localStorage.removeItem('hottrack_token');
-          setIsAuthenticated(false);
-          setBots([]);
-      };
-
-      const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
-      
-      
-      const PageComponent = {
-        bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
-        flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
-        chat: <LiveChatPage bots={bots} />,
-        contacts: <ContactsPage bots={bots} />,
-        media: <MediaLibraryPage />,
-        disparos: <DisparosPage bots={bots} />,
-        'disparos-history': <DisparosHistoryPage />,
-        integrations: <SettingsPage />,
-        'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
-        'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
-      }[currentPage];
-
-      return (
-        <div className="app-container">
-          <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} onLogout={handleLogout} />
-          <main className="main-content" style={{padding: 0, height: '100vh', width: '100%', overflow: 'hidden'}}>
-            <div className="page-container" style={{height: '100%'}}>
-                {PageComponent}
-            </div>
-          </main>
-        </div>
-      );
-    }
     
     function Sidebar({ currentPage, setCurrentPage, onLogout }) {
         const pages = { 
@@ -1543,7 +1535,6 @@
             media: 'Biblioteca', 
             disparos: 'Disparos',
             'disparos-history': 'Histórico',
-            integrations: 'Integrações'
         };
         return (
             <aside className="sidebar">
@@ -1555,9 +1546,6 @@
                         </div>
                     ))}
                 </nav>
-                <div className="logout-btn nav-item" onClick={onLogout} title="Sair">
-                    {Icons.logout} <span className="nav-text">Sair</span>
-                </div>
             </aside>
         );
     }
@@ -1574,7 +1562,7 @@
           const token = prompt("Insira o novo Token:"); 
           if (token) { 
               try { 
-                  await api.put(`/bots/${id}`, { bot_token: token }); 
+                  await api.put(`/api/bots/${id}`, { bot_token: token }); 
                   alert("OK"); 
                   fetchBots(); 
               } catch (e) { 
@@ -1582,7 +1570,7 @@
               } 
           } 
       };
-      const handleSetWebhook = async (id) => { try { const res = await api.post(`/bots/${id}/set-webhook`); alert(res.data.message); } catch (e) { alert('Falha.'); } };
+      const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); alert(res.data.message); } catch (e) { alert('Falha.'); } };
       return (
           <div style={{padding: '2rem 3rem', height: '100%', overflowY: 'auto'}}>
             <div className="page-header"><h2>Gerenciamento de Bots</h2><button className="btn btn-primary" onClick={() => document.getElementById('botName').focus()}>+ Adicionar Bot</button></div>
