@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hotbot - Plataforma de Gestão Avançada</title>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script src="https://unpkg.com/reactflow@11/dist/umd/index.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+  <script src="https://unpkg.com/dompurify@2.4.0/dist/purify.min.js"></script>
+
+  <link href="https://unpkg.com/reactflow@11/dist/style.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+        --bg-primary: #111111; --bg-secondary: #1A1A1A; --bg-tertiary: #242424;
+        --border-color: #2D2D2D; --text-primary: #E5E5E5; --text-secondary: #A3A3A3;
+        --brand-primary: #00F5A0; --brand-secondary: #00B372;
+        --info-bg: #1e40af; --info-text: #dbeafe;
+        --danger-bg: #441C24; --danger-text: #F87171; --danger-border: #7f1d1d;
+        --danger-hover-bg: #7f1d1d; --danger-hover-text: white;
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html,body,#root { height: 100%; font-family: var(--font-sans); }
+    body { background: var(--bg-primary); color: var(--text-primary); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    * { scrollbar-width: thin; scrollbar-color: var(--border-color) var(--bg-primary); }
+    *::-webkit-scrollbar { width: 8px; } *::-webkit-scrollbar-track { background: var(--bg-primary); }
+    *::-webkit-scrollbar-thumb { background-color: var(--border-color); border-radius: 10px; border: 2px solid var(--bg-primary); }
+    .app-container { display: flex; height: 100vh; }
+    .main-content {
+        flex: 1; height: 100vh; overflow-y: auto;
+        background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
+        background-size: 2rem 2rem;
+    }
+    .page-container { animation: fadeIn 0.5s ease-in-out; height: 100%; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .sidebar { width: 80px; background: var(--bg-secondary); border-right: 1px solid var(--border-color); padding: 1.5rem 0; display: flex; flex-direction: column; align-items: center; transition: width 0.3s ease-in-out; z-index: 20; }
+    .sidebar:hover { width: 240px; }
+    .sidebar .logo { font-size: 1.8rem; margin-bottom: 3.5rem; color: var(--text-primary); font-weight: 800; letter-spacing: 1px; }
+    .sidebar .logo span { color: var(--brand-primary); }
+    .sidebar .logo .logo-text { opacity: 0; transition: opacity 0.3s ease-in-out; }
+    .sidebar:hover .logo .logo-text { opacity: 1; }
+    .nav-menu { display: flex; flex-direction: column; gap: 0.75rem; width: 100%; }
+    .nav-item { display: flex; align-items: center; justify-content: flex-start; gap: 1rem; padding: 1rem 1.75rem; cursor: pointer; transition: all 0.2s ease-in-out; border-left: 4px solid transparent; color: var(--text-secondary); }
+    .nav-item:hover { background: linear-gradient(90deg, rgba(0, 245, 160, 0.1), transparent); color: var(--text-primary); }
+    .nav-item.active { color: var(--brand-primary); border-left: 4px solid var(--brand-primary); }
+    .nav-item .nav-text { opacity: 0; white-space: nowrap; transform: translateX(-10px); transition: opacity 0.2s ease-in-out, transform 0.2s ease-in-out; font-weight: 600; }
+    .sidebar:hover .nav-text { opacity: 1; transform: translateX(0); }
+    .nav-item svg { min-width: 24px; min-height: 24px; transition: all 0.2s ease-in-out; }
+    .nav-item.active svg { filter: drop-shadow(0 0 8px var(--brand-primary)); }
+    .sidebar .logout-btn { margin-top: auto; width: 100%; }
+    .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2.5rem; }
+    .page-header h2 { font-size: 2.25rem; font-weight: 800; }
+    .card { background: var(--bg-secondary); padding: 2rem; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+    .form-group { margin-bottom: 1.5rem; }
+    .form-group label { display: block; margin-bottom: 0.75rem; font-weight: 600; color: var(--text-secondary); font-size: 0.9rem; }
+    .form-input, .form-select, .form-textarea { width: 100%; padding: 0.85rem 1.1rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); font-size: 1rem; transition: border-color 0.2s, box-shadow 0.2s; }
+    .form-input:focus, .form-select:focus, .form-textarea:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 4px rgba(0, 245, 160, 0.2); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.8rem 1.6rem; border-radius: 8px; border: none; cursor: pointer; font-weight: 700; transition: all 0.2s ease-in-out; text-transform: uppercase; letter-spacing: 0.8px; font-size: 0.9rem; }
+    .btn:hover { transform: translateY(-3px); box-shadow: 0 6px 20px rgba(0,0,0,0.3); }
+    .btn:disabled { background-color: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-sm { padding: 0.5rem 1rem; font-size: 0.8rem; }
+    .btn-primary { background: var(--brand-primary); color: #000; box-shadow: 0 4px 15px rgba(0, 245, 160, 0.2); }
+    .btn-danger { background-color: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border);}
+    .btn-danger:hover { background-color: var(--danger-hover-bg); color: var(--danger-hover-text); }
+    .btn-secondary { background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 2rem; }
+    .bot-card { background: var(--bg-secondary); border-radius: 12px; border: 1px solid var(--border-color); padding: 1rem; display: flex; flex-direction: column; transition: all 0.2s ease-in-out; }
+    .bot-card:hover { transform: translateY(-5px); border-color: var(--brand-primary); box-shadow: 0 8px 30px rgba(0, 245, 160, 0.1); }
+    .bot-card-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+    .bot-card-header .icon { background: var(--bg-primary); padding: 0.75rem; border-radius: 8px; }
+    .bot-card-header h3 { font-size: 1.25rem; font-weight: 700; }
+    .bot-card-actions { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(10px); }
+    .login-box { background: var(--bg-secondary); padding: 3rem; border-radius: 12px; width: 420px; border: 1px solid var(--border-color); }
+    .checkbox-group { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+    .checkbox-group label { margin-bottom: 0; cursor: pointer; }
+    .chat-page-layout { height: 100%; padding: 0; }
+    .chat-container { display: flex; height: calc(100vh - 8.5rem); background: var(--bg-secondary); border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; }
+    .conversations-panel { width: 320px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+    .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
+    .conversations-list { flex: 1; overflow-y: auto; }
+    .conversation-item { padding: 1rem; cursor: pointer; border-bottom: 1px solid var(--border-color); border-left: 4px solid transparent; }
+    .conversation-item:hover { background: var(--bg-tertiary); }
+    .conversation-item.active { background: var(--bg-primary); border-left-color: var(--brand-primary); }
+    .conversation-item-name { font-weight: 600; color: var(--text-primary); }
+    .conversation-item-preview { font-size: 0.9rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-window { flex: 1; display: flex; flex-direction: column; }
+    .chat-header { padding: 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--bg-secondary); }
+    .chat-header h3 { font-size: 1.1rem; }
+    .message-list { flex: 1; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
+    .message-bubble { max-width: 70%; padding: 0.75rem 1.25rem; border-radius: 18px; line-height: 1.5; word-wrap: break-word; }
+    .message-bubble strong { display: block; margin-bottom: 0.25rem; font-size: 0.8rem; }
+    .message-bubble-time { font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem; text-align: right; }
+    .message-user { background: var(--bg-tertiary); align-self: flex-start; border-bottom-left-radius: 4px; }
+    .message-attendant { background: var(--brand-primary); color: #000; align-self: flex-end; border-bottom-right-radius: 4px; }
+    .chat-input-area { border-top: 1px solid var(--border-color); padding: 1rem; background: var(--bg-secondary); }
+    .chat-input-form { display: flex; align-items: center; gap: 1rem; }
+    .chat-input { flex: 1; }
+    .contact-panel { width: 320px; border-left: 1px solid var(--border-color); background: var(--bg-primary); padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem;}
+    .contact-panel h3 { margin-bottom: 0; font-size: 1.2rem; }
+    .contact-detail { margin-bottom: 0; }
+    .contact-detail label { font-size: 0.8rem; color: var(--text-secondary); font-weight: 600; margin-bottom: 0.25rem; display: block; }
+    .contact-detail p { font-size: 0.95rem; color: var(--text-primary); word-wrap: break-word; }
+    .centered-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; color: var(--text-secondary); }
+    .centered-placeholder svg { margin-bottom: 1rem; }
+    .media-preview { width: 100%; height: 150px; object-fit: cover; border-radius: 8px; margin-bottom: 1rem; background-color: var(--bg-primary); }
+    .chat-media { max-width: 300px; max-height: 300px; border-radius: 10px; margin-top: 0.5rem; cursor: pointer; }
+    .chat-audio { margin-top: 0.5rem; }
+    .attach-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 0.5rem; display: flex; align-items: center; justify-content: center;}
+    .attach-btn:hover { color: var(--text-primary); }
+    .actions-panel { border-top: 1px solid var(--border-color); margin-top: 1rem; padding-top: 1rem; }
+    .actions-panel .form-group { margin-bottom: 0.75rem; }
+    .actions-panel .btn { width: 100%; margin-top: 0.5rem; }
+    .flow-editor-page { display: flex; flex-direction: column; height: 100vh; background: #fff; color: #333; }
+    .flow-editor-container { flex: 1; display: flex; overflow: hidden; }
+    .reactflow-wrapper { flex-grow: 1; position: relative; background-color: #f8f9fa; background-image: radial-gradient(#dee2e6 1px, transparent 0); background-size: 30px 30px;}
+    .flow-header { padding: 1rem 1.5rem; background: white; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e9ecef; z-index: 11; }
+    .flow-sidebar { width: 280px; background: white; border-right: 1px solid #e9ecef; padding: 1rem; overflow-y: auto; }
+    .flow-sidebar h3 { margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e9ecef; font-size: 1.1rem; }
+    .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid #dee2e6; text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: #495057; }
+    .node-button:hover { border-color: var(--brand-primary); color: var(--brand-secondary); background: #f1f3f5; }
+    .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background: white; z-index: 10; padding: 1.5rem; border-left: 1px solid #e9ecef; overflow-y: auto; }
+    .react-flow__node { background: white; border: 1px solid #adb5bd; border-radius: 8px; padding: 0; width: 280px; font-family: var(--font-sans); box-shadow: 0 4px 10px rgba(0,0,0,0.05); color: #343a40; }
+    .react-flow__node.selected { border: 2px solid var(--brand-primary); box-shadow: 0 0 15px rgba(0, 245, 160, 0.5); }
+    .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e9ecef; }
+    .node-content { padding: 1rem; font-size: 0.9rem; color: #6c757d; }
+    .react-flow__handle { width: 12px; height: 12px; background: white; border: 2px solid #adb5bd; }
+    .react-flow__handle:hover { border-color: var(--brand-primary); }
+    .node-header { color: #212529; }
+    .react-flow__node-trigger .node-header { background: #e7f5ff; }
+    .react-flow__node-message .node-header { background: #e6fcf5; }
+    .react-flow__node-image .node-header { background: #f3e8ff; }
+    .react-flow__node-video .node-header { background: #f3e8ff; }
+    .react-flow__node-audio .node-header { background: #fff0f6; }
+    .react-flow__node-delay .node-header { background: #fff9db; }
+    .react-flow__node-typing_action .node-header { background: #f0f9ff; }
+    .react-flow__node-action_pix .node-header { background: #dcfce7; }
+    .react-flow__node-action_check_pix .node-header { background: #ffedd5; }
+    .react-flow__node-action_city .node-header { background: #e0f2fe; }
+    .react-flow__node-forward_flow .node-header { background: #eef2ff; }
+    .handle-label { position: absolute; font-size: 11px; color: #6c757d; background: white; padding: 2px 6px; border-radius: 4px; bottom: -24px; border: 1px solid #e9ecef; }
+    .variable-btn { background: #e9ecef; color: #495057; border: none; border-radius: 4px; padding: 2px 8px; margin-right: 5px; cursor: pointer; font-size: 0.8rem;}
+    .variable-btn:hover { background: #dee2e6; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback, useEffect, useRef } = window.React;
+    const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position, getConnectedEdges } = window.ReactFlow;
+
+    const API_BASE_URL = 'https://hottrack.vercel.app/api';
+    const FRONTEND_URL = 'https://hottrackerbot.netlify.app';
+
+    const api = axios.create({ baseURL: API_BASE_URL });
+
+    api.interceptors.request.use(
+      config => {
+        // ******** ALERTA DE SEGURANÇA: localStorage ********
+        // O localStorage é vulnerável a ataques XSS. Se um script malicioso for executado na página,
+        // ele pode roubar este token.
+        // CORREÇÃO FUTURA (BACKEND): Substitua por cookies HttpOnly. O servidor deve definir o cookie
+        // e o navegador o enviará automaticamente. O frontend não precisará mais manipular o token.
+        const token = localStorage.getItem('authToken');
+        if (token) {
+          config.headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        // ******** ALERTA DE SEGURANÇA: CSRF (Cross-Site Request Forgery) ********
+        // As requisições que alteram dados (POST, PUT, DELETE) estão vulneráveis a CSRF.
+        // CORREÇÃO FUTURA (BACKEND + FRONTEND):
+        // 1. O backend deve gerar um token anti-CSRF e enviá-lo ao frontend (geralmente em um cookie).
+        // 2. O frontend deve ler esse token e enviá-lo de volta em um cabeçalho customizado em cada requisição.
+        // Ex: config.headers['X-CSRF-Token'] = getCsrfTokenFromCookie();
+        return config;
+      },
+      error => Promise.reject(error)
+    );
+
+    const Icons = {
+        contacts: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+        attach: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
+        bots: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect x="4" y="12" width="16" height="8" rx="2"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M17 12v-2a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>,
+        flows: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h3"/><path d="M7 12h3"/><path d="M12 12h3"/><path d="M17 12h3"/><path d="M5 7v10"/><path d="M10 7v10"/><path d="M15 7v10"/><path d="M20 7v10"/><path d="M5 12a5 5 0 0 0 5 5"/><path d="M10 12a5 5 0 0 1 5 5"/><path d="M15 12a5 5 0 0 0 5-5"/></svg>,
+        chat: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+        media: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>,
+        disparos: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+        history: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8a6 6 0 0 1-8.4 0l-6.3-6.3"/><path d="M12 20.7a6 6 0 0 0 8.4 0l1.3-1.3"/></svg>,
+        integrations: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"/></svg>,
+        logout: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+        send: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+    };
+
+    function App() {
+      const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('authToken'));
+      const [isLoading, setIsLoading] = useState(true);
+      const [currentPage, setCurrentPage] = useState('bots');
+      const [editingFlow, setEditingFlow] = useState(null);
+      const [bots, setBots] = useState([]);
+      const [importingFlowLink, setImportingFlowLink] = useState(null);
+
+      const fetchInitialData = useCallback(() => {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            setIsLoading(true);
+            api.get('/dashboard/data')
+                .then((res) => {
+                    setIsAuthenticated(true);
+                    setBots(res.data.bots || []);
+                })
+                .catch(() => {
+                    localStorage.removeItem('authToken');
+                    setIsAuthenticated(false);
+                })
+                .finally(() => setIsLoading(false));
+        } else {
+            setIsAuthenticated(false);
+            setIsLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+          fetchInitialData();
+          
+          const urlParams = new URLSearchParams(window.location.search);
+          const shareLink = urlParams.get('link');
+
+          if (shareLink) {
+              setImportingFlowLink(shareLink);
+              setCurrentPage('import-flow');
+          }
+      }, []);
+
+      const handleLogin = (token) => {
+          // ALERTA DE SEGURANÇA: localStorage é inseguro.
+          localStorage.setItem('authToken', token);
+          setIsAuthenticated(true);
+          fetchInitialData();
+      };
+      
+      const handleLogout = () => {
+          localStorage.removeItem('authToken');
+          setIsAuthenticated(false);
+          setBots([]);
+      };
+
+      const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+      
+      if (isLoading) return <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh'}}>A carregar...</div>;
+      if (!isAuthenticated) {
+        if(importingFlowLink) {
+            return <LoginScreen onLogin={handleLogin} />;
+        }
+        return <LoginScreen onLogin={handleLogin} />;
+      }
+      
+      const PageComponent = {
+        bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+        flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
+        chat: <LiveChatPage bots={bots} />,
+        contacts: <ContactsPage bots={bots} />,
+        media: <MediaLibraryPage />,
+        disparos: <DisparosPage bots={bots} />,
+        'disparos-history': <DisparosHistoryPage />,
+        integrations: <SettingsPage />,
+        'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+        'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+      }[currentPage];
+
+      return (
+        <div className="app-container">
+          <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} onLogout={handleLogout} />
+          <main className="main-content" style={{padding: 0, height: '100vh', width: '100%', overflow: 'hidden'}}>
+            <div className="page-container" style={{height: '100%'}}>
+                {PageComponent}
+            </div>
+          </main>
+        </div>
+      );
+    }
+    
+    function Sidebar({ currentPage, setCurrentPage, onLogout }) {
+        const pages = { 
+            bots: 'Bots', 
+            flows: 'Fluxos', 
+            chat: 'Chat ao Vivo', 
+            contacts: 'Contatos', 
+            media: 'Biblioteca', 
+            disparos: 'Disparos',
+            'disparos-history': 'Histórico',
+            integrations: 'Integrações'
+        };
+        return (
+            <aside className="sidebar">
+                <div className="logo">H<span className="logo-text">otbot</span></div>
+                <nav className="nav-menu">
+                    {Object.entries(pages).map(([key, value]) => (
+                        <div key={key} className={`nav-item ${currentPage === key ? 'active' : ''}`} onClick={() => setCurrentPage(key)} title={value}>
+                            {Icons[key] || Icons.history} <span className="nav-text">{value}</span>
+                        </div>
+                    ))}
+                </nav>
+                <div className="logout-btn nav-item" onClick={onLogout} title="Sair">
+                    {Icons.logout} <span className="nav-text">Sair</span>
+                </div>
+            </aside>
+        );
+    }
+    
+    function BotsPage({ bots, fetchBots }) {
+      const [newBotName, setNewBotName] = useState('');
+      const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); } catch (e) { alert('Erro: ' + (e.response?.data?.message || '')); } };
+      const handleDeleteBot = async (id) => { if (confirm('Certeza?')) { try { await api.delete(`/bots/${id}`); fetchBots(); } catch (e) { alert('Erro'); } } };
+      const handleUpdateToken = async (id) => {
+          // ALERTA DE SEGURANÇA: O uso de prompt() não é recomendado para dados sensíveis,
+          // pois pode ser simulado em ataques de phishing.
+          // RECOMENDAÇÃO: Use um modal seguro, construído com HTML/CSS/JS, para esta entrada.
+          alert("Por segurança, use um formulário modal para inserir tokens, em vez de um prompt.");
+          const token = prompt("Insira o novo Token:"); 
+          if (token) { 
+              try { 
+                  await api.put(`/bots/${id}`, { bot_token: token }); 
+                  alert("OK"); 
+                  fetchBots(); 
+              } catch (e) { 
+                  alert('Erro: ' + (e.response?.data?.message || '')); 
+              } 
+          } 
+      };
+      const handleSetWebhook = async (id) => { try { const res = await api.post(`/bots/${id}/set-webhook`); alert(res.data.message); } catch (e) { alert('Falha.'); } };
+      return (
+          <div style={{padding: '2rem 3rem', height: '100%', overflowY: 'auto'}}>
+            <div className="page-header"><h2>Gerenciamento de Bots</h2><button className="btn btn-primary" onClick={() => document.getElementById('botName').focus()}>+ Adicionar Bot</button></div>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', alignItems: 'start'}}>
+                <div className="card"><h3 style={{color: 'var(--text-primary)'}}>Adicionar Novo Bot</h3><p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem'}}>Crie e configure novos bots.</p><form onSubmit={handleCreateBot}><div className="form-group"><label htmlFor="botName">Nome de usuário</label><input id="botName" className="form-input" value={newBotName} onChange={(e) => setNewBotName(e.target.value)} placeholder="@meu_bot"/></div><button className="btn btn-primary" type="submit" style={{width: '100%'}}>Criar</button></form></div>
+                <div>
+                    <h3 style={{marginBottom: '1rem', fontSize: '1.5rem', color: 'var(--text-primary)'}}>Bots Ativos</h3>
+                    <div className="grid">
+                        {bots.map(bot => (<div key={bot.id} className="bot-card"><div className="bot-card-header"><div className="icon">{Icons.bots}</div><h3>{bot.bot_name}</h3></div><p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', flexGrow: 1}}>Gerencie as configurações.</p><div className="bot-card-actions"><button className="btn btn-secondary btn-sm" onClick={() => handleSetWebhook(bot.id)}>Webhook</button><button className="btn btn-secondary btn-sm" onClick={() => handleUpdateToken(bot.id)}>Token</button><button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDeleteBot(bot.id)}>Excluir</button></div></div>))}
+                        {bots.length === 0 && <p style={{color: 'var(--text-secondary)'}}>Nenhum bot criado.</p>}
+                    </div>
+                </div>
+            </div>
+          </div>
+        );
+    }
+    
+    function ShareFlowModal({ flow, onClose, onLinkGenerated }) {
+        const [isPaid, setIsPaid] = useState(false);
+        const [price, setPrice] = useState(10);
+        const [allowReshare, setAllowReshare] = useState(false);
+        const [bundleLinkedFlows, setBundleLinkedFlows] = useState(false);
+        const [bundleMedia, setBundleMedia] = useState(false);
+        const [isGenerating, setIsGenerating] = useState(false);
+
+        const handleGenerateLink = async () => {
+            setIsGenerating(true);
+            try {
+                const options = {
+                    priceInCents: isPaid ? Math.round(price * 100) : 0,
+                    allowReshare,
+                    bundleLinkedFlows,
+                    bundleMedia
+                };
+                const response = await api.post(`/flows/${flow.id}/generate-share-link`, options);
+                const link = `${FRONTEND_URL}/?link=${response.data.shareable_link_id}`;
+                prompt("Link de compartilhamento gerado! Copie abaixo:", link);
+                onLinkGenerated();
+                onClose();
+            } catch (error) {
+                alert('Erro ao gerar link: ' + (error.response?.data?.message || 'Tente novamente.'));
+            } finally {
+                setIsGenerating(false);
+            }
+        };
+
+        return (
+            <div className="login-overlay" style={{ zIndex: 101 }}>
+                <div className="login-box" style={{ width: '500px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                        <h2 style={{ fontWeight: 800, margin: 0 }}>Compartilhar Fluxo</h2>
+                        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>&times;</button>
+                    </div>
+
+                    <div className="form-group checkbox-group">
+                        <input type="checkbox" id="isPaid" checked={isPaid} onChange={e => setIsPaid(e.target.checked)} />
+                        <label htmlFor="isPaid">Cobrar pela importação deste fluxo?</label>
+                    </div>
+                    {isPaid && (
+                        <div className="form-group">
+                            <label htmlFor="price">Preço (R$)</label>
+                            <input id="price" className="form-input" type="number" min="1" step="0.01" value={price} onChange={e => setPrice(parseFloat(e.target.value))} />
+                        </div>
+                    )}
+                    
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Atenção: As funcionalidades de anexar fluxos e mídias ainda estão em desenvolvimento.</p>
+
+                    <div className="form-group checkbox-group">
+                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} disabled />
+                        <label htmlFor="bundleFlows">Incluir fluxos anexados (encaminhados)</label>
+                    </div>
+                    <div className="form-group checkbox-group">
+                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} disabled />
+                        <label htmlFor="bundleMedia">Incluir mídias (imagens, vídeos, áudios)</label>
+                    </div>
+                     <div className="form-group checkbox-group">
+                        <input type="checkbox" id="allowReshare" checked={allowReshare} onChange={e => setAllowReshare(e.target.checked)} />
+                        <label htmlFor="allowReshare">Permitir que quem importar compartilhe também</label>
+                    </div>
+
+                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleGenerateLink} disabled={isGenerating}>
+                        {isGenerating ? 'Gerando...' : 'Gerar Link de Compartilhamento'}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    function FlowsListPage({ bots, onEditFlow }) {
+        const [selectedBotId, setSelectedBotId] = useState('');
+        const [flows, setFlows] = useState([]);
+        const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+        const [flowToShare, setFlowToShare] = useState(null);
+        
+        const fetchFlows = useCallback(async () => {
+            if (!selectedBotId) { setFlows([]); return; }
+            try {
+                const res = await api.get('/flows');
+                setFlows(res.data.filter(f => f.bot_id == selectedBotId));
+            } catch (e) { console.error("Erro ao buscar fluxos", e); }
+        }, [selectedBotId]);
+        
+        useEffect(() => {
+            if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
+        }, [bots, selectedBotId]);
+
+        useEffect(() => { fetchFlows(); }, [fetchFlows]);
+
+        const handleCreate = async () => {
+            const n = prompt("Nome do novo fluxo:");
+            if(n && selectedBotId) {
+                try {
+                    await api.post('/flows', { name: n, botId: selectedBotId });
+                    fetchFlows();
+                } catch (e) { alert("Erro ao criar fluxo."); }
+            }
+        };
+
+        const handleDelete = async (id) => {
+            if (confirm("Tem certeza que deseja excluir este fluxo?")) {
+                try {
+                    await api.delete(`/flows/${id}`);
+                    fetchFlows();
+                } catch (e) { alert("Erro ao excluir fluxo."); }
+            }
+        };
+
+        const handleOpenShareModal = (flow) => {
+            setFlowToShare(flow);
+            setIsShareModalOpen(true);
+        };
+
+        return (
+            <>
+                {isShareModalOpen && <ShareFlowModal flow={flowToShare} onClose={() => setIsShareModalOpen(false)} onLinkGenerated={fetchFlows} />}
+                <div style={{padding: '2rem 3rem', height: '100%', overflowY: 'auto'}}>
+                    <div className="page-header"><h2>Fluxos de Conversa</h2><button className="btn btn-primary" onClick={handleCreate} disabled={!selectedBotId}>+ Novo Fluxo</button></div>
+                    <div className="form-group" style={{maxWidth: '400px', marginBottom: '2rem'}}><label htmlFor="botSelect">Selecione um Bot</label><select id="botSelect" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div>
+                    <div className="grid">
+                        {flows.map(flow => (
+                            <div key={flow.id} className="bot-card">
+                               <div className="bot-card-header"><div className="icon">{Icons.flows}</div><h3>{flow.name}</h3></div>
+                               <p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', flexGrow: 1}}>Modificado em: {new Date(flow.updated_at).toLocaleDateString()}</p>
+                                {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
+                                <div className="bot-card-actions">
+                                    <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
+                                    <button className="btn btn-secondary btn-sm" onClick={() => handleOpenShareModal(flow)}>Compartilhar</button>
+                                    <button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDelete(flow.id)}>Excluir</button>
+                                </div>
+                            </div>
+                        ))}
+                        {flows.length === 0 && selectedBotId && <p style={{color: 'var(--text-secondary)'}}>Nenhum fluxo criado para este bot.</p>}
+                    </div>
+                </div>
+            </>
+        );
+    }
+    
+    function ImportFlowPage({ shareableLinkId, bots, onImported }) {
+        const [selectedBotId, setSelectedBotId] = useState('');
+        const [isImporting, setIsImporting] = useState(false);
+        const [isLoading, setIsLoading] = useState(true);
+        const [flowDetails, setFlowDetails] = useState(null);
+        const [error, setError] = useState('');
+        const [pixData, setPixData] = useState(null);
+        const [isWaitingPayment, setIsWaitingPayment] = useState(false);
+
+        useEffect(() => {
+            if (bots.length > 0 && !selectedBotId) {
+                setSelectedBotId(bots[0].id);
+            }
+        }, [bots]);
+
+        useEffect(() => {
+            if (shareableLinkId) {
+                setIsLoading(true);
+                api.get(`/share/details/${shareableLinkId}`)
+                    .then(response => {
+                        setFlowDetails(response.data);
+                    })
+                    .catch(err => {
+                        setError(err.response?.data?.message || 'Não foi possível carregar os detalhes deste fluxo.');
+                    })
+                    .finally(() => {
+                        setIsLoading(false);
+                    });
+            }
+        }, [shareableLinkId]);
+
+        const handleFreeImport = async () => {
+            if (!selectedBotId) { alert('Por favor, selecione um bot para importar o fluxo.'); return; }
+            setIsImporting(true);
+            try {
+                await api.post('/flows/import-from-link', { shareableLinkId, botId: selectedBotId });
+                alert('Fluxo importado com sucesso!');
+                onImported();
+            } catch (err) {
+                alert('Erro ao importar o fluxo: ' + (err.response?.data?.message || 'Tente novamente.'));
+            } finally {
+                setIsImporting(false);
+            }
+        };
+        
+        const handleInitiatePixPayment = () => {
+             alert("Funcionalidade de pagamento via PIX em desenvolvimento. O backend precisa ser conectado à API de PIX para esta ação.");
+        };
+
+        if (isLoading) {
+            return <div style={{ padding: '2rem 3rem' }}><h2>A carregar detalhes do fluxo...</h2></div>;
+        }
+
+        if (error) {
+            return <div style={{ padding: '2rem 3rem' }}><h2>Erro</h2><p style={{color: 'var(--danger-text)'}}>{error}</p></div>;
+        }
+        
+        const isPaid = flowDetails && flowDetails.share_price_cents > 0;
+        const priceInReais = (flowDetails.share_price_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                <div className="page-header"><h2>Importar Fluxo: {flowDetails?.name}</h2></div>
+                <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+                    
+                    {isPaid ? (
+                        <>
+                            <h3>Este é um fluxo pago</h3>
+                            <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
+                            <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
+                            <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment}>
+                                {isWaitingPayment ? 'Aguardando Pagamento...' : 'Pagar com PIX para Importar'}
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Selecione para qual dos seus bots você deseja adicionar este fluxo gratuito.</p>
+                            <div className="form-group">
+                                <label htmlFor="botSelectImport">Selecione o Bot de Destino</label>
+                                <select id="botSelectImport" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
+                                    <option value="">-- Selecione um Bot --</option>
+                                    {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
+                                </select>
+                            </div>
+                            <button className="btn btn-primary" onClick={handleFreeImport} disabled={isImporting || !selectedBotId}>
+                                {isImporting ? 'Importando...' : 'Confirmar Importação Gratuita'}
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+        );
+    }
+    
+    function DisparosPage({ bots }) {
+        const [selectedBotIds, setSelectedBotIds] = useState([]);
+        const [flowSteps, setFlowSteps] = useState([]);
+        const [campaignName, setCampaignName] = useState('');
+        const [contactCount, setContactCount] = useState(0);
+        const [isSending, setIsSending] = useState(false);
+        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+
+        useEffect(() => {
+            const fetchCount = async () => {
+                if (selectedBotIds.length === 0) {
+                    setContactCount(0);
+                    return;
+                }
+                try {
+                    const response = await api.post('/bots/contacts-count', { botIds: selectedBotIds });
+                    setContactCount(response.data.count);
+                } catch (error) {
+                    console.error("Erro ao buscar contagem de contatos", error);
+                    setContactCount(0);
+                }
+            };
+            fetchCount();
+        }, [selectedBotIds]);
+
+        const handleBotSelection = (botId) => {
+            setSelectedBotIds(prev => prev.includes(botId) ? prev.filter(id => id !== botId) : [...prev, botId]);
+        };
+
+        const addStep = (type) => {
+            const newStep = { id: Date.now(), type };
+            switch (type) {
+                case 'message': newStep.text = ''; newStep.buttonText = ''; newStep.buttonUrl = ''; break;
+                case 'image': case 'video': case 'audio': newStep.fileUrl = ''; newStep.caption = ''; break;
+                case 'pix': newStep.valueInCents = 100; newStep.pixMessage = '✅ PIX Gerado! Copie o código abaixo:'; newStep.pixButtonText = '📋 Copiar Código'; break;
+                case 'check_pix': newStep.deliveryText = '✅ Pagamento confirmado! Aqui está seu acesso:'; newStep.deliveryButtonText = 'Acessar Conteúdo'; newStep.deliveryButtonUrl = ''; break;
+                default: break;
+            }
+            setFlowSteps(prev => [...prev, newStep]);
+        };
+        
+        const updateStep = (id, field, value) => { setFlowSteps(prev => prev.map(step => step.id === id ? { ...step, [field]: value } : step)); };
+        const removeStep = (id) => { setFlowSteps(prev => prev.filter(step => step.id !== id)); };
+        const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
+
+        const handleSelectMedia = (mediaItem) => {
+            if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem.file_id); }
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+        };
+        
+        const handleSubmit = async (e) => {
+            e.preventDefault();
+            if (!campaignName || selectedBotIds.length === 0 || flowSteps.length === 0) {
+                alert('Preencha o nome da campanha, selecione ao menos um bot e adicione uma ação ao fluxo.');
+                return;
+            }
+            setIsSending(true);
+            try {
+                const response = await api.post('/bots/mass-send', { campaignName, botIds: selectedBotIds, flowSteps });
+                alert(response.data.message || 'Disparo agendado com sucesso!');
+                setFlowSteps([]);
+                setCampaignName('');
+            } catch (error) {
+                alert('Erro ao enviar disparo: ' + (error.response?.data?.message || error.message));
+            } finally {
+                setIsSending(false);
+            }
+        };
+
+        const renderStep = (step) => {
+            switch (step.type) {
+                case 'message': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>💬 Enviar Mensagem</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Texto da Mensagem</label><textarea className="form-textarea" rows="3" value={step.text} onChange={e => updateStep(step.id, 'text', e.target.value)} placeholder="Use {{primeiro_nome}} ou {{nome_completo}}"/></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão (Opcional)</label><input type="text" className="form-input" value={step.buttonText} onChange={e => updateStep(step.id, 'buttonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão (Opcional)</label><input type="url" className="form-input" value={step.buttonUrl} onChange={e => updateStep(step.id, 'buttonUrl', e.target.value)} /></div></div></div>);
+                case 'image': case 'video': case 'audio': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>{step.type === 'image' ? '🖼️' : (step.type === 'video' ? '🎬' : '🎵')} Enviar {step.type.charAt(0).toUpperCase() + step.type.slice(1)}</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>File ID ou URL</label><input type="text" className="form-input" value={step.fileUrl} onChange={e => updateStep(step.id, 'fileUrl', e.target.value)} /></div><button className="btn btn-secondary btn-sm" style={{marginBottom: '1rem'}} onClick={() => openMediaLibrary(fileId => updateStep(step.id, 'fileUrl', fileId))}>Selecionar da Biblioteca</button><div className="form-group"><label>Legenda (Opcional)</label><textarea className="form-textarea" rows="2" value={step.caption} onChange={e => updateStep(step.id, 'caption', e.target.value)} /></div></div>);
+                case 'pix': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>💳 Gerar PIX</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Valor (em centavos)</label><input type="number" className="form-input" value={step.valueInCents} onChange={e => updateStep(step.id, 'valueInCents', e.target.value)} /></div><div className="form-group"><label>Texto da Mensagem PIX</label><textarea className="form-textarea" rows="2" value={step.pixMessage} onChange={e => updateStep(step.id, 'pixMessage', e.target.value)} /></div><div className="form-group"><label>Texto do Botão PIX</label><input type="text" className="form-input" value={step.pixButtonText} onChange={e => updateStep(step.id, 'pixButtonText', e.target.value)} /></div></div>);
+                case 'check_pix': return (<div key={step.id} className="card" style={{marginBottom: '1rem', borderLeft: '4px solid var(--info-bg)'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>🔍 Verificar PIX & Entregar</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '1rem'}}>Esta ação só será executada se o PIX gerado na etapa anterior for pago.</p><div className="form-group"><label>Texto de Entrega (Pós-Pagamento)</label><textarea className="form-textarea" rows="3" value={step.deliveryText} onChange={e => updateStep(step.id, 'deliveryText', e.target.value)} /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão de Entrega</label><input type="text" className="form-input" value={step.deliveryButtonText} onChange={e => updateStep(step.id, 'deliveryButtonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão de Entrega</label><input type="url" className="form-input" value={step.deliveryButtonUrl} onChange={e => updateStep(step.id, 'deliveryButtonUrl', e.target.value)} /></div></div></div>);
+                default: return null;
+            }
+        };
+
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
+                <div className="page-header"><h2>Disparo em Massa Inteligente</h2></div>
+                <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                    <form onSubmit={handleSubmit}>
+                        <div className="card" style={{marginBottom: '2rem'}}>
+                            <div className="form-group"><label>1. Nome da Campanha</label><input type="text" className="form-input" value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Ex: Lançamento VIP" required /></div>
+                            <div className="form-group"><label>2. Selecione os Bots de Destino</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>{bots.map(bot => (<label key={bot.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={selectedBotIds.includes(bot.id)} onChange={() => handleBotSelection(bot.id)} />{bot.bot_name}</label>))}</div>
+                             <p style={{marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem'}}>Total de contatos selecionados: <strong style={{color: 'var(--brand-primary)'}}>{contactCount}</strong></p>
+                            </div>
+                        </div>
+                        <div className="card" style={{marginBottom: '2rem'}}><label>3. Monte o Fluxo de Disparo</label><p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem'}}>Adicione as ações na ordem em que devem ser enviadas.</p><div style={{display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem'}}><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('message')}>+ Mensagem</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('image')}>+ Imagem</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('video')}>+ Vídeo</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('audio')}>+ Áudio</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('pix')}>+ Gerar PIX</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('check_pix')}>+ Verificar PIX</button></div><div>{flowSteps.map(renderStep)}</div>{flowSteps.length === 0 && <p style={{color: 'var(--text-secondary)', textAlign: 'center'}}>Nenhuma ação adicionada ainda.</p>}</div>
+                        <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending}>{isSending ? 'Agendando...' : `Disparar para ${contactCount} contato(s)`}</button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+    
+    function DisparosHistoryPage() {
+        const [history, setHistory] = useState([]);
+        const [isLoading, setIsLoading] = useState(true);
+        const [isChecking, setIsChecking] = useState(null);
+
+        const fetchHistory = useCallback(() => {
+            api.get('/disparos/history')
+                .then(res => setHistory(res.data))
+                .catch(() => console.error('Erro ao atualizar histórico.'));
+        }, []);
+
+        useEffect(() => {
+            setIsLoading(true);
+            api.get('/disparos/history')
+                .then(res => setHistory(res.data))
+                .catch(() => alert('Erro ao carregar o histórico.'))
+                .finally(() => setIsLoading(false));
+            
+            const intervalId = setInterval(fetchHistory, 5000);
+
+            return () => clearInterval(intervalId);
+        }, [fetchHistory]);
+        
+        const handleCheckConversions = async (historyId) => {
+            setIsChecking(historyId);
+            try {
+                const res = await api.post(`/disparos/check-conversions/${historyId}`);
+                alert(res.data.message);
+                fetchHistory();
+            } catch (error) {
+                alert('Erro ao verificar: ' + (error.response?.data?.message || error.message));
+            } finally {
+                setIsChecking(null);
+            }
+        };
+        
+        const getStatusChip = (status) => {
+            const styles = {
+                PENDING: { background: '#a16207', color: '#fefce8' },
+                RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
+                COMPLETED: { background: '#166534', color: '#dcfce7' },
+                FAILED: { background: '#991b1b', color: '#fee2e2' }
+            };
+            return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{status}</span>
+        }
+
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                <div className="page-header"><h2>Histórico de Disparos</h2><button className="btn btn-secondary" onClick={fetchHistory} disabled={isLoading}>Atualizar</button></div>
+                <div className="card">
+                    <table style={{width: '100%', borderCollapse: 'collapse', textAlign: 'left'}}>
+                        <thead>
+                            <tr style={{borderBottom: '1px solid var(--border-color)'}}>
+                                <th style={{padding: '1rem'}}>Campanha</th>
+                                <th style={{padding: '1rem'}}>Data</th>
+                                <th style={{padding: '1rem'}}>Status</th>
+                                <th style={{padding: '1rem'}}>Envios</th>
+                                <th style={{padding: '1rem'}}>Conversões</th>
+                                <th style={{padding: '1rem'}}>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {isLoading ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                             history.map(item => (
+                                <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
+                                    <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
+                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString()}</td>
+                                    <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
+                                    <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
+                                    <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
+                                    <td style={{padding: '1rem'}}>
+                                        <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                            {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                     {!isLoading && history.length === 0 && <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Nenhum disparo encontrado.</p>}
+                </div>
+            </div>
+        );
+    }
+
+    function SettingsPage() {
+        const [apiKey, setApiKey] = useState('');
+        const [isLoading, setIsLoading] = useState(true);
+        const [isSaving, setIsSaving] = useState(false);
+        useEffect(() => {
+            api.get('/dashboard/data')
+                .then(res => setApiKey(res.data.settings?.hottrack_api_key || ''))
+                .catch(() => alert("Não foi possível carregar as suas configurações."))
+                .finally(() => setIsLoading(false));
+        }, []);
+        const handleSave = async (e) => {
+            e.preventDefault();
+            setIsSaving(true);
+            try {
+                const res = await api.put('/settings/hottrack-key', { apiKey });
+                alert(res.data.message);
+            } catch (error) {
+                alert('Erro ao salvar: ' + (error.response?.data?.message || error.message));
+            } finally {
+                setIsSaving(false);
+            }
+        };
+        if (isLoading) { return <div style={{padding: '2rem 3rem'}}><div className="page-header"><h2>Integrações</h2></div><p>A carregar...</p></div>; }
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                <div className="page-header"><h2>Integrações</h2></div>
+                <div className="card" style={{ maxWidth: '700px' }}>
+                    <h3 style={{color: 'var(--text-primary)'}}>Integração com HotTrack PIX</h3>
+                    <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem'}}>Insira a sua Chave de API da plataforma HotTrack para permitir que este bot gere e consulte PIXs.</p>
+                    <form onSubmit={handleSave}>
+                        <div className="form-group"><label htmlFor="hottrackApiKey">A sua Chave de API HotTrack</label><input id="hottrackApiKey" className="form-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Cole a sua chave de API aqui" /></div>
+                        <button className="btn btn-primary" type="submit" disabled={isSaving}>{isSaving ? 'A guardar...' : 'Guardar Chave'}</button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+    
+    function LiveChatPage({ bots }) {
+        const [selectedBotId, setSelectedBotId] = useState('');
+        const [allFlows, setAllFlows] = useState([]);
+        const [users, setUsers] = useState([]);
+        const [filteredUsers, setFilteredUsers] = useState([]);
+        const [selectedChat, setSelectedChat] = useState(null);
+        const [messages, setMessages] = useState([]);
+        const [newMessage, setNewMessage] = useState('');
+        const [searchTerm, setSearchTerm] = useState('');
+        
+        const [showOnlyActive, setShowOnlyActive] = useState(false);
+        const [inactiveChatIds, setInactiveChatIds] = useState([]);
+        const [isValidating, setIsValidating] = useState(false);
+        
+        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const chatWindowRef = useRef(null);
+        const fileInputRef = useRef(null);
+        
+        useEffect(() => {
+            if (bots.length > 0 && !selectedBotId) {
+                setSelectedBotId(bots[0].id);
+            }
+        }, [bots]);
+        
+        useEffect(() => {
+            const chatWindow = chatWindowRef.current;
+            if (!chatWindow) return;
+
+            const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 150;
+
+            if (isScrolledToBottom) {
+                chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+            }
+        }, [messages]);
+        
+        useEffect(() => {
+            api.get('/flows').then(({data}) => setAllFlows(data || []));
+        }, []);
+
+        const fetchUsers = useCallback(async () => {
+            if (!selectedBotId) return;
+            try {
+                const { data } = await api.get(`/chats/${selectedBotId}`);
+                setUsers(data);
+            } catch (e) {
+                console.error("Erro ao buscar usuários", e);
+            }
+        }, [selectedBotId]);
+        
+        useEffect(() => {
+            if (!selectedBotId) return;
+            fetchUsers();
+            const intervalId = setInterval(fetchUsers, 10000);
+            return () => clearInterval(intervalId);
+        }, [fetchUsers, selectedBotId]);
+
+        const fetchMessages = useCallback(async () => {
+             if (!selectedBotId || !selectedChat?.chat_id) return;
+             try {
+                 const { data } = await api.get(`/chats/${selectedBotId}/${selectedChat.chat_id}`);
+                 setMessages(prevMessages => JSON.stringify(prevMessages) === JSON.stringify(data) ? prevMessages : data);
+             } catch (e) {
+                 console.error("Erro ao buscar mensagens", e);
+             }
+        }, [selectedBotId, selectedChat?.chat_id]);
+
+        useEffect(() => {
+            if (!selectedChat) return;
+            fetchMessages(); 
+            const intervalId = setInterval(fetchMessages, 5000);
+            return () => clearInterval(intervalId);
+        }, [fetchMessages, selectedChat]);
+        
+        useEffect(() => {
+            const activeUsers = showOnlyActive 
+                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+                : users;
+
+            setFilteredUsers(
+                activeUsers.filter(u => 
+                    ((u.first_name || '') + ' ' + (u.last_name || '')).toLowerCase().includes(searchTerm.toLowerCase()) || 
+                    (u.chat_id || '').toString().includes(searchTerm) || 
+                    (u.click_id || '').toLowerCase().includes(searchTerm.toLowerCase())
+                )
+            );
+        }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
+
+        const handleFilterActiveToggle = async () => {
+            const nextState = !showOnlyActive;
+            setShowOnlyActive(nextState);
+
+            if (nextState && selectedBotId) {
+                setIsValidating(true);
+                try {
+                    const { data } = await api.post('/bots/validate-contacts', { botId: selectedBotId });
+                    setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
+                } catch (error) {
+                    console.error("Erro ao validar contatos", error);
+                    alert('Não foi possível validar os contatos.');
+                } finally {
+                    setIsValidating(false);
+                }
+            }
+        };
+
+        useEffect(() => {
+            if (selectedBotId) {
+                setSelectedChat(null);
+            }
+        }, [selectedBotId]);
+
+        const handleSelectChat = useCallback((user) => {
+            if (selectedChat?.chat_id !== user.chat_id) {
+                setMessages([]);
+                setSelectedChat(user);
+            }
+        }, [selectedChat]);
+
+        const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
+        const handleFileChange = (e) => { const file = e.target.files[0]; if (!file || !selectedChat) return; const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = async () => { try { const base64Data = reader.result.split(',')[1]; await api.post(`/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name }); fetchMessages(); } catch (error) { alert('Falha no upload: ' + (error.response?.data?.message || error.message)); }}; e.target.value = null; };
+        
+        const handleSendFromLibrary = async (mediaItem) => {
+            if (!selectedChat || !selectedBotId) return;
+            setIsMediaModalOpen(false);
+            try {
+                await api.post(`/chats/${selectedBotId}/send-library-media`, {
+                    chatId: selectedChat.chat_id,
+                    fileId: mediaItem.file_id,
+                    fileType: mediaItem.file_type
+                });
+                fetchMessages();
+            } catch (error) {
+                alert('Falha ao enviar mídia da biblioteca: ' + (error.response?.data?.message || error.message));
+            }
+        };
+
+        const handleDelete = async (id) => { if (confirm(`Certeza?`)) { try { await api.delete(`/chats/${selectedBotId}/${id}`); fetchUsers(); if (selectedChat?.chat_id === id) { setSelectedChat(null); } } catch (e) { alert('Erro'); } } };
+        const getDisplayName = (u) => { if (!u) return ''; if (u.click_id) { const cleanId = u.click_id.replace('/start ', ''); return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); } return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; };
+        const getMessageSender = (msg) => {
+            const selectedBot = bots.find(b => b.id == selectedBotId);
+            switch(msg.sender_type) {
+                case 'user': return `${msg.first_name || ''} ${msg.last_name || ''}`.trim();
+                case 'operator': return 'Você (Operador)';
+                case 'bot': return `${(selectedBot?.bot_name || 'Bot').replace('@', '')} (Automação)`;
+                default: return 'Desconhecido';
+            }
+        };
+        const getMessageBubbleClass = (senderType) => {
+            if (senderType === 'user') return 'message-user';
+            return 'message-attendant';
+        };
+
+        // ******** CORREÇÃO DE SEGURANÇA (XSS) APLICADA AQUI ********
+        const renderMessageContent = (msg) => {
+            const text = msg.message_text || '';
+            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
+            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
+            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
+            
+            // SANITIZAÇÃO: Limpa o HTML de qualquer script malicioso antes de renderizar.
+            // A biblioteca DOMPurify foi adicionada no <head> do HTML.
+            const sanitizedHtml = DOMPurify.sanitize(text.replace(/\n/g, '<br />'));
+            
+            return <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+        };
+        
+        const botFlows = allFlows.filter(f => f.bot_id == selectedBotId);
+
+        return (
+            <div className="chat-page-layout">
+                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSendFromLibrary} onClose={() => setIsMediaModalOpen(false)} />}
+                <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
+                    <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
+                    <div className="chat-container" style={{height: 'calc(100vh - 8.5rem)', margin: '0 3rem 2rem 3rem'}} >
+                        <div className="conversations-panel">
+                            <div className="conversations-header">
+                                <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                            </div>
+                            <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <label htmlFor="activeFilter" style={{ cursor: 'pointer', flexGrow: 1, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                    {isValidating ? 'Validando...' : 'Mostrar apenas ativos'}
+                                </label>
+                                <input 
+                                    type="checkbox" 
+                                    id="activeFilter" 
+                                    checked={showOnlyActive} 
+                                    onChange={handleFilterActiveToggle} 
+                                    disabled={isValidating}
+                                />
+                            </div>
+                            <div className="conversations-list">
+                                {filteredUsers.map(u => (<div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}><div className="conversation-item-name">{getDisplayName(u)}</div><p className="conversation-item-preview">{u.message_text}</p></div>))}
+                            </div>
+                        </div>
+                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getDisplayName(selectedChat)}</h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="contact-panel">
+                            {selectedChat ? (<>
+                                <h3>Detalhes</h3>
+                                <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
+                                <div className="contact-detail"><label>Username</label><p>{selectedChat.username ? `@${selectedChat.username}` : 'Nenhum'}</p></div>
+                                <div className="contact-detail"><label>Chat ID</label><p>{selectedChat.chat_id}</p></div>
+                                <div className="contact-detail"><label>Click ID</label><p>{selectedChat.click_id || 'Nenhum'}</p></div>
+                                <ChatActionsPanel botId={selectedBotId} chat={selectedChat} flows={botFlows} onAction={fetchMessages}/>
+                            </>) : (<div className="centered-placeholder"><h3>Informações</h3><p>Detalhes do contato aqui.</p></div>)}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    function ChatActionsPanel({ botId, chat, flows, onAction }) {
+        const [pixValue, setPixValue] = useState(100);
+        const [pixMessage, setPixMessage] = useState('🚨 Meu amor, o código expira em 6 minutos.');
+        const [pixButtonText, setPixButtonText] = useState('📋 Copiar Código PIX');
+        const [selectedFlow, setSelectedFlow] = useState('');
+
+        const handleGeneratePix = async () => {
+            try {
+                const res = await api.post('/chats/generate-pix', {
+                    botId,
+                    chatId: chat.chat_id,
+                    click_id: chat.click_id,
+                    valueInCents: pixValue,
+                    pixMessage: pixMessage,
+                    pixButtonText: pixButtonText
+                });
+                alert(res.data.message);
+                onAction();
+            } catch (e) {
+                alert('Erro: ' + (e.response?.data?.message || e.message));
+            }
+        };
+
+        const handleCheckPix = async () => {
+             try {
+                const res = await api.get(`/chats/check-pix/${botId}/${chat.chat_id}`);
+                alert(`Status do PIX: ${res.data.status}`);
+            } catch (e) {
+                alert('Erro: ' + (e.response?.data?.message || e.message));
+            }
+        };
+
+        const handleStartFlow = async () => {
+            if (!selectedFlow) {
+                alert('Selecione um fluxo para iniciar.');
+                return;
+            }
+            try {
+                const res = await api.post('/chats/start-flow', { botId, chatId: chat.chat_id, flowId: selectedFlow });
+                alert(res.data.message);
+                setTimeout(() => {
+                    onAction();
+                }, 1500);
+            } catch (e) {
+                alert('Erro: ' + (e.response?.data?.message || e.message));
+            }
+        };
+
+        return (
+            <div className="actions-panel">
+                <h3>Ações Rápidas</h3>
+                <div className="form-group">
+                    <label htmlFor="pixValue">Valor do PIX (em centavos)</label>
+                    <input id="pixValue" type="number" className="form-input" value={pixValue} onChange={e => setPixValue(e.target.value)} />
+                    <label htmlFor="pixMessage">Texto da Mensagem do PIX</label>
+                    <textarea id="pixMessage" className="form-textarea" rows="3" value={pixMessage} onChange={e => setPixMessage(e.target.value)} />
+                    <label htmlFor="pixButtonText">Texto do Botão PIX</label>
+                    <input id="pixButtonText" type="text" className="form-input" value={pixButtonText} onChange={e => setPixButtonText(e.target.value)} />
+                    <button className="btn btn-secondary btn-sm" onClick={handleGeneratePix} style={{marginTop: '1rem'}}>Gerar e Enviar PIX</button>
+                    <button className="btn btn-secondary btn-sm" onClick={handleCheckPix}>Consultar Último PIX</button>
+                </div>
+                <div className="form-group">
+                    <label htmlFor="flowSelect">Iniciar Fluxo</label>
+                    <select id="flowSelect" className="form-select" value={selectedFlow} onChange={e => setSelectedFlow(e.target.value)}>
+                        <option value="">Selecione um fluxo...</option>
+                        {flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                    </select>
+                    <button className="btn btn-secondary btn-sm" onClick={handleStartFlow} disabled={!selectedFlow}>Iniciar Fluxo</button>
+                </div>
+            </div>
+        );
+    }
+    
+    function MediaLibraryPage() {
+        const [media, setMedia] = useState([]);
+        const [isUploading, setIsUploading] = useState(false);
+        const fetchMedia = async () => { try { const { data } = await api.get('/media'); setMedia(data); } catch (e) { console.error("Erro ao buscar mídias", e); }};
+        useEffect(() => { fetchMedia(); }, []);
+        const handleFileChange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : (file.type.startsWith('audio/') ? 'audio' : null));
+            if (!fileType) {
+                alert("Formato de ficheiro não suportado.");
+                return;
+            }
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = async () => {
+                setIsUploading(true);
+                try {
+                    const base64Data = reader.result.split(',')[1];
+                    await api.post('/media/upload', { fileName: file.name, fileData: base64Data, fileType: fileType });
+                    fetchMedia();
+                } catch (error) {
+                    alert('Falha no upload: ' + (error.response?.data?.message || error.message));
+                } finally {
+                    setIsUploading(false);
+                }
+            };
+        };
+        const handleDelete = async (id) => { if (confirm('Tem a certeza?')) { try { await api.delete(`/media/${id}`); fetchMedia(); } catch(e) { alert('Erro ao excluir.'); }}};
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                <div className="page-header">
+                    <h2>Biblioteca de Mídia</h2>
+                    <label className={`btn btn-primary ${isUploading ? 'disabled' : ''}`}>
+                        {isUploading ? 'A carregar...' : '+ Carregar Mídia'}
+                        <input type="file" hidden onChange={handleFileChange} disabled={isUploading} accept="image/*,video/*,audio/*" />
+                    </label>
+                </div>
+                <div className="grid">
+                    {media.map(item => (
+                        <div key={item.id} className="bot-card">
+                             {item.thumbnail_file_id || item.file_type === 'image' ? (
+                                <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                             ) : item.file_type === 'video' ? (
+                                <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
+                             ) : (
+                                <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.audio}</div>
+                             )}
+                             <h3 style={{fontSize: '1.1rem', marginBottom: '0.5rem'}}>{item.file_name}</h3>
+                             <p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', wordBreak: 'break-all', flexGrow: 1, marginBottom: '1rem'}}>File ID: {item.file_id}</p>
+                             <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Excluir</button>
+                        </div>
+                    ))}
+                </div>
+                {media.length === 0 && !isUploading && <p style={{color: 'var(--text-secondary)'}}>A sua biblioteca está vazia.</p>}
+            </div>
+        );
+    }
+    
+    function ContactsPage({ bots }) {
+        const [selectedBotId, setSelectedBotId] = useState('');
+        const [isLoading, setIsLoading] = useState(false);
+        const [inactiveContacts, setInactiveContacts] = useState(null);
+        
+        useEffect(() => {
+            if (bots.length > 0 && !selectedBotId) {
+                setSelectedBotId(bots[0].id);
+            }
+        }, [bots]);
+
+        const handleValidate = async () => {
+            if (!selectedBotId) {
+                alert('Por favor, selecione um bot.');
+                return;
+            }
+            setIsLoading(true);
+            setInactiveContacts(null);
+            try {
+                const response = await api.post('/bots/validate-contacts', { botId: selectedBotId });
+                setInactiveContacts(response.data.inactive_contacts);
+                 if (response.data.inactive_contacts.length === 0) {
+                    alert('Nenhum contato inativo encontrado!');
+                }
+            } catch (error) {
+                alert('Erro ao validar contatos: ' + (error.response?.data?.message || 'Falha na validação.'));
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        const handleRemove = async () => {
+            if (!inactiveContacts || inactiveContacts.length === 0) {
+                alert('Nenhum contato inativo para remover.');
+                return;
+            }
+            if (!confirm(`Tem certeza que deseja remover ${inactiveContacts.length} contato(s) inativo(s)? Esta ação não pode ser desfeita.`)) {
+                return;
+            }
+            setIsLoading(true);
+            try {
+                const chatIds = inactiveContacts.map(c => c.chat_id);
+                const response = await api.post('/bots/remove-contacts', { botId: selectedBotId, chatIds });
+                alert(response.data.message);
+                setInactiveContacts([]);
+            } catch (error) {
+                alert('Erro ao remover contatos: ' + (error.response?.data?.message || 'Falha na remoção.'));
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+
+        return (
+            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
+                <div className="page-header"><h2>Higienização de Contatos</h2></div>
+                <div className="card" style={{ maxWidth: '700px', margin: '0 auto' }}>
+                    <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem'}}>
+                        Use esta ferramenta para verificar quais contatos bloquearam seu bot e removê-los da sua base. Isso garante que seus disparos tenham uma melhor entrega e performance.
+                    </p>
+                    <div className="form-group" style={{maxWidth: '400px', marginBottom: '2rem'}}>
+                        <label htmlFor="botSelect">Selecione um Bot</label>
+                        <select id="botSelect" className="form-select" value={selectedBotId} onChange={e => { setSelectedBotId(e.target.value); setInactiveContacts(null); }}>
+                            <option value="">-- Selecione --</option>
+                            {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
+                        </select>
+                    </div>
+                    <button className="btn btn-primary" onClick={handleValidate} disabled={isLoading || !selectedBotId}>
+                        {isLoading ? 'Validando...' : 'Validar Contatos Ativos'}
+                    </button>
+                    
+                    {inactiveContacts && (
+                        <div style={{marginTop: '2rem'}}>
+                            <h3>Contatos Inativos Encontrados: {inactiveContacts.length}</h3>
+                            {inactiveContacts.length > 0 ? (
+                                <>
+                                    <ul style={{listStyle: 'none', maxHeight: '300px', overflowY: 'auto', background: 'var(--bg-primary)', padding: '1rem', borderRadius: '8px', margin: '1rem 0'}}>
+                                        {inactiveContacts.map(c => (
+                                            <li key={c.chat_id} style={{padding: '0.5rem', borderBottom: '1px solid var(--border-color)'}}>
+                                                {c.first_name || ''} {c.last_name || ''} ({c.username ? `@${c.username}`: c.chat_id})
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <button className="btn btn-danger" onClick={handleRemove} disabled={isLoading}>
+                                        {isLoading ? 'Removendo...' : `Remover ${inactiveContacts.length} Contato(s)`}
+                                    </button>
+                                </>
+                            ) : (
+                                <p style={{color: 'var(--text-secondary)', marginTop: '1rem'}}>Ótima notícia! Nenhum contato inativo foi encontrado para este bot.</p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+    
+    function MediaLibraryModal({ onSelect, onClose }) {
+        const [media, setMedia] = useState([]);
+        useEffect(() => { api.get('/media').then(res => setMedia(res.data)); }, []);
+        return (
+            <div className="login-overlay" style={{zIndex: 1000}}>
+                <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
+                        <h2>Selecionar Mídia</h2>
+                        <button onClick={onClose} style={{background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer'}}>&times;</button>
+                    </div>
+                    <div className="grid" style={{overflowY: 'auto', flex: 1, padding: '1rem'}}>
+                        {media.map(item => (
+                            <div key={item.id} className="bot-card" onClick={() => onSelect(item)} style={{cursor: 'pointer'}}>
+                                {item.thumbnail_file_id || item.file_type === 'image' ? (
+                                    <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                 ) : item.file_type === 'video' ? (
+                                    <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
+                                 ) : (
+                                    <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.audio}</div>
+                                 )}
+                                <div className="bot-card-header" style={{padding: 0, marginBottom: 0}}><h3 style={{fontSize: '1.1rem'}}>{item.file_name}</h3></div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    const initialNodes = [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }];
+    
+    const CustomNode = ({ id, type, data, isConnectable }) => {
+        const nodeInfo = {
+            trigger: { icon: '🚀', name: 'Gatilho Inicial', content: 'Início do fluxo com click_id.' },
+            message: { icon: '💬', name: 'Enviar Mensagem', content: data.text ? `"${data.text.substring(0, 50)}..."` : 'Configure o texto.' },
+            image: { icon: '🖼️', name: 'Enviar Imagem', content: data.imageUrl ? 'Configurado.' : 'Configure.' },
+            video: { icon: '🎬', name: 'Enviar Vídeo', content: data.videoUrl ? 'Configurado.' : 'Configure.' },
+            audio: { icon: '🎵', name: 'Enviar Áudio', content: data.audioUrl ? 'Configurado.' : 'Configure.' },
+            delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar por ${data.delayInSeconds || 1}s.` },
+            typing_action: { icon: '✍️', name: 'Ação de Digitando', content: `Simular por ${data.durationInSeconds || 1}s.` },
+            action_pix: { icon: '💳', name: 'Gerar PIX', content: `Valor: R$ ${((data.valueInCents || 0) / 100).toFixed(2)}.` },
+            action_check_pix: { icon: '🔍', name: 'Consultar PIX', content: 'Verifica se o PIX foi pago.' },
+            forward_flow: { icon: '↪️', name: 'Encaminhar Fluxo', content: data.targetFlowName || 'Selecione um fluxo.' },
+        };
+        const info = nodeInfo[type] || { icon: '❓', name: 'Nó' };
+
+        return (
+            <>
+                {type !== 'trigger' && <Handle type="target" position={Position.Top} isConnectable={isConnectable} />}
+                <div className={`node-header react-flow__node-${type}`}>{info.icon} {info.name}</div>
+                <div className="node-content">{info.content}</div>
+                
+                {type === 'trigger' && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
+                
+                {type === 'message' && !data.waitForReply && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
+                {type === 'message' && data.waitForReply && (
+                    <>
+                        <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Com Resp.</div>
+                        <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                        <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Sem Resp.</div>
+                        <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                    </>
+                )}
+                {type === 'action_check_pix' && (
+                    <>
+                        <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Pago</div>
+                        <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                        <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Pendente</div>
+                        <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                    </>
+                )}
+                {['delay', 'typing_action', 'action_pix', 'image', 'video', 'audio', 'forward_flow'].includes(type) && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
+            </>
+        );
+    };
+
+    const nodeTypes = { trigger: CustomNode, message: CustomNode, image: CustomNode, video: CustomNode, audio: CustomNode, delay: CustomNode, typing_action: CustomNode, action_pix: CustomNode, action_check_pix: CustomNode, forward_flow: CustomNode };
+
+    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
+        const [nodeData, setNodeData] = useState(selectedNode.data || {});
+        const textAreaRef = useRef(null);
+        
+        useEffect(() => { setNodeData(selectedNode.data || {}) }, [selectedNode]);
+
+        const handleChange = (e) => {
+            const { name, value, type, checked } = e.target;
+            const finalValue = type === 'checkbox' ? checked : value;
+            const newData = { ...nodeData, [name]: finalValue };
+
+            if (name === "targetFlowId") {
+                const selectedFlow = availableFlows.find(f => f.id == finalValue);
+                newData.targetFlowName = selectedFlow ? selectedFlow.name : '';
+            }
+
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const onDelete = () => {
+            setNodes(nds => nds.filter(n => n.id !== selectedNode.id));
+            setEdges(eds => eds.filter(e => e.source !== selectedNode.id && e.target !== selectedNode.id));
+            setSelectedNode(null);
+        };
+
+        const insertVariable = (variable) => {
+            const textarea = textAreaRef.current;
+            if (!textarea) return;
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            const text = textarea.value;
+            const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+            handleChange({ target: { name: 'text', value: newText }});
+            setTimeout(() => {
+                textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                textarea.focus();
+            }, 0);
+        };
+
+        const renderPanel = () => {
+            switch (selectedNode.type) {
+                case 'message': return (<>
+                    <div className="form-group"><label>Texto</label><textarea ref={textAreaRef} name="text" className="form-textarea" rows="5" value={nodeData.text || ''} onChange={handleChange} /></div>
+                    <div><label style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Inserir variável:</label><div style={{marginTop: '0.5rem', marginBottom: '1rem'}}><button className="variable-btn" onClick={() => insertVariable('primeiro_nome')}>Nome</button><button className="variable-btn" onClick={() => insertVariable('nome_completo')}>Nome Completo</button><button className="variable-btn" onClick={() => insertVariable('cidade')}>Cidade</button></div></div>
+                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
+                    <div className="form-group"><label>Botão (Opcional)</label><input name="buttonText" type="text" className="form-input" value={nodeData.buttonText || ''} onChange={handleChange} placeholder="Texto do Botão"/><input name="buttonUrl" type="url" className="form-input" value={nodeData.buttonUrl || ''} onChange={handleChange} placeholder="URL do Botão" style={{marginTop: '0.5rem'}}/></div>
+                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
+                    <div className="form-group"><label><input name="addTypingAction" type="checkbox" checked={!!nodeData.addTypingAction} onChange={handleChange} /> Adicionar "Digitando" antes</label></div>
+                    {nodeData.addTypingAction && (<div className="form-group"><label>Duração do "Digitando..." (s)</label><input name="typingDuration" type="number" className="form-input" value={nodeData.typingDuration || 2} onChange={handleChange} /></div>)}
+                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
+                    <div className="form-group"><label><input name="waitForReply" type="checkbox" checked={!!nodeData.waitForReply} onChange={handleChange} /> Aguardar Resposta</label></div>
+                    {nodeData.waitForReply && (<div className="form-group"><label>Tempo de espera (min)</label><input name="replyTimeout" type="number" className="form-input" value={nodeData.replyTimeout || 5} onChange={handleChange} /></div>)}
+                </>);
+                case 'image': return (<><div className="form-group"><label>File ID ou URL da Imagem</label><input name="imageUrl" type="text" className="form-input" value={nodeData.imageUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'imageUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
+                case 'video': return (<><div className="form-group"><label>File ID ou URL do Vídeo</label><input name="videoUrl" type="text" className="form-input" value={nodeData.videoUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'videoUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
+                case 'audio': return (<><div className="form-group"><label>File ID ou URL do Áudio</label><input name="audioUrl" type="text" className="form-input" value={nodeData.audioUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'audioUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Duração do áudio (em segundos)</label><p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Define por quanto tempo a ação "gravando áudio" será exibida.</p><input name="durationInSeconds" type="number" className="form-input" value={nodeData.durationInSeconds || 0} onChange={handleChange} /></div></>);
+                case 'delay': return (<div className="form-group"><label>Aguardar por (segundos)</label><input name="delayInSeconds" type="number" className="form-input" value={nodeData.delayInSeconds || 1} onChange={handleChange} /></div>);
+                case 'typing_action': return (<div className="form-group"><label>Duração do "Digitando..." (em segundos)</label><input name="durationInSeconds" type="number" className="form-input" value={nodeData.durationInSeconds || 1} onChange={handleChange} /></div>);
+                case 'action_pix': return (<><div className="form-group"><label>Valor (centavos)</label><input name="valueInCents" type="number" className="form-input" value={nodeData.valueInCents || 0} onChange={handleChange} /></div><div className="form-group"><label>Texto da Mensagem do PIX</label><textarea name="pixMessageText" className="form-textarea" rows="4" value={nodeData.pixMessageText || ''} onChange={handleChange} placeholder="Ex: PIX Gerado! Copie o código abaixo..." /></div></>);
+                case 'forward_flow': return (<div className="form-group"><label>Encaminhar para o fluxo</label><select name="targetFlowId" className="form-select" value={nodeData.targetFlowId || ''} onChange={handleChange}><option value="">Selecione um fluxo...</option>{availableFlows.map(f => (<option key={f.id} value={f.id}>{f.name}</option>))}</select></div>);
+                default: return <p>Sem configurações para este nó.</p>;
+            }
+        };
+
+        return (
+            <div className="editor-panel">
+                <h3 style={{marginBottom: '1.5rem'}}>Editar Nó</h3>
+                {renderPanel()}
+                <div style={{marginTop: 'auto'}}>
+                    {selectedNode.type !== 'trigger' && <button className="btn btn-danger" style={{width: '100%'}} onClick={onDelete}>Excluir Nó</button>}
+                </div>
+            </div>
+        );
+    }
+    
+    function FlowEditorPage({ flow, onBack }) {
+        const reactFlowWrapper = useRef(null);
+        const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+        const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+        const [selectedNode, setSelectedNode] = useState(null);
+        const [reactFlowInstance, setReactFlowInstance] = useState(null);
+        const [availableFlows, setAvailableFlows] = useState([]);
+        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        
+        useEffect(() => {
+            if (flow?.nodes) {
+                const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                setNodes(flowContent.nodes || initialNodes);
+                setEdges(flowContent.edges || []);
+            }
+            if(flow?.bot_id) {
+                api.get('/flows')
+                   .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
+                   .catch(console.error);
+            }
+        }, [flow]);
+
+        const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
+        const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true }, eds)), [setEdges]);
+        const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
+        const onPaneClick = useCallback(() => setSelectedNode(null), []);
+        const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
+        const onDrop = useCallback((event) => { event.preventDefault(); const type = event.dataTransfer.getData('application/reactflow'); if (!type) return; const position = reactFlowInstance.project({ x: event.clientX, y: event.clientY }); const newNode = { id: `${type}-${Date.now()}`, type, position, data: {}, }; setNodes((nds) => nds.concat(newNode)); }, [reactFlowInstance] );
+        const handleSave = async () => { try { await api.put(`/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
+        const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
+        
+        const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
+        const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); };
+
+        return (
+            <div className="flow-editor-page">
+                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
+                <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
+                <div className="flow-editor-container">
+                    <div className="flow-sidebar">
+                        <h3>Componentes</h3>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'message')} draggable>💬 Mensagem</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'image')} draggable>🖼️ Imagem</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'video')} draggable>🎬 Vídeo</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'audio')} draggable>🎵 Áudio</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'delay')} draggable>⏱️ Atraso</div>
+                        <h3>Ações</h3>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'typing_action')} draggable>✍️ Ação de Digitando</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_pix')} draggable>💳 Gerar PIX</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_check_pix')} draggable>🔍 Consultar PIX</div>
+                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'forward_flow')} draggable>↪️ Encaminhar Fluxo</div>
+                    </div>
+                    <div className="reactflow-wrapper" ref={reactFlowWrapper}>
+                        <ReactFlowProvider>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} fitView>
+                                <Background />
+                                <Controls />
+                            </ReactFlow>
+                        </ReactFlowProvider>
+                        {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    function LoginScreen({ onLogin }) {
+        const [isLogin, setIsLogin] = useState(true);
+        const [loginEmail, setLoginEmail] = useState('');
+        const [loginPassword, setLoginPassword] = useState('');
+        const [regName, setRegName] = useState('');
+        const [regEmail, setRegEmail] = useState('');
+        const [regPassword, setRegPassword] = useState('');
+        const handleLoginSubmit = async (e) => { e.preventDefault(); try { const res = await api.post(`/sellers/login`, { email: loginEmail, password: loginPassword }); onLogin(res.data.token); } catch (e) { alert('Falha no login: ' + (e.response?.data?.message || '')); } };
+        const handleRegisterSubmit = async (e) => { e.preventDefault(); try { await api.post(`/sellers/register`, { name: regName, email: regEmail, password: regPassword }); alert('Cadastro realizado com sucesso! Você já pode fazer o login.'); setIsLogin(true); } catch (e) { alert('Falha no cadastro: ' + (e.response?.data?.message || '')); } };
+        if (isLogin) {
+            return (
+                <div className="login-overlay">
+                    <div className="login-box">
+                        <h2 style={{textAlign: 'center', marginBottom: '1.5rem', fontWeight: 800}}>Acessar Plataforma</h2>
+                        <form onSubmit={handleLoginSubmit}>
+                            <div className="form-group"><label>Email</label><input className="form-input" type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} required /></div>
+                            <div className="form-group"><label>Senha</label><input className="form-input" type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} required /></div>
+                            <button className="btn btn-primary" type="submit" style={{width: '100%'}}>Entrar</button>
+                        </form>
+                        <p style={{textAlign: 'center', marginTop: '1.5rem', fontSize: '0.9rem'}}>Não tem uma conta? <a href="#" onClick={(e) => { e.preventDefault(); setIsLogin(false); }} style={{color: 'var(--brand-primary)', fontWeight: '600'}}>Cadastre-se</a></p>
+                    </div>
+                </div>
+            );
+        } else {
+            return (
+                 <div className="login-overlay">
+                    <div className="login-box">
+                        <h2 style={{textAlign: 'center', marginBottom: '1.5rem', fontWeight: 800}}>Criar Conta</h2>
+                        <form onSubmit={handleRegisterSubmit}>
+                            <div className="form-group"><label>Nome</label><input className="form-input" type="text" value={regName} onChange={e => setRegName(e.target.value)} required /></div>
+                            <div className="form-group"><label>Email</label><input className="form-input" type="email" value={regEmail} onChange={e => setRegEmail(e.target.value)} required /></div>
+                            <div className="form-group"><label>Senha</label><input className="form-input" type="password" value={regPassword} onChange={e => setRegPassword(e.target.value)} required minLength="8" /></div>
+                            <button className="btn btn-primary" type="submit" style={{width: '100%'}}>Criar Conta</button>
+                        </form>
+                         <p style={{textAlign: 'center', marginTop: '1.5rem', fontSize: '0.9rem'}}>Já tem uma conta? <a href="#" onClick={(e) => { e.preventDefault(); setIsLogin(true); }} style={{color: 'var(--brand-primary)', fontWeight: '600'}}>Faça Login</a></p>
+                    </div>
+                </div>
+            );
+        }
+    }
+
+
+    const root = window.ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
