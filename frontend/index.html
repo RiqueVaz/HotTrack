@@ -102,51 +102,149 @@
         #app-loader { display: flex; align-items: center; justify-content: center; height: 100vh; font-size: 1.25rem; }
 
         /* ====================================================================== */
-        /* == ESTILOS DO HOTBOT (PREFIXADOS PARA EVITAR CONFLITOS) == */
+        /* == ESTILOS CORRIGIDOS DO HOTBOT (INTEGRADOS AO HOTTRACK) == */
         /* ====================================================================== */
-        #hotbot-root { font-family: 'Inter', sans-serif; --bg-primary: #111111; --bg-secondary: #1A1A1A; --bg-tertiary: #242424; --border-color: #2D2D2D; --text-primary: #E5E5E5; --text-secondary: #A3A3A3; --brand-primary: #00F5A0; --brand-secondary: #00B372; --danger-bg: #441C24; --danger-text: #F87171; --danger-border: #7f1d1d; --danger-hover-bg: #7f1d1d; --danger-hover-text: white; }
-        .hotbot-page-container { height: 100%; width: 100%; display: flex; background: var(--bg-primary); color: var(--text-primary); }
-        .hotbot-main-content { flex: 1; height: 100%; overflow-y: auto; background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 2rem 2rem; }
-        .hotbot-page-container .form-input, .hotbot-page-container .form-select, .hotbot-page-container .form-textarea { background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-primary); }
-        .hotbot-page-container .form-input:focus, .hotbot-page-container .form-select:focus, .hotbot-page-container .form-textarea:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 4px rgba(0, 245, 160, 0.2); }
-        .hotbot-page-container .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.8rem 1.6rem; border-radius: 8px; border: none; cursor: pointer; font-weight: 700; transition: all 0.2s ease-in-out; }
-        .hotbot-btn-primary { background: var(--brand-primary); color: #000; box-shadow: 0 4px 15px rgba(0, 245, 160, 0.2); }
-        .hotbot-btn-secondary { background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); }
-        .hotbot-btn-danger { background-color: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
-        .hotbot-btn-danger:hover { background-color: var(--danger-hover-bg); color: var(--danger-hover-text); }
-        .hotbot-card { background: var(--bg-secondary); padding: 2rem; border-radius: 12px; border: 1px solid var(--border-color); }
-        .hotbot-sidebar { width: 80px; background: var(--bg-secondary); border-right: 1px solid var(--border-color); padding: 1.5rem 0; display: flex; flex-direction: column; align-items: center; transition: width 0.3s ease-in-out; z-index: 20; height: 100%; }
-        .hotbot-sidebar:hover { width: 240px; }
-        .hotbot-sidebar .logo { font-size: 1.8rem; margin-bottom: 3.5rem; color: var(--text-primary); font-weight: 800; letter-spacing: 1px; }
-        .hotbot-sidebar .logo span { color: var(--brand-primary); }
-        .hotbot-sidebar .logo .logo-text { opacity: 0; transition: opacity 0.3s ease-in-out; }
-        .hotbot-sidebar:hover .logo .logo-text { opacity: 1; }
-        .hotbot-nav-menu { display: flex; flex-direction: column; gap: 0.75rem; width: 100%; }
-        .hotbot-nav-item { display: flex; align-items: center; justify-content: flex-start; gap: 1rem; padding: 1rem 1.75rem; cursor: pointer; transition: all 0.2s ease-in-out; border-left: 4px solid transparent; color: var(--text-secondary); }
-        .hotbot-nav-item:hover { background: linear-gradient(90deg, rgba(0, 245, 160, 0.1), transparent); color: var(--text-primary); }
-        .hotbot-nav-item.active { color: var(--brand-primary); border-left: 4px solid var(--brand-primary); }
-        .hotbot-nav-item .nav-text { opacity: 0; white-space: nowrap; transform: translateX(-10px); transition: opacity 0.2s ease-in-out, transform 0.2s ease-in-out; font-weight: 600; }
-        .hotbot-sidebar:hover .nav-text { opacity: 1; transform: translateX(0); }
-        .hotbot-login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(10px); }
-        .hotbot-login-box { background: var(--bg-secondary); padding: 3rem; border-radius: 12px; width: 420px; border: 1px solid var(--border-color); }
         
-        /* Estilos do Editor de Fluxo */
-        .flow-editor-page { display: flex; flex-direction: column; height: 100%; background: #fff; color: #333; }
-        .flow-editor-container { flex: 1; display: flex; overflow: hidden; }
-        .reactflow-wrapper { flex-grow: 1; position: relative; background-color: #f8f9fa; background-image: radial-gradient(#dee2e6 1px, transparent 0); background-size: 30px 30px;}
-        .flow-header { padding: 1rem 1.5rem; background: white; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e9ecef; z-index: 11; }
-        .flow-sidebar { width: 280px; background: white; border-right: 1px solid #e9ecef; padding: 1rem; overflow-y: auto; }
-        .flow-sidebar h3 { margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e9ecef; font-size: 1.1rem; }
-        .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid #dee2e6; text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: #495057; }
-        .node-button:hover { border-color: var(--brand-primary); color: var(--brand-secondary); background: #f1f3f5; }
-        .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background: white; z-index: 10; padding: 1.5rem; border-left: 1px solid #e9ecef; overflow-y: auto; }
-        .react-flow__node { background: white; border: 1px solid #adb5bd; border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.05); color: #343a40; }
-        .react-flow__node.selected { border: 2px solid var(--brand-primary); box-shadow: 0 0 15px rgba(0, 245, 160, 0.5); }
-        .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e9ecef; color: #212529; }
-        .node-content { padding: 1rem; font-size: 0.9rem; color: #6c757d; }
-        .react-flow__handle { width: 12px; height: 12px; background: white; border: 2px solid #adb5bd; }
-        .react-flow__handle:hover { border-color: var(--brand-primary); }
-        .react-flow__node-trigger .node-header { background: #e7f5ff; } .react-flow__node-message .node-header { background: #e6fcf5; } .react-flow__node-image .node-header { background: #f3e8ff; } .react-flow__node-video .node-header { background: #f3e8ff; } .react-flow__node-audio .node-header { background: #fff0f6; } .react-flow__node-delay .node-header { background: #fff9db; } .react-flow__node-typing_action .node-header { background: #f0f9ff; } .react-flow__node-action_pix .node-header { background: #dcfce7; } .react-flow__node-action_check_pix .node-header { background: #ffedd5; } .react-flow__node-forward_flow .node-header { background: #eef2ff; }
+        /* * NOTA: Os estilos foram reescritos para funcionar dentro do layout do HotTrack.
+         * Usamos a classe '.hotbot-scope' para isolar os estilos.
+         * O tema do editor de fluxos foi completamente refeito para modo escuro.
+        */
+
+        .hotbot-scope {
+            --hotbot-accent: #00F5A0; /* Verde característico do HotBot */
+            --hotbot-accent-dark: #00B372;
+            height: 100%;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Layout Principal do HotBot com abas horizontais */
+        .hotbot-nav-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        /* Reutiliza a classe .tab-button do tema principal para consistência */
+        .hotbot-scope .nav-button {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .hotbot-scope .hotbot-content {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+        
+        /* Herda os estilos de formulário, mas com foco verde */
+        .hotbot-scope .form-input:focus, 
+        .hotbot-scope .form-select:focus, 
+        .hotbot-scope .form-textarea:focus {
+            border-color: var(--hotbot-accent);
+            box-shadow: 0 0 0 3px rgba(0, 245, 160, 0.2);
+        }
+
+        /* Botão Primário Verde */
+        .hotbot-scope .btn-primary {
+            background-color: var(--hotbot-accent);
+            color: #000;
+            border-color: var(--hotbot-accent);
+        }
+        .hotbot-scope .btn-primary:hover {
+            background-color: var(--hotbot-accent-dark);
+        }
+
+        /* --- ESTILOS DO EDITOR DE FLUXOS (TEMA ESCURO) --- */
+        .hotbot-scope .flow-editor-page { display: flex; flex-direction: column; height: 100%; background-color: transparent; color: var(--text-primary); }
+        .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; }
+        .hotbot-scope .reactflow-wrapper { flex-grow: 1; position: relative; background-color: var(--bg-primary); background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 2rem 2rem; }
+        
+        .hotbot-scope .flow-header { padding: 1rem 1.5rem; background-color: var(--bg-secondary); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .flow-header h3 { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin:0; }
+        .hotbot-scope .flow-header div { display: flex; gap: 0.75rem; }
+        
+        .hotbot-scope .flow-sidebar { width: 280px; background-color: var(--bg-secondary); border-right: 1px solid var(--border-color); padding: 1rem; overflow-y: auto; }
+        .hotbot-scope .flow-sidebar h3 { margin-top: 0; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color); font-size: 1.1rem; }
+
+        .hotbot-scope .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: var(--text-secondary); }
+        .hotbot-scope .node-button:hover { border-color: var(--hotbot-accent); color: var(--hotbot-accent); background-color: rgba(0, 245, 160, 0.05); }
+
+        .hotbot-scope .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background-color: var(--bg-secondary); z-index: 10; padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
+        
+        /* Estilos dos Nós do ReactFlow */
+        .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
+        .hotbot-scope .react-flow__node.selected { border: 2px solid var(--hotbot-accent); box-shadow: 0 0 20px rgba(0, 245, 160, 0.3); }
+        
+        .hotbot-scope .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .hotbot-scope .node-content { padding: 1rem; font-size: 0.9rem; }
+        .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
+        .hotbot-scope .react-flow__handle:hover { border-color: var(--hotbot-accent); }
+        .hotbot-scope .handle-label { position: absolute; bottom: -20px; font-size: 10px; color: var(--text-secondary); }
+
+        /* Cores dos Headers dos Nós */
+        .hotbot-scope .react-flow__node-trigger .node-header { background-color: rgba(139, 92, 246, 0.1); }
+        .hotbot-scope .react-flow__node-message .node-header { background-color: rgba(59, 130, 246, 0.1); }
+        .hotbot-scope .react-flow__node-image .node-header,
+        .hotbot-scope .react-flow__node-video .node-header,
+        .hotbot-scope .react-flow__node-audio .node-header { background-color: rgba(217, 70, 239, 0.1); }
+        .hotbot-scope .react-flow__node-delay .node-header,
+        .hotbot-scope .react-flow__node-typing_action .node-header { background-color: rgba(245, 158, 11, 0.1); }
+        .hotbot-scope .react-flow__node-action_pix .node-header { background-color: rgba(34, 197, 94, 0.1); }
+        .hotbot-scope .react-flow__node-action_check_pix .node-header { background-color: rgba(249, 115, 22, 0.1); }
+        .hotbot-scope .react-flow__node-forward_flow .node-header { background-color: rgba(99, 102, 241, 0.1); }
+
+        /* Estilos do Live Chat */
+        .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: hidden; }
+        .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
+        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .conversations-list { overflow-y: auto; flex: 1; }
+        .hotbot-scope .conversation-item { padding: 1rem; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background-color 0.2s; }
+        .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
+        .hotbot-scope .conversation-item.active { background-color: rgba(0, 245, 160, 0.1); border-left: 3px solid var(--hotbot-accent); }
+        .hotbot-scope .conversation-item-name { font-weight: 600; color: var(--text-primary); }
+        .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        
+        .hotbot-scope .chat-window { display: flex; flex-direction: column; }
+        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .hotbot-scope .chat-header h3 { font-size: 1.1rem; font-weight: 700; margin:0; }
+        .hotbot-scope .message-list { flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
+        .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
+        .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
+        .hotbot-scope .message-user { background-color: var(--bg-primary); align-self: flex-start; border-top-left-radius: 0; }
+        .hotbot-scope .message-attendant { background-color: #003825; align-self: flex-end; border-top-right-radius: 0; }
+        .hotbot-scope .message-attendant strong { color: var(--hotbot-accent); }
+        .hotbot-scope .chat-media { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; cursor: pointer; }
+        
+        .hotbot-scope .chat-input-area { padding: 1rem; border-top: 1px solid var(--border-color); }
+        .hotbot-scope .chat-input-form { display: flex; gap: 0.75rem; }
+        .hotbot-scope .attach-btn { background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 0.5rem; color: var(--text-secondary); cursor: pointer; padding: 0.6rem; }
+        .hotbot-scope .chat-input { flex: 1; }
+        .hotbot-scope .centered-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); text-align: center; }
+        .hotbot-scope .centered-placeholder svg { width: 48px; height: 48px; margin-bottom: 1rem; }
+        
+        .hotbot-scope .contact-panel { padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
+        .hotbot-scope .contact-panel h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1.5rem; }
+        .hotbot-scope .contact-detail { margin-bottom: 1rem; }
+        .hotbot-scope .contact-detail label { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
+        .hotbot-scope .contact-detail p { color: var(--text-primary); font-weight: 500; word-break: break-all; }
+        
+        /* Outros estilos do HotBot */
+        .hotbot-scope .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
+        .hotbot-scope .bot-card { display: flex; flex-direction: column; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.5rem; }
+        .hotbot-scope .bot-card-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+        .hotbot-scope .bot-card-header h3 { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin:0; }
+        .hotbot-scope .bot-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: auto; }
+        .hotbot-scope .media-preview { width: 100%; height: 150px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1rem; background-color: var(--bg-primary); }
+
+        .hotbot-scope .login-overlay { position: fixed; inset: 0; background-color: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(8px); }
+        .hotbot-scope .login-box { background-color: var(--bg-secondary); padding: 2rem; border-radius: 0.75rem; width: 100%; max-width: 420px; border: 1px solid var(--border-color); }
     </style>
 </head>
 <body>
@@ -253,15 +351,16 @@
                 </div>`;
             },
             hotbot() {
-    return `
-    <div class="animate-fade-in">
-        <div class="mb-6">
-            <h1 class="text-3xl font-bold text-white">HotBot - Gerenciador de Bots</h1>
-            <p class="text-slate-400">Gerencie seus bots do Telegram e fluxos de conversação.</p>
-        </div>
-        <div id="hotbot-container" style="height: calc(100vh - 200px);"></div>
-    </div>`;
-},
+                return `
+                <div class="animate-fade-in" style="height: 100%; display: flex; flex-direction: column;">
+                    <div class="mb-6">
+                        <h1 class="text-3xl font-bold text-white">HotBot - Automação & Vendas</h1>
+                        <p class="text-slate-400">Gerencie seus bots, fluxos, disparos e conversas em um só lugar.</p>
+                    </div>
+                    {/* Container para a aplicação React do HotBot. A classe 'hotbot-scope' isola os estilos. */}
+                    <div id="hotbot-container" class="hotbot-scope" style="flex: 1; min-height: 0;"></div>
+                </div>`;
+            },
             registerForm() {
                 return `
                 <div class="card p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
@@ -1484,96 +1583,90 @@
     };
 
     function AppHotBot() {
-            // --- ALTERAÇÃO AQUI: LÓGICA DE LOGIN REMOVIDA ---
-            const [isLoading, setIsLoading] = useState(true);
-            const [currentPage, setCurrentPage] = useState('bots');
-            const [editingFlow, setEditingFlow] = useState(null);
-            const [bots, setBots] = useState([]);
-            const [importingFlowLink, setImportingFlowLink] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [currentPage, setCurrentPage] = useState('bots');
+    const [editingFlow, setEditingFlow] = useState(null);
+    const [bots, setBots] = useState([]);
+    const [importingFlowLink, setImportingFlowLink] = useState(null);
 
-            const fetchInitialData = useCallback(() => {
-                setIsLoading(true);
-                api.get('/api/dashboard/data') // Note: Adicionei '/api' se sua rota for essa
-                    .then((res) => {
-                        setBots(res.data.bots || []);
-                    })
-                    .catch((err) => {
-                        console.error("Erro ao buscar dados do HotBot:", err);
-                        // Chama o logout global se a API falhar (ex: token expirado)
-                        App.logout(); 
-                    })
-                    .finally(() => setIsLoading(false));
-            }, []);
-
-            useEffect(() => {
-                fetchInitialData();
-                const urlParams = new URLSearchParams(window.location.search);
-                const shareLink = urlParams.get('link');
-                if (shareLink) {
-                    setImportingFlowLink(shareLink);
-                    setCurrentPage('import-flow');
-                }
-            }, [fetchInitialData]);
-            
-            const handleLogout = () => {
-                // Chama o logout da aplicação principal
+    const fetchInitialData = useCallback(() => {
+        setIsLoading(true);
+        api.get('/api/dashboard/data')
+            .then((res) => {
+                setBots(res.data.bots || []);
+            })
+            .catch((err) => {
+                console.error("Erro ao buscar dados do HotBot:", err);
                 App.logout(); 
-            };
+            })
+            .finally(() => setIsLoading(false));
+    }, []);
 
-            const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
-            
-            if (isLoading) return <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'white'}}>Carregando dados do HotBot...</div>;
-            
-      
-      
-            const PageComponent = {
-                bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
-                flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
-                chat: <LiveChatPage bots={bots} />,
-                contacts: <ContactsPage bots={bots} />,
-                media: <MediaLibraryPage />,
-                disparos: <DisparosPage bots={bots} />,
-                'disparos-history': <DisparosHistoryPage />,
-                integrations: <SettingsPage />,
-                'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
-                'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
-            }[currentPage];
-
-            return (
-                <div className="hotbot-page-container">
-                    <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} onLogout={handleLogout} />
-                    <main className="hotbot-main-content">
-                        <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
-                            {PageComponent}
-                        </div>
-                    </main>
-                </div>
-            );
+    useEffect(() => {
+        fetchInitialData();
+        const urlParams = new URLSearchParams(window.location.search);
+        const shareLink = urlParams.get('link');
+        if (shareLink) {
+            setImportingFlowLink(shareLink);
+            setCurrentPage('import-flow');
         }
+    }, [fetchInitialData]);
     
-    function Sidebar({ currentPage, setCurrentPage, onLogout }) {
-        const pages = { 
-            bots: 'Bots', 
-            flows: 'Fluxos', 
-            chat: 'Chat ao Vivo', 
-            contacts: 'Contatos', 
-            media: 'Biblioteca', 
-            disparos: 'Disparos',
-            'disparos-history': 'Histórico',
-        };
-        return (
-            <aside className="sidebar">
-                <div className="logo">H<span className="logo-text">otbot</span></div>
-                <nav className="nav-menu">
-                    {Object.entries(pages).map(([key, value]) => (
-                        <div key={key} className={`nav-item ${currentPage === key ? 'active' : ''}`} onClick={() => setCurrentPage(key)} title={value}>
-                            {Icons[key] || Icons.history} <span className="nav-text">{value}</span>
-                        </div>
-                    ))}
-                </nav>
-            </aside>
-        );
-    }
+    const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+    
+    if (isLoading) return <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'white'}}>Carregando dados do HotBot...</div>;
+    
+    const PageComponent = {
+        bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+        flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
+        chat: <LiveChatPage bots={bots} />,
+        contacts: <ContactsPage bots={bots} />,
+        media: <MediaLibraryPage />,
+        disparos: <DisparosPage bots={bots} />,
+        'disparos-history': <DisparosHistoryPage />,
+        integrations: <SettingsPage />,
+        'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+        'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+    }[currentPage];
+
+    return (
+        <>
+            <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+            <main className="hotbot-content">
+                <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
+                    {PageComponent}
+                </div>
+            </main>
+        </>
+    );
+}
+    
+        function HotBotNav({ currentPage, setCurrentPage }) {
+    const pages = { 
+        bots: { name: 'Bots', icon: Icons.bots },
+        flows: { name: 'Fluxos', icon: Icons.flows },
+        chat: { name: 'Chat ao Vivo', icon: Icons.chat },
+        contacts: { name: 'Contatos', icon: Icons.contacts },
+        media: { name: 'Biblioteca', icon: Icons.media },
+        disparos: { name: 'Disparos', icon: Icons.disparos },
+        'disparos-history': { name: 'Histórico', icon: Icons.history },
+    };
+    return (
+        <div className="hotbot-nav-bar">
+            {Object.entries(pages).map(([key, { name, icon }]) => (
+                <button 
+                    key={key} 
+                    className={`tab-button nav-button ${currentPage === key ? 'active' : ''}`} 
+                    onClick={() => setCurrentPage(key)} 
+                    title={name}
+                >
+                    {icon}
+                    <span>{name}</span>
+                </button>
+            ))}
+        </div>
+    );
+}
     
     function BotsPage({ bots, fetchBots }) {
       const [newBotName, setNewBotName] = useState('');
