@@ -76,7 +76,7 @@
         .tab-content.active { display: block; animation: fadeIn 0.5s ease-out; }
         .progress-bar { background-color: #334155; border-radius: 999px; overflow: hidden; height: 8px; }
         .progress-bar-inner { height: 100%; transition: width 0.5s ease; }
-
+    
         .metric-card {
             position: relative;
             overflow: hidden;
@@ -100,26 +100,21 @@
             transform: scale(3);
         }
         #app-loader { display: flex; align-items: center; justify-content: center; height: 100vh; font-size: 1.25rem; }
-
+    
         /* ====================================================================== */
         /* == ESTILOS CORRIGIDOS DO HOTBOT (INTEGRADOS AO HOTTRACK) == */
         /* ====================================================================== */
         
-        /* * NOTA: Os estilos foram reescritos para funcionar dentro do layout do HotTrack.
-         * Usamos a classe '.hotbot-scope' para isolar os estilos.
-         * O tema do editor de fluxos foi completamente refeito para modo escuro.
-        */
-
         .hotbot-scope {
-            --hotbot-accent: #00F5A0; /* Verde característico do HotBot */
+            --hotbot-accent: #00F5A0;
             --hotbot-accent-dark: #00B372;
             height: 100%;
             width: 100%;
             display: flex;
             flex-direction: column;
         }
-
-        /* Layout Principal do HotBot com abas horizontais */
+    
+        /* Layout Principal do HotBot com abas horizontais - ESTILOS APLICADOS */
         .hotbot-nav-bar {
             display: flex;
             flex-wrap: wrap;
@@ -129,37 +124,273 @@
             margin-bottom: 1.5rem;
         }
         
-        /* Reutiliza a classe .tab-button do tema principal para consistência */
+        /* Botões das abas - ESTILOS APLICADOS seguindo o padrão pressel */
         .hotbot-scope .nav-button {
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            cursor: pointer;
         }
-
+    
+        .hotbot-scope .nav-button:hover {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+    
+        .hotbot-scope .nav-button.active {
+            background-color: rgba(0, 245, 160, 0.15);
+            border-color: var(--hotbot-accent);
+            color: var(--hotbot-accent);
+            font-weight: 600;
+            box-shadow: 0 0 15px rgba(0, 245, 160, 0.2);
+        }
+    
         .hotbot-scope .hotbot-content {
             flex: 1;
             overflow-y: auto;
             min-height: 0;
         }
         
-        /* Herda os estilos de formulário, mas com foco verde */
+        /* Herda os estilos de formulário, mas com foco verde - ESTILOS APLICADOS */
+        .hotbot-scope .form-input, 
+        .hotbot-scope .form-select, 
+        .hotbot-scope .form-textarea {
+            background-color: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            width: 100%;
+        }
+    
         .hotbot-scope .form-input:focus, 
         .hotbot-scope .form-select:focus, 
         .hotbot-scope .form-textarea:focus {
+            outline: none;
             border-color: var(--hotbot-accent);
             box-shadow: 0 0 0 3px rgba(0, 245, 160, 0.2);
         }
-
-        /* Botão Primário Verde */
+    
+        .hotbot-scope .form-textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+    
+        /* Botões - ESTILOS APLICADOS seguindo o padrão pressel */
+        .hotbot-scope .btn {
+            background-color: var(--hotbot-accent);
+            color: #000;
+            border: 1px solid var(--hotbot-accent);
+            transition: all 0.3s ease;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 0 15px rgba(0, 245, 160, 0.2);
+        }
+    
+        .hotbot-scope .btn:hover {
+            background-color: var(--hotbot-accent-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 0 25px rgba(0, 245, 160, 0.4);
+        }
+    
+        .hotbot-scope .btn:disabled {
+            background-color: #334155;
+            border-color: #475569;
+            color: #64748b;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+    
         .hotbot-scope .btn-primary {
             background-color: var(--hotbot-accent);
             color: #000;
             border-color: var(--hotbot-accent);
         }
+    
         .hotbot-scope .btn-primary:hover {
             background-color: var(--hotbot-accent-dark);
         }
-
+    
+        .hotbot-scope .btn-secondary {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+            border-color: var(--border-color);
+            box-shadow: 0 0 10px rgba(30, 41, 59, 0.3);
+        }
+    
+        .hotbot-scope .btn-secondary:hover {
+            background-color: #334155;
+            border-color: #475569;
+        }
+    
+        .hotbot-scope .btn-red {
+            background-color: #991b1b;
+            border-color: #ef4444;
+            color: white;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+        }
+    
+        .hotbot-scope .btn-red:hover {
+            background-color: #b91c1c;
+            box-shadow: 0 0 25px rgba(239, 68, 68, 0.4);
+        }
+    
+        .hotbot-scope .btn-green {
+            background-color: #047857;
+            border-color: #10b981;
+            color: white;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
+        }
+    
+        .hotbot-scope .btn-green:hover {
+            background-color: #059669;
+            box-shadow: 0 0 25px rgba(16, 185, 129, 0.4);
+        }
+    
+        .hotbot-scope .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }
+    
+        /* Cartões - ESTILOS APLICADOS seguindo o padrão pressel */
+        .hotbot-scope .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+        }
+    
+        .hotbot-scope .bot-card {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            height: fit-content;
+        }
+    
+        .hotbot-scope .bot-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.45);
+        }
+    
+        /* Grid layout - ESTILOS APLICADOS */
+        .hotbot-scope .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+    
+        /* Headers de página - ESTILOS APLICADOS */
+        .hotbot-scope .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding: 0 0.5rem;
+        }
+    
+        .hotbot-scope .page-header h2 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 0;
+        }
+    
+        /* Form groups - ESTILOS APLICADOS */
+        .hotbot-scope .form-group {
+            margin-bottom: 1.5rem;
+        }
+    
+        .hotbot-scope .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+    
+        /* Ajustes específicos para Disparos Page - ESPAÇAMENTOS APLICADOS */
+        .hotbot-scope .disparos-container {
+            padding: 1.5rem;
+        }
+    
+        .hotbot-scope .step-actions-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+    
+        .hotbot-scope .campaign-info-card {
+            margin-bottom: 2rem;
+        }
+    
+        .hotbot-scope .flow-steps-container {
+            margin-bottom: 2rem;
+        }
+    
+        /* Ajustes para botões de variáveis - ESTILOS APLICADOS */
+        .hotbot-scope .variable-btn {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+    
+        .hotbot-scope .variable-btn:hover {
+            background-color: rgba(0, 245, 160, 0.1);
+            color: var(--hotbot-accent);
+            border-color: var(--hotbot-accent);
+        }
+    
+        /* Ajustes para checkboxes - ESTILOS APLICADOS */
+        .hotbot-scope .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+    
+        .hotbot-scope .checkbox-group input[type="checkbox"] {
+            width: 1rem;
+            height: 1rem;
+            background-color: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+        }
+    
+        .hotbot-scope .checkbox-group label {
+            margin-bottom: 0;
+            cursor: pointer;
+        }
+    
         /* --- ESTILOS DO EDITOR DE FLUXOS (TEMA ESCURO) --- */
         .hotbot-scope .flow-editor-page { display: flex; flex-direction: column; height: 100%; background-color: transparent; color: var(--text-primary); }
         .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; }
@@ -171,10 +402,10 @@
         
         .hotbot-scope .flow-sidebar { width: 280px; background-color: var(--bg-secondary); border-right: 1px solid var(--border-color); padding: 1rem; overflow-y: auto; }
         .hotbot-scope .flow-sidebar h3 { margin-top: 0; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color); font-size: 1.1rem; }
-
+    
         .hotbot-scope .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: var(--text-secondary); }
         .hotbot-scope .node-button:hover { border-color: var(--hotbot-accent); color: var(--hotbot-accent); background-color: rgba(0, 245, 160, 0.05); }
-
+    
         .hotbot-scope .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background-color: var(--bg-secondary); z-index: 10; padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
         
         /* Estilos dos Nós do ReactFlow */
@@ -186,7 +417,7 @@
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
         .hotbot-scope .react-flow__handle:hover { border-color: var(--hotbot-accent); }
         .hotbot-scope .handle-label { position: absolute; bottom: -20px; font-size: 10px; color: var(--text-secondary); }
-
+    
         /* Cores dos Headers dos Nós */
         .hotbot-scope .react-flow__node-trigger .node-header { background-color: rgba(139, 92, 246, 0.1); }
         .hotbot-scope .react-flow__node-message .node-header { background-color: rgba(59, 130, 246, 0.1); }
@@ -198,7 +429,7 @@
         .hotbot-scope .react-flow__node-action_pix .node-header { background-color: rgba(34, 197, 94, 0.1); }
         .hotbot-scope .react-flow__node-action_check_pix .node-header { background-color: rgba(249, 115, 22, 0.1); }
         .hotbot-scope .react-flow__node-forward_flow .node-header { background-color: rgba(99, 102, 241, 0.1); }
-
+    
         /* Estilos do Live Chat */
         .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: hidden; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
@@ -236,15 +467,36 @@
         .hotbot-scope .contact-detail p { color: var(--text-primary); font-weight: 500; word-break: break-all; }
         
         /* Outros estilos do HotBot */
-        .hotbot-scope .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
-        .hotbot-scope .bot-card { display: flex; flex-direction: column; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.5rem; }
         .hotbot-scope .bot-card-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
         .hotbot-scope .bot-card-header h3 { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin:0; }
         .hotbot-scope .bot-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: auto; }
         .hotbot-scope .media-preview { width: 100%; height: 150px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1rem; background-color: var(--bg-primary); }
-
+    
         .hotbot-scope .login-overlay { position: fixed; inset: 0; background-color: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(8px); }
         .hotbot-scope .login-box { background-color: var(--bg-secondary); padding: 2rem; border-radius: 0.75rem; width: 100%; max-width: 420px; border: 1px solid var(--border-color); }
+    
+        /* Media queries para responsividade */
+        @media (max-width: 768px) {
+            .hotbot-nav-bar {
+                gap: 0.25rem;
+            }
+            
+            .hotbot-scope .nav-button {
+                padding: 0.5rem 1rem;
+                font-size: 0.875rem;
+            }
+            
+            .hotbot-scope .page-header {
+                flex-direction: column;
+                gap: 1rem;
+                align-items: flex-start;
+            }
+            
+            .hotbot-scope .grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -357,7 +609,6 @@
                         <h1 class="text-3xl font-bold text-white">HotBot - Automação & Vendas</h1>
                         <p class="text-slate-400">Gerencie seus bots, fluxos, disparos e conversas em um só lugar.</p>
                     </div>
-                    {/* Container para a aplicação React do HotBot. A classe 'hotbot-scope' isola os estilos. */}
                     <div id="hotbot-container" class="hotbot-scope" style="flex: 1; min-height: 0;"></div>
                 </div>`;
             },
@@ -1544,165 +1795,162 @@
     </script>
     
     <script type="text/babel">
-    // ==========================================================
-    // == LÓGICA DO HOTBOT (ENCAPSULADA DENTRO DE UMA FUNÇÃO) ==
-    // ==========================================================
-    function launchHotBot(containerElement) {
-        const { useState, useCallback, useEffect, useRef } = window.React;
-        const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
+// ==========================================================
+// == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
+// ==========================================================
+function launchHotBot(containerElement) {
+    const { useState, useCallback, useEffect, useRef } = window.React;
+    const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
-        const API_BASE_URL = App.state.API_BASE_URL; // Usa a URL do App principal
-        const api = axios.create({ baseURL: API_BASE_URL });
-        
-        api.interceptors.request.use(
-            config => {
-                const token = localStorage.getItem('hottrack_token'); // USA O TOKEN DO HOTTRACK
-                if (token) {
-                    config.headers['Authorization'] = `Bearer ${token}`;
-                }
-                return config;
-            },
-            error => Promise.reject(error)
-        );
-        
-        // --- INÍCIO DO CÓDIGO DO HOTBOT PARA COLAR ---
-
-
+    const API_BASE_URL = App.state.API_BASE_URL;
+    const api = axios.create({ baseURL: API_BASE_URL });
+    
+    api.interceptors.request.use(
+        config => {
+            const token = localStorage.getItem('hottrack_token');
+            if (token) {
+                config.headers['Authorization'] = `Bearer ${token}`;
+            }
+            return config;
+        },
+        error => Promise.reject(error)
+    );
+    
     const Icons = {
-        contacts: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
-        attach: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
-        bots: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect x="4" y="12" width="16" height="8" rx="2"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M17 12v-2a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>,
-        flows: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h3"/><path d="M7 12h3"/><path d="M12 12h3"/><path d="M17 12h3"/><path d="M5 7v10"/><path d="M10 7v10"/><path d="M15 7v10"/><path d="M20 7v10"/><path d="M5 12a5 5 0 0 0 5 5"/><path d="M10 12a5 5 0 0 1 5 5"/><path d="M15 12a5 5 0 0 0 5-5"/></svg>,
-        chat: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
-        media: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>,
-        disparos: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
-        history: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8a6 6 0 0 1-8.4 0l-6.3-6.3"/><path d="M12 20.7a6 6 0 0 0 8.4 0l1.3-1.3"/></svg>,
-        integrations: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"/></svg>,
-        logout: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
-        send: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+        contacts: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zm-1.586 3.414a2 2 0 012.828 0L12 11.236V13h2v-2a2 2 0 00-2-2H8.414zM16 6a3 3 0 11-6 0 3 3 0 016 0z" /><path d="M18 9a2 2 0 012 2v2h-2v-2a2 2 0 01-2-2h-2a4 4 0 00-4 4v1a1 1 0 001 1h8a1 1 0 001-1v-1a4 4 0 00-4-4h-2z" /></svg>,
+        attach: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a3 3 0 10-6 0v4a1 1 0 102 0V7a1 1 0 112 0v4a3 3 0 11-6 0V7a1 1 0 011-1z" clipRule="evenodd" /></svg>,
+        bots: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M11 17a1 1 0 001.447.894l4-2A1 1 0 0017 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 0011 7v10zM4 17a1 1 0 001.447.894l4-2A1 1 0 0010 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 004 7v10z" /></svg>,
+        flows: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.586 2.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clipRule="evenodd" /><path fillRule="evenodd" d="M3.586 12.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clipRule="evenodd" /><path fillRule="evenodd" d="M8.586 6.586a2 2 0 10-2.828 2.828l3 3a2 2 0 002.828 0l1.5-1.5a2 2 0 10-2.828-2.828l-1.5 1.5z" clipRule="evenodd" /></svg>,
+        chat: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M18 5v8a2 2 0 01-2 2h-5l-5 4v-4H4a2 2 0 01-2-2V5a2 2 0 012-2h12a2 2 0 012 2zM7 8H5v2h2V8zm2 0h2v2H9V8zm6 0h-2v2h2V8z" clipRule="evenodd" /></svg>,
+        media: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" /></svg>,
+        disparos: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>,
+        history: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" /></svg>,
+        send: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>,
     };
 
     function AppHotBot() {
-    const [isLoading, setIsLoading] = useState(true);
-    const [currentPage, setCurrentPage] = useState('bots');
-    const [editingFlow, setEditingFlow] = useState(null);
-    const [bots, setBots] = useState([]);
-    const [importingFlowLink, setImportingFlowLink] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [currentPage, setCurrentPage] = useState('bots');
+        const [editingFlow, setEditingFlow] = useState(null);
+        const [bots, setBots] = useState([]);
+        const [importingFlowLink, setImportingFlowLink] = useState(null);
 
-    const fetchInitialData = useCallback(() => {
-        setIsLoading(true);
-        api.get('/api/dashboard/data')
-            .then((res) => {
-                setBots(res.data.bots || []);
-            })
-            .catch((err) => {
-                console.error("Erro ao buscar dados do HotBot:", err);
-                App.logout(); 
-            })
-            .finally(() => setIsLoading(false));
-    }, []);
+        const fetchInitialData = useCallback(() => {
+            setIsLoading(true);
+            api.get('/api/dashboard/data')
+                .then((res) => setBots(res.data.bots || []))
+                .catch((err) => { console.error("Error fetching HotBot data:", err); App.logout(); })
+                .finally(() => setIsLoading(false));
+        }, []);
 
-    useEffect(() => {
-        fetchInitialData();
-        const urlParams = new URLSearchParams(window.location.search);
-        const shareLink = urlParams.get('link');
-        if (shareLink) {
-            setImportingFlowLink(shareLink);
-            setCurrentPage('import-flow');
-        }
-    }, [fetchInitialData]);
-    
-    const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
-    
-    if (isLoading) return <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'white'}}>Carregando dados do HotBot...</div>;
-    
-    const PageComponent = {
-        bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
-        flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
-        chat: <LiveChatPage bots={bots} />,
-        contacts: <ContactsPage bots={bots} />,
-        media: <MediaLibraryPage />,
-        disparos: <DisparosPage bots={bots} />,
-        'disparos-history': <DisparosHistoryPage />,
-        integrations: <SettingsPage />,
-        'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
-        'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
-    }[currentPage];
+        useEffect(() => {
+            fetchInitialData();
+            const urlParams = new URLSearchParams(window.location.search);
+            const shareLink = urlParams.get('link');
+            if (shareLink) {
+                setImportingFlowLink(shareLink);
+                setCurrentPage('import-flow');
+            }
+        }, [fetchInitialData]);
+        
+        const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+        
+        if (isLoading) return <div className="flex items-center justify-center h-full text-white">Carregando dados do HotBot...</div>;
+        
+        const PageComponent = {
+            bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+            flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
+            chat: <LiveChatPage bots={bots} />,
+            contacts: <ContactsPage bots={bots} />,
+            media: <MediaLibraryPage />,
+            disparos: <DisparosPage bots={bots} />,
+            'disparos-history': <DisparosHistoryPage />,
+            'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+            'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+        }[currentPage];
 
-    return (
-        <>
-            <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
-            <main className="hotbot-content">
-                <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
-                    {PageComponent}
-                </div>
-            </main>
-        </>
-    );
-}
-    
-        function HotBotNav({ currentPage, setCurrentPage }) {
-    const pages = { 
-        bots: { name: 'Bots', icon: Icons.bots },
-        flows: { name: 'Fluxos', icon: Icons.flows },
-        chat: { name: 'Chat ao Vivo', icon: Icons.chat },
-        contacts: { name: 'Contatos', icon: Icons.contacts },
-        media: { name: 'Biblioteca', icon: Icons.media },
-        disparos: { name: 'Disparos', icon: Icons.disparos },
-        'disparos-history': { name: 'Histórico', icon: Icons.history },
-    };
-    return (
-        <div className="hotbot-nav-bar">
-            {Object.entries(pages).map(([key, { name, icon }]) => (
-                <button 
-                    key={key} 
-                    className={`tab-button nav-button ${currentPage === key ? 'active' : ''}`} 
-                    onClick={() => setCurrentPage(key)} 
-                    title={name}
-                >
-                    {icon}
-                    <span>{name}</span>
-                </button>
-            ))}
-        </div>
-    );
-}
-    
+        return (
+            <>
+                <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+                <main className="hotbot-content">
+                    <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
+                        {PageComponent}
+                    </div>
+                </main>
+            </>
+        );
+    }
+
+    function HotBotNav({ currentPage, setCurrentPage }) {
+        const pages = { 
+            bots: { name: 'Bots', icon: Icons.bots },
+            flows: { name: 'Fluxos', icon: Icons.flows },
+            chat: { name: 'Chat ao Vivo', icon: Icons.chat },
+            contacts: { name: 'Contatos', icon: Icons.contacts },
+            media: { name: 'Biblioteca', icon: Icons.media },
+            disparos: { name: 'Disparos', icon: Icons.disparos },
+            'disparos-history': { name: 'Histórico', icon: Icons.history },
+        };
+        return (
+            <div className="hotbot-nav-bar">
+                {Object.entries(pages).map(([key, { name, icon }]) => (
+                    <button 
+                        key={key} 
+                        className={`tab-button nav-button ${currentPage === key ? 'active' : ''}`} 
+                        onClick={() => setCurrentPage(key)} 
+                        title={name}
+                    >
+                        {React.cloneElement(icon, { className: 'h-5 w-5' })}
+                        <span>{name}</span>
+                    </button>
+                ))}
+            </div>
+        );
+    }
+
     function BotsPage({ bots, fetchBots }) {
-      const [newBotName, setNewBotName] = useState('');
-      const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/api/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); } catch (e) { alert('Erro: ' + (e.response?.data?.message || '')); } };
-      const handleDeleteBot = async (id) => { if (confirm('Certeza?')) { try { await api.delete(`/api/bots/${id}`); fetchBots(); } catch (e) { alert('Erro'); } } };
-      const handleUpdateToken = async (id) => {
-          // ALERTA DE SEGURANÇA: O uso de prompt() não é recomendado para dados sensíveis,
-          // pois pode ser simulado em ataques de phishing.
-          // RECOMENDAÇÃO: Use um modal seguro, construído com HTML/CSS/JS, para esta entrada.
-          alert("Por segurança, use um formulário modal para inserir tokens, em vez de um prompt.");
-          const token = prompt("Insira o novo Token:"); 
-          if (token) { 
-              try { 
-                  await api.put(`/api/bots/${id}`, { bot_token: token }); 
-                  alert("OK"); 
-                  fetchBots(); 
-              } catch (e) { 
-                  alert('Erro: ' + (e.response?.data?.message || '')); 
-              } 
-          } 
-      };
-      const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); alert(res.data.message); } catch (e) { alert('Falha.'); } };
-      return (
-          <div style={{padding: '2rem 3rem', height: '100%', overflowY: 'auto'}}>
-            <div className="page-header"><h2>Gerenciamento de Bots</h2><button className="btn btn-primary" onClick={() => document.getElementById('botName').focus()}>+ Adicionar Bot</button></div>
-            <div style={{display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', alignItems: 'start'}}>
-                <div className="card"><h3 style={{color: 'var(--text-primary)'}}>Adicionar Novo Bot</h3><p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem'}}>Crie e configure novos bots.</p><form onSubmit={handleCreateBot}><div className="form-group"><label htmlFor="botName">Nome de usuário</label><input id="botName" className="form-input" value={newBotName} onChange={(e) => setNewBotName(e.target.value)} placeholder="@meu_bot"/></div><button className="btn btn-primary" type="submit" style={{width: '100%'}}>Criar</button></form></div>
-                <div>
-                    <h3 style={{marginBottom: '1rem', fontSize: '1.5rem', color: 'var(--text-primary)'}}>Bots Ativos</h3>
-                    <div className="grid">
-                        {bots.map(bot => (<div key={bot.id} className="bot-card"><div className="bot-card-header"><div className="icon">{Icons.bots}</div><h3>{bot.bot_name}</h3></div><p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', flexGrow: 1}}>Gerencie as configurações.</p><div className="bot-card-actions"><button className="btn btn-secondary btn-sm" onClick={() => handleSetWebhook(bot.id)}>Webhook</button><button className="btn btn-secondary btn-sm" onClick={() => handleUpdateToken(bot.id)}>Token</button><button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDeleteBot(bot.id)}>Excluir</button></div></div>))}
-                        {bots.length === 0 && <p style={{color: 'var(--text-secondary)'}}>Nenhum bot criado.</p>}
+        const [newBotName, setNewBotName] = useState('');
+        const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/api/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); App.showToast('Bot criado com sucesso!', 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Erro ao criar bot', 'error'); } };
+        const handleDeleteBot = async (id) => { if (confirm('Tem certeza que deseja excluir este bot e todos os seus dados?')) { try { await api.delete(`/api/bots/${id}`); fetchBots(); App.showToast('Bot excluído!', 'success'); } catch (e) { App.showToast('Erro ao excluir', 'error'); } } };
+        const handleUpdateToken = async (id) => {
+            const token = prompt("Insira o novo Token do Bot (obtido no @BotFather):"); 
+            if (token) { 
+                try { 
+                    await api.put(`/api/bots/${id}`, { bot_token: token }); 
+                    App.showToast('Token atualizado!', 'success');
+                    fetchBots(); 
+                } catch (e) { 
+                    App.showToast(e.response?.data?.message || 'Erro ao atualizar token', 'error');
+                } 
+            } 
+        };
+        const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); App.showToast(res.data.message, 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Falha ao configurar webhook', 'error'); } };
+        
+        return (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="card p-6 rounded-lg lg:col-span-1">
+                    <h2 className="text-xl font-semibold mb-4 text-white">Adicionar Novo Bot</h2>
+                    <form onSubmit={handleCreateBot} className="space-y-4">
+                        <input name="bot_name" className="form-input w-full p-2" value={newBotName} onChange={(e) => setNewBotName(e.target.value)} placeholder="Username do Bot (sem @)" required />
+                        <button type="submit" className="btn w-full p-2 rounded-md">Criar Bot</button>
+                    </form>
+                </div>
+                <div className="card p-6 rounded-lg lg:col-span-2">
+                    <h2 className="text-xl font-semibold text-white mb-4">Bots Ativos</h2>
+                    <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                        {bots.length > 0 ? bots.map(bot => (
+                            <div key={bot.id} className="p-4 bg-slate-900/50 rounded-lg flex flex-col sm:flex-row justify-between items-center gap-4">
+                                <span className="font-semibold text-white">{bot.bot_name}</span>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                    <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleUpdateToken(bot.id)}>Token</button>
+                                    <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleSetWebhook(bot.id)}>Webhook</button>
+                                    <button className="btn btn-red text-xs py-1 px-2" onClick={() => handleDeleteBot(bot.id)}>Excluir</button>
+                                </div>
+                            </div>
+                        )) : <p className="text-slate-500 text-center py-4">Nenhum bot criado ainda.</p>}
                     </div>
                 </div>
             </div>
-          </div>
         );
     }
     
