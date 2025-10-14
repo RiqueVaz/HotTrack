@@ -1,0 +1,16 @@
+{
+  "name": "HotTrack",
+  "short_name": "HotTrack",
+  "icons": [
+    {
+      "src": "https://i.postimg.cc/ZnHB6HB5/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#1C1C1C"
+}
