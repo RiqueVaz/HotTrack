@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HotTrack & HotBot 🔥</title>
+    <title>HotTrack🔥</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -1577,8 +1577,8 @@
     
     function BotsPage({ bots, fetchBots }) {
       const [newBotName, setNewBotName] = useState('');
-      const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); } catch (e) { alert('Erro: ' + (e.response?.data?.message || '')); } };
-      const handleDeleteBot = async (id) => { if (confirm('Certeza?')) { try { await api.delete(`/bots/${id}`); fetchBots(); } catch (e) { alert('Erro'); } } };
+      const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/api/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); } catch (e) { alert('Erro: ' + (e.response?.data?.message || '')); } };
+      const handleDeleteBot = async (id) => { if (confirm('Certeza?')) { try { await api.delete(`/api/bots/${id}`); fetchBots(); } catch (e) { alert('Erro'); } } };
       const handleUpdateToken = async (id) => {
           // ALERTA DE SEGURANÇA: O uso de prompt() não é recomendado para dados sensíveis,
           // pois pode ser simulado em ataques de phishing.
@@ -1630,7 +1630,7 @@
                     bundleLinkedFlows,
                     bundleMedia
                 };
-                const response = await api.post(`/flows/${flow.id}/generate-share-link`, options);
+                const response = await api.post(`/api/flows/${flow.id}/generate-share-link`, options);
                 const link = `${FRONTEND_URL}/?link=${response.data.shareable_link_id}`;
                 prompt("Link de compartilhamento gerado! Copie abaixo:", link);
                 onLinkGenerated();
@@ -1693,7 +1693,7 @@
         const fetchFlows = useCallback(async () => {
             if (!selectedBotId) { setFlows([]); return; }
             try {
-                const res = await api.get('/flows');
+                const res = await api.get('/api/flows');
                 setFlows(res.data.filter(f => f.bot_id == selectedBotId));
             } catch (e) { console.error("Erro ao buscar fluxos", e); }
         }, [selectedBotId]);
@@ -1708,7 +1708,7 @@
             const n = prompt("Nome do novo fluxo:");
             if(n && selectedBotId) {
                 try {
-                    await api.post('/flows', { name: n, botId: selectedBotId });
+                    await api.post('/api/flows', { name: n, botId: selectedBotId });
                     fetchFlows();
                 } catch (e) { alert("Erro ao criar fluxo."); }
             }
@@ -1717,7 +1717,7 @@
         const handleDelete = async (id) => {
             if (confirm("Tem certeza que deseja excluir este fluxo?")) {
                 try {
-                    await api.delete(`/flows/${id}`);
+                    await api.delete(`/api/flows/${id}`);
                     fetchFlows();
                 } catch (e) { alert("Erro ao excluir fluxo."); }
             }
@@ -1772,7 +1772,7 @@
         useEffect(() => {
             if (shareableLinkId) {
                 setIsLoading(true);
-                api.get(`/share/details/${shareableLinkId}`)
+                api.get(`/api/share/details/${shareableLinkId}`)
                     .then(response => {
                         setFlowDetails(response.data);
                     })
@@ -1789,7 +1789,7 @@
             if (!selectedBotId) { alert('Por favor, selecione um bot para importar o fluxo.'); return; }
             setIsImporting(true);
             try {
-                await api.post('/flows/import-from-link', { shareableLinkId, botId: selectedBotId });
+                await api.post('/api/flows/import-from-link', { shareableLinkId, botId: selectedBotId });
                 alert('Fluxo importado com sucesso!');
                 onImported();
             } catch (err) {
@@ -1864,7 +1864,7 @@
                     return;
                 }
                 try {
-                    const response = await api.post('/bots/contacts-count', { botIds: selectedBotIds });
+                    const response = await api.post('/api/bots/contacts-count', { botIds: selectedBotIds });
                     setContactCount(response.data.count);
                 } catch (error) {
                     console.error("Erro ao buscar contagem de contatos", error);
@@ -1908,7 +1908,7 @@
             }
             setIsSending(true);
             try {
-                const response = await api.post('/bots/mass-send', { campaignName, botIds: selectedBotIds, flowSteps });
+                const response = await api.post('/api/bots/mass-send', { campaignName, botIds: selectedBotIds, flowSteps });
                 alert(response.data.message || 'Disparo agendado com sucesso!');
                 setFlowSteps([]);
                 setCampaignName('');
@@ -1955,14 +1955,14 @@
         const [isChecking, setIsChecking] = useState(null);
 
         const fetchHistory = useCallback(() => {
-            api.get('/disparos/history')
+            api.get('/api/disparos/history')
                 .then(res => setHistory(res.data))
                 .catch(() => console.error('Erro ao atualizar histórico.'));
         }, []);
 
         useEffect(() => {
             setIsLoading(true);
-            api.get('/disparos/history')
+            api.get('/api/disparos/history')
                 .then(res => setHistory(res.data))
                 .catch(() => alert('Erro ao carregar o histórico.'))
                 .finally(() => setIsLoading(false));
@@ -1975,7 +1975,7 @@
         const handleCheckConversions = async (historyId) => {
             setIsChecking(historyId);
             try {
-                const res = await api.post(`/disparos/check-conversions/${historyId}`);
+                const res = await api.post(`/api/disparos/check-conversions/${historyId}`);
                 alert(res.data.message);
                 fetchHistory();
             } catch (error) {
@@ -2039,7 +2039,7 @@
         const [isLoading, setIsLoading] = useState(true);
         const [isSaving, setIsSaving] = useState(false);
         useEffect(() => {
-            api.get('/dashboard/data')
+            api.get('/api/dashboard/data')
                 .then(res => setApiKey(res.data.settings?.hottrack_api_key || ''))
                 .catch(() => alert("Não foi possível carregar as suas configurações."))
                 .finally(() => setIsLoading(false));
@@ -2048,7 +2048,7 @@
             e.preventDefault();
             setIsSaving(true);
             try {
-                const res = await api.put('/settings/hottrack-key', { apiKey });
+                const res = await api.put('/api/settings/hottrack-key', { apiKey });
                 alert(res.data.message);
             } catch (error) {
                 alert('Erro ao salvar: ' + (error.response?.data?.message || error.message));
@@ -2108,13 +2108,13 @@
         }, [messages]);
         
         useEffect(() => {
-            api.get('/flows').then(({data}) => setAllFlows(data || []));
+            api.get('/api/flows').then(({data}) => setAllFlows(data || []));
         }, []);
 
         const fetchUsers = useCallback(async () => {
             if (!selectedBotId) return;
             try {
-                const { data } = await api.get(`/chats/${selectedBotId}`);
+                const { data } = await api.get(`/api/chats/${selectedBotId}`);
                 setUsers(data);
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
@@ -2131,7 +2131,7 @@
         const fetchMessages = useCallback(async () => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
              try {
-                 const { data } = await api.get(`/chats/${selectedBotId}/${selectedChat.chat_id}`);
+                 const { data } = await api.get(`/api/chats/${selectedBotId}/${selectedChat.chat_id}`);
                  setMessages(prevMessages => JSON.stringify(prevMessages) === JSON.stringify(data) ? prevMessages : data);
              } catch (e) {
                  console.error("Erro ao buscar mensagens", e);
@@ -2166,7 +2166,7 @@
             if (nextState && selectedBotId) {
                 setIsValidating(true);
                 try {
-                    const { data } = await api.post('/bots/validate-contacts', { botId: selectedBotId });
+                    const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
                     setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
                 } catch (error) {
                     console.error("Erro ao validar contatos", error);
@@ -2190,14 +2190,14 @@
             }
         }, [selectedChat]);
 
-        const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
-        const handleFileChange = (e) => { const file = e.target.files[0]; if (!file || !selectedChat) return; const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = async () => { try { const base64Data = reader.result.split(',')[1]; await api.post(`/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name }); fetchMessages(); } catch (error) { alert('Falha no upload: ' + (error.response?.data?.message || error.message)); }}; e.target.value = null; };
+        const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
+        const handleFileChange = (e) => { const file = e.target.files[0]; if (!file || !selectedChat) return; const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = async () => { try { const base64Data = reader.result.split(',')[1]; await api.post(`/api/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name }); fetchMessages(); } catch (error) { alert('Falha no upload: ' + (error.response?.data?.message || error.message)); }}; e.target.value = null; };
         
         const handleSendFromLibrary = async (mediaItem) => {
             if (!selectedChat || !selectedBotId) return;
             setIsMediaModalOpen(false);
             try {
-                await api.post(`/chats/${selectedBotId}/send-library-media`, {
+                await api.post(`/api/chats/${selectedBotId}/send-library-media`, {
                     chatId: selectedChat.chat_id,
                     fileId: mediaItem.file_id,
                     fileType: mediaItem.file_type
@@ -2208,7 +2208,7 @@
             }
         };
 
-        const handleDelete = async (id) => { if (confirm(`Certeza?`)) { try { await api.delete(`/chats/${selectedBotId}/${id}`); fetchUsers(); if (selectedChat?.chat_id === id) { setSelectedChat(null); } } catch (e) { alert('Erro'); } } };
+        const handleDelete = async (id) => { if (confirm(`Certeza?`)) { try { await api.delete(`/api/chats/${selectedBotId}/${id}`); fetchUsers(); if (selectedChat?.chat_id === id) { setSelectedChat(null); } } catch (e) { alert('Erro'); } } };
         const getDisplayName = (u) => { if (!u) return ''; if (u.click_id) { const cleanId = u.click_id.replace('/start ', ''); return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); } return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; };
         const getMessageSender = (msg) => {
             const selectedBot = bots.find(b => b.id == selectedBotId);
@@ -2291,7 +2291,7 @@
 
         const handleGeneratePix = async () => {
             try {
-                const res = await api.post('/chats/generate-pix', {
+                const res = await api.post('/api/chats/generate-pix', {
                     botId,
                     chatId: chat.chat_id,
                     click_id: chat.click_id,
@@ -2308,7 +2308,7 @@
 
         const handleCheckPix = async () => {
              try {
-                const res = await api.get(`/chats/check-pix/${botId}/${chat.chat_id}`);
+                const res = await api.get(`/api/chats/check-pix/${botId}/${chat.chat_id}`);
                 alert(`Status do PIX: ${res.data.status}`);
             } catch (e) {
                 alert('Erro: ' + (e.response?.data?.message || e.message));
@@ -2321,7 +2321,7 @@
                 return;
             }
             try {
-                const res = await api.post('/chats/start-flow', { botId, chatId: chat.chat_id, flowId: selectedFlow });
+                const res = await api.post('/api/chats/start-flow', { botId, chatId: chat.chat_id, flowId: selectedFlow });
                 alert(res.data.message);
                 setTimeout(() => {
                     onAction();
@@ -2359,7 +2359,7 @@
     function MediaLibraryPage() {
         const [media, setMedia] = useState([]);
         const [isUploading, setIsUploading] = useState(false);
-        const fetchMedia = async () => { try { const { data } = await api.get('/media'); setMedia(data); } catch (e) { console.error("Erro ao buscar mídias", e); }};
+        const fetchMedia = async () => { try { const { data } = await api.get('/api/media'); setMedia(data); } catch (e) { console.error("Erro ao buscar mídias", e); }};
         useEffect(() => { fetchMedia(); }, []);
         const handleFileChange = (e) => {
             const file = e.target.files[0];
@@ -2375,7 +2375,7 @@
                 setIsUploading(true);
                 try {
                     const base64Data = reader.result.split(',')[1];
-                    await api.post('/media/upload', { fileName: file.name, fileData: base64Data, fileType: fileType });
+                    await api.post('/api/media/upload', { fileName: file.name, fileData: base64Data, fileType: fileType });
                     fetchMedia();
                 } catch (error) {
                     alert('Falha no upload: ' + (error.response?.data?.message || error.message));
@@ -2384,7 +2384,7 @@
                 }
             };
         };
-        const handleDelete = async (id) => { if (confirm('Tem a certeza?')) { try { await api.delete(`/media/${id}`); fetchMedia(); } catch(e) { alert('Erro ao excluir.'); }}};
+        const handleDelete = async (id) => { if (confirm('Tem a certeza?')) { try { await api.delete(`/api/media/${id}`); fetchMedia(); } catch(e) { alert('Erro ao excluir.'); }}};
         return (
             <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
                 <div className="page-header">
@@ -2434,7 +2434,7 @@
             setIsLoading(true);
             setInactiveContacts(null);
             try {
-                const response = await api.post('/bots/validate-contacts', { botId: selectedBotId });
+                const response = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
                 setInactiveContacts(response.data.inactive_contacts);
                  if (response.data.inactive_contacts.length === 0) {
                     alert('Nenhum contato inativo encontrado!');
@@ -2457,7 +2457,7 @@
             setIsLoading(true);
             try {
                 const chatIds = inactiveContacts.map(c => c.chat_id);
-                const response = await api.post('/bots/remove-contacts', { botId: selectedBotId, chatIds });
+                const response = await api.post('/api/bots/remove-contacts', { botId: selectedBotId, chatIds });
                 alert(response.data.message);
                 setInactiveContacts([]);
             } catch (error) {
@@ -2514,7 +2514,7 @@
     
     function MediaLibraryModal({ onSelect, onClose }) {
         const [media, setMedia] = useState([]);
-        useEffect(() => { api.get('/media').then(res => setMedia(res.data)); }, []);
+        useEffect(() => { api.get('/api/media').then(res => setMedia(res.data)); }, []);
         return (
             <div className="login-overlay" style={{zIndex: 1000}}>
                 <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
@@ -2683,7 +2683,7 @@
                 setEdges(flowContent.edges || []);
             }
             if(flow?.bot_id) {
-                api.get('/flows')
+                api.get('/api/flows')
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
             }
@@ -2695,7 +2695,7 @@
         const onPaneClick = useCallback(() => setSelectedNode(null), []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
         const onDrop = useCallback((event) => { event.preventDefault(); const type = event.dataTransfer.getData('application/reactflow'); if (!type) return; const position = reactFlowInstance.project({ x: event.clientX, y: event.clientY }); const newNode = { id: `${type}-${Date.now()}`, type, position, data: {}, }; setNodes((nds) => nds.concat(newNode)); }, [reactFlowInstance] );
-        const handleSave = async () => { try { await api.put(`/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
+        const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
         const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
         
         const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
