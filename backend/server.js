@@ -2361,10 +2361,10 @@ app.post('/api/webhook/brpix', async (req, res) => {
 });
 
 // ==========================================================
-//          ENDPOINTS FALTANTES DO ARQUIVO 1
+//          ENDPOINTS ADICIONAIS DO ARQUIVO 1
 // ==========================================================
 
-// 1. Configurações HotTrack
+// Endpoint 1: Configurações HotTrack
 app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
     const { apiKey } = req.body;
     if (typeof apiKey === 'undefined') return res.status(400).json({ message: 'O campo apiKey é obrigatório.' });
@@ -2376,7 +2376,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
     }
 });
 
-// 2. Contagem de contatos
+// Endpoint 2: Contagem de contatos
 app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     const { botIds } = req.body;
     const sellerId = req.user.id;
@@ -2397,7 +2397,7 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 });
 
-// 3. Validação de contatos
+// Endpoint 3: Validação de contatos
 app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
     const { botId } = req.body;
     const sellerId = req.user.id;
@@ -2446,7 +2446,7 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
     }
 });
 
-// 4. Remoção de contatos
+// Endpoint 4: Remoção de contatos
 app.post('/api/bots/remove-contacts', authenticateJwt, async (req, res) => {
     const { botId, chatIds } = req.body;
     const sellerId = req.user.id;
@@ -2464,7 +2464,7 @@ app.post('/api/bots/remove-contacts', authenticateJwt, async (req, res) => {
     }
 });
 
-// 5. Envio de mídia (base64)
+// Endpoint 5: Envio de mídia (base64)
 app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
     const { chatId, fileData, fileType, fileName } = req.body;
     if (!chatId || !fileData || !fileType || !fileName) {
@@ -2500,7 +2500,7 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
     }
 });
 
-// 6. Deletar conversa
+// Endpoint 6: Deletar conversa
 app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
     try {
         await sqlWithRetry('DELETE FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3', [req.params.botId, req.params.chatId, req.user.id]);
@@ -2509,25 +2509,28 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Erro ao deletar a conversa.' }); }
 });
 
-// 7. Gerar PIX via chat
+// Endpoint 7: Gerar PIX via chat (modificado)
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
     const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
         if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
         
-        const [seller] = await sqlWithRetry('SELECT hottrack_api_key FROM sellers WHERE id = $1', [req.user.id]);
-        if (!seller || !seller.hottrack_api_key) return res.status(400).json({ message: "Chave de API do HotTrack não configurada." });
-        
-        const pixResponse = await axios.post('https://novaapi-one.vercel.app/api/pix/generate', { click_id, value_cents: valueInCents }, { headers: { 'x-api-key': seller.hottrack_api_key } });
-        const { transaction_id, qr_code_text } = pixResponse.data;
+        const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
+        if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
 
-        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [transaction_id, botId, chatId]);
+        // Buscar o clique para pegar o IP
+        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [click_id.startsWith('/start ') ? click_id : `/start ${click_id}`]);
+        const ip_address = click ? click.ip_address : req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+
+        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, valueInCents, req.headers.host, seller.api_key, ip_address);
+
+        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
 
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
         
         const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
-        const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
+        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
 
         const sentMessage = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
             chat_id: chatId,
@@ -2535,7 +2538,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
             parse_mode: 'HTML',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: buttonText, copy_text: { text: qr_code_text } }]
+                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
                 ]
             }
         });
@@ -2549,24 +2552,62 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
     }
 });
 
-// 8. Verificar status do PIX
+// Endpoint 8: Verificar status do PIX (modificado)
 app.get('/api/chats/check-pix/:botId/:chatId', authenticateJwt, async (req, res) => {
     try {
         const { botId, chatId } = req.params;
         const [chat] = await sqlWithRetry('SELECT last_transaction_id FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND last_transaction_id IS NOT NULL ORDER BY created_at DESC LIMIT 1', [botId, chatId]);
         if (!chat || !chat.last_transaction_id) return res.status(404).json({ message: 'Nenhuma transação PIX recente encontrada para este usuário.' });
         
-        const [seller] = await sqlWithRetry('SELECT hottrack_api_key FROM sellers WHERE id = $1', [req.user.id]);
-        if (!seller || !seller.hottrack_api_key) return res.status(400).json({ message: "Chave de API do HotTrack não configurada." });
+        const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
+        if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
 
-        const checkResponse = await axios.get(`https://novaapi-one.vercel.app/api/pix/status/${chat.last_transaction_id}`, { headers: { 'x-api-key': seller.hottrack_api_key } });
-        res.status(200).json(checkResponse.data);
+        // Buscar a transação no banco
+        const [transaction] = await sqlWithRetry('SELECT * FROM pix_transactions WHERE provider_transaction_id = $1 OR pix_id = $1', [chat.last_transaction_id]);
+        if (!transaction) {
+            return res.status(404).json({ status: 'not_found', message: 'Transação não encontrada.' });
+        }
+
+        if (transaction.status === 'paid') {
+            return res.status(200).json({ status: 'paid' });
+        }
+
+        // Se a transação não está paga, podemos verificar no provedor
+        let providerStatus, customerData = {};
+        try {
+            if (transaction.provider === 'syncpay') {
+                const syncPayToken = await getSyncPayAuthToken(seller);
+                const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                    headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                });
+                providerStatus = response.data.status;
+                customerData = response.data.payer;
+            } else if (transaction.provider === 'pushinpay') {
+                const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                providerStatus = response.data.status;
+                customerData = { name: response.data.payer_name, document: response.data.payer_document };
+            } else if (transaction.provider === 'oasyfy' || transaction.provider === 'cnpay' || transaction.provider === 'brpix') {
+                // Para esses, não temos como consultar, então dependemos do webhook
+                return res.status(200).json({ status: 'pending', message: 'Aguardando confirmação via webhook.' });
+            }
+        } catch (providerError) {
+             console.error(`Falha ao consultar o provedor para a transação ${transaction.id}:`, providerError.message);
+             return res.status(200).json({ status: 'pending' });
+        }
+
+        if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+            await handleSuccessfulPayment(transaction.id, customerData);
+            return res.status(200).json({ status: 'paid' });
+        }
+
+        res.status(200).json({ status: 'pending' });
+
     } catch (error) {
         res.status(500).json({ message: error.response?.data?.message || 'Erro ao consultar PIX.' });
     }
 });
 
-// 9. Iniciar fluxo manualmente
+// Endpoint 9: Iniciar fluxo manualmente
 app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const { botId, chatId, flowId } = req.body;
     try {
@@ -2579,7 +2620,7 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         const flowData = flow.nodes;
         const startNode = flowData.nodes.find(node => node.type === 'trigger');
         const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
-        
+
         processFlow(chatId, botId, bot.bot_token, bot.seller_id, firstNodeId, {}, flowData);
 
         res.status(200).json({ message: 'Fluxo iniciado para o usuário.' });
@@ -2588,7 +2629,7 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     }
 });
 
-// 10. Preview de mídia
+// Endpoint 10: Preview de mídia
 app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
     try {
         const { bot_id, file_id } = req.params;
@@ -2614,7 +2655,7 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
     }
 });
 
-// 11. Listar biblioteca de mídia
+// Endpoint 11: Listar biblioteca de mídia
 app.get('/api/media', authenticateJwt, async (req, res) => {
     try {
         const mediaFiles = await sqlWithRetry('SELECT id, file_name, file_id, file_type, thumbnail_file_id FROM media_library WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
@@ -2624,7 +2665,7 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
     }
 });
 
-// 12. Upload para biblioteca de mídia
+// Endpoint 12: Upload para biblioteca de mídia
 app.post('/api/media/upload', authenticateJwt, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
@@ -2672,7 +2713,7 @@ app.post('/api/media/upload', authenticateJwt, async (req, res) => {
     }
 });
 
-// 13. Deletar mídia da biblioteca
+// Endpoint 13: Deletar mídia da biblioteca
 app.delete('/api/media/:id', authenticateJwt, async (req, res) => {
     try {
         const result = await sqlWithRetry('DELETE FROM media_library WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
@@ -2683,7 +2724,7 @@ app.delete('/api/media/:id', authenticateJwt, async (req, res) => {
     }
 });
 
-// 14. Compartilhar fluxo
+// Endpoint 14: Compartilhar fluxo
 app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
     const { id } = req.params;
     const { name, description } = req.body;
@@ -2707,7 +2748,7 @@ app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
     }
 });
 
-// 15. Listar fluxos compartilhados
+// Endpoint 15: Listar fluxos compartilhados
 app.get('/api/shared-flows', authenticateJwt, async (req, res) => {
     try {
         const sharedFlows = await sqlWithRetry('SELECT id, name, description, seller_name, import_count, created_at FROM shared_flows ORDER BY import_count DESC, created_at DESC');
@@ -2717,7 +2758,7 @@ app.get('/api/shared-flows', authenticateJwt, async (req, res) => {
     }
 });
 
-// 16. Importar fluxo compartilhado
+// Endpoint 16: Importar fluxo compartilhado
 app.post('/api/shared-flows/:id/import', authenticateJwt, async (req, res) => {
     const { id } = req.params;
     const { botId } = req.body;
@@ -2742,7 +2783,7 @@ app.post('/api/shared-flows/:id/import', authenticateJwt, async (req, res) => {
     }
 });
 
-// 17. Gerar link de compartilhamento
+// Endpoint 17: Gerar link de compartilhamento
 app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res) => {
     const { id } = req.params;
     const sellerId = req.user.id;
@@ -2768,7 +2809,7 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
     }
 });
 
-// 18. Detalhes do link compartilhado
+// Endpoint 18: Detalhes do link compartilhado
 app.get('/api/share/details/:shareId', async (req, res) => {
     try {
         const { shareId } = req.params;
@@ -2788,7 +2829,7 @@ app.get('/api/share/details/:shareId', async (req, res) => {
     }
 });
 
-// 19. Importar fluxo por link
+// Endpoint 19: Importar fluxo por link
 app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
     const { shareableLinkId, botId } = req.body;
     const sellerId = req.user.id;
@@ -2814,91 +2855,7 @@ app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
     }
 });
 
-// 20. Conectar com NovaAPI
-app.post('/api/novaapi/connect', authenticateJwt, async (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Email e senha são obrigatórios.' });
-    }
-
-    try {
-        const loginResponse = await axios.post(`${NOVA_API_URL}/sellers/login`, { email, password });
-        const token = loginResponse.data.token;
-
-        if (!token) {
-            throw new Error('Token não recebido da Nova API.');
-        }
-        
-        const dashboardResponse = await axios.get(`${NOVA_API_URL}/dashboard/data`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        res.status(200).json({
-            message: 'Conectado com sucesso!',
-            token: token,
-            bots: dashboardResponse.data.bots || []
-        });
-
-    } catch (error) {
-        console.error("Erro ao conectar com a Nova API:", error.response?.data || error.message);
-        const status = error.response?.status || 500;
-        const message = error.response?.data?.message || 'Falha ao conectar. Verifique suas credenciais.';
-        res.status(status).json({ message });
-    }
-});
-
-// 21. Importar da NovaAPI
-app.post('/api/novaapi/import', authenticateJwt, async (req, res) => {
-    const { sourceBotId, destinationBotId, novaApiToken } = req.body;
-    const sellerId = req.user.id;
-
-    if (!sourceBotId || !destinationBotId || !novaApiToken) {
-        return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
-    }
-
-    try {
-        const { data: sourceContacts } = await axios.get(`${NOVA_API_URL}/chats/${sourceBotId}`, {
-            headers: { 'Authorization': `Bearer ${novaApiToken}` }
-        });
-
-        if (!sourceContacts || sourceContacts.length === 0) {
-            return res.status(404).json({ message: 'Nenhum contato encontrado no bot de origem da Nova API.' });
-        }
-
-        let importedCount = 0;
-        for (const contact of sourceContacts) {
-             const existingContact = await sqlWithRetry(`
-                SELECT id FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 LIMIT 1
-            `, [destinationBotId, contact.chat_id]);
-            
-            if (existingContact.length === 0) {
-                const result = await sqlWithRetry(`
-                    INSERT INTO telegram_chats 
-                        (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
-                    VALUES 
-                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Contato importado via Nova API', 'user')
-                `, [
-                    sellerId, destinationBotId, contact.chat_id, (contact.message_id || Date.now()), contact.user_id, 
-                    contact.first_name, contact.last_name, contact.username, contact.click_id
-                ]);
-                
-                if (result.count > 0) {
-                    importedCount++;
-                }
-            }
-        }
-        
-        res.status(200).json({ message: `Importação concluída! ${importedCount} novos contatos foram adicionados.` });
-
-    } catch (error) {
-        console.error("Erro durante a importação de contatos da Nova API:", error.response?.data || error.message);
-        const status = error.response?.status || 500;
-        const message = error.response?.data?.message || 'Falha ao importar contatos.';
-        res.status(status).json({ message });
-    }
-});
-
-// 22. Histórico de disparos
+// Endpoint 22: Histórico de disparos
 app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     try {
         const history = await sqlWithRetry(`
@@ -2918,15 +2875,15 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     }
 });
 
-// 23. Verificar conversões de disparos
+// Endpoint 23: Verificar conversões de disparos (modificado)
 app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (req, res) => {
     const { historyId } = req.params;
     const sellerId = req.user.id;
 
     try {
-        const [seller] = await sqlWithRetry('SELECT hottrack_api_key FROM sellers WHERE id = $1', [sellerId]);
-        if (!seller || !seller.hottrack_api_key) {
-            return res.status(400).json({ message: "Chave de API do HotTrack não configurada." });
+        const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [sellerId]);
+        if (!seller) {
+            return res.status(400).json({ message: "Vendedor não encontrado." });
         }
 
         const logs = await sqlWithRetry(
@@ -2937,8 +2894,43 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
         let updatedCount = 0;
         for (const log of logs) {
             try {
-                const checkResponse = await axios.get(`https://novaapi-one.vercel.app/api/pix/status/${log.transaction_id}`, { headers: { 'x-api-key': seller.hottrack_api_key } });
-                if (checkResponse.data.status === 'PAID') {
+                // Buscar a transação no banco
+                const [transaction] = await sqlWithRetry('SELECT * FROM pix_transactions WHERE provider_transaction_id = $1 OR pix_id = $1', [log.transaction_id]);
+                if (!transaction) {
+                    continue;
+                }
+
+                if (transaction.status === 'paid') {
+                    await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
+                    updatedCount++;
+                    continue;
+                }
+
+                // Se não está paga, verificar no provedor
+                let providerStatus, customerData = {};
+                try {
+                    if (transaction.provider === 'syncpay') {
+                        const syncPayToken = await getSyncPayAuthToken(seller);
+                        const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                        });
+                        providerStatus = response.data.status;
+                        customerData = response.data.payer;
+                    } else if (transaction.provider === 'pushinpay') {
+                        const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                        providerStatus = response.data.status;
+                        customerData = { name: response.data.payer_name, document: response.data.payer_document };
+                    } else if (transaction.provider === 'oasyfy' || transaction.provider === 'cnpay' || transaction.provider === 'brpix') {
+                        // Não consultamos, depende do webhook
+                        continue;
+                    }
+                } catch (providerError) {
+                    console.error(`Falha ao consultar o provedor para a transação ${transaction.id}:`, providerError.message);
+                    continue;
+                }
+
+                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+                    await handleSuccessfulPayment(transaction.id, customerData);
                     await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
                     updatedCount++;
                 }
@@ -2954,7 +2946,7 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
     }
 });
 
-// 24. CRON para processar fila de disparos (versão GET)
+// Endpoint 24: CRON para processar fila de disparos (modificado)
 app.get('/api/cron/process-disparo-queue', async (req, res) => {
     const cronSecret = process.env.CRON_SECRET;
     if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
@@ -2988,8 +2980,7 @@ app.get('/api/cron/process-disparo-queue', async (req, res) => {
                     throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
                 }
                 
-                const [seller] = await sqlWithRetry('SELECT hottrack_api_key FROM sellers WHERE id = $1', [bot.seller_id]);
-                const hottrackApiKey = seller?.hottrack_api_key;
+                const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [bot.seller_id]);
                 
                 let response;
 
@@ -3014,18 +3005,27 @@ app.get('/api/cron/process-disparo-queue', async (req, res) => {
                         response = await sendTelegramRequest(bot.bot_token, method, payload);
                     }
                 } else if (step.type === 'pix') {
-                    if (!hottrackApiKey || !userVariables.click_id) continue;
-                    const pixResponse = await axios.post('https://novaapi-one.vercel.app/api/pix/generate', { click_id: userVariables.click_id, value_cents: step.valueInCents }, { headers: { 'x-api-key': hottrackApiKey } });
-                    lastTransactionId = pixResponse.data.transaction_id;
-                    
-                    const messageText = await replaceVariables(step.pixMessage, userVariables);
-                    const buttonText = await replaceVariables(step.pixButtonText, userVariables);
-                    const textToSend = `${messageText}\n\n<pre>${pixResponse.data.qr_code_text}</pre>`;
+                    if (!userVariables.click_id) continue;
+                    // Buscar o clique para pegar o IP
+                    const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`]);
+                    const ip_address = click ? click.ip_address : null;
 
-                    response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                        chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResponse.data.qr_code_text }}]]}
-                    });
+                    try {
+                        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, step.valueInCents, req.headers.host, seller.api_key, ip_address);
+                        lastTransactionId = pixResult.transaction_id;
+
+                        const messageText = await replaceVariables(step.pixMessage, userVariables);
+                        const buttonText = await replaceVariables(step.pixButtonText, userVariables);
+                        const textToSend = `${messageText}\n\n<pre>${pixResult.qr_code_text}</pre>`;
+
+                        response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                            chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
+                            reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text }}]]}
+                        });
+                    } catch (error) {
+                        console.error(`Erro ao gerar PIX para o chat ${chat_id}:`, error);
+                        logStatus = 'FAILED';
+                    }
                 }
                 
                 if (response && response.ok) {
