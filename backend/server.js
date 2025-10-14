@@ -1,4 +1,5 @@
 // VERSÃO FINAL E COMPLETA - PRONTA PARA PRODUÇÃO
+require('dotenv').config({ path: '../.env' });
 const express = require('express');
 const cors = require('cors');
 const { neon } = require('@neondatabase/serverless');
@@ -6,16 +7,51 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const FormData = require('form-data');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
 
+
+
 const app = express();
-app.use(cors());
-app.use(express.json()); // Middleware global para processar JSON
+app.use(express.json({ limit: '10mb' }));
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'https://hottrackerbot.netlify.app',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// Agentes HTTP/HTTPS para reutilização de conexão (melhora a performance)
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
 
 // --- OTIMIZAÇÃO CRÍTICA: A conexão com o banco é inicializada UMA VEZ e reutilizada ---
 const sql = neon(process.env.DATABASE_URL);
+
+// ==========================================================
+//          VARIÁVEIS DE AMBIENTE E CONFIGURAÇÕES
+// ==========================================================
+const HOTTRACK_API_URL = process.env.HOTTRACK_API_URL || 'https://hottrack.vercel.app/api';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://hottrackerbot.netlify.app';
+const DOCUMENTATION_URL = process.env.DOCUMENTATION_URL || 'https://documentacaohot.netlify.app';
+
+// ==========================================================
+//          LÓGICA DE RETRY PARA O BANCO DE DADOS
+// ==========================================================
+async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            if (typeof query === 'string') { return await sql(query, params); }
+            return await query;
+        } catch (error) {
+            const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
+            if (isRetryable && i < retries - 1) { await new Promise(res => setTimeout(res, delay)); } else { throw error; }
+        }
+    }
+}
 
 // --- ROTA DO CRON JOB ---
 app.post('/api/cron/process-timeouts', async (req, res) => {
@@ -64,6 +100,182 @@ const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+
+// ==========================================================
+//          FUNÇÕES DO HOTBOT INTEGRADAS
+// ==========================================================
+async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
+    const { headers = {}, responseType = 'json', timeout = 30000 } = options;
+    const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await axios.post(apiUrl, data, {
+                headers,
+                responseType,
+                httpAgent,
+                httpsAgent,
+                timeout
+            });
+            return response.data;
+        } catch (error) {
+            const chatId = data instanceof FormData ? data.getBoundary && data.get('chat_id') : data.chat_id;
+
+            if (error.response && error.response.status === 403) {
+                console.warn(`[TELEGRAM API WARN] O bot foi bloqueado pelo usuário. ChatID: ${chatId}`);
+                return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+            }
+
+            const isRetryable = error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.message.includes('socket hang up');
+
+            if (isRetryable && i < retries - 1) {
+                await new Promise(res => setTimeout(res, delay * (i + 1)));
+                continue;
+            }
+            
+            const errorData = error.response?.data;
+            const errorMessage = (errorData instanceof ArrayBuffer)
+                ? JSON.parse(Buffer.from(errorData).toString('utf8'))
+                : errorData;
+
+            console.error(`[TELEGRAM API ERROR] Method: ${method}, ChatID: ${chatId}:`, errorMessage || error.message);
+            throw error;
+        }
+    }
+}
+
+async function saveMessageToDb(sellerId, botId, message, senderType) {
+    const { message_id, chat, from, text, photo, video, voice } = message;
+    let mediaType = null;
+    let mediaFileId = null;
+    let messageText = text;
+    let newClickId = null;
+
+    if (text && text.startsWith('/start ')) {
+        newClickId = text.substring(7);
+    }
+
+    let finalClickId = newClickId;
+    if (!finalClickId) {
+        const result = await sqlWithRetry(
+            'SELECT click_id FROM telegram_chats WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+            [chat.id, botId]
+        );
+        if (result.length > 0) {
+            finalClickId = result[0].click_id;
+        }
+    }
+
+    if (photo) {
+        mediaType = 'photo';
+        mediaFileId = photo[photo.length - 1].file_id;
+        messageText = message.caption || '[Foto]';
+    } else if (video) {
+        mediaType = 'video';
+        mediaFileId = video.file_id;
+        messageText = message.caption || '[Vídeo]';
+    } else if (voice) {
+        mediaType = 'voice';
+        mediaFileId = voice.file_id;
+        messageText = '[Mensagem de Voz]';
+    }
+    const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
+    const fromUser = from || chat;
+
+    await sqlWithRetry(`
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ON CONFLICT (chat_id, message_id) DO NOTHING;
+    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId]);
+
+    if (newClickId) {
+        await sqlWithRetry(
+            'UPDATE telegram_chats SET click_id = $1 WHERE chat_id = $2 AND bot_id = $3',
+            [newClickId, chat.id, botId]
+        );
+    }
+}
+
+async function replaceVariables(text, variables) {
+    if (!text) return '';
+    let processedText = text;
+    for (const key in variables) {
+        const regex = new RegExp(`{{${key}}}`, 'g');
+        processedText = processedText.replace(regex, variables[key]);
+    }
+    return processedText;
+}
+
+async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
+    const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+    if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
+
+    const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
+    if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
+
+    const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
+
+    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    if (caption) {
+        formData.append('caption', caption);
+    }
+
+    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
+
+    const method = methodMap[fileType];
+    const field = fieldMap[fileType];
+    const fileName = fileNameMap[fileType];
+    const timeout = fileType === 'video' ? 60000 : 30000;
+
+    if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+    formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
+
+    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
+}
+
+async function handleMediaNode(node, botToken, chatId, caption) {
+    const type = node.type;
+    const nodeData = node.data || {};
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
+    const fileIdentifier = nodeData[urlMap[type]];
+
+    if (!fileIdentifier) {
+        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        return null;
+    }
+
+    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
+    let response;
+    const timeout = type === 'video' ? 60000 : 30000;
+
+    if (isLibraryFile) {
+        if (type === 'audio') {
+            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+            if (duration > 0) {
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+            }
+        }
+        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+    } else {
+        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+        
+        const method = methodMap[type];
+        const field = fieldMap[type];
+        
+        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+    }
+    
+    return response;
+}
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
 async function authenticateJwt(req, res, next) {
@@ -541,6 +753,119 @@ app.put('/api/admin/sellers/:id/commission', authenticateAdmin, async (req, res)
     }
 });
 
+// ==========================================================
+//          ROTAS ÚNICAS DO HOTBOT INTEGRADAS
+// ==========================================================
+app.get('/api/health', async (req, res) => {
+    try {
+        await sqlWithRetry('SELECT 1 as status;');
+        res.status(200).json({ status: 'ok' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Erro de conexão ao BD.' });
+    }
+});
+
+// --- ROTAS DE FLOWS ---
+app.get('/api/flows', authenticateJwt, async (req, res) => {
+    try {
+        const flows = await sqlWithRetry('SELECT * FROM flows WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
+        res.status(200).json(flows.map(f => ({ ...f, nodes: f.nodes || { nodes: [], edges: [] } })));
+    } catch (error) { res.status(500).json({ message: 'Erro ao buscar os fluxos.' }); }
+});
+
+app.post('/api/flows', authenticateJwt, async (req, res) => {
+    const { name, botId } = req.body;
+    if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
+    try {
+        const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {} }], edges: [] };
+        const [newFlow] = await sqlWithRetry(`
+            INSERT INTO flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, [req.user.id, botId, name, JSON.stringify(initialFlow)]);
+        res.status(201).json(newFlow);
+    } catch (error) { res.status(500).json({ message: 'Erro ao criar o fluxo.' }); }
+});
+
+app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
+    const { name, nodes } = req.body;
+    if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    try {
+        const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
+        if (updated) res.status(200).json(updated);
+        else res.status(404).json({ message: 'Fluxo não encontrado.' });
+    } catch (error) { res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); }
+});
+
+app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const result = await sqlWithRetry('DELETE FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (result.count > 0) res.status(204).send();
+        else res.status(404).json({ message: 'Fluxo não encontrado.' });
+    } catch (error) { res.status(500).json({ message: 'Erro ao deletar o fluxo.' }); }
+});
+
+// --- ROTAS DE CHATS ---
+app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
+    try {
+        const users = await sqlWithRetry(`
+            SELECT * FROM (
+                SELECT DISTINCT ON (chat_id) * FROM telegram_chats 
+                WHERE bot_id = $1 AND seller_id = $2
+                ORDER BY chat_id, created_at DESC
+            ) AS latest_chats
+            ORDER BY created_at DESC;
+        `, [req.params.botId, req.user.id]);
+        res.status(200).json(users);
+    } catch (error) { 
+        res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
+    }
+});
+
+app.get('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
+    try {
+        const messages = await sqlWithRetry(`
+            SELECT * FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 ORDER BY created_at ASC;`, [req.params.botId, req.params.chatId, req.user.id]);
+        res.status(200).json(messages);
+    } catch (error) { res.status(500).json({ message: 'Erro ao buscar mensagens.' }); }
+});
+
+app.post('/api/chats/:botId/send-message', authenticateJwt, async (req, res) => {
+    const { chatId, text } = req.body;
+    if (!chatId || !text) return res.status(400).json({ message: 'Chat ID e texto são obrigatórios.' });
+    try {
+        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
+        if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
+        const response = await sendTelegramRequest(bot.bot_token, 'sendMessage', { chat_id: chatId, text });
+        if (response.ok) {
+            await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
+        }
+        res.status(200).json({ message: 'Mensagem enviada!' });
+    } catch (error) { res.status(500).json({ message: 'Não foi possível enviar a mensagem.' }); }
+});
+
+app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, res) => {
+    const { chatId, fileId, fileType } = req.body;
+    const { botId } = req.params;
+
+    if (!chatId || !fileId || !fileType) {
+        return res.status(400).json({ message: 'Dados incompletos.' });
+    }
+
+    try {
+        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [botId, req.user.id]);
+        if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
+
+        const response = await sendMediaAsProxy(bot.bot_token, chatId, fileId, fileType, null);
+
+        if (response.ok) {
+            await saveMessageToDb(req.user.id, botId, response.result, 'operator');
+            res.status(200).json({ message: 'Mídia enviada!' });
+        } else {
+            throw new Error('Falha ao enviar mídia para o usuário final.');
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Não foi possível enviar a mídia: ' + error.message });
+    }
+});
+
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
     const { name, email, password } = req.body;
@@ -771,7 +1096,7 @@ app.post('/api/bots/:id/set-webhook', authenticateJwt, async (req, res) => {
         }
 
         const token = bot.bot_token.trim();
-        const webhookUrl = `https://novaapi-one.vercel.app/api/webhook/telegram/${id}`;
+        const webhookUrl = `${HOTTRACK_API_URL}/webhook/telegram/${id}`;
         const telegramApiUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${webhookUrl}`;
         
         const response = await axios.get(telegramApiUrl);
@@ -1538,7 +1863,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                     const provider = seller.pix_provider_primary || 'pushinpay';
                     const ip_address = click.ip_address;
-                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, 'novaapi-one.vercel.app', seller.api_key, ip_address);
+                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, HOTTRACK_API_URL.replace('/api', ''), seller.api_key, ip_address);
                     
                     await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${valueInCents / 100}, ${pixResult.qr_code_text}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})`;
                     
@@ -2034,6 +2359,14 @@ app.post('/api/webhook/brpix', async (req, res) => {
     }
 
     res.sendStatus(200);
+});
+
+const PORT = process.env.PORT || 3001;
+
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
+    console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
+    console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
 });
 
 module.exports = app;
