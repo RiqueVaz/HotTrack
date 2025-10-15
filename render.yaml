@@ -1,0 +1,66 @@
+services:
+  # Backend API Service (Docker)
+  - type: web
+    name: hottrack-backend
+    env: docker
+    region: oregon
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: QSTASH_TOKEN
+        sync: false
+      - key: PUSHINPAY_SPLIT_ACCOUNT_ID
+        sync: false
+      - key: CNPAY_SPLIT_PRODUCER_ID
+        sync: false
+      - key: OASYFY_SPLIT_PRODUCER_ID
+        sync: false
+      - key: BRPIX_SPLIT_RECIPIENT_ID
+        sync: false
+      - key: FRONTEND_URL
+        value: https://hottrack-frontend.onrender.com
+      - key: HOTTRACK_API_URL
+        value: https://hottrack-backend.onrender.com/api
+      - key: DOCUMENTATION_URL
+        value: https://hottrack-docs.onrender.com
+
+  # Frontend Service (Docker)
+  - type: web
+    name: hottrack-frontend
+    env: docker
+    region: oregon
+    plan: starter
+    dockerfilePath: ./frontend/Dockerfile
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # Admin Frontend Service (Docker)
+  - type: web
+    name: hottrack-admin
+    env: docker
+    region: oregon
+    plan: starter
+    dockerfilePath: ./admin-frontend/Dockerfile
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+# Banco de dados Neon (externo) - configure a DATABASE_URL nas variáveis de ambiente
