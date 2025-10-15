@@ -46,10 +46,6 @@ services:
     region: oregon
     plan: starter
     dockerfilePath: ./frontend/Dockerfile
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
 
   # Admin Frontend Service (Docker)
   - type: web
@@ -58,9 +54,5 @@ services:
     region: oregon
     plan: starter
     dockerfilePath: ./admin-frontend/Dockerfile
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
 
 # Banco de dados Neon (externo) - configure a DATABASE_URL nas variáveis de ambiente
