@@ -1,21 +1,8 @@
 {
-  "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "server.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "server.js"
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/process-timeouts",
-      "schedule": "* * * * *"
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
     }
   ]
 }
