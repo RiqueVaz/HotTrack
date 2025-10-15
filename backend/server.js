@@ -1918,27 +1918,39 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 app.post('/api/webhook/telegram/:botId', async (req, res) => {
     const { botId } = req.params;
-    const body = req.body;
+    const { message } = req.body;
+
+    // Responda imediatamente ao Telegram
     res.sendStatus(200);
 
-    try {
-        const message = body.message;
-        const chatId = message?.chat?.id;
-        if (!chatId || !message.text) return;
-        
-        await sql`DELETE FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+    if (!message?.chat?.id || !message.text) {
+        return;
+    }
 
+    const chatId = message.chat.id;
+    const text = message.text;
+
+    console.log(`[Webhook] Mensagem recebida de ${chatId} para o bot ${botId}: "${text}"`);
+
+    try {
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
-            console.warn(`[Webhook] Webhook recebido para botId não encontrado: ${botId}`);
+            console.warn(`[Webhook] Bot ID ${botId} não encontrado no banco de dados.`);
             return;
         }
-        
+
         const { seller_id: sellerId, bot_token: botToken } = bot;
+        const isStartCommand = text.startsWith('/start');
         
-        const text = message.text;
-        const isStartCommand = text.startsWith('/start ');
-        const clickIdValue = isStartCommand ? text : null;
+        // FORÇA O REINÍCIO DO FLUXO se for um comando /start
+        if (isStartCommand) {
+            console.log(`[Webhook] Comando /start detectado. Resetando estado do fluxo para ${chatId}.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sql`DELETE FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        }
+
+        // Captura o click_id apenas se ele existir (com espaço)
+        const clickIdValue = text.startsWith('/start ') ? text : null;
 
         await sql`
             INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
@@ -1947,16 +1959,18 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         `;
         
         let initialVars = {};
-        if (isStartCommand) {
+        if (clickIdValue) {
             initialVars.click_id = clickIdValue;
         }
         
+        console.log(`[Webhook] Chamando processFlow para ${chatId} com variáveis:`, initialVars);
         await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
 
     } catch (error) {
-        console.error("Erro CRÍTICO ao processar webhook do Telegram:", error);
+        console.error(`Erro CRÍTICO ao processar webhook para Bot ID ${botId} e Chat ID ${chatId}:`, error);
     }
 });
+
 
 
 app.get('/api/dispatches', authenticateJwt, async (req, res) => {
