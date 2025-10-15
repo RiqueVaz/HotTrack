@@ -11,22 +11,6 @@ COPY backend/package*.json ./
 RUN npm install --production
 COPY backend/ ./
 
-# Build do frontend (se necessário)
-FROM node:18-alpine AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
-
-# Build do admin (se necessário)  
-FROM node:18-alpine AS admin-builder
-WORKDIR /app/admin-frontend
-COPY admin-frontend/package*.json ./
-RUN npm install
-COPY admin-frontend/ ./
-RUN npm run build
-
 # Imagem final
 FROM node:18-alpine
 RUN apk add --no-cache nginx
@@ -35,11 +19,11 @@ RUN apk add --no-cache nginx
 WORKDIR /app
 COPY --from=backend /app ./
 
-# Copiar frontend buildado
-COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html/frontend
+# Copiar frontend (ARQUIVOS ESTÁTICOS - SEM BUILD)
+COPY frontend/ /usr/share/nginx/html/frontend
 
-# Copiar admin buildado  
-COPY --from=admin-builder /app/admin-frontend/dist /usr/share/nginx/html/admin
+# Copiar admin (ARQUIVOS ESTÁTICOS - SEM BUILD)  
+COPY admin-frontend/ /usr/share/nginx/html/admin
 
 # Configurar nginx para servir frontend e admin
 RUN echo 'server { \
