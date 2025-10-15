@@ -4,34 +4,19 @@
     "backend": {
       "build": {
         "builder": "DOCKERFILE",
-        "dockerfilePath": "Dockerfile"
-      },
-      "deploy": {
-        "numReplicas": 1,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 10
+        "dockerfilePath": "backend/Dockerfile"
       }
     },
     "frontend": {
       "build": {
-        "builder": "DOCKERFILE",
+        "builder": "DOCKERFILE", 
         "dockerfilePath": "frontend/Dockerfile"
-      },
-      "deploy": {
-        "numReplicas": 1,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 10
       }
     },
     "admin": {
       "build": {
         "builder": "DOCKERFILE",
         "dockerfilePath": "admin-frontend/Dockerfile"
-      },
-      "deploy": {
-        "numReplicas": 1,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 10
       }
     }
   }
