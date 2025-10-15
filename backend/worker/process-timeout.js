@@ -1,7 +1,10 @@
 // /api/worker/process-timeout.js
 
 // Carrega as variáveis de ambiente. O caminho sobe dois níveis para chegar na raiz do projeto.
-require('dotenv').config({ path: '../../.env' });
+if (process.env.NODE_ENV !== 'production') {
+    // ATENÇÃO: O caminho para o .env precisa subir 3 níveis a partir daqui
+    require('dotenv').config({ path: '../../.env' });
+  }
 
 const { neon } = require('@neondatabase/serverless');
 const { verifySignature } = require("@upstash/qstash/nextjs");

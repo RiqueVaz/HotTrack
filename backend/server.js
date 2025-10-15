@@ -1,5 +1,10 @@
 // VERSÃO FINAL E COMPLETA - PRONTA PARA PRODUÇÃO
-require('dotenv').config({ path: '../.env' });
+// VERSÃO FINAL E COMPLETA - PRONTA PARA PRODUÇÃO
+
+// Carrega as variáveis de ambiente APENAS se não estivermos em produção (na Vercel)
+if (process.env.NODE_ENV !== 'production') {
+    require('dotenv').config({ path: '../.env' });
+  }
 const express = require('express');
 const cors = require('cors');
 const { neon } = require('@neondatabase/serverless');
