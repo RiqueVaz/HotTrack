@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=${DATABASE_URL}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
+      - VAPID_SUBJECT=${VAPID_SUBJECT}
+      - QSTASH_TOKEN=${QSTASH_TOKEN}
+      - PUSHINPAY_SPLIT_ACCOUNT_ID=${PUSHINPAY_SPLIT_ACCOUNT_ID}
+      - CNPAY_SPLIT_PRODUCER_ID=${CNPAY_SPLIT_PRODUCER_ID}
+      - OASYFY_SPLIT_PRODUCER_ID=${OASYFY_SPLIT_PRODUCER_ID}
+      - BRPIX_SPLIT_RECIPIENT_ID=${BRPIX_SPLIT_RECIPIENT_ID}
+      - FRONTEND_URL=http://localhost:3001
+      - HOTTRACK_API_URL=http://localhost:3000/api
+      - DOCUMENTATION_URL=http://localhost:3002
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./admin-frontend:/app/admin-frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "3001:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  admin:
+    image: nginx:alpine
+    ports:
+      - "3002:80"
+    volumes:
+      - ./admin-frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    restart: unless-stopped

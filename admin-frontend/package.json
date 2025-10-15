@@ -1,0 +1,28 @@
+{
+  "name": "hottrack-admin-frontend",
+  "version": "2.0.0",
+  "description": "Admin Frontend do HotTrack SaaS",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve -s . -p 3002",
+    "dev": "npx live-server --port=3002 --host=localhost",
+    "build": "echo 'Static files - no build needed'",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "admin",
+    "frontend",
+    "hottrack",
+    "saas"
+  ],
+  "author": "HotTrack Team",
+  "license": "MIT",
+  "devDependencies": {
+    "live-server": "^1.2.2",
+    "serve": "^14.2.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}

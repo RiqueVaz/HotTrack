@@ -1,10 +1,10 @@
 // VERSÃO FINAL E COMPLETA - PRONTA PARA PRODUÇÃO
 // VERSÃO FINAL E COMPLETA - PRONTA PARA PRODUÇÃO
 
-// Carrega as variáveis de ambiente APENAS se não estivermos em produção (na Vercel)
+// Carrega as variáveis de ambiente APENAS se não estivermos em produção (Render/Vercel)
 if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ path: '../.env' });
-  }
+}
 const express = require('express');
 const cors = require('cors');
 const { neon } = require('@neondatabase/serverless');
@@ -27,11 +27,27 @@ const qstashClient = new Client({
 
 
 const app = express();
+
+// Configuração do servidor
+const PORT = process.env.PORT || 3000;
+
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// CORS configurado para múltiplos frontends
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_FRONTEND_URL,
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002'
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
+  credentials: true
 }));
 
 // Agentes HTTP/HTTPS para reutilização de conexão (melhora a performance)
@@ -3091,12 +3107,22 @@ app.get('/api/cron/process-disparo-queue', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3001;
+// Health check endpoint para Render
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        port: PORT
+    });
+});
 
-app.listen(PORT, () => {
+// Inicialização do servidor
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
     console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
