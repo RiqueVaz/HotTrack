@@ -1,0 +1,114 @@
+# ===================================================================
+#          ARQUIVO .GITIGNORE PARA PROJETOS FULL-STACK JS
+#    Node.js, Express, React, Vite, Next.js e Ferramentas Comuns
+# ===================================================================
+
+# ################ #
+# #   SEGURANÇA    #
+# ################ #
+
+# Nunca envie arquivos de ambiente para o repositório! Eles contêm segredos.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+
+# Não ignore o arquivo de exemplo, ele é útil para outros desenvolvedores.
+!*.env.example
+
+
+# #################### #
+# #   DEPENDÊNCIAS     #
+# #################### #
+
+# Pasta de dependências do Node.js (gerada pelo npm, yarn ou pnpm)
+node_modules/
+.pnpm-store/
+
+
+# ####################### #
+# #   BUILD & OUTPUT    #
+# ####################### #
+
+# Pastas de build de projetos frontend e backend
+dist/
+build/
+out/
+.output/
+
+# Cache do Turborepo (essencial para monorepos)
+.turbo
+
+# Cache do Next.js (caso use no futuro)
+.next/
+
+# Arquivos de deploy da Vercel
+.vercel/
+
+
+# #################### #
+# #   LOGS & DEBUG   #
+# #################### #
+
+# Arquivos de log gerais
+*.log
+logs
+*.log.*
+
+# Logs de debug de gerenciadores de pacotes
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ####################### #
+# #   IDE & EDITORES    #
+# ####################### #
+
+# Configurações do Visual Studio Code (permite compartilhar configurações úteis)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Configurações de IDEs da JetBrains (WebStorm, IntelliJ, etc.)
+.idea/
+
+# Outros editores
+*.sublime-project
+*.sublime-workspace
+
+
+# ######################### #
+# #   SISTEMA OPERACIONAL   #
+# ######################### #
+
+# Arquivos de sistema do macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Arquivos de sistema do Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+
+# ##################### #
+# #   TESTES & LINT   #
+# ##################### #
+
+# Pasta de relatórios de cobertura de testes (Jest, Vitest, etc.)
+coverage/
+
+# Cache do ESLint
+.eslintcache
+
+# Relatórios do NYC (ferramenta de cobertura)
+.nyc_output
