@@ -106,8 +106,8 @@
         /* ====================================================================== */
         
         .hotbot-scope {
-            --hotbot-accent: #00F5A0;
-            --hotbot-accent-dark: #00B372;
+            --hotbot-accent: var(--accent-primary); /* #38bdf8 - Azul da aplicação principal */
+            --hotbot-accent-dark: var(--accent-secondary); /* #0ea5e9 - Azul mais escuro */
             height: 100%;
             width: 100%;
             display: flex;
@@ -146,11 +146,11 @@
         }
     
         .hotbot-scope .nav-button.active {
-            background-color: rgba(0, 245, 160, 0.15);
-            border-color: var(--hotbot-accent);
-            color: var(--hotbot-accent);
+            background-color: rgba(56, 189, 248, 0.15);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
             font-weight: 600;
-            box-shadow: 0 0 15px rgba(0, 245, 160, 0.2);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
         }
     
         .hotbot-scope .hotbot-content {
@@ -159,7 +159,7 @@
             min-height: 0;
         }
         
-        /* Herda os estilos de formulário, mas com foco verde - ESTILOS APLICADOS */
+        /* Herda os estilos de formulário, mas com foco azul - ESTILOS APLICADOS */
         .hotbot-scope .form-input, 
         .hotbot-scope .form-select, 
         .hotbot-scope .form-textarea {
@@ -176,8 +176,8 @@
         .hotbot-scope .form-select:focus, 
         .hotbot-scope .form-textarea:focus {
             outline: none;
-            border-color: var(--hotbot-accent);
-            box-shadow: 0 0 0 3px rgba(0, 245, 160, 0.2);
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
         }
     
         .hotbot-scope .form-textarea {
@@ -187,9 +187,9 @@
     
         /* Botões - ESTILOS APLICADOS seguindo o padrão pressel */
         .hotbot-scope .btn {
-            background-color: var(--hotbot-accent);
-            color: #000;
-            border: 1px solid var(--hotbot-accent);
+            background-color: var(--accent-primary);
+            color: white;
+            border: 1px solid var(--accent-primary);
             transition: all 0.3s ease;
             border-radius: 0.5rem;
             padding: 0.75rem 1.5rem;
@@ -197,13 +197,13 @@
             cursor: pointer;
             position: relative;
             overflow: hidden;
-            box-shadow: 0 0 15px rgba(0, 245, 160, 0.2);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
         }
     
         .hotbot-scope .btn:hover {
-            background-color: var(--hotbot-accent-dark);
+            background-color: var(--accent-secondary);
             transform: translateY(-2px);
-            box-shadow: 0 0 25px rgba(0, 245, 160, 0.4);
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.4);
         }
     
         .hotbot-scope .btn:disabled {
@@ -216,13 +216,13 @@
         }
     
         .hotbot-scope .btn-primary {
-            background-color: var(--hotbot-accent);
-            color: #000;
-            border-color: var(--hotbot-accent);
+            background-color: var(--accent-primary);
+            color: white;
+            border-color: var(--accent-primary);
         }
     
         .hotbot-scope .btn-primary:hover {
-            background-color: var(--hotbot-accent-dark);
+            background-color: var(--accent-secondary);
         }
     
         .hotbot-scope .btn-secondary {
@@ -365,9 +365,9 @@
         }
     
         .hotbot-scope .variable-btn:hover {
-            background-color: rgba(0, 245, 160, 0.1);
-            color: var(--hotbot-accent);
-            border-color: var(--hotbot-accent);
+            background-color: rgba(56, 189, 248, 0.1);
+            color: var(--accent-primary);
+            border-color: var(--accent-primary);
         }
     
         /* Ajustes para checkboxes - ESTILOS APLICADOS */
@@ -404,18 +404,18 @@
         .hotbot-scope .flow-sidebar h3 { margin-top: 0; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color); font-size: 1.1rem; }
     
         .hotbot-scope .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: var(--text-secondary); }
-        .hotbot-scope .node-button:hover { border-color: var(--hotbot-accent); color: var(--hotbot-accent); background-color: rgba(0, 245, 160, 0.05); }
+        .hotbot-scope .node-button:hover { border-color: var(--accent-primary); color: var(--accent-primary); background-color: rgba(56, 189, 248, 0.05); }
     
         .hotbot-scope .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background-color: var(--bg-secondary); z-index: 10; padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
         
         /* Estilos dos Nós do ReactFlow */
         .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
-        .hotbot-scope .react-flow__node.selected { border: 2px solid var(--hotbot-accent); box-shadow: 0 0 20px rgba(0, 245, 160, 0.3); }
+        .hotbot-scope .react-flow__node.selected { border: 2px solid var(--accent-primary); box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
         
         .hotbot-scope .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
         .hotbot-scope .node-content { padding: 1rem; font-size: 0.9rem; }
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
-        .hotbot-scope .react-flow__handle:hover { border-color: var(--hotbot-accent); }
+        .hotbot-scope .react-flow__handle:hover { border-color: var(--accent-primary); }
         .hotbot-scope .handle-label { position: absolute; bottom: -20px; font-size: 10px; color: var(--text-secondary); }
     
         /* Cores dos Headers dos Nós */
@@ -437,7 +437,7 @@
         .hotbot-scope .conversations-list { overflow-y: auto; flex: 1; }
         .hotbot-scope .conversation-item { padding: 1rem; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background-color 0.2s; }
         .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
-        .hotbot-scope .conversation-item.active { background-color: rgba(0, 245, 160, 0.1); border-left: 3px solid var(--hotbot-accent); }
+        .hotbot-scope .conversation-item.active { background-color: rgba(56, 189, 248, 0.1); border-left: 3px solid var(--accent-primary); }
         .hotbot-scope .conversation-item-name { font-weight: 600; color: var(--text-primary); }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
@@ -449,8 +449,8 @@
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
         .hotbot-scope .message-user { background-color: var(--bg-primary); align-self: flex-start; border-top-left-radius: 0; }
-        .hotbot-scope .message-attendant { background-color: #003825; align-self: flex-end; border-top-right-radius: 0; }
-        .hotbot-scope .message-attendant strong { color: var(--hotbot-accent); }
+        .hotbot-scope .message-attendant { background-color: #0c4a6e; align-self: flex-end; border-top-right-radius: 0; }
+        .hotbot-scope .message-attendant strong { color: var(--accent-primary); }
         .hotbot-scope .chat-media { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; cursor: pointer; }
         
         .hotbot-scope .chat-input-area { padding: 1rem; border-top: 1px solid var(--border-color); }
