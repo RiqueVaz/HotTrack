@@ -1917,29 +1917,47 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 app.post('/api/webhook/telegram/:botId', async (req, res) => {
     const { botId } = req.params;
-    const body = req.body;
+    // CORREÇÃO 1: Extrai o objeto 'message' do corpo da requisição logo no início.
+    const { message } = req.body; 
+    
+    // Responde imediatamente ao Telegram para evitar timeouts.
     res.sendStatus(200);
 
     try {
-        const chatId = message?.chat?.id;
-        if (!chatId) return;
+        // --- Bloco de Segurança ---
+        // Se a requisição não for uma mensagem válida, ignora para evitar erros.
+        if (!message || !message.chat || !message.chat.id) {
+            console.warn('[Webhook] Requisição recebida sem a estrutura de mensagem esperada. Ignorando.');
+            return; 
+        }
+        const chatId = message.chat.id;
 
-        // --- AJUSTE PARA CANCELAR A TAREFA DO WORKER ---
+        // --- Cancelamento da Tarefa do Worker ---
+        // Tenta encontrar uma tarefa agendada para este usuário.
         const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
+        // Se encontrar uma tarefa, cancela no QStash e limpa do banco de dados.
         if (userState && userState.scheduled_message_id) {
-            console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando mensagem agendada ${userState.scheduled_message_id} no QStash.`);
-            await qstashClient.messages.delete(userState.scheduled_message_id);
-            // Limpa o ID da mensagem do banco
+            console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando msg ${userState.scheduled_message_id} no QStash.`);
+            // CORREÇÃO 2: Usa o método correto para deletar a mensagem no QStash v2.
+            await qstashClient.messages.delete({ id: userState.scheduled_message_id });
             await sql`UPDATE user_flow_states SET scheduled_message_id = NULL WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         }
         
+        // --- Processamento Normal da Mensagem ---
+        // CORREÇÃO 3: Busca os dados do bot ANTES de tentar usá-los.
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
+        if (!bot) {
+            console.warn(`[Webhook] Webhook recebido para botId não encontrado: ${botId}`);
+            return;
+        }
         const { seller_id: sellerId, bot_token: botToken } = bot;
         
-        const text = message.text;
+        const text = message.text || ''; // Garante que `text` sempre seja uma string
         const isStartCommand = text.startsWith('/start ');
         const clickIdValue = isStartCommand ? text : null;
 
+        // Salva a mensagem do usuário no banco de dados.
         await sql`
             INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
             VALUES (${sellerId}, ${botId}, ${chatId}, ${message.message_id}, ${message.from.id}, ${message.from.first_name}, ${message.from.last_name || null}, ${message.from.username || null}, ${clickIdValue}, ${text}, 'user')
@@ -1951,6 +1969,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             initialVars.click_id = clickIdValue;
         }
         
+        // Inicia ou continua o motor de fluxo para o usuário.
         await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
 
     } catch (error) {
