@@ -3119,6 +3119,30 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// ==========================================================
+//          SERVIÇO DE ARQUIVOS ESTÁTICOS (FRONTEND & ADMIN)
+// ==========================================================
+
+// Servir frontend estático
+app.use(express.static(path.join(__dirname, 'frontend')));
+
+// Servir admin estático em /admin
+app.use('/admin', express.static(path.join(__dirname, 'admin-frontend')));
+
+// Rota catch-all para SPA - DEVE SER A ÚLTIMA ROTA
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api')) {
+    // API routes - não servir arquivos estáticos
+    return res.status(404).json({ error: 'API route not found' });
+  } else if (req.path.startsWith('/admin')) {
+    // Admin routes
+    return res.sendFile(path.join(__dirname, 'admin-frontend', 'index.html'));
+  } else {
+    // Frontend routes
+    return res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+  }
+}); 
+
 // Inicialização do servidor
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
