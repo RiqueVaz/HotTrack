@@ -124,7 +124,9 @@
     <script>
     // --- CONFIG & STATE ---
     const CONFIG = {
-        API_URL: 'https://backend-production-xxxx.up.railway.app/api',
+        API_URL: window.location.origin.includes('railway') 
+            ? 'https://backend-production-xxxx.up.railway.app/api' 
+            : 'http://localhost:3000/api',
         NAV_ITEMS: [
             { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
             { id: 'sellers', label: 'Vendedores', icon: 'users' },

@@ -517,7 +517,9 @@
     // ============================================
     const App = {
         state: {
-            API_BASE_URL: 'https://backend-production-xxxx.up.railway.app',
+            API_BASE_URL: window.location.origin.includes('railway') 
+                ? 'https://backend-production-xxxx.up.railway.app' 
+                : 'http://localhost:3000',
             token: null,
             data: { 
                 pixels: [],

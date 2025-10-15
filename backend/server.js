@@ -38,6 +38,7 @@ app.use(express.urlencoded({ extended: true }));
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.ADMIN_FRONTEND_URL,
+  /^https:\/\/.*\.up\.railway\.app$/,  // Aceita qualquer subdomínio do Railway
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002'
@@ -49,6 +50,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
   credentials: true
 }));
+
 
 // Agentes HTTP/HTTPS para reutilização de conexão (melhora a performance)
 const httpAgent = new http.Agent({ keepAlive: true });

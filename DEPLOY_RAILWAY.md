@@ -25,9 +25,13 @@ docker-compose up --build
 4. **Selecione "Deploy from GitHub repo"**
 5. **Escolha seu repositório HotTrack**
 
-### 3. Configurar Serviços
+### 3. Configurar 3 Serviços Separados
 
-O Railway detectará automaticamente os Dockerfiles e criará 3 serviços:
+O Railway detectará automaticamente os 3 Dockerfiles e criará 3 serviços:
+
+- **Backend:** `railway.json` → `backend-production-xxxx.up.railway.app`
+- **Frontend:** `frontend/Dockerfile` → `frontend-production-xxxx.up.railway.app`  
+- **Admin:** `admin-frontend/Dockerfile` → `admin-production-xxxx.up.railway.app`
 
 #### Backend API
 - **Detectado automaticamente** pelo `Dockerfile` (raiz)
