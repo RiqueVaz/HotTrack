@@ -13,7 +13,12 @@ const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
+const { Client } = require("@upstash/qstash");
+const { verifySignature } = require("@upstash/qstash/nextjs");
 
+const qstashClient = new Client({
+  token: process.env.QSTASH_TOKEN,
+});
 
 
 const app = express();
@@ -53,34 +58,7 @@ async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     }
 }
 
-// --- ROTA DO CRON JOB ---
-app.post('/api/cron/process-timeouts', async (req, res) => {
-    const cronSecret = process.env.CRON_SECRET;
-    if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
-        return res.status(401).send('Unauthorized');
-    }
-    try {
-        const pendingTimeouts = await sql`SELECT * FROM flow_timeouts WHERE execute_at <= NOW()`;
-        if (pendingTimeouts.length > 0) {
-            console.log(`[CRON] Encontrados ${pendingTimeouts.length} timeouts para processar.`);
-            for (const timeout of pendingTimeouts) {
-                const { chat_id, bot_id, target_node_id, variables } = timeout;
-                await sql`DELETE FROM flow_timeouts WHERE id = ${timeout.id}`;
-                const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
-                if (userState && userState.waiting_for_input) {
-                    const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
-                    if (bot) {
-                        processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
-                    }
-                }
-            }
-        }
-        res.status(200).send(`Processados ${pendingTimeouts.length} timeouts.`);
-    } catch (error) {
-        console.error('[CRON] Erro ao processar timeouts:', error);
-        res.status(500).send('Erro interno no servidor.');
-    }
-});
+
 
 // --- CONFIGURAÇÃO DAS NOTIFICAÇÕES ---
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -1825,17 +1803,38 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                    
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
                     
-                    if(noReplyNodeId){
-                        console.log(`[Flow Engine] Agendando timeout de ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-                        await sql`
-                            INSERT INTO flow_timeouts (chat_id, bot_id, execute_at, target_node_id, variables)
-                            VALUES (${chatId}, ${botId}, NOW() + INTERVAL '${timeoutMinutes} minutes', ${noReplyNodeId}, ${JSON.stringify(variables)})
-                        `;
+                    if (noReplyNodeId) {
+                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                        
+                        console.log(`[Flow Engine] Agendando worker via QStash em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+            
+                        // A MÁGICA ACONTECE AQUI
+                        // Em vez de INSERT no SQL, você publica uma mensagem no QStash
+                        const response = await qstashClient.publishJSON({
+                            // A URL do seu worker que será chamado
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`, 
+                            // O corpo da requisição que seu worker vai receber
+                            body: {
+                                chat_id: chatId,
+                                bot_id: botId,
+                                target_node_id: noReplyNodeId,
+                                variables: variables
+                            },
+                            // Atraso para a entrega da mensagem
+                            delay: `${timeoutMinutes}m`,
+                            // ID único para poder cancelar depois
+                            contentBasedDeduplication: true, // Garante que a mesma tarefa não seja duplicada
+                            "Upstash-Method": "POST" // Especifica que o método deve ser POST
+                        });
+                        
+                        // Salva o ID da mensagem para poder cancelar depois
+                        await sql`UPDATE user_flow_states SET scheduled_message_id = '${response.messageId}' WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     }
-                    currentNodeId = null; 
+                    
+                    currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
@@ -1922,16 +1921,17 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     res.sendStatus(200);
 
     try {
-        const message = body.message;
         const chatId = message?.chat?.id;
-        if (!chatId || !message.text) return;
-        
-        await sql`DELETE FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        if (!chatId) return;
 
-        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
-        if (!bot) {
-            console.warn(`[Webhook] Webhook recebido para botId não encontrado: ${botId}`);
-            return;
+        // --- AJUSTE PARA CANCELAR A TAREFA DO WORKER ---
+        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        
+        if (userState && userState.scheduled_message_id) {
+            console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando mensagem agendada ${userState.scheduled_message_id} no QStash.`);
+            await qstashClient.messages.delete(userState.scheduled_message_id);
+            // Limpa o ID da mensagem do banco
+            await sql`UPDATE user_flow_states SET scheduled_message_id = NULL WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         }
         
         const { seller_id: sellerId, bot_token: botToken } = bot;
