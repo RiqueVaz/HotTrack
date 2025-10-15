@@ -19,7 +19,7 @@ const webpush = require('web-push');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://hottrackerbot.netlify.app',
+  origin: process.env.FRONTEND_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
