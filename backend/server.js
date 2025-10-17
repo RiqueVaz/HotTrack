@@ -476,22 +476,39 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-// Importa a lógica do worker que você acabou de finalizar
-const processTimeoutWorker = require('./worker/process-timeout'); // Ajuste o caminho se necessário
+// Importa o handler PURO do worker
+const processTimeoutWorker = require('./worker/process-timeout');
 
-// Cria o endpoint que o QStash irá chamar
-app.post('/api/worker/process-timeout', express.raw({ type: 'application/json' }), async (req, res) => {
+// Substitua a sua rota antiga por esta
+app.post(
+  '/api/worker/process-timeout',
+
+  // 1. O express.raw() garante que o body não seja modificado
+  express.raw({ type: 'application/json' }), 
+
+  // 2. Criamos um middleware anônimo que usa o verifySignature para PROTEGER o worker
+  async (req, res, next) => {
     try {
-        // Recria o objeto `req` com o corpo decodificado para o `verifySignature` funcionar
-        const newReq = {
-            ...req,
-            body: req.body.toString() 
-        };
-        await processTimeoutWorker(newReq, res);
-    } catch (e) {
-        res.status(500).send(`Webhook Error: ${e.message}`);
+      // A função verifySignature espera um handler e o executa se a assinatura for válida.
+      // Se for inválida, ela mesma joga um erro.
+      const wrappedHandler = verifySignature(
+        // Passamos uma função que chama seu worker e o `next()` para continuar se necessário
+        async (reqAsNext) => {
+          // Precisamos passar o `req` e `res` originais para o worker
+          await processTimeoutWorker(req, res);
+        }
+      );
+
+      // Executamos o handler protegido
+      await wrappedHandler(req);
+
+    } catch (error) {
+      // Se verifySignature jogar um erro (assinatura inválida), respondemos com 401
+      console.error("QStash Signature Verification Failed:", error.message);
+      return res.status(401).send("Invalid signature");
     }
-});
+  }
+);
 
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
