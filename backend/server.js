@@ -19,17 +19,61 @@ const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
 const { Client } = require("@upstash/qstash");
-const { verifySignature } = require("@upstash/qstash/nextjs");
+const { Receiver } = require("@upstash/qstash");
 
 const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
 });
 
+const processTimeoutWorker = require('./worker/process-timeout');
 
+const receiver = new Receiver({
+    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+  });
+  
 const app = express();
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
+
+
+app.post(
+  '/api/worker/process-timeout',
+  express.raw({ type: 'application/json' }), // 1. Ainda é OBRIGATÓRIO para pegar o corpo original
+  async (req, res) => {
+    try {
+      // 2. Extraia as informações necessárias manualmente
+      const signature = req.headers["upstash-signature"];
+      const bodyString = req.body.toString(); // O Receiver espera uma string, não um Buffer
+
+      // 3. Verifique a assinatura
+      const isValid = await receiver.verify({
+        signature,
+        body: bodyString,
+      });
+
+      // 4. Se a assinatura for inválida, rejeite a requisição
+      if (!isValid) {
+        console.error("QStash Signature Verification Failed (Manual Receiver)");
+        return res.status(401).send("Invalid signature");
+      }
+
+      // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
+      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
+      req.body = JSON.parse(bodyString);
+      await processTimeoutWorker(req, res);
+
+    } catch (error) {
+      console.error("Erro crítico no handler do worker:", error);
+      res.status(500).send("Internal Server Error");
+    }
+  }
+);
+// ==========================================================
+// FIM DA ROTA DO QSTASH
+// ==========================================================
+
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -476,40 +520,7 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-const processTimeoutWorker = require('./worker/process-timeout'); 
 
-
-// SUBSTITUA A SUA ROTA ANTIGA POR ESTA VERSÃO COMPLETA
-app.post(
-  '/api/worker/process-timeout',
-  
-  // 1. Middleware do Express que captura o corpo da requisição sem modificá-lo
-  express.raw({ type: 'application/json' }), 
-  
-  // 2. Middleware de verificação que protege sua lógica
-  async (req, res, next) => {
-    try {
-      // O verifySignature agora envolve seu worker.
-      // Ele só será executado se a assinatura for válida.
-      const wrappedHandler = verifySignature(
-        async () => {
-          // O corpo da requisição agora é um Buffer, precisamos decodificá-lo
-          // para que o worker consiga ler o JSON.
-          req.body = JSON.parse(req.body.toString());
-          await processTimeoutWorker(req, res);
-        }
-      );
-      
-      // Executa o handler protegido
-      await wrappedHandler(req, res);
-
-    } catch (error) {
-      // Se a assinatura for inválida, o verifySignature joga um erro.
-      console.error("QStash Signature Verification Failed:", error.message);
-      return res.status(401).send("Invalid signature");
-    }
-  }
-);
 
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
