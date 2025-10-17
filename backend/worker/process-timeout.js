@@ -38,6 +38,16 @@ async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     }
 }
 
+async function replaceVariables(text, variables) {
+    if (!text) return '';
+    let processedText = text;
+    for (const key in variables) {
+        const regex = new RegExp(`{{${key}}}`, 'g');
+        processedText = processedText.replace(regex, variables[key]);
+    }
+    return processedText;
+}
+
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
