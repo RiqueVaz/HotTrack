@@ -1131,7 +1131,7 @@ app.post('/api/bots/:id/set-webhook', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: 'O token do bot não está configurado. Salve um token válido primeiro.' });
         }
         const token = bot.bot_token.trim();
-        const webhookUrl = `${HOTTRACK_API_URL}/webhook/telegram/${id}`;
+        const webhookUrl = `${HOTTRACK_API_URL}/api/webhook/telegram/${id}`;
         const telegramApiUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${webhookUrl}`;
         
         const response = await axios.get(telegramApiUrl);
