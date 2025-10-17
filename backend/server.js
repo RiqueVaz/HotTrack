@@ -1992,7 +1992,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         if (userState && userState.scheduled_message_id) {
             console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando msg ${userState.scheduled_message_id} no QStash.`);
             // CORREÇÃO 2: Usa o método correto para deletar a mensagem no QStash v2.
-            await qstashClient.messages.delete({ id: userState.scheduled_message_id });
+            await qstashClient.messages.delete(userState.scheduled_message_id);
             await sql`UPDATE user_flow_states SET scheduled_message_id = NULL WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         }
         
