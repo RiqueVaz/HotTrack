@@ -476,6 +476,23 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
+// Importa a lógica do worker que você acabou de finalizar
+const processTimeoutWorker = require('./worker/process-timeout'); // Ajuste o caminho se necessário
+
+// Cria o endpoint que o QStash irá chamar
+app.post('/api/worker/process-timeout', express.raw({ type: 'application/json' }), async (req, res) => {
+    try {
+        // Recria o objeto `req` com o corpo decodificado para o `verifySignature` funcionar
+        const newReq = {
+            ...req,
+            body: req.body.toString() 
+        };
+        await processTimeoutWorker(newReq, res);
+    } catch (e) {
+        res.status(500).send(`Webhook Error: ${e.message}`);
+    }
+});
+
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
     const adminKey = req.headers['x-admin-api-key'];

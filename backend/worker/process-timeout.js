@@ -126,12 +126,176 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) 
     }
 }
 
-// COPIE AQUI A FUNÇÃO `processFlow` COMPLETA DO SEU ARQUIVO PRINCIPAL
-// Exemplo (simplificado, cole a sua versão completa):
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
-    console.log(`[WORKER - Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId}`);
-    // ... cole sua lógica completa da função processFlow aqui ...
-    // É crucial que esta função esteja completa e funcional.
+    console.log(`[Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
+    if (!flow || !flow.nodes) {
+        console.log(`[Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+        return;
+    }
+
+    const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+    const nodes = flowData.nodes || [];
+    const edges = flowData.edges || [];
+
+    let currentNodeId = startNodeId;
+    let variables = initialVariables;
+
+    if (!currentNodeId) {
+        const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        if (userState && userState.waiting_for_input) {
+            console.log(`[Flow Engine] Usuário ${chatId} respondeu. Continuando do nó ${userState.current_node_id} pelo caminho 'com resposta'.`);
+            currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
+            variables = userState.variables;
+        } else {
+            console.log(`[Flow Engine] Iniciando novo fluxo para ${chatId} a partir do gatilho.`);
+            const startNode = nodes.find(node => node.type === 'trigger');
+            if (startNode) {
+                currentNodeId = findNextNode(startNode.id, null, edges);
+            }
+        }
+    }
+
+    if (!currentNodeId) {
+        console.log(`[Flow Engine] Fim do fluxo ou nenhum nó inicial encontrado para ${chatId}.`);
+        await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        return;
+    }
+
+    let safetyLock = 0;
+    while (currentNodeId && safetyLock < 20) {
+        const currentNode = nodes.find(node => node.id === currentNodeId);
+        if (!currentNode) {
+            console.error(`[Flow Engine] Erro: Nó ${currentNodeId} não encontrado no fluxo.`);
+            break;
+        }
+
+        await sql`
+            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input)
+            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false)
+            ON CONFLICT (chat_id, bot_id)
+            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false;
+        `;
+
+        switch (currentNode.type) {
+            case 'message':
+                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
+                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
+                }
+                await sendMessage(chatId, currentNode.data.text, botToken, sellerId, botId, currentNode.data.showTyping);
+
+                if (currentNode.data.waitForReply) {
+                    await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    
+                    if (noReplyNodeId) {
+                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                        
+                        console.log(`[Flow Engine] Agendando worker via QStash em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+            
+                        // A MÁGICA ACONTECE AQUI
+                        // Em vez de INSERT no SQL, você publica uma mensagem no QStash
+                        const response = await qstashClient.publishJSON({
+                            // A URL do seu worker que será chamado
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`, 
+                            // O corpo da requisição que seu worker vai receber
+                            body: {
+                                chat_id: chatId,
+                                bot_id: botId,
+                                target_node_id: noReplyNodeId,
+                                variables: variables
+                            },
+                            // Atraso para a entrega da mensagem
+                            delay: `${timeoutMinutes}m`,
+                            // ID único para poder cancelar depois
+                            contentBasedDeduplication: true, // Garante que a mesma tarefa não seja duplicada
+                            "Upstash-Method": "POST" // Especifica que o método deve ser POST
+                        });
+                        
+                        // Salva o ID da mensagem para poder cancelar depois
+                        await sql`UPDATE user_flow_states SET scheduled_message_id = '${response.messageId}' WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    }
+                    
+                    currentNodeId = null;
+                } else {
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                }
+                break;
+
+            case 'delay':
+                const delaySeconds = currentNode.data.delayInSeconds || 1;
+                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                currentNodeId = findNextNode(currentNodeId, null, edges);
+                break;
+            
+            case 'action_pix':
+                try {
+                    const valueInCents = currentNode.data.valueInCents;
+                    if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+                    
+                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    const [userFlowState] = await sql`SELECT variables FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    const click_id = userFlowState.variables.click_id;
+                    if (!click_id) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+                    
+                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error("Dados do clique não encontrados para gerar o PIX.");
+
+                    const provider = seller.pix_provider_primary || 'pushinpay';
+                    const ip_address = click.ip_address;
+                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, HOTTRACK_API_URL.replace('/api', ''), seller.api_key, ip_address);
+                    
+                    await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${valueInCents / 100}, ${pixResult.qr_code_text}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})`;
+                    
+                    variables.last_transaction_id = pixResult.transaction_id;
+                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    await sendMessage(chatId, `Pix copia e cola gerado:\n\n\`${pixResult.qr_code_text}\``, botToken, sellerId, botId, true);
+                } catch (error) {
+                    console.error("[Flow Engine] Erro ao gerar PIX:", error);
+                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                }
+                currentNodeId = findNextNode(currentNodeId, null, edges);
+                break;
+
+            case 'action_check_pix':
+                try {
+                    const transactionId = variables.last_transaction_id;
+                    if (!transactionId) throw new Error("Nenhum ID de transação PIX encontrado para consultar.");
+                    
+                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    
+                    if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+
+                    if (transaction.status === 'paid') {
+                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                        currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
+                    } else {
+                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                        currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
+                    }
+                } catch (error) {
+                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                     await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                }
+                break;
+
+            default:
+                console.warn(`[Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
+                currentNodeId = null;
+                break;
+        }
+
+        if (!currentNodeId) {
+            const pendingTimeouts = await sql`SELECT 1 FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if(pendingTimeouts.length === 0){
+                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            }
+        }
+        safetyLock++;
+    }
 }
 
 
@@ -141,34 +305,28 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 async function handler(req, res) {
     try {
-        // 1. Extrai os dados do corpo da requisição enviada pelo QStash
         const { chat_id, bot_id, target_node_id, variables } = req.body;
         console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}`);
 
-        // 2. Verifica se o usuário ainda está aguardando uma resposta.
-        // Isso previne que o fluxo de "não respondeu" seja executado se o usuário respondeu no último segundo.
         const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
 
-        // 3. Se o estado for "waiting_for_input", significa que o usuário não respondeu a tempo.
         if (userState && userState.waiting_for_input) {
             console.log(`[WORKER] Timeout confirmado! Processando fluxo para ${chat_id} a partir do nó ${target_node_id}`);
             
-            // Busca as credenciais do bot para poder continuar o fluxo
             const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
 
             if (bot) {
-                // Chama o motor de fluxo, mas forçando o início a partir do nó de "não respondeu"
+                // CORREÇÃO DE ROBUSTEZ: Limpa o estado de espera ANTES de continuar o fluxo.
+                await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+
                 await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
             } else {
-                 console.error(`[WORKER] Bot com ID ${bot_id} não encontrado no banco.`);
+                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado no banco.`);
             }
         } else {
-            // Se o estado não é mais "waiting_for_input", significa que o usuário já respondeu
-            // e o webhook principal já cancelou esta tarefa (ou está prestes a).
             console.log(`[WORKER] Tarefa para ${chat_id} ignorada, pois o usuário já respondeu.`);
         }
 
-        // 4. Responde com sucesso para o QStash saber que a tarefa foi processada.
         res.status(200).send('Worker finished successfully.');
 
     } catch (error) {
