@@ -478,8 +478,6 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
 
 const processTimeoutWorker = require('./worker/process-timeout'); 
 
-// Importe o verificador de assinatura aqui no backend
-const { verifySignature } = require("@upstash/qstash/nextjs");
 
 // SUBSTITUA A SUA ROTA ANTIGA POR ESTA VERSÃO COMPLETA
 app.post(
