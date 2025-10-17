@@ -3149,11 +3149,18 @@ app.get('/api/config', (req, res) => {
 //          SERVIÇO DE ARQUIVOS ESTÁTICOS (FRONTEND & ADMIN)
 // ==========================================================
 
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Define os caminhos baseados no ambiente
+const frontendPath = isProduction ? 'frontend' : '../frontend';
+const adminFrontendPath = isProduction ? 'admin-frontend' : '../admin-frontend';
+
 // Servir frontend estático
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.use(express.static(path.join(__dirname, frontendPath)));
 
 // Servir admin estático em /admin
-app.use('/admin', express.static(path.join(__dirname, '../admin-frontend')));
+app.use('/admin', express.static(path.join(__dirname, adminFrontendPath)));
 
 // Rota catch-all para SPA - DEVE SER A ÚLTIMA ROTA
 app.get('*', (req, res) => {
@@ -3162,12 +3169,12 @@ app.get('*', (req, res) => {
     return res.status(404).json({ error: 'API route not found' });
   } else if (req.path.startsWith('/admin')) {
     // Admin routes
-    return res.sendFile(path.join(__dirname, '../admin-frontend', 'index.html'));
+    return res.sendFile(path.join(__dirname, adminFrontendPath, 'index.html'));
   } else {
     // Frontend routes
-    return res.sendFile(path.join(__dirname, '../frontend', 'index.html'));
+    return res.sendFile(path.join(__dirname, frontendPath, 'index.html'));
   }
-}); 
+});
 
 // Inicialização do servidor
 app.listen(PORT, '0.0.0.0', () => {
