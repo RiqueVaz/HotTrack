@@ -40,7 +40,9 @@ const allowedOrigins = [
   process.env.ADMIN_FRONTEND_URL,
   /^https:\/\/.*\.up\.railway\.app$/,  // Aceita qualquer subdomínio do Railway
   'http://localhost:3000',
-  'http://localhost:3001'
+  'http://localhost:3001',  
+  'http://localhost:3000/admin',
+  'http://localhost:3001/admin'
 ].filter(Boolean);
 
 app.use(cors({
@@ -482,6 +484,22 @@ function authenticateAdmin(req, res, next) {
     }
     next();
 }
+
+// Endpoint para validar chave de admin
+app.post('/api/admin/validate-key', (req, res) => {
+    const adminKey = req.headers['x-admin-api-key'];
+    if (!adminKey || adminKey !== ADMIN_API_KEY) {
+        return res.status(403).json({ 
+            message: 'Chave de administrador inválida.',
+            valid: false 
+        });
+    }
+    res.status(200).json({ 
+        message: 'Chave válida.',
+        valid: true,
+        timestamp: new Date().toISOString()
+    });
+});
 
 async function sendHistoricalMetaEvent(eventName, clickData, transactionData, targetPixel) {
     let payload_sent = null;
