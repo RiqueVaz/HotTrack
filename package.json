@@ -5,8 +5,9 @@
   "main": "backend/server.js",
   "scripts": {
     "start": "node backend/server.js",
-    "dev": "docker-compose up --build",
-    "test": "docker-compose up --build"
+    "dev": "cd backend && npm run dev",
+    "install:backend": "cd backend && npm install",
+    "test": "echo 'No tests configured'"
   },
   "keywords": [
     "saas",

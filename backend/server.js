@@ -29,7 +29,7 @@ const qstashClient = new Client({
 const app = express();
 
 // Configuração do servidor
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -40,8 +40,9 @@ const allowedOrigins = [
   process.env.ADMIN_FRONTEND_URL,
   /^https:\/\/.*\.up\.railway\.app$/,  // Aceita qualquer subdomínio do Railway
   'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002'
+  'http://localhost:3001',  
+  'http://localhost:3000/admin',
+  'http://localhost:3001/admin'
 ].filter(Boolean);
 
 app.use(cors({
@@ -484,6 +485,22 @@ function authenticateAdmin(req, res, next) {
     next();
 }
 
+// Endpoint para validar chave de admin
+app.post('/api/admin/validate-key', (req, res) => {
+    const adminKey = req.headers['x-admin-api-key'];
+    if (!adminKey || adminKey !== ADMIN_API_KEY) {
+        return res.status(403).json({ 
+            message: 'Chave de administrador inválida.',
+            valid: false 
+        });
+    }
+    res.status(200).json({ 
+        message: 'Chave válida.',
+        valid: true,
+        timestamp: new Date().toISOString()
+    });
+});
+
 async function sendHistoricalMetaEvent(eventName, clickData, transactionData, targetPixel) {
     let payload_sent = null;
     try {
@@ -657,14 +674,15 @@ app.get('/api/admin/ranking', authenticateAdmin, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar ranking.' });
     }
 });
+// No seu backend.js
 app.get('/api/admin/sellers', authenticateAdmin, async (req, res) => {
-    try {
-        const sellers = await sql`SELECT id, name, email, created_at, is_active FROM sellers ORDER BY created_at DESC;`;
+      try {
+        const sellers = await sql`SELECT id, name, email, created_at, is_active, commission_rate FROM sellers ORDER BY created_at DESC;`;
         res.json(sellers);
-    } catch (error) {
+      } catch (error) {
         res.status(500).json({ message: 'Erro ao listar vendedores.' });
-    }
-});
+      }
+    });
 app.post('/api/admin/sellers/:id/toggle-active', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
     const { isActive } = req.body;
@@ -3119,15 +3137,23 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Config endpoint para frontend
+app.get('/api/config', (req, res) => {
+    res.status(200).json({
+        apiUrl: process.env.HOTTRACK_API_URL || `http://localhost:${PORT}`,
+        environment: process.env.NODE_ENV || 'development'
+    });
+});
+
 // ==========================================================
 //          SERVIÇO DE ARQUIVOS ESTÁTICOS (FRONTEND & ADMIN)
 // ==========================================================
 
 // Servir frontend estático
-app.use(express.static(path.join(__dirname, 'frontend')));
+app.use(express.static(path.join(__dirname, '../frontend')));
 
 // Servir admin estático em /admin
-app.use('/admin', express.static(path.join(__dirname, 'admin-frontend')));
+app.use('/admin', express.static(path.join(__dirname, '../admin-frontend')));
 
 // Rota catch-all para SPA - DEVE SER A ÚLTIMA ROTA
 app.get('*', (req, res) => {
@@ -3136,10 +3162,10 @@ app.get('*', (req, res) => {
     return res.status(404).json({ error: 'API route not found' });
   } else if (req.path.startsWith('/admin')) {
     // Admin routes
-    return res.sendFile(path.join(__dirname, 'admin-frontend', 'index.html'));
+    return res.sendFile(path.join(__dirname, '../admin-frontend', 'index.html'));
   } else {
     // Frontend routes
-    return res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+    return res.sendFile(path.join(__dirname, '../frontend', 'index.html'));
   }
 }); 
 

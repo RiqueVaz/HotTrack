@@ -25,29 +25,18 @@ docker-compose up --build
 4. **Selecione "Deploy from GitHub repo"**
 5. **Escolha seu repositório HotTrack**
 
-### 3. Configurar 3 Serviços Separados
+### 3. Deploy Automático
 
-O Railway detectará automaticamente os 3 Dockerfiles e criará 3 serviços:
+O Railway detectará automaticamente o Dockerfile e criará um serviço único:
 
-- **Backend:** `railway.json` → `backend-production-xxxx.up.railway.app`
-- **Frontend:** `frontend/Dockerfile` → `frontend-production-xxxx.up.railway.app`  
-- **Admin:** `admin-frontend/Dockerfile` → `admin-production-xxxx.up.railway.app`
+- **HotTrack:** `Dockerfile` → `hottrack-production-xxxx.up.railway.app`
 
-#### Backend API
-- **Detectado automaticamente** pelo `Dockerfile` (raiz)
-- **Porta:** 3000 (automática)
-
-#### Frontend Principal  
-- **Detectado automaticamente** pelo `frontend/Dockerfile`
-- **Porta:** 80 (automática)
-
-#### Admin Frontend
-- **Detectado automaticamente** pelo `admin-frontend/Dockerfile`
-- **Porta:** 80 (automática)
+#### Serviço Único
+- **Backend API:** `http://hottrack-production-xxxx.up.railway.app/api`
+- **Frontend:** `http://hottrack-production-xxxx.up.railway.app/`
+- **Admin:** `http://hottrack-production-xxxx.up.railway.app/admin`
 
 ### 4. Configurar Variáveis de Ambiente
-
-**Apenas no Backend:**
 
 ```bash
 # Obrigatórias
@@ -85,15 +74,16 @@ BRPIX_SPLIT_RECIPIENT_ID=seu_recipient_id_brpix
 
 Após o deploy, suas URLs serão:
 
-- **Backend:** `https://backend-production-xxxx.up.railway.app`
-- **Frontend:** `https://frontend-production-xxxx.up.railway.app`
-- **Admin:** `https://admin-production-xxxx.up.railway.app`
+- **HotTrack:** `https://hottrack-production-xxxx.up.railway.app`
+  - **Frontend:** `https://hottrack-production-xxxx.up.railway.app/`
+  - **Admin:** `https://hottrack-production-xxxx.up.railway.app/admin`
+  - **API:** `https://hottrack-production-xxxx.up.railway.app/api`
 
 ## 🧪 Testando
 
-1. **Health Check:** `https://backend-production-xxxx.up.railway.app/api/health`
-2. **Frontend:** Acesse a URL do frontend
-3. **Admin:** Acesse a URL do admin com sua `ADMIN_API_KEY`
+1. **Health Check:** `https://hottrack-production-xxxx.up.railway.app/api/health`
+2. **Frontend:** Acesse `https://hottrack-production-xxxx.up.railway.app/`
+3. **Admin:** Acesse `https://hottrack-production-xxxx.up.railway.app/admin` com sua `ADMIN_API_KEY`
 
 ## 🔧 Troubleshooting
 
