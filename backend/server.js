@@ -1850,7 +1850,21 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-                variables = { ...initialVariables, ...(userState.variables || {}) };
+        
+                // --- INÍCIO DA CORREÇÃO ---
+                let parsedVariables = {}; // Começa com um objeto vazio por segurança
+                if (userState.variables) {
+                    try {
+                        // Se for uma string, faz o parse. Se já for um objeto, o parse falha e caímos no catch.
+                        parsedVariables = JSON.parse(userState.variables);
+                    } catch (e) {
+                        // Se o parse falhou, é porque provavelmente já é um objeto. Usamos ele diretamente.
+                        parsedVariables = userState.variables;
+                    }
+                }
+                variables = { ...initialVariables, ...parsedVariables };
+                // --- FIM DA CORREÇÃO ---
+        
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
                 const startNode = nodes.find(node => node.type === 'trigger');
