@@ -124,9 +124,7 @@
     <script>
     // --- CONFIG & STATE ---
     const CONFIG = {
-        API_URL: window.location.origin.includes('railway') 
-            ? 'https://hottrack-production.up.railway.app' 
-            : 'http://localhost:3000/api',
+        API_URL: '', // Será carregado dinamicamente
         NAV_ITEMS: [
             { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
             { id: 'sellers', label: 'Vendedores', icon: 'users' },
@@ -531,6 +529,29 @@
         } catch (error) { console.error('Falha ao reativar notificações:', error); }
     }
     
+    // --- CONFIG LOADING ---
+    async function loadConfig() {
+        try {
+            // Usar uma URL base temporária para buscar a config
+            const tempBaseUrl = window.location.origin.includes('localhost') 
+                ? 'http://localhost:3001' 
+                : window.location.origin;
+            
+            const response = await fetch(`${tempBaseUrl}/api/config`);
+            const config = await response.json();
+            
+            // Forçar HTTP para localhost
+            CONFIG.API_URL = config.apiUrl.replace('https://localhost', 'http://localhost');
+            console.log('🔧 Admin config carregada:', config);
+        } catch (error) {
+            console.warn('⚠️ Erro ao carregar config, usando fallback:', error);
+            // Fallback para detecção manual - sempre HTTP para localhost
+            CONFIG.API_URL = window.location.origin.includes('localhost') 
+                ? 'http://localhost:3001' 
+                : window.location.origin;
+        }
+    }
+
     // --- APP INITIALIZATION ---
     async function fetchAllInitialData() {
         try {
@@ -602,6 +623,9 @@
     }
 
     async function initializeApp() {
+        // Carregar configuração primeiro
+        await loadConfig();
+        
         DOM.loginScreen.style.display = 'none';
         DOM.appContainer.style.visibility = 'visible';
         

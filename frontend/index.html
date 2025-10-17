@@ -76,7 +76,7 @@
         .tab-content.active { display: block; animation: fadeIn 0.5s ease-out; }
         .progress-bar { background-color: #334155; border-radius: 999px; overflow: hidden; height: 8px; }
         .progress-bar-inner { height: 100%; transition: width 0.5s ease; }
-    
+
         .metric-card {
             position: relative;
             overflow: hidden;
@@ -100,7 +100,7 @@
             transform: scale(3);
         }
         #app-loader { display: flex; align-items: center; justify-content: center; height: 100vh; font-size: 1.25rem; }
-    
+
         /* ====================================================================== */
         /* == ESTILOS CORRIGIDOS DO HOTBOT (INTEGRADOS AO HOTTRACK) == */
         /* ====================================================================== */
@@ -517,9 +517,7 @@
     // ============================================
     const App = {
         state: {
-            API_BASE_URL: window.location.origin.includes('railway') 
-                ? 'https://hottrack-production.up.railway.app' 
-                : 'http://localhost:3000',
+            API_BASE_URL: '', // Será carregado dinamicamente
             token: null,
             data: { 
                 pixels: [],
@@ -540,9 +538,9 @@
         },
 
         async init() {
-            if (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')) {
-                this.state.API_BASE_URL = 'http://localhost:3002';
-            }
+            // Carregar configuração dinamicamente
+            await this.loadConfig();
+            
             this.state.token = localStorage.getItem('hottrack_token');
             if (this.state.token) {
                 try {
@@ -559,6 +557,28 @@
             } else {
                 this.renderLogin();
                 this.addAuthEventListeners(); 
+            }
+        },
+
+        async loadConfig() {
+            try {
+                // Usar uma URL base temporária para buscar a config
+                const tempBaseUrl = window.location.origin.includes('localhost') 
+                    ? 'http://localhost:3001' 
+                    : window.location.origin;
+                
+                const response = await fetch(`${tempBaseUrl}/api/config`);
+                const config = await response.json();
+                
+                // Forçar HTTP para localhost
+                this.state.API_BASE_URL = config.apiUrl.replace('https://localhost', 'http://localhost');
+                console.log('🔧 Config carregada:', config);
+            } catch (error) {
+                console.warn('⚠️ Erro ao carregar config, usando fallback:', error);
+                // Fallback para detecção manual - sempre HTTP para localhost
+                this.state.API_BASE_URL = window.location.origin.includes('localhost') 
+                    ? 'http://localhost:3001' 
+                    : window.location.origin;
             }
         },
 
@@ -605,15 +625,15 @@
                 </div>`;
             },
             hotbot() {
-                return `
+    return `
                 <div class="animate-fade-in" style="height: 100%; display: flex; flex-direction: column;">
-                    <div class="mb-6">
+        <div class="mb-6">
                         <h1 class="text-3xl font-bold text-white">HotBot - Automação & Vendas</h1>
                         <p class="text-slate-400">Gerencie seus bots, fluxos, disparos e conversas em um só lugar.</p>
-                    </div>
+        </div>
                     <div id="hotbot-container" class="hotbot-scope" style="flex: 1; min-height: 0;"></div>
-                </div>`;
-            },
+    </div>`;
+},
             registerForm() {
                 return `
                 <div class="card p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
@@ -1797,27 +1817,27 @@
     </script>
     
     <script type="text/babel">
-// ==========================================================
+    // ==========================================================
 // == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
-// ==========================================================
-function launchHotBot(containerElement) {
-    const { useState, useCallback, useEffect, useRef } = window.React;
-    const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
+    // ==========================================================
+    function launchHotBot(containerElement) {
+        const { useState, useCallback, useEffect, useRef } = window.React;
+        const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
-    const api = axios.create({ baseURL: API_BASE_URL });
-    
-    api.interceptors.request.use(
-        config => {
+        const api = axios.create({ baseURL: API_BASE_URL });
+        
+        api.interceptors.request.use(
+            config => {
             const token = localStorage.getItem('hottrack_token');
-            if (token) {
-                config.headers['Authorization'] = `Bearer ${token}`;
-            }
-            return config;
-        },
-        error => Promise.reject(error)
-    );
-    
+                if (token) {
+                    config.headers['Authorization'] = `Bearer ${token}`;
+                }
+                return config;
+            },
+            error => Promise.reject(error)
+        );
+
     const Icons = {
         contacts: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zm-1.586 3.414a2 2 0 012.828 0L12 11.236V13h2v-2a2 2 0 00-2-2H8.414zM16 6a3 3 0 11-6 0 3 3 0 016 0z" /><path d="M18 9a2 2 0 012 2v2h-2v-2a2 2 0 01-2-2h-2a4 4 0 00-4 4v1a1 1 0 001 1h8a1 1 0 001-1v-1a4 4 0 00-4-4h-2z" /></svg>,
         attach: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a3 3 0 10-6 0v4a1 1 0 102 0V7a1 1 0 112 0v4a3 3 0 11-6 0V7a1 1 0 011-1z" clipRule="evenodd" /></svg>,
@@ -1831,58 +1851,58 @@ function launchHotBot(containerElement) {
     };
 
     function AppHotBot() {
-        const [isLoading, setIsLoading] = useState(true);
-        const [currentPage, setCurrentPage] = useState('bots');
-        const [editingFlow, setEditingFlow] = useState(null);
-        const [bots, setBots] = useState([]);
-        const [importingFlowLink, setImportingFlowLink] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+            const [currentPage, setCurrentPage] = useState('bots');
+            const [editingFlow, setEditingFlow] = useState(null);
+            const [bots, setBots] = useState([]);
+            const [importingFlowLink, setImportingFlowLink] = useState(null);
 
-        const fetchInitialData = useCallback(() => {
-            setIsLoading(true);
+            const fetchInitialData = useCallback(() => {
+                setIsLoading(true);
             api.get('/api/dashboard/data')
                 .then((res) => setBots(res.data.bots || []))
                 .catch((err) => { console.error("Error fetching HotBot data:", err); App.logout(); })
-                .finally(() => setIsLoading(false));
-        }, []);
+                    .finally(() => setIsLoading(false));
+            }, []);
 
-        useEffect(() => {
-            fetchInitialData();
-            const urlParams = new URLSearchParams(window.location.search);
-            const shareLink = urlParams.get('link');
-            if (shareLink) {
-                setImportingFlowLink(shareLink);
-                setCurrentPage('import-flow');
-            }
-        }, [fetchInitialData]);
-        
-        const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
-        
+            useEffect(() => {
+                fetchInitialData();
+                const urlParams = new URLSearchParams(window.location.search);
+                const shareLink = urlParams.get('link');
+                if (shareLink) {
+                    setImportingFlowLink(shareLink);
+                    setCurrentPage('import-flow');
+                }
+            }, [fetchInitialData]);
+
+            const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+            
         if (isLoading) return <div className="flex items-center justify-center h-full text-white">Carregando dados do HotBot...</div>;
-        
-        const PageComponent = {
-            bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
-            flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
-            chat: <LiveChatPage bots={bots} />,
-            contacts: <ContactsPage bots={bots} />,
-            media: <MediaLibraryPage />,
-            disparos: <DisparosPage bots={bots} />,
-            'disparos-history': <DisparosHistoryPage />,
-            'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
-            'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
-        }[currentPage];
+      
+            const PageComponent = {
+                bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+                flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
+                chat: <LiveChatPage bots={bots} />,
+                contacts: <ContactsPage bots={bots} />,
+                media: <MediaLibraryPage />,
+                disparos: <DisparosPage bots={bots} />,
+                'disparos-history': <DisparosHistoryPage />,
+                'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+                'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+            }[currentPage];
 
-        return (
+            return (
             <>
                 <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
                 <main className="hotbot-content">
-                    <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
-                        {PageComponent}
-                    </div>
-                </main>
+                        <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
+                            {PageComponent}
+                        </div>
+                    </main>
             </>
-        );
-    }
-
+            );
+        }
+    
     function HotBotNav({ currentPage, setCurrentPage }) {
         const pages = { 
             bots: { name: 'Bots', icon: Icons.bots },
@@ -1909,26 +1929,26 @@ function launchHotBot(containerElement) {
             </div>
         );
     }
-
+    
     function BotsPage({ bots, fetchBots }) {
-        const [newBotName, setNewBotName] = useState('');
+      const [newBotName, setNewBotName] = useState('');
         const handleCreateBot = async (e) => { e.preventDefault(); if (!newBotName) return; try { await api.post('/api/bots', { bot_name: newBotName }); setNewBotName(''); fetchBots(); App.showToast('Bot criado com sucesso!', 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Erro ao criar bot', 'error'); } };
         const handleDeleteBot = async (id) => { if (confirm('Tem certeza que deseja excluir este bot e todos os seus dados?')) { try { await api.delete(`/api/bots/${id}`); fetchBots(); App.showToast('Bot excluído!', 'success'); } catch (e) { App.showToast('Erro ao excluir', 'error'); } } };
-        const handleUpdateToken = async (id) => {
+      const handleUpdateToken = async (id) => {
             const token = prompt("Insira o novo Token do Bot (obtido no @BotFather):"); 
-            if (token) { 
-                try { 
-                    await api.put(`/api/bots/${id}`, { bot_token: token }); 
+          if (token) { 
+              try { 
+                  await api.put(`/api/bots/${id}`, { bot_token: token }); 
                     App.showToast('Token atualizado!', 'success');
-                    fetchBots(); 
-                } catch (e) { 
+                  fetchBots(); 
+              } catch (e) { 
                     App.showToast(e.response?.data?.message || 'Erro ao atualizar token', 'error');
-                } 
-            } 
-        };
+              } 
+          } 
+      };
         const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); App.showToast(res.data.message, 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Falha ao configurar webhook', 'error'); } };
         
-        return (
+      return (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="card p-6 rounded-lg lg:col-span-1">
                     <h2 className="text-xl font-semibold mb-4 text-white">Adicionar Novo Bot</h2>
@@ -1936,7 +1956,7 @@ function launchHotBot(containerElement) {
                         <input name="bot_name" className="form-input w-full p-2" value={newBotName} onChange={(e) => setNewBotName(e.target.value)} placeholder="Username do Bot (sem @)" required />
                         <button type="submit" className="btn w-full p-2 rounded-md">Criar Bot</button>
                     </form>
-                </div>
+                    </div>
                 <div className="card p-6 rounded-lg lg:col-span-2">
                     <h2 className="text-xl font-semibold text-white mb-4">Bots Ativos</h2>
                     <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
@@ -1950,9 +1970,9 @@ function launchHotBot(containerElement) {
                                 </div>
                             </div>
                         )) : <p className="text-slate-500 text-center py-4">Nenhum bot criado ainda.</p>}
-                    </div>
                 </div>
             </div>
+          </div>
         );
     }
     
