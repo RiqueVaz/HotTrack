@@ -1902,21 +1902,41 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
                 }
                 await sendMessage(chatId, currentNode.data.text, botToken, sellerId, botId, currentNode.data.showTyping);
+                
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    
                     if (noReplyNodeId) {
                         const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                        console.log(`${logPrefix} [Flow Engine] Agendando worker via QStash em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
-                            delay: `${timeoutMinutes}m`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
-                        // Remova as aspas simples ao redor de ${response.messageId}
-                        await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;                    }
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+            
+                        // --- INÍCIO DA BLINDAGEM ---
+                        try {
+                            // 1. Tenta "testar" o objeto 'variables' convertendo para string. 
+                            // Se isso falhar, ele tem um problema de serialização.
+                            JSON.stringify(variables);
+            
+                            // 2. Se o teste passou, envia para o QStash
+                            const response = await qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                                delay: `${timeoutMinutes}m`,
+                                contentBasedDeduplication: true,
+                                method: "POST"
+                            });
+                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            
+                        } catch (error) {
+                            // 3. 🚨 SE CHEGARMOS AQUI, ENCONTRAMOS O CULPADO! 🚨
+                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
+                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
+                            console.error("Conteúdo do objeto problemático:", variables);
+                            console.error("Erro original:", error.message);
+                            console.error("--- FIM DO ERRO ---");
+                        }
+                        // --- FIM DA BLINDAGEM ---
+                    }
                     currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
