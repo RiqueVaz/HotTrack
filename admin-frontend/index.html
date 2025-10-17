@@ -108,6 +108,11 @@
         <aside id="sidebar">
             <h2 style="font-weight: 700; color: var(--accent); text-align: center; margin-bottom: 40px;">HotTrack</h2>
             <nav id="main-nav" style="display: flex; flex-direction: column; gap: 10px;"></nav>
+            <div style="margin-top: auto; padding-top: 20px;">
+                <button id="logout-btn" style="background: none; border: 1px solid var(--border); color: var(--text-secondary); padding: 10px; border-radius: 8px; cursor: pointer; width: 100%;">
+                    <i data-lucide="log-out"></i> Sair
+                </button>
+            </div>
         </aside>
         <main id="main-content">
             <div id="dashboard" class="page"></div>
@@ -124,7 +129,7 @@
     <script>
     // --- CONFIG & STATE ---
     const CONFIG = {
-        API_URL: 'https://novaapi-one.vercel.app',
+        API_URL: '', // Será carregado dinamicamente
         NAV_ITEMS: [
             { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
             { id: 'sellers', label: 'Vendedores', icon: 'users' },
@@ -155,6 +160,7 @@
         mainContent: document.getElementById('main-content'),
         modalContainer: document.getElementById('modal-container'),
         toastContainer: document.getElementById('toast-container'),
+        logoutBtn: document.getElementById('logout-btn'),
     };
 
     // --- UTILS ---
@@ -365,10 +371,45 @@
     async function handleLogin(e) {
         e.preventDefault();
         const key = DOM.adminKeyInput.value;
-        if (key) {
-            localStorage.setItem('adminApiKey', key);
-            await initializeApp();
+        if (!key) {
+            showToast('Por favor, insira a chave de administrador.', 'warning');
+            return;
         }
+
+        try {
+            // Validar a chave antes de salvar
+            const tempBaseUrl = window.location.origin.includes('localhost') 
+                ? 'http://localhost:3001' 
+                : window.location.origin;
+            
+            const response = await fetch(`${tempBaseUrl}/api/admin/validate-key`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-api-key': key
+                }
+            });
+
+            const responseData = await response.json();
+
+            if (response.ok && responseData.valid) {
+                localStorage.setItem('adminApiKey', key);
+                showToast('Acesso autorizado!', 'success');
+                await initializeApp();
+            } else {
+                showToast(responseData.message || 'Chave de administrador inválida.', 'error');
+            }
+        } catch (error) {
+            showToast('Erro ao validar chave: ' + error.message, 'error');
+        }
+    }
+
+    function handleLogout() {
+        localStorage.removeItem('adminApiKey');
+        DOM.appContainer.style.visibility = 'hidden';
+        DOM.loginScreen.style.display = 'flex';
+        DOM.adminKeyInput.value = '';
+        showToast('Sessão encerrada.', 'success');
     }
 
     function handleSellerSearch(e) {
@@ -529,6 +570,29 @@
         } catch (error) { console.error('Falha ao reativar notificações:', error); }
     }
     
+    // --- CONFIG LOADING ---
+    async function loadConfig() {
+        try {
+            // Usar uma URL base temporária para buscar a config
+            const tempBaseUrl = window.location.origin.includes('localhost') 
+                ? 'http://localhost:3001' 
+                : window.location.origin;
+            
+            const response = await fetch(`${tempBaseUrl}/api/config`);
+            const config = await response.json();
+            
+            // Forçar HTTP para localhost
+            CONFIG.API_URL = config.apiUrl.replace('https://localhost', 'http://localhost');
+            console.log('🔧 Admin config carregada:', config);
+        } catch (error) {
+            console.warn('⚠️ Erro ao carregar config, usando fallback:', error);
+            // Fallback para detecção manual - sempre HTTP para localhost
+            CONFIG.API_URL = window.location.origin.includes('localhost') 
+                ? 'http://localhost:3001' 
+                : window.location.origin;
+        }
+    }
+
     // --- APP INITIALIZATION ---
     async function fetchAllInitialData() {
         try {
@@ -547,9 +611,12 @@
                 dashboardData: dashboardData || {}
             });
         } catch (e) {
-            showToast(`Erro ao carregar dados: ${e.message}`, 'error');
-            localStorage.removeItem('adminApiKey');
-            setTimeout(() => window.location.reload(), 2000);
+            if (e.message.includes('Chave de API inválida')) {
+                showToast('Sessão expirada. Faça login novamente.', 'error');
+                handleLogout();
+            } else {
+                showToast(`Erro ao carregar dados: ${e.message}`, 'error');
+            }
         }
     }
 
@@ -557,6 +624,7 @@
         // Global Listeners
         window.addEventListener('hashchange', () => handleNavigation(window.location.hash));
         DOM.loginForm.addEventListener('submit', handleLogin);
+        DOM.logoutBtn.addEventListener('click', handleLogout);
         
         // Mobile Menu
         DOM.menuToggle.addEventListener('click', () => DOM.sidebar.classList.toggle('show'));
@@ -600,23 +668,29 @@
     }
 
     async function initializeApp() {
-        DOM.loginScreen.style.display = 'none';
-        DOM.appContainer.style.visibility = 'visible';
-        
-        renderNav();
-        setupEventListeners();
-        await tryReactivatingNotifications();
-        await fetchAllInitialData();
-        
-        handleNavigation(window.location.hash);
-    }
+    // Carregar configuração primeiro
+    await loadConfig();
+    
+    DOM.loginScreen.style.display = 'none';
+    DOM.appContainer.style.visibility = 'visible';
+    
+    renderNav();
+    // A linha foi removida daqui
+    await tryReactivatingNotifications();
+    await fetchAllInitialData();
+    
+    handleNavigation(window.location.hash);
+}
 
-    // --- START ---
-    document.addEventListener('DOMContentLoaded', () => {
-        if (localStorage.getItem('adminApiKey')) {
-            initializeApp();
-        }
-    });
+document.addEventListener('DOMContentLoaded', () => {
+    // 1. Registra os listeners de evento IMEDIATAMENTE.
+    setupEventListeners(); 
+
+    // 2. Agora, verifica se o usuário já está logado.
+    if (localStorage.getItem('adminApiKey')) {
+        initializeApp();
+    }
+});
 
     </script>
 </body>

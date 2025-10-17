@@ -1,0 +1,26 @@
+{
+  "name": "hottrack-saas",
+  "version": "2.0.0",
+  "description": "HotTrack SaaS - Sistema completo de tracking e automação",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "cd backend && npm run dev",
+    "install:backend": "cd backend && npm install",
+    "test": "echo 'No tests configured'"
+  },
+  "keywords": [
+    "saas",
+    "tracking",
+    "telegram",
+    "automation",
+    "pix",
+    "payments"
+  ],
+  "author": "HotTrack Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}
