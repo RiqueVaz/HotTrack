@@ -228,7 +228,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
                             delay: `${timeoutMinutes}m`,
                             contentBasedDeduplication: true,
-                            "Upstash-Method": "POST"
+                            method: "POST"
                         });
                         // Remova as aspas simples ao redor de ${response.messageId}
                         await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;                    }
