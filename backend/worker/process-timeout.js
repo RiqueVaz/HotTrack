@@ -1,26 +1,31 @@
-// /api/worker/process-timeout.js
+// /backend/worker/process-timeout.js
 
-// Carrega as variáveis de ambiente. O caminho sobe dois níveis para chegar na raiz do projeto.
 if (process.env.NODE_ENV !== 'production') {
-    // ATENÇÃO: O caminho para o .env precisa subir 3 níveis a partir daqui
     require('dotenv').config({ path: '../../.env' });
-  }
+}
 
 const { neon } = require('@neondatabase/serverless');
 const { verifySignature } = require("@upstash/qstash/nextjs");
 const axios = require('axios');
-const FormData = require('form-data'); // Necessário para sendMediaAsProxy
+const FormData = require('form-data');
+const { v4: uuidv4 } = require('uuid');
 
 // ==========================================================
-//                  INICIALIZAÇÃO
+//                     INICIALIZAÇÃO
 // ==========================================================
 const sql = neon(process.env.DATABASE_URL);
+const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
+const syncPayTokenCache = new Map();
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
+const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
+const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
+const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 
-// ====================================================================================
-// ATENÇÃO: As funções abaixo foram copiadas do seu arquivo principal.
-// Se você fizer alterações no motor de fluxo (processFlow, sendMessage, etc.)
-// no seu arquivo principal, lembre-se de atualizar as cópias aqui neste arquivo também.
-// ====================================================================================
+
+// ==========================================================
+//    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
+// ==========================================================
 
 async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     for (let i = 0; i < retries; i++) {
@@ -34,54 +39,83 @@ async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     }
 }
 
-async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3) {
-    const { headers = {} } = options;
+async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
+    const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
     for (let i = 0; i < retries; i++) {
         try {
-            const response = await axios.post(apiUrl, data, { headers });
+            const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
             return response.data;
         } catch (error) {
-            if (i < retries - 1) {
-                await new Promise(res => setTimeout(res, 1500 * (i + 1)));
-                continue;
-            }
             console.error(`[WORKER - Telegram API ERROR] Method: ${method}:`, error.response?.data || error.message);
-            throw error;
+            if (i < retries - 1) { await new Promise(res => setTimeout(res, delay * (i + 1))); } else { throw error; }
         }
     }
 }
 
-async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
-    const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-    if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
+async function getSyncPayAuthToken(seller) {
+    const cachedToken = syncPayTokenCache.get(seller.id);
+    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
+    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) { throw new Error('Credenciais da SyncPay não configuradas.'); }
+    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, { client_id: seller.syncpay_client_id, client_secret: seller.syncpay_client_secret });
+    const { access_token, expires_in } = response.data;
+    const expiresAt = Date.now() + (expires_in * 1000);
+    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
+    return access_token;
+}
 
-    const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
-    if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
-
-    const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
-
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
+    // ESTA É A CÓPIA COMPLETA DA SUA FUNÇÃO
+    let pixData;
+    let acquirer = 'Não identificado';
+    const commission_rate = seller.commission_rate || 0.0299;
     
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
+    const clientPayload = {
+        document: { number: "21376710773", type: "CPF" },
+        name: "Cliente Padrão",
+        email: "gabriel@email.com",
+        phone: "27995310379"
+    };
+    
+    if (provider === 'brpix') {
+        if (!seller.brpix_secret_key || !seller.brpix_company_id) { throw new Error('Credenciais da BR PIX não configuradas.'); }
+        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
+        const payload = { customer: clientPayload, items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }], paymentMethod: "PIX", amount: parseInt(value_cents, 10), pix: { expiresInDays: 1 }, ip: ip_address };
+        const commission_cents = Math.floor(value_cents * commission_rate);
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) { payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }]; }
+        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, { headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' } });
+        pixData = response.data;
+        return { qr_code_text: pixData.pix.qrcode, qr_code_base64: pixData.pix.qrcode, transaction_id: pixData.id, acquirer: "BRPix", provider };
+    } else if (provider === 'syncpay') {
+        const token = await getSyncPayAuthToken(seller);
+        const payload = { amount: value_cents / 100, payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/syncpay` };
+        const commission_percentage = commission_rate * 100;
+        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) { payload.split = [{ percentage: Math.round(commission_percentage), user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID }]; }
+        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
+        pixData = response.data;
+        return { qr_code_text: pixData.pix_code, qr_code_base64: null, transaction_id: pixData.identifier, acquirer: "SyncPay", provider };
+    } else if (provider === 'cnpay' || provider === 'oasyfy') {
+        const isCnpay = provider === 'cnpay';
+        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
+        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
+        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
+        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
+        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
+        const payload = { identifier: uuidv4(), amount: value_cents / 100, client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/${provider}` };
+        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
+        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) { payload.splits = [{ producerId: splitId, amount: commission }]; }
+        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
+        pixData = response.data;
+        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer: isCnpay ? "CNPay" : "Oasy.fy", provider };
+    } else { 
+        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
+        const payload = { value: value_cents, webhook_url: `https://${host}/api/webhook/pushinpay` };
+        const commission_cents = Math.floor(value_cents * commission_rate);
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) { payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }]; }
+        const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+        pixData = response.data;
+        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer: "Woovi", provider: 'pushinpay' };
     }
-
-    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
-
-    const method = methodMap[fileType];
-    const field = fieldMap[fileType];
-    const fileName = fileNameMap[fileType];
-
-    if (!method) throw new Error('Tipo de arquivo não suportado.');
-
-    formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
-
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders() });
 }
 
 function findNextNode(currentNodeId, handleId, edges) {
@@ -91,38 +125,27 @@ function findNextNode(currentNodeId, handleId, edges) {
 
 async function sendTypingAction(chatId, botToken) {
     try {
-        await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
-            chat_id: chatId,
-            action: 'typing',
-        });
+        await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, { chat_id: chatId, action: 'typing' });
     } catch (error) {
-        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing' para ${chatId}:`, error.response?.data || error.message);
+        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, error.response?.data || error.message);
     }
 }
 
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) {
     if (!text || text.trim() === '') return;
-    const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
     try {
         if (showTyping) {
             await sendTypingAction(chatId, botToken);
             let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
             await new Promise(resolve => setTimeout(resolve, typingDuration));
         }
-
-        const response = await axios.post(apiUrl, { chat_id: chatId, text: text, parse_mode: 'HTML' });
-        
+        const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
-            // Salvar a mensagem enviada pelo bot (lógica simplificada para o worker)
             const sentMessage = response.data.result;
-            await sql`
-                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type)
-                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot')
-                ON CONFLICT (chat_id, message_id) DO NOTHING;
-            `;
+            await sql`INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type) VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot') ON CONFLICT (chat_id, message_id) DO NOTHING;`;
         }
     } catch (error) {
-        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem para ${chatId}:`, error.response?.data || error.message);
+        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
 
@@ -305,40 +328,25 @@ async function handler(req, res) {
         const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
 
         if (userState && userState.waiting_for_input) {
-            console.log(`[WORKER] Timeout confirmado! Processando fluxo para ${chat_id} a partir do nó ${target_node_id}`);
+            console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
             
             const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
 
             if (bot) {
-                // CORREÇÃO DE ROBUSTEZ: Limpa o estado de espera ANTES de continuar o fluxo.
                 await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
-
                 await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
             } else {
-                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado no banco.`);
+                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado.`);
             }
         } else {
             console.log(`[WORKER] Tarefa para ${chat_id} ignorada, pois o usuário já respondeu.`);
         }
-
         res.status(200).send('Worker finished successfully.');
-
     } catch (error) {
         console.error('[WORKER] Erro crítico ao processar timeout:', error);
-        res.status(500).send('Erro interno no servidor durante o processamento do worker.');
+        res.status(500).send('Erro interno no worker.');
     }
 }
 
-
-// ==========================================================
-//                        EXPORTAÇÃO
-// ==========================================================
-
-// Exporta o handler, mas o envolve com a verificação de segurança do QStash.
-// Isso garante que apenas requisições legítimas do Upstash possam executar este código.
-module.exports = verifySignature(handler, {
-    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
-    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
-    // Opcional, mas recomendado: adicione a URL para uma verificação extra
-    // url: `https://${process.env.VERCEL_URL}/api/worker/process-timeout` 
-});
+// Exporta o handler com a verificação de segurança do QStash
+module.exports = verifySignature(handler);
