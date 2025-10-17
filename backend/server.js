@@ -1802,10 +1802,13 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) 
 }
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
-    console.log(`[Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    // Adiciona um prefixo no log para sabermos qual arquivo está rodando
+    const logPrefix = startNodeId ? '[WORKER - Flow Engine]' : '[MAIN - Flow Engine]';
+    
+    console.log(`${logPrefix} Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
     const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
     if (!flow || !flow.nodes) {
-        console.log(`[Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+        console.log(`${logPrefix} Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
         return;
     }
 
@@ -1816,23 +1819,38 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     let currentNodeId = startNodeId;
     let variables = initialVariables;
 
+    const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
+
     if (!currentNodeId) {
-        const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        if (userState && userState.waiting_for_input) {
-            console.log(`[Flow Engine] Usuário ${chatId} respondeu. Continuando do nó ${userState.current_node_id} pelo caminho 'com resposta'.`);
-            currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-            variables = userState.variables;
-        } else {
-            console.log(`[Flow Engine] Iniciando novo fluxo para ${chatId} a partir do gatilho.`);
+        // --- LÓGICA CORRIGIDA ---
+        // 1. PRIORIDADE MÁXIMA: Se for um comando /start, sempre reinicia o fluxo.
+        if (isStartCommand) {
+            console.log(`${logPrefix} Comando /start detectado. Reiniciando o fluxo para ${chatId}.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             const startNode = nodes.find(node => node.type === 'trigger');
             if (startNode) {
                 currentNodeId = findNextNode(startNode.id, null, edges);
+            }
+        } else {
+            // 2. Se não for /start, verifica se é uma resposta a uma pergunta pendente.
+            const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (userState && userState.waiting_for_input) {
+                console.log(`${logPrefix} Usuário ${chatId} respondeu. Continuando do nó ${userState.current_node_id}.`);
+                currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
+                variables = { ...initialVariables, ...userState.variables };
+            } else {
+                // 3. Se não for nada disso, é uma mensagem aleatória, então inicia o fluxo do zero.
+                console.log(`${logPrefix} Nova conversa sem comando /start para ${chatId}. Iniciando do gatilho.`);
+                const startNode = nodes.find(node => node.type === 'trigger');
+                if (startNode) {
+                    currentNodeId = findNextNode(startNode.id, null, edges);
+                }
             }
         }
     }
 
     if (!currentNodeId) {
-        console.log(`[Flow Engine] Fim do fluxo ou nenhum nó inicial encontrado para ${chatId}.`);
+        console.log(`${logPrefix} Fim do fluxo ou nenhum nó inicial encontrado para ${chatId}.`);
         await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         return;
     }
@@ -1841,7 +1859,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     while (currentNodeId && safetyLock < 20) {
         const currentNode = nodes.find(node => node.id === currentNodeId);
         if (!currentNode) {
-            console.error(`[Flow Engine] Erro: Nó ${currentNodeId} não encontrado no fluxo.`);
+            console.error(`${logPrefix} Erro: Nó ${currentNodeId} não encontrado no fluxo.`);
             break;
         }
 
@@ -1849,7 +1867,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input)
             VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false)
             ON CONFLICT (chat_id, bot_id)
-            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false;
+            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false, scheduled_message_id = NULL;
         `;
 
         switch (currentNode.type) {
@@ -1964,9 +1982,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         if (!currentNodeId) {
-            const pendingTimeouts = await sql`SELECT 1 FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            if(pendingTimeouts.length === 0){
-                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+            if(!state){
+                await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             }
         }
         safetyLock++;
