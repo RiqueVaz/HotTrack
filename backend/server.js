@@ -1976,40 +1976,48 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     res.sendStatus(200);
 
     try {
-        // --- Bloco de Segurança ---
-        // Se a requisição não for uma mensagem válida, ignora para evitar erros.
         if (!message || !message.chat || !message.chat.id) {
-            console.warn('[Webhook] Requisição recebida sem a estrutura de mensagem esperada. Ignorando.');
-            return; 
-        }
-        const chatId = message.chat.id;
-
-        // --- Cancelamento da Tarefa do Worker ---
-        // Tenta encontrar uma tarefa agendada para este usuário.
-        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        
-        // Se encontrar uma tarefa, cancela no QStash e limpa do banco de dados.
-        if (userState && userState.scheduled_message_id) {
-            console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando msg ${userState.scheduled_message_id} no QStash.`);
-            // CORREÇÃO 2: Usa o método correto para deletar a mensagem no QStash v2.
-            await qstashClient.messages.delete(userState.scheduled_message_id);
-            await sql`UPDATE user_flow_states SET scheduled_message_id = NULL WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        }
-        
-        // --- Processamento Normal da Mensagem ---
-        // CORREÇÃO 3: Busca os dados do bot ANTES de tentar usá-los.
-        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
-        if (!bot) {
-            console.warn(`[Webhook] Webhook recebido para botId não encontrado: ${botId}`);
+            console.warn('[Webhook] Requisição ignorada: estrutura de mensagem inválida.');
             return;
         }
-        const { seller_id: sellerId, bot_token: botToken } = bot;
+        const chatId = message.chat.id;
+    
+        // 1. Busque o estado do usuário
+        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
-        const text = message.text || ''; // Garante que `text` sempre seja uma string
+        // --- BLOCO CORRIGIDO ---
+        // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
+        if (userState && userState.scheduled_message_id) {
+            const messageIdToCancel = userState.scheduled_message_id;
+            console.log(`[Webhook] Usuário respondeu. Tentando cancelar Message ID: "${messageIdToCancel}"`);
+    
+            try {
+                await qstashClient.messages.delete({ id: messageIdToCancel });
+                console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
+            } catch (error) {
+                // Se o erro for 404 (Not Found), ignore. É a race condition que previmos.
+                if (error.status === 404) {
+                    console.warn(`[Webhook] QStash retornou 404 para o ID ${messageIdToCancel}. A mensagem provavelmente já foi executada ou nunca foi totalmente registrada. Ignorando e continuando.`);
+                } else {
+                    // Se for qualquer outro erro, registre como crítico.
+                    console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
+                }
+            }
+        }
+        // --- FIM DO BLOCO CORRIGIDO ---
+        
+        // 3. Continue com o processamento normal da mensagem (esta parte não muda)
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
+        if (!bot) {
+            console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
+            return;
+        }
+        
+        const { seller_id: sellerId, bot_token: botToken } = bot;
+        const text = message.text || '';
         const isStartCommand = text.startsWith('/start ');
         const clickIdValue = isStartCommand ? text : null;
-
-        // Salva a mensagem do usuário no banco de dados.
+    
         await sql`
             INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
             VALUES (${sellerId}, ${botId}, ${chatId}, ${message.message_id}, ${message.from.id}, ${message.from.first_name}, ${message.from.last_name || null}, ${message.from.username || null}, ${clickIdValue}, ${text}, 'user')
@@ -2021,11 +2029,11 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             initialVars.click_id = clickIdValue;
         }
         
-        // Inicia ou continua o motor de fluxo para o usuário.
         await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
-
+    
     } catch (error) {
-        console.error("Erro CRÍTICO ao processar webhook do Telegram:", error);
+        // Este catch agora só pegará erros realmente inesperados no fluxo principal.
+        console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
     }
 });
 
