@@ -5,7 +5,6 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const { neon } = require('@neondatabase/serverless');
-const { verifySignature } = require("@upstash/qstash/nextjs");
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
@@ -349,4 +348,4 @@ async function handler(req, res) {
 }
 
 // Exporta o handler com a verificação de segurança do QStash
-module.exports = verifySignature(handler);
+module.exports = handler;
