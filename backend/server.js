@@ -476,34 +476,37 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-// Importa o handler PURO do worker
-const processTimeoutWorker = require('./worker/process-timeout');
+const processTimeoutWorker = require('./worker/process-timeout'); 
 
-// Substitua a sua rota antiga por esta
+// Importe o verificador de assinatura aqui no backend
+const { verifySignature } = require("@upstash/qstash/nextjs");
+
+// SUBSTITUA A SUA ROTA ANTIGA POR ESTA VERSÃO COMPLETA
 app.post(
   '/api/worker/process-timeout',
-
-  // 1. O express.raw() garante que o body não seja modificado
+  
+  // 1. Middleware do Express que captura o corpo da requisição sem modificá-lo
   express.raw({ type: 'application/json' }), 
-
-  // 2. Criamos um middleware anônimo que usa o verifySignature para PROTEGER o worker
+  
+  // 2. Middleware de verificação que protege sua lógica
   async (req, res, next) => {
     try {
-      // A função verifySignature espera um handler e o executa se a assinatura for válida.
-      // Se for inválida, ela mesma joga um erro.
+      // O verifySignature agora envolve seu worker.
+      // Ele só será executado se a assinatura for válida.
       const wrappedHandler = verifySignature(
-        // Passamos uma função que chama seu worker e o `next()` para continuar se necessário
-        async (reqAsNext) => {
-          // Precisamos passar o `req` e `res` originais para o worker
+        async () => {
+          // O corpo da requisição agora é um Buffer, precisamos decodificá-lo
+          // para que o worker consiga ler o JSON.
+          req.body = JSON.parse(req.body.toString());
           await processTimeoutWorker(req, res);
         }
       );
-
-      // Executamos o handler protegido
-      await wrappedHandler(req);
+      
+      // Executa o handler protegido
+      await wrappedHandler(req, res);
 
     } catch (error) {
-      // Se verifySignature jogar um erro (assinatura inválida), respondemos com 401
+      // Se a assinatura for inválida, o verifySignature joga um erro.
       console.error("QStash Signature Verification Failed:", error.message);
       return res.status(401).send("Invalid signature");
     }
