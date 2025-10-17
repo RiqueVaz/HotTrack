@@ -157,7 +157,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-                variables = { ...initialVariables, ...JSON.parse(userState.variables || '{}') };
+                variables = { ...initialVariables, ...(userState.variables ? JSON.parse(userState.variables) : {}) };
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
                 const startNode = nodes.find(node => node.type === 'trigger');
@@ -208,8 +208,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             contentBasedDeduplication: true,
                             "Upstash-Method": "POST"
                         });
-                        await sql`UPDATE user_flow_states SET scheduled_message_id = '${response.messageId}' WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    }
+                        // Remova as aspas simples ao redor de ${response.messageId}
+                        await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;                    }
                     currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
