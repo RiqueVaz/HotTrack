@@ -31,7 +31,7 @@ const receiver = new Receiver({
     currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
   });
-  
+
 const app = express();
 
 // Configuração do servidor
@@ -1861,21 +1861,18 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-        
-                // --- INÍCIO DA CORREÇÃO ---
-                let parsedVariables = {}; // Começa com um objeto vazio por segurança
+                
+                // Garantir que 'variables' do DB seja um objeto
+                let parsedVariables = {};
                 if (userState.variables) {
                     try {
-                        // Se for uma string, faz o parse. Se já for um objeto, o parse falha e caímos no catch.
                         parsedVariables = JSON.parse(userState.variables);
                     } catch (e) {
-                        // Se o parse falhou, é porque provavelmente já é um objeto. Usamos ele diretamente.
                         parsedVariables = userState.variables;
                     }
                 }
                 variables = { ...initialVariables, ...parsedVariables };
-                // --- FIM DA CORREÇÃO ---
-        
+
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
                 const startNode = nodes.find(node => node.type === 'trigger');
@@ -1921,14 +1918,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     if (noReplyNodeId) {
                         const timeoutMinutes = currentNode.data.replyTimeout || 5;
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-            
-                        // --- INÍCIO DA BLINDAGEM ---
+
                         try {
-                            // 1. Tenta "testar" o objeto 'variables' convertendo para string. 
-                            // Se isso falhar, ele tem um problema de serialização.
-                            JSON.stringify(variables);
-            
-                            // 2. Se o teste passou, envia para o QStash
+                            JSON.stringify(variables); // Testa a serialização
                             const response = await qstashClient.publishJSON({
                                 url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
                                 body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
@@ -1937,22 +1929,38 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                                 method: "POST"
                             });
                             await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                            
                         } catch (error) {
-                            // 3. 🚨 SE CHEGARMOS AQUI, ENCONTRAMOS O CULPADO! 🚨
                             console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
                             console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
                             console.error("Conteúdo do objeto problemático:", variables);
                             console.error("Erro original:", error.message);
                             console.error("--- FIM DO ERRO ---");
                         }
-                        // --- FIM DA BLINDAGEM ---
                     }
                     currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
                 break;
+
+            // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
+            case 'image':
+            case 'video':
+            case 'audio': {
+                try {
+                    const caption = await replaceVariables(currentNode.data.caption, variables);
+                    const response = await handleMediaNode(currentNode, botToken, chatId, caption);
+
+                    if (response && response.ok) {
+                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    }
+                } catch (e) {
+                    console.error(`[Flow Media] Erro ao enviar mídia no nó ${currentNode.id} para o chat ${chatId}: ${e.message}`);
+                }
+                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                break;
+            }
+            // ===========================================
 
             case 'delay':
                 const delaySeconds = currentNode.data.delayInSeconds || 1;
@@ -2007,9 +2015,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
                     }
                 } catch (error) {
-                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
-                     await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
-                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                    currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
 
@@ -2027,8 +2035,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
             }
             safetyLock++;
-        }
     }
+}
 
 app.post('/api/webhook/telegram/:botId', async (req, res) => {
     const { botId } = req.params;

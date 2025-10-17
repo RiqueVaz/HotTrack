@@ -179,7 +179,18 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-                variables = { ...initialVariables, ...(userState.variables || {}) };
+                
+                // Garantir que 'variables' do DB seja um objeto
+                let parsedVariables = {};
+                if (userState.variables) {
+                    try {
+                        parsedVariables = JSON.parse(userState.variables);
+                    } catch (e) {
+                        parsedVariables = userState.variables;
+                    }
+                }
+                variables = { ...initialVariables, ...parsedVariables };
+
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
                 const startNode = nodes.find(node => node.type === 'trigger');
@@ -217,26 +228,57 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
                 }
                 await sendMessage(chatId, currentNode.data.text, botToken, sellerId, botId, currentNode.data.showTyping);
+                
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    
                     if (noReplyNodeId) {
                         const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                        console.log(`${logPrefix} [Flow Engine] Agendando worker via QStash em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
-                            delay: `${timeoutMinutes}m`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
-                        // Remova as aspas simples ao redor de ${response.messageId}
-                        await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;                    }
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+
+                        try {
+                            JSON.stringify(variables); // Testa a serialização
+                            const response = await qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                                delay: `${timeoutMinutes}m`,
+                                contentBasedDeduplication: true,
+                                method: "POST"
+                            });
+                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        } catch (error) {
+                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
+                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
+                            console.error("Conteúdo do objeto problemático:", variables);
+                            console.error("Erro original:", error.message);
+                            console.error("--- FIM DO ERRO ---");
+                        }
+                    }
                     currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
                 break;
+
+            // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
+            case 'image':
+            case 'video':
+            case 'audio': {
+                try {
+                    const caption = await replaceVariables(currentNode.data.caption, variables);
+                    const response = await handleMediaNode(currentNode, botToken, chatId, caption);
+
+                    if (response && response.ok) {
+                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    }
+                } catch (e) {
+                    console.error(`[Flow Media] Erro ao enviar mídia no nó ${currentNode.id} para o chat ${chatId}: ${e.message}`);
+                }
+                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                break;
+            }
+            // ===========================================
 
             case 'delay':
                 const delaySeconds = currentNode.data.delayInSeconds || 1;
@@ -291,9 +333,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
                     }
                 } catch (error) {
-                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
-                     await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
-                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                    currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
 
@@ -311,8 +353,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
             }
             safetyLock++;
-        }
     }
+}
 
 
 // ==========================================================
