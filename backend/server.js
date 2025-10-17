@@ -674,14 +674,15 @@ app.get('/api/admin/ranking', authenticateAdmin, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar ranking.' });
     }
 });
+// No seu backend.js
 app.get('/api/admin/sellers', authenticateAdmin, async (req, res) => {
-    try {
-        const sellers = await sql`SELECT id, name, email, created_at, is_active FROM sellers ORDER BY created_at DESC;`;
+      try {
+        const sellers = await sql`SELECT id, name, email, created_at, is_active, commission_rate FROM sellers ORDER BY created_at DESC;`;
         res.json(sellers);
-    } catch (error) {
+      } catch (error) {
         res.status(500).json({ message: 'Erro ao listar vendedores.' });
-    }
-});
+      }
+    });
 app.post('/api/admin/sellers/:id/toggle-active', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
     const { isActive } = req.body;
