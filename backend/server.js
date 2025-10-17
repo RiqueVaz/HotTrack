@@ -1834,6 +1834,37 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     
     console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+
+    // ==========================================================
+    // PASSO 1: CARREGAR AS VARIÁVEIS NO INÍCIO
+    // ==========================================================
+    let variables = { ...initialVariables };
+
+    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    const [user] = await sql`
+        SELECT first_name, last_name 
+        FROM telegram_chats 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        ORDER BY created_at DESC LIMIT 1`;
+
+    if (user) {
+        variables.primeiro_nome = user.first_name || '';
+        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+    }
+
+    // Se tiver um click_id, busca os dados de geolocalização (cidade)
+    if (variables.click_id) {
+        const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+        const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
+        if (click) {
+            variables.cidade = click.city || 'Desconhecida';
+            variables.estado = click.state || 'Desconhecido';
+        }
+    }
+    // ==========================================================
+    // FIM DO PASSO 1
+    // ==========================================================
+    
     const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
     if (!flow || !flow.nodes) {
         console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
@@ -1845,7 +1876,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     const edges = flowData.edges || [];
 
     let currentNodeId = startNodeId;
-    let variables = initialVariables;
     const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
 
     if (!currentNodeId) {
@@ -1862,7 +1892,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
                 
-                // Garantir que 'variables' do DB seja um objeto
                 let parsedVariables = {};
                 if (userState.variables) {
                     try {
@@ -1871,7 +1900,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         parsedVariables = userState.variables;
                     }
                 }
-                variables = { ...initialVariables, ...parsedVariables };
+                // Une as variáveis já carregadas com as salvas no estado
+                variables = { ...variables, ...parsedVariables };
 
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
@@ -1909,7 +1939,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
                     await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
                 }
-                await sendMessage(chatId, currentNode.data.text, botToken, sellerId, botId, currentNode.data.showTyping);
+
+                // ==========================================================
+                // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
+                // ==========================================================
+                const textToSend = await replaceVariables(currentNode.data.text, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                // ==========================================================
+                // FIM DO PASSO 2
+                // ==========================================================
                 
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -1920,7 +1958,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
 
                         try {
-                            JSON.stringify(variables); // Testa a serialização
+                            JSON.stringify(variables);
                             const response = await qstashClient.publishJSON({
                                 url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
                                 body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
