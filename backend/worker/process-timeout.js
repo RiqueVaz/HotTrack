@@ -74,7 +74,6 @@ async function getSyncPayAuthToken(seller) {
 }
 
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    // ESTA É A CÓPIA COMPLETA DA SUA FUNÇÃO
     let pixData;
     let acquirer = 'Não identificado';
     const commission_rate = seller.commission_rate || 0.0299;
@@ -87,22 +86,62 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
     };
     
     if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) { throw new Error('Credenciais da BR PIX não configuradas.'); }
+        if (!seller.brpix_secret_key || !seller.brpix_company_id) {
+            throw new Error('Credenciais da BR PIX não configuradas para este vendedor.');
+        }
         const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        const payload = { customer: clientPayload, items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }], paymentMethod: "PIX", amount: parseInt(value_cents, 10), pix: { expiresInDays: 1 }, ip: ip_address };
+        
+        const payload = {
+            customer: clientPayload,
+            items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }],
+            paymentMethod: "PIX",
+            amount: parseInt(value_cents, 10),
+            pix: { expiresInDays: 1 },
+            ip: ip_address
+        };
+
         const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) { payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }]; }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, { headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' } });
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) {
+            payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }];
+        }
+        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
+            headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' }
+        });
         pixData = response.data;
-        return { qr_code_text: pixData.pix.qrcode, qr_code_base64: pixData.pix.qrcode, transaction_id: pixData.id, acquirer: "BRPix", provider };
+        acquirer = "BRPix";
+        return {
+            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
+            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
+            transaction_id: pixData.id,
+            acquirer,
+            provider
+        };
     } else if (provider === 'syncpay') {
         const token = await getSyncPayAuthToken(seller);
-        const payload = { amount: value_cents / 100, payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/syncpay` };
+        const payload = { 
+            amount: value_cents / 100, 
+            payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
+            callbackUrl: `https://${host}/api/webhook/syncpay`
+        };
         const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) { payload.split = [{ percentage: Math.round(commission_percentage), user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID }]; }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
+            payload.split = [{
+                percentage: Math.round(commission_percentage), 
+                user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID 
+            }];
+        }
+        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
         pixData = response.data;
-        return { qr_code_text: pixData.pix_code, qr_code_base64: null, transaction_id: pixData.identifier, acquirer: "SyncPay", provider };
+        acquirer = "SyncPay";
+        return { 
+            qr_code_text: pixData.pix_code, 
+            qr_code_base64: null, 
+            transaction_id: pixData.identifier, 
+            acquirer, 
+            provider 
+        };
     } else if (provider === 'cnpay' || provider === 'oasyfy') {
         const isCnpay = provider === 'cnpay';
         const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
@@ -110,20 +149,34 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
         const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
         const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = { identifier: uuidv4(), amount: value_cents / 100, client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/${provider}` };
+        const payload = {
+            identifier: uuidv4(),
+            amount: value_cents / 100,
+            client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
+            callbackUrl: `https://${host}/api/webhook/${provider}`
+        };
         const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) { payload.splits = [{ producerId: splitId, amount: commission }]; }
+        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
+            payload.splits = [{ producerId: splitId, amount: commission }];
+        }
         const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
         pixData = response.data;
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer: isCnpay ? "CNPay" : "Oasy.fy", provider };
-    } else { 
+        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
+        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
+    } else { // Padrão é PushinPay
         if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = { value: value_cents, webhook_url: `https://${host}/api/webhook/pushinpay` };
+        const payload = {
+            value: value_cents,
+            webhook_url: `https://${host}/api/webhook/pushinpay`,
+        };
         const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) { payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }]; }
-        const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = response.data;
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer: "Woovi", provider: 'pushinpay' };
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
+            payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
+        }
+        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+        pixData = pushinpayResponse.data;
+        acquirer = "Woovi";
+        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
     }
 }
 
@@ -334,35 +387,68 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 currentNodeId = findNextNode(currentNodeId, null, edges);
                 break;
             
-            case 'action_pix':
-                try {
-                    const valueInCents = currentNode.data.valueInCents;
-                    if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
-                    
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    const [userFlowState] = await sql`SELECT variables FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    const click_id = userFlowState.variables.click_id;
-                    if (!click_id) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
-                    
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error("Dados do clique não encontrados para gerar o PIX.");
-
-                    const provider = seller.pix_provider_primary || 'pushinpay';
-                    const ip_address = click.ip_address;
-                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, HOTTRACK_API_URL.replace('/api', ''), seller.api_key, ip_address);
-                    
-                    await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${valueInCents / 100}, ${pixResult.qr_code_text}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})`;
-                    
-                    variables.last_transaction_id = pixResult.transaction_id;
-                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    
-                    await sendMessage(chatId, `Pix copia e cola gerado:\n\n\`${pixResult.qr_code_text}\``, botToken, sellerId, botId, true);
-                } catch (error) {
-                    console.error("[Flow Engine] Erro ao gerar PIX:", error);
-                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
-                }
-                currentNodeId = findNextNode(currentNodeId, null, edges);
-                break;
+                case 'action_pix':
+                    try {
+                        const valueInCents = currentNode.data.valueInCents;
+                        if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+    
+                        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                         // Adiciona verificação do seller
+                        if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
+    
+                        // Busca o click_id das variáveis do fluxo
+                        const click_id_from_vars = variables.click_id;
+                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+    
+                        const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                        const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                        if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
+    
+                        const ip_address = click.ip_address; // IP do clique original
+    
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+    
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+    
+                        variables.last_transaction_id = pixResult.transaction_id;
+                        // Salva as variáveis atualizadas (com o last_transaction_id)
+                        await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+    
+                        // Envia o PIX para o usuário
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+    
+                        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                            chat_id: chatId,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                                ]
+                            }
+                        });
+    
+                         if (sentMessage.ok) {
+                             await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot'); // Salva como 'bot'
+                         }
+    
+                    } catch (error) {
+                        console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
+                        // Informa o usuário sobre o erro
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
+                        // Por enquanto, vamos parar aqui para evitar loops
+                        currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
+                        break; // Sai do switch
+                    }
+                    // Se chegou aqui, o PIX foi gerado e enviado com sucesso
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
+                    break; // Sai do switch
 
             case 'action_check_pix':
                 try {
