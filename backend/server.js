@@ -371,6 +371,56 @@ async function getSyncPayAuthToken(seller) {
     return access_token;
 }
 
+// NOVA FUNÇÃO REUTILIZÁVEL PARA GERAR PIX COM FALLBACK
+async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
+    const providerOrder = [
+        seller.pix_provider_primary,
+        seller.pix_provider_secondary,
+        seller.pix_provider_tertiary
+    ].filter(Boolean); // Remove nulos ou vazios
+
+    if (providerOrder.length === 0) {
+        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
+    }
+
+    let lastError = null;
+
+    for (const provider of providerOrder) {
+        try {
+            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
+            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
+            console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
+
+            // Salvar a transação no banco AQUI DENTRO da função de fallback
+            // Isso garante que a transação só é salva se a geração for bem-sucedida
+            const [transaction] = await sql`
+                INSERT INTO pix_transactions (
+                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
+                    provider, provider_transaction_id, pix_id
+                ) VALUES (
+                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
+                    ${pixResult.qr_code_base64}, ${pixResult.provider},
+                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
+                ) RETURNING id`;
+
+             // Adiciona o ID interno da transação salva ao resultado para uso posterior
+            pixResult.internal_transaction_id = transaction.id;
+
+            return pixResult; // Retorna o resultado SUCESSO
+
+        } catch (error) {
+            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
+            lastError = error; // Guarda o erro para o caso de todos falharem
+        }
+    }
+
+    // Se o loop terminar sem sucesso, lança o último erro ocorrido
+    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
+    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
+    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
+    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
+}
+
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
@@ -1567,62 +1617,48 @@ app.get('/api/transactions', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });
     }
 });
+
 app.post('/api/pix/generate', logApiRequest, async (req, res) => {
     const apiKey = req.headers['x-api-key'];
     const { click_id, value_cents, customer, product } = req.body;
-    
+
     if (!apiKey || !click_id || !value_cents) return res.status(400).json({ message: 'API Key, click_id e value_cents são obrigatórios.' });
 
     try {
         const [seller] = await sql`SELECT * FROM sellers WHERE api_key = ${apiKey}`;
         if (!seller) return res.status(401).json({ message: 'API Key inválida.' });
 
-        if (adminSubscription) {
-            const payload = JSON.stringify({
-                title: 'PIX Gerado',
-                body: `Um PIX de R$ ${(value_cents / 100).toFixed(2)} foi gerado por ${seller.name}.`,
-            });
-            webpush.sendNotification(adminSubscription, payload).catch(err => console.error(err));
-        }
-
         const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
-        
         const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${seller.id}`;
         if (!click) return res.status(404).json({ message: 'Click ID não encontrado.' });
-        
+
         const ip_address = click.ip_address;
-        
-        const providerOrder = [ seller.pix_provider_primary, seller.pix_provider_secondary, seller.pix_provider_tertiary ].filter(Boolean);
-        let lastError = null;
 
-        for (const provider of providerOrder) {
-            try {
-                const pixResult = await generatePixForProvider(provider, seller, value_cents, req.headers.host, apiKey, ip_address);
-                const [transaction] = await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id}) RETURNING id`;
-                
-                if (click.pressel_id) {
-                    await sendMetaEvent('InitiateCheckout', click, { id: transaction.id, pix_value: value_cents / 100 }, null);
-                }
+        // *** SUBSTITUIÇÃO DA LÓGICA DO LOOP PELA NOVA FUNÇÃO ***
+        const pixResult = await generatePixWithFallback(seller, value_cents, req.headers.host, apiKey, ip_address, click.id); // Passa click.id
 
-                const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
-                const productDataForUtmify = product || { id: "prod_1", name: "Produto Ofertado" };
-                await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
-                
-                return res.status(200).json(pixResult);
-            } catch (error) {
-                console.error(`[PIX GENERATE FALLBACK] Falha ao gerar PIX com ${provider}:`, error.response?.data || error.message);
-                lastError = error;
-            }
+        // O INSERT já foi feito dentro de generatePixWithFallback
+        // Apenas continue com os eventos pós-geração
+
+        if (click.pressel_id || click.checkout_id) { // Verifica se veio de pressel ou checkout
+             await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 }, null);
         }
 
-        console.error(`[PIX GENERATE FINAL ERROR] Seller ID: ${seller?.id}, Email: ${seller?.email} - Todas as tentativas falharam. Último erro:`, lastError?.message || lastError);
-        return res.status(500).json({ message: 'Não foi possível gerar o PIX. Todos os provedores falharam.' });
+        const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
+        const productDataForUtmify = product || { id: "prod_1", name: "Produto Ofertado" };
+        await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
 
-    } catch (error) {
-        console.error(`[PIX GENERATE ERROR] Erro geral na rota:`, error.message);
-        res.status(500).json({ message: 'Erro interno ao processar a geração de PIX.' });
+        // Remove o internal_transaction_id antes de retornar para a API externa
+        const { internal_transaction_id, ...apiResponse } = pixResult;
+        return res.status(200).json(apiResponse);
+
+    } catch (error) { // O catch agora pega o erro lançado por generatePixWithFallback se todos falharem
+        console.error(`[PIX GENERATE ERROR] Erro na rota /api/pix/generate:`, error.message);
+        // Retorna a mensagem de erro específica lançada pela função de fallback
+        res.status(500).json({ message: error.message || 'Erro interno ao processar a geração de PIX.' });
     }
 });
+
 app.get('/api/pix/status/:transaction_id', async (req, res) => {
     const apiKey = req.headers['x-api-key'];
     const { transaction_id } = req.params;
@@ -2006,35 +2042,68 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 currentNodeId = findNextNode(currentNodeId, null, edges);
                 break;
             
-            case 'action_pix':
-                try {
-                    const valueInCents = currentNode.data.valueInCents;
-                    if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
-                    
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    const [userFlowState] = await sql`SELECT variables FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    const click_id = userFlowState.variables.click_id;
-                    if (!click_id) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
-                    
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error("Dados do clique não encontrados para gerar o PIX.");
-
-                    const provider = seller.pix_provider_primary || 'pushinpay';
-                    const ip_address = click.ip_address;
-                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, HOTTRACK_API_URL.replace('/api', ''), seller.api_key, ip_address);
-                    
-                    await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${valueInCents / 100}, ${pixResult.qr_code_text}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})`;
-                    
-                    variables.last_transaction_id = pixResult.transaction_id;
-                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    
-                    await sendMessage(chatId, `Pix copia e cola gerado:\n\n\`${pixResult.qr_code_text}\``, botToken, sellerId, botId, true);
-                } catch (error) {
-                    console.error("[Flow Engine] Erro ao gerar PIX:", error);
-                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
-                }
-                currentNodeId = findNextNode(currentNodeId, null, edges);
-                break;
+                case 'action_pix':
+                    try {
+                        const valueInCents = currentNode.data.valueInCents;
+                        if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+    
+                        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                         // Adiciona verificação do seller
+                        if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
+    
+                        // Busca o click_id das variáveis do fluxo
+                        const click_id_from_vars = variables.click_id;
+                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+    
+                        const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                        const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                        if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
+    
+                        const ip_address = click.ip_address; // IP do clique original
+    
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+    
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+    
+                        variables.last_transaction_id = pixResult.transaction_id;
+                        // Salva as variáveis atualizadas (com o last_transaction_id)
+                        await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+    
+                        // Envia o PIX para o usuário
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+    
+                        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                            chat_id: chatId,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                                ]
+                            }
+                        });
+    
+                         if (sentMessage.ok) {
+                             await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot'); // Salva como 'bot'
+                         }
+    
+                    } catch (error) {
+                        console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
+                        // Informa o usuário sobre o erro
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
+                        // Por enquanto, vamos parar aqui para evitar loops
+                        currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
+                        break; // Sai do switch
+                    }
+                    // Se chegou aqui, o PIX foi gerado e enviado com sucesso
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
+                    break; // Sai do switch
 
             case 'action_check_pix':
                 try {
@@ -2697,25 +2766,37 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Erro ao deletar a conversa.' }); }
 });
 
-// Endpoint 7: Gerar PIX via chat (modificado)
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
     const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
         if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
-        
+
         const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
         if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
 
-        // Buscar o clique para pegar o IP
-        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [click_id.startsWith('/start ') ? click_id : `/start ${click_id}`]);
-        const ip_address = click ? click.ip_address : req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
+        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
+        // Se o clique não existir no banco para ESTE vendedor, retorna erro
+        if (!click) return res.status(404).json({ message: "Click ID não encontrado para este vendedor." });
 
-        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, valueInCents, req.headers.host, seller.api_key, ip_address);
+        const ip_address = click.ip_address || req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress; // Garante IP
 
+        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+        const pixResult = await generatePixWithFallback(seller, valueInCents, req.headers.host, seller.api_key, ip_address, click.id); // Passa click.id
+
+        // O INSERT já foi feito dentro de generatePixWithFallback
+        // Apenas continue com a lógica do Telegram
+
+        // CORRECTION: Removed ORDER BY and LIMIT
         await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
-
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
-        
+         // ADICIONAR VERIFICAÇÃO DO BOT (Importante!)
+        if (!bot) {
+            console.error(`[Generate PIX Chat] Bot ID ${botId} não encontrado após gerar PIX.`);
+            // O PIX foi gerado, mas não podemos enviar. Logar isso é importante.
+            return res.status(500).json({ message: 'PIX gerado, mas falha ao buscar informações do bot para envio.' });
+        }
+
         const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
@@ -2733,10 +2814,18 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         if (sentMessage.ok) {
             await saveMessageToDb(req.user.id, botId, sentMessage.result, 'operator');
+        } else {
+             console.error(`[Generate PIX Chat] Falha ao enviar mensagem do PIX para ${chatId}. Resposta Telegram:`, sentMessage.description);
+             // Considerar se deve retornar erro aqui ou apenas logar
         }
+
         res.status(200).json({ message: 'PIX enviado ao usuário.' });
+
     } catch (error) {
-        res.status(500).json({ message: error.response?.data?.message || 'Erro ao gerar PIX.' });
+        // O catch agora pega o erro lançado por generatePixWithFallback ou outros erros
+        console.error('ERRO EM /api/chats/generate-pix:', error);
+        const message = error.message || 'Erro ao gerar ou enviar PIX via chat.'; // Usa a mensagem do erro lançado
+        res.status(500).json({ message });
     }
 });
 
@@ -3193,26 +3282,51 @@ app.get('/api/cron/process-disparo-queue', async (req, res) => {
                         response = await sendTelegramRequest(bot.bot_token, method, payload);
                     }
                 } else if (step.type === 'pix') {
-                    if (!userVariables.click_id) continue;
-                    // Buscar o clique para pegar o IP
-                    const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`]);
-                    const ip_address = click ? click.ip_address : null;
+                    if (!userVariables.click_id) {
+                        console.warn(`[CRON Disparo] Job ${id}: Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
+                        logStatus = 'SKIPPED'; // Status diferente para indicar que foi pulado
+                        await sqlWithRetry(`DELETE FROM disparo_queue WHERE id = $1`, [id]); // Remove da fila
+                        processedCount++;
+                        continue; // Pula para o próximo job
+                    }
+
+                    const db_click_id = userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`;
+                    const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
+
+                    if (!click) {
+                        console.warn(`[CRON Disparo] Job ${id}: Ignorando passo PIX para chat ${chat_id}. Click ID ${userVariables.click_id} não encontrado ou não pertence ao vendedor ${seller.id}.`);
+                        logStatus = 'SKIPPED';
+                        await sqlWithRetry(`DELETE FROM disparo_queue WHERE id = $1`, [id]);
+                        processedCount++;
+                        continue;
+                    }
+
+                    const ip_address = click.ip_address; // IP do clique original
 
                     try {
-                        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, step.valueInCents, req.headers.host, seller.api_key, ip_address);
-                        lastTransactionId = pixResult.transaction_id;
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, step.valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+                        lastTransactionId = pixResult.transaction_id; // Guarda para o log
 
-                        const messageText = await replaceVariables(step.pixMessage, userVariables);
-                        const buttonText = await replaceVariables(step.pixButtonText, userVariables);
-                        const textToSend = `${messageText}\n\n<pre>${pixResult.qr_code_text}</pre>`;
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+
+                        const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
+                        const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
 
                         response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                            chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                            reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text }}]]}
+                            chat_id: chat_id,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]]
+                            }
                         });
-                    } catch (error) {
-                        console.error(`Erro ao gerar PIX para o chat ${chat_id}:`, error);
+                    } catch (error) { // Pega erro do generatePixWithFallback ou do sendTelegramRequest
+                        console.error(`[CRON Disparo] Job ${id}: Erro ao gerar/enviar PIX para chat ${chat_id}:`, error.message);
                         logStatus = 'FAILED';
+                        // Não definimos 'response' aqui, o catch externo tratará
                     }
                 }
                 
