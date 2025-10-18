@@ -2787,9 +2787,8 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
         // O INSERT já foi feito dentro de generatePixWithFallback
         // Apenas continue com a lógica do Telegram
 
-        // Atualizar last_transaction_id no chat (opcional, pode ser útil)
-        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3 ORDER BY created_at DESC LIMIT 1`, [pixResult.transaction_id, botId, chatId]);
-
+        // CORRECTION: Removed ORDER BY and LIMIT
+        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
          // ADICIONAR VERIFICAÇÃO DO BOT (Importante!)
         if (!bot) {
