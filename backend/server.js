@@ -1637,13 +1637,33 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
 app.get('/api/transactions', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const transactions = await sql`
-            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at
+        
+        // Buscar transações regulares (de pressels/checkouts)
+        const regularTransactions = await sql`
+            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at, 'regular' as transaction_type
             FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
             LEFT JOIN pressels p ON c.pressel_id = p.id LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
             LEFT JOIN checkouts ch ON c.checkout_id = ch.id WHERE c.seller_id = ${sellerId}
-            ORDER BY pt.created_at DESC;`;
-        res.status(200).json(transactions);
+        `;
+        
+        // Buscar transações de disparo
+        const disparoTransactions = await sql`
+            SELECT pt.status, pt.pix_value, 
+                   COALESCE(tb.bot_name, 'Disparo') as source_name, 
+                   pt.provider, pt.created_at, 'disparo' as transaction_type,
+                   dh.campaign_name
+            FROM pix_transactions pt 
+            JOIN disparo_log dl ON pt.provider_transaction_id = dl.transaction_id
+            JOIN disparo_history dh ON dl.history_id = dh.id
+            LEFT JOIN telegram_bots tb ON dl.bot_id = tb.id
+            WHERE dh.seller_id = ${sellerId} AND dl.transaction_id IS NOT NULL
+        `;
+        
+        // Combinar e ordenar todas as transações
+        const allTransactions = [...regularTransactions, ...disparoTransactions]
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            
+        res.status(200).json(allTransactions);
     } catch (error) {
         console.error("Erro ao buscar transações:", error);
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });

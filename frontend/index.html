@@ -1457,7 +1457,9 @@
                     const statusText = t.status === 'paid' ? 'Pago' : 'Pendente';
                     const formattedValue = this.formatNumber(t.pix_value, true);
                     const formattedDate = new Date(t.created_at).toLocaleString('pt-BR');
-                    const sourceName = (t.source_name === 'Checkout' || !t.source_name) ? 'Disparo' : t.source_name;
+                    const sourceName = t.transaction_type === 'disparo' 
+                        ? (t.campaign_name ? `Disparo: ${t.campaign_name}` : 'Disparo')
+                        : (t.source_name === 'Checkout' || !t.source_name) ? 'Checkout' : t.source_name;
                     return `<tr class="hover:bg-slate-800/50">
                                 <td><span class="px-2 py-1 rounded-full text-xs font-medium ${statusClass}">${statusText}</span></td>
                                 <td>${formattedValue}</td><td>${sourceName}</td><td>${t.provider.toUpperCase()}</td><td>${formattedDate}</td>
