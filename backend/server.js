@@ -25,6 +25,7 @@ const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
 });
 
+const processDisparoWorker = require('./worker/process-disparo');
 const processTimeoutWorker = require('./worker/process-timeout');
 
 const receiver = new Receiver({
@@ -70,6 +71,37 @@ app.post(
     }
   }
 );
+
+app.post(
+      '/api/worker/process-disparo',
+      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+      async (req, res) => {
+        try {
+          // 1. Verificar a assinatura do QStash
+          const signature = req.headers["upstash-signature"];
+          const bodyString = req.body.toString();
+    
+          const isValid = await receiver.verify({
+            signature,
+            body: bodyString,
+          });
+    
+          if (!isValid) {
+            console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
+            return res.status(401).send("Invalid signature");
+          }
+    
+          // 2. Se for válida, processar a tarefa
+          console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
+          req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
+          await processDisparoWorker(req, res); // Chama o handler do worker
+    
+        } catch (error) {
+          console.error("Erro crítico no handler do worker de disparo:", error);
+          res.status(500).send("Internal Server Error");
+        }
+      }
+    );
 // ==========================================================
 // FIM DA ROTA DO QSTASH
 // ==========================================================
@@ -2241,70 +2273,128 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar detalhes.' });
     }
 });
+
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
-    const sellerId = req.user.id;
-    const { botIds, flowType, initialText, ctaButtonText, pixValue, externalLink, imageUrl } = req.body;
+        const sellerId = req.user.id;
+        const { botIds, flowSteps, campaignName } = req.body;
+    
+        // 1. Validar os dados
+        if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
+            return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
+        }
+    
+        let historyId; 
+    
+        try {
+            // 2. Criar o registro mestre da campanha
+            // (Esta query está correta, pois você já adicionou a coluna failure_count)
+            const [history] = await sqlWithRetry(
+                sql`INSERT INTO disparo_history (seller_id, campaign_name, bot_ids, flow_steps, status, total_sent, failure_count) 
+                    VALUES (${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 'PENDING', 0, 0) 
+                    RETURNING id`
+            );
+            historyId = history.id;
+    
+            // 3. Buscar todos os contatos únicos
+            const allContacts = new Map();
+            for (const botId of botIds) {
+                // Garante que o bot pertence ao vendedor
+                // *** CORREÇÃO 1: Mudar para template literal ***
+                const [botCheck] = await sqlWithRetry(
+                    sql`SELECT id FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`
+                );
+                if (!botCheck) continue; 
+    
+                // *** CORREÇÃO 2: Mudar a query principal para template literal ***
+                // Esta era a linha 2304 que causou o erro
+            const contacts = await sqlWithRetry(
+                'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
+                [botId, sellerId]
+            );
+                // *** FIM DA CORREÇÃO 2 ***
+    
+                contacts.forEach(c => {
+                    if (!allContacts.has(c.chat_id)) {
+                        allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
+                    }
+                });
+            }
+            const uniqueContacts = Array.from(allContacts.values());
+    
+            if (uniqueContacts.length === 0) {
+                // *** CORREÇÃO 3: Mudar para template literal ***
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
+                return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
+            }
+    
+            // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
+            let messageCounter = 0;
+            const delayBetweenMessages = 1; // 1 segundo de atraso entre cada mensagem
+            const qstashPromises = [];
+    
+            for (const contact of uniqueContacts) {
+                const userVariables = {
+                    primeiro_nome: contact.first_name || '',
+                    nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                    click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                };
+                
+                let currentStepDelay = 0; 
+    
+                for (const step of flowSteps) {
+                    const payload = {
+                        history_id: historyId,
+                        chat_id: contact.chat_id,
+                        bot_id: contact.bot_id_source,
+                        step_json: JSON.stringify(step),
+                        variables_json: JSON.stringify(userVariables)
+                    };
+    
+                    const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
+    
+                    qstashPromises.push(
+                        qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                            body: payload,
+                            delay: `${totalDelaySeconds}s`, 
+                            retries: 2 
+                        })
+                    );
+                    
+                    if (step.type === 'delay') {
+                        // Acessa o 'data' se existir, senão usa o 'step' (fallback para o seu frontend antigo)
+                        const delayData = step.data || step; 
+                        currentStepDelay += (delayData.delayInSeconds || 1);
+                    } else {
+                        currentStepDelay += 1; // Adiciona 1 seg entre passos normais
+                    }
+                }
+                messageCounter++; 
+            }
+    
+            await Promise.all(qstashPromises);
+    
+            // 5. Atualizar o status da campanha para "RUNNING"
+            // *** CORREÇÃO 4: Mudar para template literal ***
+            await sqlWithRetry(
+                sql`UPDATE disparo_history SET status = 'RUNNING', total_sent = ${uniqueContacts.length} WHERE id = ${historyId}`
+            );
+    
+            res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
+    
+      S } catch (error) {
+            console.error("Erro crítico no agendamento do disparo:", error);
+            if(historyId) {
+                // *** CORREÇÃO 5: Mudar para template literal ***
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
+            }
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
+            }
+        }
+    });
 
-    if (!botIds || botIds.length === 0 || !initialText || !ctaButtonText) {
-        return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
-    }
 
-    try {
-        const bots = await sql`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${sellerId}`;
-        if (bots.length === 0) return res.status(404).json({ message: 'Nenhum bot válido selecionado.' });
-        
-        const users = await sql`SELECT DISTINCT ON (chat_id) chat_id, bot_id FROM telegram_chats WHERE bot_id = ANY(${botIds}) AND seller_id = ${sellerId}`;
-        if (users.length === 0) return res.status(404).json({ message: 'Nenhum usuário encontrado para os bots selecionados.' });
-
-        const [log] = await sql`INSERT INTO mass_sends (seller_id, message_content, button_text, button_url, image_url) VALUES (${sellerId}, ${initialText}, ${ctaButtonText}, ${externalLink || null}, ${imageUrl || null}) RETURNING id;`;
-        const logId = log.id;
-        
-        res.status(202).json({ message: `Disparo agendado para ${users.length} usuários.`, logId });
-        
-        (async () => {
-            let successCount = 0, failureCount = 0;
-            const botTokenMap = new Map(bots.map(b => [b.id, b.bot_token]));
-
-            for (const user of users) {
-                const botToken = botTokenMap.get(user.bot_id);
-                if (!botToken) continue;
-
-                const endpoint = imageUrl ? 'sendPhoto' : 'sendMessage';
-                const apiUrl = `https://api.telegram.org/bot${botToken}/${endpoint}`;
-                let payload;
-
-                if (flowType === 'pix_flow') {
-                    const valueInCents = Math.round(parseFloat(pixValue) * 100);
-                    const callback_data = `generate_pix|${valueInCents}`;
-                    payload = { chat_id: user.chat_id, caption: initialText, text: initialText, photo: imageUrl, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: ctaButtonText, callback_data }]] } };
-                } else {
-                    payload = { chat_id: user.chat_id, caption: initialText, text: initialText, photo: imageUrl, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: ctaButtonText, url: externalLink }]] } };
-                }
-                
-                if (!imageUrl) { delete payload.photo; delete payload.caption; } else { delete payload.text; }
-
-                try {
-                    await axios.post(apiUrl, payload, { timeout: 10000 });
-                    successCount++;
-                    await sql`INSERT INTO mass_send_details (mass_send_id, chat_id, status) VALUES (${logId}, ${user.chat_id}, 'success')`;
-                } catch (error) {
-                    failureCount++;
-                    const errorMessage = error.response?.data?.description || error.message;
-                    console.error(`Falha ao enviar para ${user.chat_id}: ${errorMessage}`);
-                    await sql`INSERT INTO mass_send_details (mass_send_id, chat_id, status, details) VALUES (${logId}, ${user.chat_id}, 'failure', ${errorMessage})`;
-                }
-                await new Promise(resolve => setTimeout(resolve, 300));
-            }
-
-            await sql`UPDATE mass_sends SET success_count = ${successCount}, failure_count = ${failureCount} WHERE id = ${logId};`;
-            console.log(`Disparo ${logId} concluído. Sucessos: ${successCount}, Falhas: ${failureCount}`);
-        })();
-
-    } catch (error) {
-        console.error("Erro no disparo em massa:", error);
-        if (!res.headersSent) res.status(500).json({ message: 'Erro ao iniciar o disparo.' });
-    }
-});
 app.post('/api/webhook/pushinpay', async (req, res) => {
     const { id, status, payer_name, payer_document } = req.body;
     if (status === 'paid') {
