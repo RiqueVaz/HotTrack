@@ -19,17 +19,93 @@ const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
 const { Client } = require("@upstash/qstash");
-const { verifySignature } = require("@upstash/qstash/nextjs");
+const { Receiver } = require("@upstash/qstash");
 
 const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
 });
 
+const processDisparoWorker = require('./worker/process-disparo');
+const processTimeoutWorker = require('./worker/process-timeout');
+
+const receiver = new Receiver({
+    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+  });
 
 const app = express();
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
+
+
+app.post(
+  '/api/worker/process-timeout',
+  express.raw({ type: 'application/json' }), // 1. Ainda é OBRIGATÓRIO para pegar o corpo original
+  async (req, res) => {
+    try {
+      // 2. Extraia as informações necessárias manualmente
+      const signature = req.headers["upstash-signature"];
+      const bodyString = req.body.toString(); // O Receiver espera uma string, não um Buffer
+
+      // 3. Verifique a assinatura
+      const isValid = await receiver.verify({
+        signature,
+        body: bodyString,
+      });
+
+      // 4. Se a assinatura for inválida, rejeite a requisição
+      if (!isValid) {
+        console.error("QStash Signature Verification Failed (Manual Receiver)");
+        return res.status(401).send("Invalid signature");
+      }
+
+      // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
+      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
+      req.body = JSON.parse(bodyString);
+      await processTimeoutWorker(req, res);
+
+    } catch (error) {
+      console.error("Erro crítico no handler do worker:", error);
+      res.status(500).send("Internal Server Error");
+    }
+  }
+);
+
+app.post(
+      '/api/worker/process-disparo',
+      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+      async (req, res) => {
+        try {
+          // 1. Verificar a assinatura do QStash
+          const signature = req.headers["upstash-signature"];
+          const bodyString = req.body.toString();
+    
+          const isValid = await receiver.verify({
+            signature,
+            body: bodyString,
+          });
+    
+          if (!isValid) {
+            console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
+            return res.status(401).send("Invalid signature");
+          }
+    
+          // 2. Se for válida, processar a tarefa
+          console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
+          req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
+          await processDisparoWorker(req, res); // Chama o handler do worker
+    
+        } catch (error) {
+          console.error("Erro crítico no handler do worker de disparo:", error);
+          res.status(500).send("Internal Server Error");
+        }
+      }
+    );
+// ==========================================================
+// FIM DA ROTA DO QSTASH
+// ==========================================================
+
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -327,6 +403,56 @@ async function getSyncPayAuthToken(seller) {
     return access_token;
 }
 
+// NOVA FUNÇÃO REUTILIZÁVEL PARA GERAR PIX COM FALLBACK
+async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
+    const providerOrder = [
+        seller.pix_provider_primary,
+        seller.pix_provider_secondary,
+        seller.pix_provider_tertiary
+    ].filter(Boolean); // Remove nulos ou vazios
+
+    if (providerOrder.length === 0) {
+        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
+    }
+
+    let lastError = null;
+
+    for (const provider of providerOrder) {
+        try {
+            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
+            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
+            console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
+
+            // Salvar a transação no banco AQUI DENTRO da função de fallback
+            // Isso garante que a transação só é salva se a geração for bem-sucedida
+            const [transaction] = await sql`
+                INSERT INTO pix_transactions (
+                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
+                    provider, provider_transaction_id, pix_id
+                ) VALUES (
+                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
+                    ${pixResult.qr_code_base64}, ${pixResult.provider},
+                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
+                ) RETURNING id`;
+
+             // Adiciona o ID interno da transação salva ao resultado para uso posterior
+            pixResult.internal_transaction_id = transaction.id;
+
+            return pixResult; // Retorna o resultado SUCESSO
+
+        } catch (error) {
+            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
+            lastError = error; // Guarda o erro para o caso de todos falharem
+        }
+    }
+
+    // Se o loop terminar sem sucesso, lança o último erro ocorrido
+    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
+    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
+    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
+    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
+}
+
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
@@ -475,6 +601,8 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
         console.error(`[handleSuccessfulPayment] ERRO CRÍTICO ao processar pagamento da transação ${transaction_id}:`, error);
     }
 }
+
+
 
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
@@ -1114,7 +1242,7 @@ app.post('/api/bots/:id/set-webhook', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: 'O token do bot não está configurado. Salve um token válido primeiro.' });
         }
         const token = bot.bot_token.trim();
-        const webhookUrl = `${HOTTRACK_API_URL}/webhook/telegram/${id}`;
+        const webhookUrl = `${HOTTRACK_API_URL}/api/webhook/telegram/${id}`;
         const telegramApiUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${webhookUrl}`;
         
         const response = await axios.get(telegramApiUrl);
@@ -1509,74 +1637,80 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
 app.get('/api/transactions', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const transactions = await sql`
-            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at
+        
+        // Buscar transações regulares (de pressels/checkouts)
+        const regularTransactions = await sql`
+            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at, 'regular' as transaction_type
             FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
             LEFT JOIN pressels p ON c.pressel_id = p.id LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
             LEFT JOIN checkouts ch ON c.checkout_id = ch.id WHERE c.seller_id = ${sellerId}
-            ORDER BY pt.created_at DESC;`;
-        res.status(200).json(transactions);
+        `;
+        
+        // Buscar transações de disparo
+        const disparoTransactions = await sql`
+            SELECT pt.status, pt.pix_value, 
+                   COALESCE(tb.bot_name, 'Disparo') as source_name, 
+                   pt.provider, pt.created_at, 'disparo' as transaction_type,
+                   dh.campaign_name
+            FROM pix_transactions pt 
+            JOIN disparo_log dl ON pt.provider_transaction_id = dl.transaction_id
+            JOIN disparo_history dh ON dl.history_id = dh.id
+            LEFT JOIN telegram_bots tb ON dl.bot_id = tb.id
+            WHERE dh.seller_id = ${sellerId} AND dl.transaction_id IS NOT NULL
+        `;
+        
+        // Combinar e ordenar todas as transações
+        const allTransactions = [...regularTransactions, ...disparoTransactions]
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            
+        res.status(200).json(allTransactions);
     } catch (error) {
         console.error("Erro ao buscar transações:", error);
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });
     }
 });
+
 app.post('/api/pix/generate', logApiRequest, async (req, res) => {
     const apiKey = req.headers['x-api-key'];
     const { click_id, value_cents, customer, product } = req.body;
-    
+
     if (!apiKey || !click_id || !value_cents) return res.status(400).json({ message: 'API Key, click_id e value_cents são obrigatórios.' });
 
     try {
         const [seller] = await sql`SELECT * FROM sellers WHERE api_key = ${apiKey}`;
         if (!seller) return res.status(401).json({ message: 'API Key inválida.' });
 
-        if (adminSubscription) {
-            const payload = JSON.stringify({
-                title: 'PIX Gerado',
-                body: `Um PIX de R$ ${(value_cents / 100).toFixed(2)} foi gerado por ${seller.name}.`,
-            });
-            webpush.sendNotification(adminSubscription, payload).catch(err => console.error(err));
-        }
-
         const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
-        
         const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${seller.id}`;
         if (!click) return res.status(404).json({ message: 'Click ID não encontrado.' });
-        
+
         const ip_address = click.ip_address;
-        
-        const providerOrder = [ seller.pix_provider_primary, seller.pix_provider_secondary, seller.pix_provider_tertiary ].filter(Boolean);
-        let lastError = null;
 
-        for (const provider of providerOrder) {
-            try {
-                const pixResult = await generatePixForProvider(provider, seller, value_cents, req.headers.host, apiKey, ip_address);
-                const [transaction] = await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id}) RETURNING id`;
-                
-                if (click.pressel_id) {
-                    await sendMetaEvent('InitiateCheckout', click, { id: transaction.id, pix_value: value_cents / 100 }, null);
-                }
+        // *** SUBSTITUIÇÃO DA LÓGICA DO LOOP PELA NOVA FUNÇÃO ***
+        const pixResult = await generatePixWithFallback(seller, value_cents, req.headers.host, apiKey, ip_address, click.id); // Passa click.id
 
-                const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
-                const productDataForUtmify = product || { id: "prod_1", name: "Produto Ofertado" };
-                await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
-                
-                return res.status(200).json(pixResult);
-            } catch (error) {
-                console.error(`[PIX GENERATE FALLBACK] Falha ao gerar PIX com ${provider}:`, error.response?.data || error.message);
-                lastError = error;
-            }
+        // O INSERT já foi feito dentro de generatePixWithFallback
+        // Apenas continue com os eventos pós-geração
+
+        if (click.pressel_id || click.checkout_id) { // Verifica se veio de pressel ou checkout
+             await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 }, null);
         }
 
-        console.error(`[PIX GENERATE FINAL ERROR] Seller ID: ${seller?.id}, Email: ${seller?.email} - Todas as tentativas falharam. Último erro:`, lastError?.message || lastError);
-        return res.status(500).json({ message: 'Não foi possível gerar o PIX. Todos os provedores falharam.' });
+        const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
+        const productDataForUtmify = product || { id: "prod_1", name: "Produto Ofertado" };
+        await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
 
-    } catch (error) {
-        console.error(`[PIX GENERATE ERROR] Erro geral na rota:`, error.message);
-        res.status(500).json({ message: 'Erro interno ao processar a geração de PIX.' });
+        // Remove o internal_transaction_id antes de retornar para a API externa
+        const { internal_transaction_id, ...apiResponse } = pixResult;
+        return res.status(200).json(apiResponse);
+
+    } catch (error) { // O catch agora pega o erro lançado por generatePixWithFallback se todos falharem
+        console.error(`[PIX GENERATE ERROR] Erro na rota /api/pix/generate:`, error.message);
+        // Retorna a mensagem de erro específica lançada pela função de fallback
+        res.status(500).json({ message: error.message || 'Erro interno ao processar a geração de PIX.' });
     }
 });
+
 app.get('/api/pix/status/:transaction_id', async (req, res) => {
     const apiKey = req.headers['x-api-key'];
     const { transaction_id } = req.params;
@@ -1785,10 +1919,43 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) 
 }
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
-    console.log(`[Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
+    
+    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+
+    // ==========================================================
+    // PASSO 1: CARREGAR AS VARIÁVEIS NO INÍCIO
+    // ==========================================================
+    let variables = { ...initialVariables };
+
+    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    const [user] = await sql`
+        SELECT first_name, last_name 
+        FROM telegram_chats 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        ORDER BY created_at DESC LIMIT 1`;
+
+    if (user) {
+        variables.primeiro_nome = user.first_name || '';
+        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+    }
+
+    // Se tiver um click_id, busca os dados de geolocalização (cidade)
+    if (variables.click_id) {
+        const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+        const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
+        if (click) {
+            variables.cidade = click.city || 'Desconhecida';
+            variables.estado = click.state || 'Desconhecido';
+        }
+    }
+    // ==========================================================
+    // FIM DO PASSO 1
+    // ==========================================================
+    
     const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
     if (!flow || !flow.nodes) {
-        console.log(`[Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+        console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
         return;
     }
 
@@ -1797,25 +1964,45 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     const edges = flowData.edges || [];
 
     let currentNodeId = startNodeId;
-    let variables = initialVariables;
+    const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
 
     if (!currentNodeId) {
-        const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        if (userState && userState.waiting_for_input) {
-            console.log(`[Flow Engine] Usuário ${chatId} respondeu. Continuando do nó ${userState.current_node_id} pelo caminho 'com resposta'.`);
-            currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
-            variables = userState.variables;
-        } else {
-            console.log(`[Flow Engine] Iniciando novo fluxo para ${chatId} a partir do gatilho.`);
+        if (isStartCommand) {
+            console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             const startNode = nodes.find(node => node.type === 'trigger');
             if (startNode) {
                 currentNodeId = findNextNode(startNode.id, null, edges);
+            }
+        } else {
+            const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (userState && userState.waiting_for_input) {
+                console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
+                currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
+                
+                let parsedVariables = {};
+                if (userState.variables) {
+                    try {
+                        parsedVariables = JSON.parse(userState.variables);
+                    } catch (e) {
+                        parsedVariables = userState.variables;
+                    }
+                }
+                // Une as variáveis já carregadas com as salvas no estado
+                variables = { ...variables, ...parsedVariables };
+
+            } else {
+                console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
+                const startNode = nodes.find(node => node.type === 'trigger');
+                if (startNode) {
+                    currentNodeId = findNextNode(startNode.id, null, edges);
+                }
             }
         }
     }
 
     if (!currentNodeId) {
-        console.log(`[Flow Engine] Fim do fluxo ou nenhum nó inicial encontrado para ${chatId}.`);
+        console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
         await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         return;
     }
@@ -1824,7 +2011,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     while (currentNodeId && safetyLock < 20) {
         const currentNode = nodes.find(node => node.id === currentNodeId);
         if (!currentNode) {
-            console.error(`[Flow Engine] Erro: Nó ${currentNodeId} não encontrado no fluxo.`);
+            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
             break;
         }
 
@@ -1832,7 +2019,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input)
             VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false)
             ON CONFLICT (chat_id, bot_id)
-            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false;
+            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false, scheduled_message_id = NULL;
         `;
 
         switch (currentNode.type) {
@@ -1840,46 +2027,66 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
                     await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
                 }
-                await sendMessage(chatId, currentNode.data.text, botToken, sellerId, botId, currentNode.data.showTyping);
 
+                // ==========================================================
+                // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
+                // ==========================================================
+                const textToSend = await replaceVariables(currentNode.data.text, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                // ==========================================================
+                // FIM DO PASSO 2
+                // ==========================================================
+                
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
                     
                     if (noReplyNodeId) {
                         const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                        
-                        console.log(`[Flow Engine] Agendando worker via QStash em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-            
-                        // A MÁGICA ACONTECE AQUI
-                        // Em vez de INSERT no SQL, você publica uma mensagem no QStash
-                        const response = await qstashClient.publishJSON({
-                            // A URL do seu worker que será chamado
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`, 
-                            // O corpo da requisição que seu worker vai receber
-                            body: {
-                                chat_id: chatId,
-                                bot_id: botId,
-                                target_node_id: noReplyNodeId,
-                                variables: variables
-                            },
-                            // Atraso para a entrega da mensagem
-                            delay: `${timeoutMinutes}m`,
-                            // ID único para poder cancelar depois
-                            contentBasedDeduplication: true, // Garante que a mesma tarefa não seja duplicada
-                            "Upstash-Method": "POST" // Especifica que o método deve ser POST
-                        });
-                        
-                        // Salva o ID da mensagem para poder cancelar depois
-                        await sql`UPDATE user_flow_states SET scheduled_message_id = '${response.messageId}' WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+
+                        try {
+                            JSON.stringify(variables);
+                            const response = await qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                                delay: `${timeoutMinutes}m`,
+                                contentBasedDeduplication: true,
+                                method: "POST"
+                            });
+                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        } catch (error) {
+                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
+                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
+                            console.error("Conteúdo do objeto problemático:", variables);
+                            console.error("Erro original:", error.message);
+                            console.error("--- FIM DO ERRO ---");
+                        }
                     }
-                    
                     currentNodeId = null;
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
                 break;
+
+            // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
+            case 'image':
+            case 'video':
+            case 'audio': {
+                try {
+                    const caption = await replaceVariables(currentNode.data.caption, variables);
+                    const response = await handleMediaNode(currentNode, botToken, chatId, caption);
+
+                    if (response && response.ok) {
+                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    }
+                } catch (e) {
+                    console.error(`[Flow Media] Erro ao enviar mídia no nó ${currentNode.id} para o chat ${chatId}: ${e.message}`);
+                }
+                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                break;
+            }
+            // ===========================================
 
             case 'delay':
                 const delaySeconds = currentNode.data.delayInSeconds || 1;
@@ -1887,35 +2094,68 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 currentNodeId = findNextNode(currentNodeId, null, edges);
                 break;
             
-            case 'action_pix':
-                try {
-                    const valueInCents = currentNode.data.valueInCents;
-                    if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
-                    
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    const [userFlowState] = await sql`SELECT variables FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    const click_id = userFlowState.variables.click_id;
-                    if (!click_id) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
-                    
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error("Dados do clique não encontrados para gerar o PIX.");
-
-                    const provider = seller.pix_provider_primary || 'pushinpay';
-                    const ip_address = click.ip_address;
-                    const pixResult = await generatePixForProvider(provider, seller, valueInCents, HOTTRACK_API_URL.replace('/api', ''), seller.api_key, ip_address);
-                    
-                    await sql`INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, provider, provider_transaction_id, pix_id) VALUES (${click.id}, ${valueInCents / 100}, ${pixResult.qr_code_text}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})`;
-                    
-                    variables.last_transaction_id = pixResult.transaction_id;
-                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    
-                    await sendMessage(chatId, `Pix copia e cola gerado:\n\n\`${pixResult.qr_code_text}\``, botToken, sellerId, botId, true);
-                } catch (error) {
-                    console.error("[Flow Engine] Erro ao gerar PIX:", error);
-                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
-                }
-                currentNodeId = findNextNode(currentNodeId, null, edges);
-                break;
+                case 'action_pix':
+                    try {
+                        const valueInCents = currentNode.data.valueInCents;
+                        if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+    
+                        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                         // Adiciona verificação do seller
+                        if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
+    
+                        // Busca o click_id das variáveis do fluxo
+                        const click_id_from_vars = variables.click_id;
+                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+    
+                        const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                        const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                        if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
+    
+                        const ip_address = click.ip_address; // IP do clique original
+    
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+    
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+    
+                        variables.last_transaction_id = pixResult.transaction_id;
+                        // Salva as variáveis atualizadas (com o last_transaction_id)
+                        await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+    
+                        // Envia o PIX para o usuário
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+    
+                        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                            chat_id: chatId,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                                ]
+                            }
+                        });
+    
+                         if (sentMessage.ok) {
+                             await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot'); // Salva como 'bot'
+                         }
+    
+                    } catch (error) {
+                        console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
+                        // Informa o usuário sobre o erro
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
+                        // Por enquanto, vamos parar aqui para evitar loops
+                        currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
+                        break; // Sai do switch
+                    }
+                    // Se chegou aqui, o PIX foi gerado e enviado com sucesso
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
+                    break; // Sai do switch
 
             case 'action_check_pix':
                 try {
@@ -1934,25 +2174,26 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
                     }
                 } catch (error) {
-                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
-                     await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
-                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                    currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
 
-            default:
-                console.warn(`[Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
-                currentNodeId = null;
-                break;
-        }
-
-        if (!currentNodeId) {
-            const pendingTimeouts = await sql`SELECT 1 FROM flow_timeouts WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            if(pendingTimeouts.length === 0){
-                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                default:
+                    console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
+                    currentNodeId = null;
+                    break;
             }
-        }
-        safetyLock++;
+
+            if (!currentNodeId) {
+                const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+                if(!state){
+                    console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                }
+            }
+            safetyLock++;
     }
 }
 
@@ -1965,40 +2206,48 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     res.sendStatus(200);
 
     try {
-        // --- Bloco de Segurança ---
-        // Se a requisição não for uma mensagem válida, ignora para evitar erros.
         if (!message || !message.chat || !message.chat.id) {
-            console.warn('[Webhook] Requisição recebida sem a estrutura de mensagem esperada. Ignorando.');
-            return; 
-        }
-        const chatId = message.chat.id;
-
-        // --- Cancelamento da Tarefa do Worker ---
-        // Tenta encontrar uma tarefa agendada para este usuário.
-        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        
-        // Se encontrar uma tarefa, cancela no QStash e limpa do banco de dados.
-        if (userState && userState.scheduled_message_id) {
-            console.log(`[Webhook] Usuário ${chatId} respondeu. Cancelando msg ${userState.scheduled_message_id} no QStash.`);
-            // CORREÇÃO 2: Usa o método correto para deletar a mensagem no QStash v2.
-            await qstashClient.messages.delete({ id: userState.scheduled_message_id });
-            await sql`UPDATE user_flow_states SET scheduled_message_id = NULL WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        }
-        
-        // --- Processamento Normal da Mensagem ---
-        // CORREÇÃO 3: Busca os dados do bot ANTES de tentar usá-los.
-        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
-        if (!bot) {
-            console.warn(`[Webhook] Webhook recebido para botId não encontrado: ${botId}`);
+            console.warn('[Webhook] Requisição ignorada: estrutura de mensagem inválida.');
             return;
         }
-        const { seller_id: sellerId, bot_token: botToken } = bot;
+        const chatId = message.chat.id;
+    
+        // 1. Busque o estado do usuário
+        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
-        const text = message.text || ''; // Garante que `text` sempre seja uma string
+        // --- BLOCO CORRIGIDO ---
+        // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
+        if (userState && userState.scheduled_message_id) {
+            const messageIdToCancel = userState.scheduled_message_id;
+            console.log(`[Webhook] Usuário respondeu. Tentando cancelar Message ID: "${messageIdToCancel}"`);
+    
+            try {
+                await qstashClient.messages.delete({ id: messageIdToCancel });
+                console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
+            } catch (error) {
+                // Se o erro for 404 (Not Found), ignore. É a race condition que previmos.
+                if (error.status === 404) {
+                    console.warn(`[Webhook] QStash retornou 404 para o ID ${messageIdToCancel}. A mensagem provavelmente já foi executada ou nunca foi totalmente registrada. Ignorando e continuando.`);
+                } else {
+                    // Se for qualquer outro erro, registre como crítico.
+                    console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
+                }
+            }
+        }
+        // --- FIM DO BLOCO CORRIGIDO ---
+        
+        // 3. Continue com o processamento normal da mensagem (esta parte não muda)
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
+        if (!bot) {
+            console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
+            return;
+        }
+        
+        const { seller_id: sellerId, bot_token: botToken } = bot;
+        const text = message.text || '';
         const isStartCommand = text.startsWith('/start ');
         const clickIdValue = isStartCommand ? text : null;
-
-        // Salva a mensagem do usuário no banco de dados.
+    
         await sql`
             INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
             VALUES (${sellerId}, ${botId}, ${chatId}, ${message.message_id}, ${message.from.id}, ${message.from.first_name}, ${message.from.last_name || null}, ${message.from.username || null}, ${clickIdValue}, ${text}, 'user')
@@ -2010,11 +2259,11 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             initialVars.click_id = clickIdValue;
         }
         
-        // Inicia ou continua o motor de fluxo para o usuário.
         await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
-
+    
     } catch (error) {
-        console.error("Erro CRÍTICO ao processar webhook do Telegram:", error);
+        // Este catch agora só pegará erros realmente inesperados no fluxo principal.
+        console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
     }
 });
 
@@ -2044,70 +2293,132 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar detalhes.' });
     }
 });
+
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
-    const sellerId = req.user.id;
-    const { botIds, flowType, initialText, ctaButtonText, pixValue, externalLink, imageUrl } = req.body;
-
-    if (!botIds || botIds.length === 0 || !initialText || !ctaButtonText) {
-        return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
-    }
-
-    try {
-        const bots = await sql`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${sellerId}`;
-        if (bots.length === 0) return res.status(404).json({ message: 'Nenhum bot válido selecionado.' });
-        
-        const users = await sql`SELECT DISTINCT ON (chat_id) chat_id, bot_id FROM telegram_chats WHERE bot_id = ANY(${botIds}) AND seller_id = ${sellerId}`;
-        if (users.length === 0) return res.status(404).json({ message: 'Nenhum usuário encontrado para os bots selecionados.' });
-
-        const [log] = await sql`INSERT INTO mass_sends (seller_id, message_content, button_text, button_url, image_url) VALUES (${sellerId}, ${initialText}, ${ctaButtonText}, ${externalLink || null}, ${imageUrl || null}) RETURNING id;`;
-        const logId = log.id;
-        
-        res.status(202).json({ message: `Disparo agendado para ${users.length} usuários.`, logId });
-        
-        (async () => {
-            let successCount = 0, failureCount = 0;
-            const botTokenMap = new Map(bots.map(b => [b.id, b.bot_token]));
-
-            for (const user of users) {
-                const botToken = botTokenMap.get(user.bot_id);
-                if (!botToken) continue;
-
-                const endpoint = imageUrl ? 'sendPhoto' : 'sendMessage';
-                const apiUrl = `https://api.telegram.org/bot${botToken}/${endpoint}`;
-                let payload;
-
-                if (flowType === 'pix_flow') {
-                    const valueInCents = Math.round(parseFloat(pixValue) * 100);
-                    const callback_data = `generate_pix|${valueInCents}`;
-                    payload = { chat_id: user.chat_id, caption: initialText, text: initialText, photo: imageUrl, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: ctaButtonText, callback_data }]] } };
-                } else {
-                    payload = { chat_id: user.chat_id, caption: initialText, text: initialText, photo: imageUrl, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: ctaButtonText, url: externalLink }]] } };
-                }
-                
-                if (!imageUrl) { delete payload.photo; delete payload.caption; } else { delete payload.text; }
-
-                try {
-                    await axios.post(apiUrl, payload, { timeout: 10000 });
-                    successCount++;
-                    await sql`INSERT INTO mass_send_details (mass_send_id, chat_id, status) VALUES (${logId}, ${user.chat_id}, 'success')`;
-                } catch (error) {
-                    failureCount++;
-                    const errorMessage = error.response?.data?.description || error.message;
-                    console.error(`Falha ao enviar para ${user.chat_id}: ${errorMessage}`);
-                    await sql`INSERT INTO mass_send_details (mass_send_id, chat_id, status, details) VALUES (${logId}, ${user.chat_id}, 'failure', ${errorMessage})`;
-                }
-                await new Promise(resolve => setTimeout(resolve, 300));
+        const sellerId = req.user.id;
+        const { botIds, flowSteps, campaignName } = req.body;
+    
+        if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
+            return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
+        }
+    
+        let historyId; 
+    
+        try {
+            // 1. Buscar todos os contatos únicos (semelhante a antes)
+            const allContacts = new Map();
+            for (const botId of botIds) {
+                const [botCheck] = await sqlWithRetry(
+                    'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
+                    [botId, sellerId]
+                );
+                if (!botCheck) continue; 
+    
+            const contacts = await sqlWithRetry(
+                'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
+                [botId, sellerId]
+            );
+                contacts.forEach(c => {
+                    if (!allContacts.has(c.chat_id)) {
+                        allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
+                    }
+                });
+            }
+            const uniqueContacts = Array.from(allContacts.values());
+    
+            if (uniqueContacts.length === 0) {
+                return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
+            }
+    
+            // --- MUDANÇA PRINCIPAL AQUI ---
+            // 2. Calcular o total de trabalhos (Contatos * Passos)
+            const total_jobs_to_queue = uniqueContacts.length * flowSteps.length;
+            if (total_jobs_to_queue === 0) {
+                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos ou 0 passos).' });
             }
+    
+            // 3. Criar o registro mestre da campanha com os totais corretos
+            const [history] = await sqlWithRetry(
+                sql`INSERT INTO disparo_history (
+                    seller_id, campaign_name, bot_ids, flow_steps, 
+                    status, total_sent, failure_count, 
+                    total_jobs, processed_jobs
+                   ) 
+                   VALUES (
+                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 
+                    'PENDING', ${uniqueContacts.length}, 0, 
+                    ${total_jobs_to_queue}, 0
+                   ) 
+                   RETURNING id`
+            );
+            historyId = history.id;
+            // --- FIM DA MUDANÇA ---
+    
+            // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
+            let messageCounter = 0;
+            const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
+            const qstashPromises = [];
+    
+            for (const contact of uniqueContacts) {
+                const userVariables = {
+                    primeiro_nome: contact.first_name || '',
+                    nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                    click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                };
+                
+                let currentStepDelay = 0; 
+    
+                for (const step of flowSteps) {
+                    const payload = {
+                        history_id: historyId,
+                        chat_id: contact.chat_id,
+                        bot_id: contact.bot_id_source,
+                        step_json: JSON.stringify(step),
+                        variables_json: JSON.stringify(userVariables)
+                    };
+    
+                    const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
+    
+                    qstashPromises.push(
+                        qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                            body: payload,
+                            delay: `${totalDelaySeconds}s`, 
+                            retries: 2 
+                        })
+                    );
+                    
+                    const delayData = step.data || step; 
+                    if (step.type === 'delay') {
+                        currentStepDelay += (delayData.delayInSeconds || 1);
+                    } else {
+                        currentStepDelay += 1; 
+                    }
+                }
+                messageCounter++; 
+            }
+    
+            await Promise.all(qstashPromises);
+    
+            // 5. Atualizar o status da campanha para "RUNNING"
+            await sqlWithRetry(
+                sql`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
+            );
+    
+            res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
+    
+        } catch (error) {
+            console.error("Erro crítico no agendamento do disparo:", error);
+            if(historyId) {
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
+            }
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
+            }
+        }
+    });
 
-            await sql`UPDATE mass_sends SET success_count = ${successCount}, failure_count = ${failureCount} WHERE id = ${logId};`;
-            console.log(`Disparo ${logId} concluído. Sucessos: ${successCount}, Falhas: ${failureCount}`);
-        })();
 
-    } catch (error) {
-        console.error("Erro no disparo em massa:", error);
-        if (!res.headersSent) res.status(500).json({ message: 'Erro ao iniciar o disparo.' });
-    }
-});
 app.post('/api/webhook/pushinpay', async (req, res) => {
     const { id, status, payer_name, payer_document } = req.body;
     if (status === 'paid') {
@@ -2569,25 +2880,37 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Erro ao deletar a conversa.' }); }
 });
 
-// Endpoint 7: Gerar PIX via chat (modificado)
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
     const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
         if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
-        
+
         const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
         if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
 
-        // Buscar o clique para pegar o IP
-        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [click_id.startsWith('/start ') ? click_id : `/start ${click_id}`]);
-        const ip_address = click ? click.ip_address : req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
+        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
+        // Se o clique não existir no banco para ESTE vendedor, retorna erro
+        if (!click) return res.status(404).json({ message: "Click ID não encontrado para este vendedor." });
 
-        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, valueInCents, req.headers.host, seller.api_key, ip_address);
+        const ip_address = click.ip_address || req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress; // Garante IP
 
+        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+        const pixResult = await generatePixWithFallback(seller, valueInCents, req.headers.host, seller.api_key, ip_address, click.id); // Passa click.id
+
+        // O INSERT já foi feito dentro de generatePixWithFallback
+        // Apenas continue com a lógica do Telegram
+
+        // CORRECTION: Removed ORDER BY and LIMIT
         await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
-
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
-        
+         // ADICIONAR VERIFICAÇÃO DO BOT (Importante!)
+        if (!bot) {
+            console.error(`[Generate PIX Chat] Bot ID ${botId} não encontrado após gerar PIX.`);
+            // O PIX foi gerado, mas não podemos enviar. Logar isso é importante.
+            return res.status(500).json({ message: 'PIX gerado, mas falha ao buscar informações do bot para envio.' });
+        }
+
         const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
@@ -2605,10 +2928,18 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         if (sentMessage.ok) {
             await saveMessageToDb(req.user.id, botId, sentMessage.result, 'operator');
+        } else {
+             console.error(`[Generate PIX Chat] Falha ao enviar mensagem do PIX para ${chatId}. Resposta Telegram:`, sentMessage.description);
+             // Considerar se deve retornar erro aqui ou apenas logar
         }
+
         res.status(200).json({ message: 'PIX enviado ao usuário.' });
+
     } catch (error) {
-        res.status(500).json({ message: error.response?.data?.message || 'Erro ao gerar PIX.' });
+        // O catch agora pega o erro lançado por generatePixWithFallback ou outros erros
+        console.error('ERRO EM /api/chats/generate-pix:', error);
+        const message = error.message || 'Erro ao gerar ou enviar PIX via chat.'; // Usa a mensagem do erro lançado
+        res.status(500).json({ message });
     }
 });
 
@@ -3065,26 +3396,51 @@ app.get('/api/cron/process-disparo-queue', async (req, res) => {
                         response = await sendTelegramRequest(bot.bot_token, method, payload);
                     }
                 } else if (step.type === 'pix') {
-                    if (!userVariables.click_id) continue;
-                    // Buscar o clique para pegar o IP
-                    const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1', [userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`]);
-                    const ip_address = click ? click.ip_address : null;
+                    if (!userVariables.click_id) {
+                        console.warn(`[CRON Disparo] Job ${id}: Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
+                        logStatus = 'SKIPPED'; // Status diferente para indicar que foi pulado
+                        await sqlWithRetry(`DELETE FROM disparo_queue WHERE id = $1`, [id]); // Remove da fila
+                        processedCount++;
+                        continue; // Pula para o próximo job
+                    }
+
+                    const db_click_id = userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`;
+                    const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
+
+                    if (!click) {
+                        console.warn(`[CRON Disparo] Job ${id}: Ignorando passo PIX para chat ${chat_id}. Click ID ${userVariables.click_id} não encontrado ou não pertence ao vendedor ${seller.id}.`);
+                        logStatus = 'SKIPPED';
+                        await sqlWithRetry(`DELETE FROM disparo_queue WHERE id = $1`, [id]);
+                        processedCount++;
+                        continue;
+                    }
+
+                    const ip_address = click.ip_address; // IP do clique original
 
                     try {
-                        const pixResult = await generatePixForProvider(seller.pix_provider_primary, seller, step.valueInCents, req.headers.host, seller.api_key, ip_address);
-                        lastTransactionId = pixResult.transaction_id;
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, step.valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+                        lastTransactionId = pixResult.transaction_id; // Guarda para o log
 
-                        const messageText = await replaceVariables(step.pixMessage, userVariables);
-                        const buttonText = await replaceVariables(step.pixButtonText, userVariables);
-                        const textToSend = `${messageText}\n\n<pre>${pixResult.qr_code_text}</pre>`;
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+
+                        const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
+                        const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
 
                         response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                            chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                            reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text }}]]}
+                            chat_id: chat_id,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]]
+                            }
                         });
-                    } catch (error) {
-                        console.error(`Erro ao gerar PIX para o chat ${chat_id}:`, error);
+                    } catch (error) { // Pega erro do generatePixWithFallback ou do sendTelegramRequest
+                        console.error(`[CRON Disparo] Job ${id}: Erro ao gerar/enviar PIX para chat ${chat_id}:`, error.message);
                         logStatus = 'FAILED';
+                        // Não definimos 'response' aqui, o catch externo tratará
                     }
                 }
                 

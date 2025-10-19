@@ -431,7 +431,7 @@
         .hotbot-scope .react-flow__node-forward_flow .node-header { background-color: rgba(99, 102, 241, 0.1); }
     
         /* Estilos do Live Chat */
-        .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: hidden; }
+        .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: auto; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
         .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
         .hotbot-scope .conversations-list { overflow-y: auto; flex: 1; }
@@ -448,8 +448,9 @@
         .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
+
         .hotbot-scope .message-user { background-color: var(--bg-primary); align-self: flex-start; border-top-left-radius: 0; }
-        .hotbot-scope .message-attendant { background-color: #0c4a6e; align-self: flex-end; border-top-right-radius: 0; }
+        .hotbot-scope .message-attendant { background-color: #0c4a6e; align-self: flex-end; border-top-right-radius: 0; white-space: pre-wrap; word-break: break-all;}
         .hotbot-scope .message-attendant strong { color: var(--accent-primary); }
         .hotbot-scope .chat-media { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; cursor: pointer; }
         
@@ -1456,7 +1457,9 @@
                     const statusText = t.status === 'paid' ? 'Pago' : 'Pendente';
                     const formattedValue = this.formatNumber(t.pix_value, true);
                     const formattedDate = new Date(t.created_at).toLocaleString('pt-BR');
-                    const sourceName = (t.source_name === 'Checkout' || !t.source_name) ? 'Disparo' : t.source_name;
+                    const sourceName = t.transaction_type === 'disparo' 
+                        ? (t.campaign_name ? `Disparo: ${t.campaign_name}` : 'Disparo')
+                        : (t.source_name === 'Checkout' || !t.source_name) ? 'Checkout' : t.source_name;
                     return `<tr class="hover:bg-slate-800/50">
                                 <td><span class="px-2 py-1 rounded-full text-xs font-medium ${statusClass}">${statusText}</span></td>
                                 <td>${formattedValue}</td><td>${sourceName}</td><td>${t.provider.toUpperCase()}</td><td>${formattedDate}</td>
@@ -2212,105 +2215,193 @@
     }
     
     function DisparosPage({ bots }) {
-        const [selectedBotIds, setSelectedBotIds] = useState([]);
-        const [flowSteps, setFlowSteps] = useState([]);
-        const [campaignName, setCampaignName] = useState('');
-        const [contactCount, setContactCount] = useState(0);
-        const [isSending, setIsSending] = useState(false);
-        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
-        const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+    const { useState, useEffect, useCallback } = window.React;
+    const [selectedBotIds, setSelectedBotIds] = useState([]);
+    const [flowSteps, setFlowSteps] = useState([]);
+    const [campaignName, setCampaignName] = useState('');
+    const [contactCount, setContactCount] = useState(0);
+    const [isSending, setIsSending] = useState(false);
+    const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+    // Use a state variable to hold the callback function for media selection
+    const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
 
-        useEffect(() => {
-            const fetchCount = async () => {
-                if (selectedBotIds.length === 0) {
-                    setContactCount(0);
-                    return;
-                }
-                try {
-                    const response = await api.post('/api/bots/contacts-count', { botIds: selectedBotIds });
-                    setContactCount(response.data.count);
-                } catch (error) {
-                    console.error("Erro ao buscar contagem de contatos", error);
-                    setContactCount(0);
-                }
-            };
-            fetchCount();
-        }, [selectedBotIds]);
-
-        const handleBotSelection = (botId) => {
-            setSelectedBotIds(prev => prev.includes(botId) ? prev.filter(id => id !== botId) : [...prev, botId]);
-        };
-
-        const addStep = (type) => {
-            const newStep = { id: Date.now(), type };
-            switch (type) {
-                case 'message': newStep.text = ''; newStep.buttonText = ''; newStep.buttonUrl = ''; break;
-                case 'image': case 'video': case 'audio': newStep.fileUrl = ''; newStep.caption = ''; break;
-                case 'pix': newStep.valueInCents = 100; newStep.pixMessage = '✅ PIX Gerado! Copie o código abaixo:'; newStep.pixButtonText = '📋 Copiar Código'; break;
-                case 'check_pix': newStep.deliveryText = '✅ Pagamento confirmado! Aqui está seu acesso:'; newStep.deliveryButtonText = 'Acessar Conteúdo'; newStep.deliveryButtonUrl = ''; break;
-                default: break;
-            }
-            setFlowSteps(prev => [...prev, newStep]);
-        };
-        
-        const updateStep = (id, field, value) => { setFlowSteps(prev => prev.map(step => step.id === id ? { ...step, [field]: value } : step)); };
-        const removeStep = (id) => { setFlowSteps(prev => prev.filter(step => step.id !== id)); };
-        const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
-
-        const handleSelectMedia = (mediaItem) => {
-            if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem.file_id); }
-            setIsMediaModalOpen(false);
-            setMediaSelectionCallback(null);
-        };
-        
-        const handleSubmit = async (e) => {
-            e.preventDefault();
-            if (!campaignName || selectedBotIds.length === 0 || flowSteps.length === 0) {
-                alert('Preencha o nome da campanha, selecione ao menos um bot e adicione uma ação ao fluxo.');
+    // Fetch contact count when selected bots change
+    useEffect(() => {
+        const fetchCount = async () => {
+            if (selectedBotIds.length === 0) {
+                setContactCount(0);
                 return;
             }
-            setIsSending(true);
             try {
-                const response = await api.post('/api/bots/mass-send', { campaignName, botIds: selectedBotIds, flowSteps });
-                alert(response.data.message || 'Disparo agendado com sucesso!');
-                setFlowSteps([]);
-                setCampaignName('');
+                // Use App.apiRequest from your new frontend structure
+                const response = await App.apiRequest('/api/bots/contacts-count', 'POST', { botIds: selectedBotIds });
+                setContactCount(response.count);
             } catch (error) {
-                alert('Erro ao enviar disparo: ' + (error.response?.data?.message || error.message));
-            } finally {
-                setIsSending(false);
+                console.error("Erro ao buscar contagem de contatos", error);
+                setContactCount(0);
+                // Use App.showToast for error display
+                App.showToast('Erro ao buscar contagem de contatos.', 'error');
             }
         };
+        fetchCount();
+    }, [selectedBotIds]);
 
-        const renderStep = (step) => {
-            switch (step.type) {
-                case 'message': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>💬 Enviar Mensagem</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Texto da Mensagem</label><textarea className="form-textarea" rows="3" value={step.text} onChange={e => updateStep(step.id, 'text', e.target.value)} placeholder="Use {{primeiro_nome}} ou {{nome_completo}}"/></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão (Opcional)</label><input type="text" className="form-input" value={step.buttonText} onChange={e => updateStep(step.id, 'buttonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão (Opcional)</label><input type="url" className="form-input" value={step.buttonUrl} onChange={e => updateStep(step.id, 'buttonUrl', e.target.value)} /></div></div></div>);
-                case 'image': case 'video': case 'audio': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>{step.type === 'image' ? '🖼️' : (step.type === 'video' ? '🎬' : '🎵')} Enviar {step.type.charAt(0).toUpperCase() + step.type.slice(1)}</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>File ID ou URL</label><input type="text" className="form-input" value={step.fileUrl} onChange={e => updateStep(step.id, 'fileUrl', e.target.value)} /></div><button className="btn btn-secondary btn-sm" style={{marginBottom: '1rem'}} onClick={() => openMediaLibrary(fileId => updateStep(step.id, 'fileUrl', fileId))}>Selecionar da Biblioteca</button><div className="form-group"><label>Legenda (Opcional)</label><textarea className="form-textarea" rows="2" value={step.caption} onChange={e => updateStep(step.id, 'caption', e.target.value)} /></div></div>);
-                case 'pix': return (<div key={step.id} className="card" style={{marginBottom: '1rem'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>💳 Gerar PIX</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Valor (em centavos)</label><input type="number" className="form-input" value={step.valueInCents} onChange={e => updateStep(step.id, 'valueInCents', e.target.value)} /></div><div className="form-group"><label>Texto da Mensagem PIX</label><textarea className="form-textarea" rows="2" value={step.pixMessage} onChange={e => updateStep(step.id, 'pixMessage', e.target.value)} /></div><div className="form-group"><label>Texto do Botão PIX</label><input type="text" className="form-input" value={step.pixButtonText} onChange={e => updateStep(step.id, 'pixButtonText', e.target.value)} /></div></div>);
-                case 'check_pix': return (<div key={step.id} className="card" style={{marginBottom: '1rem', borderLeft: '4px solid var(--info-bg)'}}><h4 style={{marginBottom: '1rem', display: 'flex', justifyContent: 'space-between'}}><span>🔍 Verificar PIX & Entregar</span> <button className="btn btn-danger btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '1rem'}}>Esta ação só será executada se o PIX gerado na etapa anterior for pago.</p><div className="form-group"><label>Texto de Entrega (Pós-Pagamento)</label><textarea className="form-textarea" rows="3" value={step.deliveryText} onChange={e => updateStep(step.id, 'deliveryText', e.target.value)} /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão de Entrega</label><input type="text" className="form-input" value={step.deliveryButtonText} onChange={e => updateStep(step.id, 'deliveryButtonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão de Entrega</label><input type="url" className="form-input" value={step.deliveryButtonUrl} onChange={e => updateStep(step.id, 'deliveryButtonUrl', e.target.value)} /></div></div></div>);
-                default: return null;
-            }
-        };
-
-        return (
-            <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
-                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
-                <div className="page-header"><h2>Disparo em Massa Inteligente</h2></div>
-                <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                    <form onSubmit={handleSubmit}>
-                        <div className="card" style={{marginBottom: '2rem'}}>
-                            <div className="form-group"><label>1. Nome da Campanha</label><input type="text" className="form-input" value={campaignName} onChange={e => setCampaignName(e.target.value)} placeholder="Ex: Lançamento VIP" required /></div>
-                            <div className="form-group"><label>2. Selecione os Bots de Destino</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>{bots.map(bot => (<label key={bot.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={selectedBotIds.includes(bot.id)} onChange={() => handleBotSelection(bot.id)} />{bot.bot_name}</label>))}</div>
-                             <p style={{marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem'}}>Total de contatos selecionados: <strong style={{color: 'var(--brand-primary)'}}>{contactCount}</strong></p>
-                            </div>
-                        </div>
-                        <div className="card" style={{marginBottom: '2rem'}}><label>3. Monte o Fluxo de Disparo</label><p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem'}}>Adicione as ações na ordem em que devem ser enviadas.</p><div style={{display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem'}}><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('message')}>+ Mensagem</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('image')}>+ Imagem</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('video')}>+ Vídeo</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('audio')}>+ Áudio</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('pix')}>+ Gerar PIX</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('check_pix')}>+ Verificar PIX</button></div><div>{flowSteps.map(renderStep)}</div>{flowSteps.length === 0 && <p style={{color: 'var(--text-secondary)', textAlign: 'center'}}>Nenhuma ação adicionada ainda.</p>}</div>
-                        <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending}>{isSending ? 'Agendando...' : `Disparar para ${contactCount} contato(s)`}</button>
-                    </form>
-                </div>
-            </div>
+    const handleBotSelection = (botId) => {
+        setSelectedBotIds(prev =>
+            prev.includes(botId) ? prev.filter(id => id !== botId) : [...prev, botId]
         );
+    };
+
+    const addStep = (type) => {
+        const newStep = { id: Date.now(), type };
+        // Initialize step data based on type (same as old frontend)
+        switch (type) {
+            case 'message': newStep.text = ''; newStep.buttonText = ''; newStep.buttonUrl = ''; break;
+            case 'image': case 'video': case 'audio': newStep.fileUrl = ''; newStep.caption = ''; break;
+            case 'pix': newStep.valueInCents = 100; newStep.pixMessage = '✅ PIX Gerado! Copie o código abaixo:'; newStep.pixButtonText = '📋 Copiar Código'; break;
+            case 'check_pix': newStep.deliveryText = '✅ Pagamento confirmado! Aqui está seu acesso:'; newStep.deliveryButtonText = 'Acessar Conteúdo'; newStep.deliveryButtonUrl = ''; break;
+            default: break;
+        }
+        setFlowSteps(prev => [...prev, newStep]);
+    };
+
+    const updateStep = (id, field, value) => {
+        setFlowSteps(prev => prev.map(step => step.id === id ? { ...step, [field]: value } : step));
+    };
+
+    const removeStep = (id) => {
+        setFlowSteps(prev => prev.filter(step => step.id !== id));
+    };
+
+    // Function to open the modal and store the callback
+    const openMediaLibrary = (callback) => {
+        setMediaSelectionCallback(() => callback); // Store the specific callback
+        setIsMediaModalOpen(true);
+    };
+
+    // Function called when media is selected in the modal
+    const handleSelectMedia = (mediaItem) => {
+        if (mediaSelectionCallback) {
+            mediaSelectionCallback(mediaItem.file_id); // Execute the stored callback
+        }
+        setIsMediaModalOpen(false);
+        setMediaSelectionCallback(null); // Clear the callback
+    };
+
+    const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!campaignName || selectedBotIds.length === 0 || flowSteps.length === 0) {
+        App.showToast('Preencha o nome da campanha, selecione ao menos um bot e adicione uma ação ao fluxo.', 'error');
+        return;
     }
+    setIsSending(true);
+    try {
+        // Este payload está correto e envia 'flowSteps'
+        const response = await App.apiRequest('/api/bots/mass-send', 'POST', { 
+            campaignName, 
+            botIds: selectedBotIds, 
+            flowSteps // <--- O backend agora espera por isso
+        });
+        App.showToast(response.message || 'Disparo agendado com sucesso!', 'success');
+        setFlowSteps([]);
+        setCampaignName('');
+        setSelectedBotIds([]);
+        setContactCount(0);
+    } catch (error) {
+        App.showToast('Erro ao agendar disparo.', 'error');
+        console.error("Erro submit disparo:", error);
+    } finally {
+        setIsSending(false);
+    }
+};
+
+    // renderStep function remains largely the same, just ensure classNames match the new CSS if needed
+    const renderStep = (step) => {
+        switch (step.type) {
+            case 'message': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>💬 Enviar Mensagem</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Texto da Mensagem</label><textarea className="form-textarea" rows="3" value={step.text || ''} onChange={e => updateStep(step.id, 'text', e.target.value)} placeholder="Use {{primeiro_nome}} ou {{nome_completo}}" /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão (Opcional)</label><input type="text" className="form-input" value={step.buttonText || ''} onChange={e => updateStep(step.id, 'buttonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão (Opcional)</label><input type="url" className="form-input" value={step.buttonUrl || ''} onChange={e => updateStep(step.id, 'buttonUrl', e.target.value)} /></div></div></div>);
+            case 'image': case 'video': case 'audio': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>{step.type === 'image' ? '🖼️' : (step.type === 'video' ? '🎬' : '🎵')} Enviar {step.type.charAt(0).toUpperCase() + step.type.slice(1)}</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>File ID ou URL</label><input type="text" className="form-input" value={step.fileUrl || ''} onChange={e => updateStep(step.id, 'fileUrl', e.target.value)} /></div><button type="button" className="btn btn-secondary btn-sm" style={{ marginBottom: '1rem' }} onClick={() => openMediaLibrary(fileId => updateStep(step.id, 'fileUrl', fileId))}>Selecionar da Biblioteca</button><div className="form-group"><label>Legenda (Opcional)</label><textarea className="form-textarea" rows="2" value={step.caption || ''} onChange={e => updateStep(step.id, 'caption', e.target.value)} /></div></div>);
+            case 'pix': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>💳 Gerar PIX</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Valor (em centavos)</label><input type="number" className="form-input" value={step.valueInCents === undefined ? 100 : step.valueInCents} onChange={e => updateStep(step.id, 'valueInCents', parseInt(e.target.value, 10))} /></div><div className="form-group"><label>Texto da Mensagem PIX</label><textarea className="form-textarea" rows="2" value={step.pixMessage || ''} onChange={e => updateStep(step.id, 'pixMessage', e.target.value)} /></div><div className="form-group"><label>Texto do Botão PIX</label><input type="text" className="form-input" value={step.pixButtonText || ''} onChange={e => updateStep(step.id, 'pixButtonText', e.target.value)} /></div></div>);
+            // check_pix might need adjustments depending on how the CRON job handles delivery logic
+            case 'check_pix': return (<div key={step.id} className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid var(--info-bg)' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>🔍 Verificar PIX & Entregar</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '1rem' }}>Esta ação só será executada se o PIX gerado na etapa anterior for pago.</p><div className="form-group"><label>Texto de Entrega (Pós-Pagamento)</label><textarea className="form-textarea" rows="3" value={step.deliveryText || ''} onChange={e => updateStep(step.id, 'deliveryText', e.target.value)} /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão de Entrega</label><input type="text" className="form-input" value={step.deliveryButtonText || ''} onChange={e => updateStep(step.id, 'deliveryButtonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão de Entrega</label><input type="url" className="form-input" value={step.deliveryButtonUrl || ''} onChange={e => updateStep(step.id, 'deliveryButtonUrl', e.target.value)} /></div></div></div>);
+            default: return null;
+        }
+    };
+
+    return (
+        // Use container div provided by AppHotBot or similar
+        <div style={{ padding: '0 1.5rem 1.5rem 1.5rem', height: '100%', overflowY: 'auto' }}>
+            {/* Render modal conditionally */}
+            {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
+
+            <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <form onSubmit={handleSubmit}>
+                    {/* Campaign Info Card */}
+                    <div className="card campaign-info-card">
+                        <div className="form-group">
+                            <label>1. Nome da Campanha</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={campaignName}
+                                onChange={e => setCampaignName(e.target.value)}
+                                placeholder="Ex: Lançamento VIP"
+                                required
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>2. Selecione os Bots de Destino</label>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+                                {bots.map(bot => (
+                                    <label key={bot.id} className="checkbox-group" style={{ marginBottom: 0 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedBotIds.includes(bot.id)}
+                                            onChange={() => handleBotSelection(bot.id)}
+                                        />
+                                        {bot.bot_name}
+                                    </label>
+                                ))}
+                            </div>
+                            <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                Total de contatos selecionados: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Flow Steps Card */}
+                    <div className="card flow-steps-container">
+                        <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+                            3. Monte o Fluxo de Disparo
+                        </label>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                            Adicione as ações na ordem em que devem ser enviadas.
+                        </p>
+                        <div className="step-actions-grid">
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('message')}>+ Mensagem</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('image')}>+ Imagem</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('video')}>+ Vídeo</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('audio')}>+ Áudio</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('pix')}>+ Gerar PIX</button>
+                            {/* Keep check_pix if your CRON job handles it */}
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('check_pix')}>+ Verificar PIX</button>
+                        </div>
+                        <div>
+                            {flowSteps.map(renderStep)}
+                        </div>
+                        {flowSteps.length === 0 &&
+                            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '1rem' }}>Nenhuma ação adicionada ainda.</p>
+                        }
+                    </div>
+
+                    {/* Submit Button */}
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending}>
+                        {isSending ? 'Agendando...' : `Disparar para ${contactCount} contato(s)`}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+}
     
     function DisparosHistoryPage() {
         const [history, setHistory] = useState([]);

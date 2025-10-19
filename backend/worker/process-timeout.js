@@ -1,26 +1,30 @@
-// /api/worker/process-timeout.js
+// /backend/worker/process-timeout.js
 
-// Carrega as variáveis de ambiente. O caminho sobe dois níveis para chegar na raiz do projeto.
 if (process.env.NODE_ENV !== 'production') {
-    // ATENÇÃO: O caminho para o .env precisa subir 3 níveis a partir daqui
     require('dotenv').config({ path: '../../.env' });
-  }
+}
 
 const { neon } = require('@neondatabase/serverless');
-const { verifySignature } = require("@upstash/qstash/nextjs");
 const axios = require('axios');
-const FormData = require('form-data'); // Necessário para sendMediaAsProxy
+const FormData = require('form-data');
+const { v4: uuidv4 } = require('uuid');
 
 // ==========================================================
-//                  INICIALIZAÇÃO
+//                     INICIALIZAÇÃO
 // ==========================================================
 const sql = neon(process.env.DATABASE_URL);
+const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
+const syncPayTokenCache = new Map();
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
+const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
+const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
+const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 
-// ====================================================================================
-// ATENÇÃO: As funções abaixo foram copiadas do seu arquivo principal.
-// Se você fizer alterações no motor de fluxo (processFlow, sendMessage, etc.)
-// no seu arquivo principal, lembre-se de atualizar as cópias aqui neste arquivo também.
-// ====================================================================================
+
+// ==========================================================
+//    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
+// ==========================================================
 
 async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     for (let i = 0; i < retries; i++) {
@@ -34,54 +38,146 @@ async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     }
 }
 
-async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3) {
-    const { headers = {} } = options;
+async function replaceVariables(text, variables) {
+    if (!text) return '';
+    let processedText = text;
+    for (const key in variables) {
+        const regex = new RegExp(`{{${key}}}`, 'g');
+        processedText = processedText.replace(regex, variables[key]);
+    }
+    return processedText;
+}
+
+async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
+    const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
     for (let i = 0; i < retries; i++) {
         try {
-            const response = await axios.post(apiUrl, data, { headers });
+            const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
             return response.data;
         } catch (error) {
-            if (i < retries - 1) {
-                await new Promise(res => setTimeout(res, 1500 * (i + 1)));
-                continue;
-            }
             console.error(`[WORKER - Telegram API ERROR] Method: ${method}:`, error.response?.data || error.message);
-            throw error;
+            if (i < retries - 1) { await new Promise(res => setTimeout(res, delay * (i + 1))); } else { throw error; }
         }
     }
 }
 
-async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
-    const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-    if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
+async function getSyncPayAuthToken(seller) {
+    const cachedToken = syncPayTokenCache.get(seller.id);
+    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
+    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) { throw new Error('Credenciais da SyncPay não configuradas.'); }
+    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, { client_id: seller.syncpay_client_id, client_secret: seller.syncpay_client_secret });
+    const { access_token, expires_in } = response.data;
+    const expiresAt = Date.now() + (expires_in * 1000);
+    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
+    return access_token;
+}
 
-    const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
-    if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
-
-    const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
-
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
+    let pixData;
+    let acquirer = 'Não identificado';
+    const commission_rate = seller.commission_rate || 0.0299;
     
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
+    const clientPayload = {
+        document: { number: "21376710773", type: "CPF" },
+        name: "Cliente Padrão",
+        email: "gabriel@email.com",
+        phone: "27995310379"
+    };
+    
+    if (provider === 'brpix') {
+        if (!seller.brpix_secret_key || !seller.brpix_company_id) {
+            throw new Error('Credenciais da BR PIX não configuradas para este vendedor.');
+        }
+        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
+        
+        const payload = {
+            customer: clientPayload,
+            items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }],
+            paymentMethod: "PIX",
+            amount: parseInt(value_cents, 10),
+            pix: { expiresInDays: 1 },
+            ip: ip_address
+        };
+
+        const commission_cents = Math.floor(value_cents * commission_rate);
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) {
+            payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }];
+        }
+        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
+            headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' }
+        });
+        pixData = response.data;
+        acquirer = "BRPix";
+        return {
+            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
+            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
+            transaction_id: pixData.id,
+            acquirer,
+            provider
+        };
+    } else if (provider === 'syncpay') {
+        const token = await getSyncPayAuthToken(seller);
+        const payload = { 
+            amount: value_cents / 100, 
+            payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
+            callbackUrl: `https://${host}/api/webhook/syncpay`
+        };
+        const commission_percentage = commission_rate * 100;
+        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
+            payload.split = [{
+                percentage: Math.round(commission_percentage), 
+                user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID 
+            }];
+        }
+        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        pixData = response.data;
+        acquirer = "SyncPay";
+        return { 
+            qr_code_text: pixData.pix_code, 
+            qr_code_base64: null, 
+            transaction_id: pixData.identifier, 
+            acquirer, 
+            provider 
+        };
+    } else if (provider === 'cnpay' || provider === 'oasyfy') {
+        const isCnpay = provider === 'cnpay';
+        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
+        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
+        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
+        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
+        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
+        const payload = {
+            identifier: uuidv4(),
+            amount: value_cents / 100,
+            client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
+            callbackUrl: `https://${host}/api/webhook/${provider}`
+        };
+        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
+        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
+            payload.splits = [{ producerId: splitId, amount: commission }];
+        }
+        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
+        pixData = response.data;
+        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
+        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
+    } else { // Padrão é PushinPay
+        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
+        const payload = {
+            value: value_cents,
+            webhook_url: `https://${host}/api/webhook/pushinpay`,
+        };
+        const commission_cents = Math.floor(value_cents * commission_rate);
+        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
+            payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
+        }
+        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+        pixData = pushinpayResponse.data;
+        acquirer = "Woovi";
+        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
     }
-
-    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
-
-    const method = methodMap[fileType];
-    const field = fieldMap[fileType];
-    const fileName = fileNameMap[fileType];
-
-    if (!method) throw new Error('Tipo de arquivo não suportado.');
-
-    formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
-
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders() });
 }
 
 function findNextNode(currentNodeId, handleId, edges) {
@@ -91,47 +187,307 @@ function findNextNode(currentNodeId, handleId, edges) {
 
 async function sendTypingAction(chatId, botToken) {
     try {
-        await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
-            chat_id: chatId,
-            action: 'typing',
-        });
+        await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, { chat_id: chatId, action: 'typing' });
     } catch (error) {
-        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing' para ${chatId}:`, error.response?.data || error.message);
+        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, error.response?.data || error.message);
     }
 }
 
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) {
     if (!text || text.trim() === '') return;
-    const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
     try {
         if (showTyping) {
             await sendTypingAction(chatId, botToken);
             let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
             await new Promise(resolve => setTimeout(resolve, typingDuration));
         }
-
-        const response = await axios.post(apiUrl, { chat_id: chatId, text: text, parse_mode: 'HTML' });
-        
+        const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
-            // Salvar a mensagem enviada pelo bot (lógica simplificada para o worker)
             const sentMessage = response.data.result;
-            await sql`
-                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type)
-                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot')
-                ON CONFLICT (chat_id, message_id) DO NOTHING;
-            `;
+            await sql`INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type) VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot') ON CONFLICT (chat_id, message_id) DO NOTHING;`;
         }
     } catch (error) {
-        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem para ${chatId}:`, error.response?.data || error.message);
+        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
 
-// COPIE AQUI A FUNÇÃO `processFlow` COMPLETA DO SEU ARQUIVO PRINCIPAL
-// Exemplo (simplificado, cole a sua versão completa):
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
-    console.log(`[WORKER - Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId}`);
-    // ... cole sua lógica completa da função processFlow aqui ...
-    // É crucial que esta função esteja completa e funcional.
+    const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
+    
+    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+
+    // ==========================================================
+    // PASSO 1: CARREGAR AS VARIÁVEIS NO INÍCIO
+    // ==========================================================
+    let variables = { ...initialVariables };
+
+    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    const [user] = await sql`
+        SELECT first_name, last_name 
+        FROM telegram_chats 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        ORDER BY created_at DESC LIMIT 1`;
+
+    if (user) {
+        variables.primeiro_nome = user.first_name || '';
+        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+    }
+
+    // Se tiver um click_id, busca os dados de geolocalização (cidade)
+    if (variables.click_id) {
+        const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+        const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
+        if (click) {
+            variables.cidade = click.city || 'Desconhecida';
+            variables.estado = click.state || 'Desconhecido';
+        }
+    }
+    // ==========================================================
+    // FIM DO PASSO 1
+    // ==========================================================
+    
+    const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
+    if (!flow || !flow.nodes) {
+        console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+        return;
+    }
+
+    const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+    const nodes = flowData.nodes || [];
+    const edges = flowData.edges || [];
+
+    let currentNodeId = startNodeId;
+    const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
+
+    if (!currentNodeId) {
+        if (isStartCommand) {
+            console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const startNode = nodes.find(node => node.type === 'trigger');
+            if (startNode) {
+                currentNodeId = findNextNode(startNode.id, null, edges);
+            }
+        } else {
+            const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (userState && userState.waiting_for_input) {
+                console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando.`);
+                currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
+                
+                let parsedVariables = {};
+                if (userState.variables) {
+                    try {
+                        parsedVariables = JSON.parse(userState.variables);
+                    } catch (e) {
+                        parsedVariables = userState.variables;
+                    }
+                }
+                // Une as variáveis já carregadas com as salvas no estado
+                variables = { ...variables, ...parsedVariables };
+
+            } else {
+                console.log(`${logPrefix} [Flow Engine] Nova conversa sem /start. Iniciando do gatilho.`);
+                const startNode = nodes.find(node => node.type === 'trigger');
+                if (startNode) {
+                    currentNodeId = findNextNode(startNode.id, null, edges);
+                }
+            }
+        }
+    }
+
+    if (!currentNodeId) {
+        console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
+        await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        return;
+    }
+
+    let safetyLock = 0;
+    while (currentNodeId && safetyLock < 20) {
+        const currentNode = nodes.find(node => node.id === currentNodeId);
+        if (!currentNode) {
+            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
+            break;
+        }
+
+        await sql`
+            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input)
+            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false)
+            ON CONFLICT (chat_id, bot_id)
+            DO UPDATE SET current_node_id = EXCLUDED.current_node_id, variables = EXCLUDED.variables, waiting_for_input = false, scheduled_message_id = NULL;
+        `;
+
+        switch (currentNode.type) {
+            case 'message':
+                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
+                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
+                }
+
+                // ==========================================================
+                // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
+                // ==========================================================
+                const textToSend = await replaceVariables(currentNode.data.text, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                // ==========================================================
+                // FIM DO PASSO 2
+                // ==========================================================
+                
+                if (currentNode.data.waitForReply) {
+                    await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    
+                    if (noReplyNodeId) {
+                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+
+                        try {
+                            JSON.stringify(variables);
+                            const response = await qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                                delay: `${timeoutMinutes}m`,
+                                contentBasedDeduplication: true,
+                                method: "POST"
+                            });
+                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        } catch (error) {
+                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
+                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
+                            console.error("Conteúdo do objeto problemático:", variables);
+                            console.error("Erro original:", error.message);
+                            console.error("--- FIM DO ERRO ---");
+                        }
+                    }
+                    currentNodeId = null;
+                } else {
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                }
+                break;
+
+            // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
+            case 'image':
+            case 'video':
+            case 'audio': {
+                try {
+                    const caption = await replaceVariables(currentNode.data.caption, variables);
+                    const response = await handleMediaNode(currentNode, botToken, chatId, caption);
+
+                    if (response && response.ok) {
+                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    }
+                } catch (e) {
+                    console.error(`[Flow Media] Erro ao enviar mídia no nó ${currentNode.id} para o chat ${chatId}: ${e.message}`);
+                }
+                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                break;
+            }
+            // ===========================================
+
+            case 'delay':
+                const delaySeconds = currentNode.data.delayInSeconds || 1;
+                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                currentNodeId = findNextNode(currentNodeId, null, edges);
+                break;
+            
+                case 'action_pix':
+                    try {
+                        const valueInCents = currentNode.data.valueInCents;
+                        if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+    
+                        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                         // Adiciona verificação do seller
+                        if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
+    
+                        // Busca o click_id das variáveis do fluxo
+                        const click_id_from_vars = variables.click_id;
+                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+    
+                        const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                        const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                        if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
+    
+                        const ip_address = click.ip_address; // IP do clique original
+    
+                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
+                        // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
+                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+    
+                        // O INSERT já foi feito dentro de generatePixWithFallback
+    
+                        variables.last_transaction_id = pixResult.transaction_id;
+                        // Salva as variáveis atualizadas (com o last_transaction_id)
+                        await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+    
+                        // Envia o PIX para o usuário
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
+                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+    
+                        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                            chat_id: chatId,
+                            text: textToSend,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                                ]
+                            }
+                        });
+    
+                         if (sentMessage.ok) {
+                             await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot'); // Salva como 'bot'
+                         }
+    
+                    } catch (error) {
+                        console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
+                        // Informa o usuário sobre o erro
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
+                        // Por enquanto, vamos parar aqui para evitar loops
+                        currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
+                        break; // Sai do switch
+                    }
+                    // Se chegou aqui, o PIX foi gerado e enviado com sucesso
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
+                    break; // Sai do switch
+
+            case 'action_check_pix':
+                try {
+                    const transactionId = variables.last_transaction_id;
+                    if (!transactionId) throw new Error("Nenhum ID de transação PIX encontrado para consultar.");
+                    
+                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    
+                    if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+
+                    if (transaction.status === 'paid') {
+                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                        currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
+                    } else {
+                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                        currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
+                    }
+                } catch (error) {
+                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                    currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                }
+                break;
+
+                default:
+                    console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
+                    currentNodeId = null;
+                    break;
+            }
+
+            if (!currentNodeId) {
+                const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+                if(!state){
+                    console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                }
+            }
+            safetyLock++;
+    }
 }
 
 
@@ -141,52 +497,31 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 async function handler(req, res) {
     try {
-        // 1. Extrai os dados do corpo da requisição enviada pelo QStash
         const { chat_id, bot_id, target_node_id, variables } = req.body;
         console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}`);
 
-        // 2. Verifica se o usuário ainda está aguardando uma resposta.
-        // Isso previne que o fluxo de "não respondeu" seja executado se o usuário respondeu no último segundo.
         const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
 
-        // 3. Se o estado for "waiting_for_input", significa que o usuário não respondeu a tempo.
         if (userState && userState.waiting_for_input) {
-            console.log(`[WORKER] Timeout confirmado! Processando fluxo para ${chat_id} a partir do nó ${target_node_id}`);
+            console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
             
-            // Busca as credenciais do bot para poder continuar o fluxo
             const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
 
             if (bot) {
-                // Chama o motor de fluxo, mas forçando o início a partir do nó de "não respondeu"
+                await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
                 await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
             } else {
-                 console.error(`[WORKER] Bot com ID ${bot_id} não encontrado no banco.`);
+                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado.`);
             }
         } else {
-            // Se o estado não é mais "waiting_for_input", significa que o usuário já respondeu
-            // e o webhook principal já cancelou esta tarefa (ou está prestes a).
             console.log(`[WORKER] Tarefa para ${chat_id} ignorada, pois o usuário já respondeu.`);
         }
-
-        // 4. Responde com sucesso para o QStash saber que a tarefa foi processada.
         res.status(200).send('Worker finished successfully.');
-
     } catch (error) {
         console.error('[WORKER] Erro crítico ao processar timeout:', error);
-        res.status(500).send('Erro interno no servidor durante o processamento do worker.');
+        res.status(500).send('Erro interno no worker.');
     }
 }
 
-
-// ==========================================================
-//                        EXPORTAÇÃO
-// ==========================================================
-
-// Exporta o handler, mas o envolve com a verificação de segurança do QStash.
-// Isso garante que apenas requisições legítimas do Upstash possam executar este código.
-module.exports = verifySignature(handler, {
-    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
-    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
-    // Opcional, mas recomendado: adicione a URL para uma verificação extra
-    // url: `https://${process.env.VERCEL_URL}/api/worker/process-timeout` 
-});
+// Exporta o handler com a verificação de segurança do QStash
+module.exports = handler;
