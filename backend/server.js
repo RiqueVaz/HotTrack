@@ -2372,26 +2372,29 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 messageCounter++; 
             }
     
+            // Pequena pausa para garantir que o registro seja commitado antes dos workers
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
             await Promise.all(qstashPromises);
     
-            // 5. Atualizar o status da campanha para "RUNNING"
+            // 5. Atualizar o status da campanha para "RUNNING"
             // *** CORREÇÃO 4: Mudar para template literal ***
-            await sqlWithRetry(
+            await sqlWithRetry(
                 sql`UPDATE disparo_history SET status = 'RUNNING', total_sent = ${uniqueContacts.length} WHERE id = ${historyId}`
             );
     
             res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
     
-      S } catch (error) {
-            console.error("Erro crítico no agendamento do disparo:", error);
-            if(historyId) {
+     } catch (error) {
+        console.error("Erro crítico no agendamento do disparo:", error);
+        if(historyId) {
                 // *** CORREÇÃO 5: Mudar para template literal ***
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
-            }
-            if (!res.headersSent) {
-                res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
-            }
-        }
+        }
+        if (!res.headersSent) {
+      res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
+     }
+     }
     });
 
 
