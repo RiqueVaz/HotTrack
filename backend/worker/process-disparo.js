@@ -330,11 +330,22 @@ async function handler(req, res) {
             console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
         }
 
-        // Loga o resultado no 'disparo_log' (o 'disparo_history' já foi criado)
-        await sqlWithRetry(
-            `INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [history_id, chat_id, bot_id, logStatus, logDetails, lastTransactionId]
-        );
+        // Verifica se o history_id ainda existe (proteção contra race condition)
+        const historyExists = await sqlWithRetry(
+            'SELECT id FROM disparo_history WHERE id = $1',
+            [history_id]
+        );
+
+        if (historyExists.length === 0) {
+            console.warn(`[WORKER-DISPARO] History ID ${history_id} não existe mais (race condition). Pulando inserção do log.`);
+            return;
+        }
+
+        // Loga o resultado no 'disparo_log' (o 'disparo_history' já foi criado)
+        await sqlWithRetry(
+            `INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [history_id, chat_id, bot_id, logStatus, logDetails, lastTransactionId]
+        );
 
         // Se falhou, atualiza a contagem de falhas no histórico principal
         if (logStatus === 'FAILED') {
