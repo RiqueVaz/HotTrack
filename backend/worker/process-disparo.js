@@ -218,148 +218,148 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 // ==========================================================
 
 async function handler(req, res) {
-    try {
-        const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
+        const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
         console.log(`[WORKER-DISPARO] Recebido job para history: ${history_id}, chat: ${chat_id}, bot: ${bot_id}`);
-
-        const step = JSON.parse(step_json);
-        const userVariables = JSON.parse(variables_json);
-        
-        let logStatus = 'SENT';
+    
+        const step = JSON.parse(step_json);
+        const userVariables = JSON.parse(variables_json);
+            
+        let logStatus = 'SENT';
         let logDetails = 'Enviado com sucesso.';
-        let lastTransactionId = null;
-
-        try {
-            const [bot] = await sqlWithRetry('SELECT seller_id, bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
-            if (!bot || !bot.bot_token) {
-                throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
-            }
-            
-            const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [bot.seller_id]);
+        let lastTransactionId = null;
+    
+        try {
+            const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+            if (!bot || !bot.bot_token) {
+                throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
+            }
+                
+            const [seller] = await sqlWithRetry(sql`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
             if (!seller) {
                 throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
             }
-            
-            let response;
+                
+        let response;
             const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-
-            if (step.type === 'message') {
-                const textToSend = await replaceVariables(step.text, userVariables);
-                let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
-                if (step.buttonText && step.buttonUrl) {
-                    payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
-                }
-                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
-            } else if (['image', 'video', 'audio'].includes(step.type)) {
-                const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' }; // Ajustado para seu payload de 'old frontend'
-                const fileIdentifier = step[urlMap[step.type]];
-                const caption = await replaceVariables(step.caption, userVariables);
-                const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
-
-                if (isLibraryFile) {
-                    response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
-                } else {
-                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
-                    const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
-                    const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
-                    response = await sendTelegramRequest(bot.bot_token, method, payload);
-                }
-            } else if (step.type === 'pix') {
-                if (!userVariables.click_id) {
-                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
-                }
-
-                const db_click_id = userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`;
-                const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
-
-                if (!click) {
-                    throw new Error(`Click ID ${userVariables.click_id} não encontrado ou não pertence ao vendedor ${seller.id}.`);
-                }
-
-                const ip_address = click.ip_address; // IP do clique original
-
-                try {
-                    const pixResult = await generatePixWithFallback(seller, step.valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    lastTransactionId = pixResult.transaction_id; // Guarda para o log
-
-                    const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
-                    const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
-                    const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-
-                    response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                        chat_id: chat_id,
-                        text: textToSend,
-                        parse_mode: 'HTML',
-                        reply_markup: {
-                            inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]]
-                        }
-                    });
-                } catch (error) {
-                    console.error(`[WORKER-DISPARO] Job ${id}: Erro ao gerar PIX para chat ${chat_id}:`, error.message);
-                    throw error; // Lança o erro para ser pego pelo catch principal
-                }
-            } else if (step.type === 'check_pix') {
-                // A lógica do 'check_pix' é passiva, ela não envia nada.
-                // Ela é usada pelo endpoint 'check-conversions'
-                // Vamos apenas logar como 'SENT' para marcar que o passo foi "processado" na fila.
-                logStatus = 'SENT';
-                logDetails = 'Passo de verificação, nenhuma ação de envio.';
-                response = { ok: true, result: { message_id: `check_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }}; // Simula uma resposta OK
-            } else if (step.type === 'delay') {
-                // A lógica de delay já foi tratada no /api/bots/mass-send
-                // Apenas logamos e seguimos
-                logStatus = 'SENT';
-                logDetails = `Atraso de ${step.data?.delayInSeconds || 1}s processado (pulado).`;
-                response = { ok: true, result: { message_id: `delay_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }}; // Simula uma resposta OK
+    
+        try {
+            if (step.type === 'message') {
+                // (Lógica para enviar 'message' ... igual a antes)
+                const textToSend = await replaceVariables(step.text, userVariables);
+                let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
+                if (step.buttonText && step.buttonUrl) {
+                    payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
+                }
+                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
+            } else if (['image', 'video', 'audio'].includes(step.type)) {
+                // (Lógica para enviar 'media' ... igual a antes)
+                const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+                const fileIdentifier = step[urlMap[step.type]];
+                const caption = await replaceVariables(step.caption, userVariables);
+                const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
+                if (isLibraryFile) {
+                    response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
+                } else {
+                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
+                    const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
+                    const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
+                    response = await sendTelegramRequest(bot.bot_token, method, payload);
+                }
+            } else if (step.type === 'pix') {
+                // (Lógica para enviar 'pix' ... igual a antes)
+                if (!userVariables.click_id) {
+                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
+                }
+                const db_click_id = userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`;
+                const [click] = await sqlWithRetry(sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${seller.id}`);
+                if (!click) {
+                    throw new Error(`Click ID ${userVariables.click_id} não encontrado ou não pertence ao vendedor ${seller.id}.`);
+                }
+                const ip_address = click.ip_address;
+                try {
+                    const pixResult = await generatePixWithFallback(seller, step.valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                    lastTransactionId = pixResult.transaction_id;
+                    const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
+                    const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
+                    const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+                    response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                        chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
+                    });
+                } catch (error) {
+                    console.error(`[WORKER-DISPARO] Erro ao gerar PIX para chat ${chat_id}:`, error.message);
+                    throw error; 
+                }
+            } else if (step.type === 'check_pix' || step.type === 'delay') {
+                // Ignora ativamente esses passos, eles não enviam nada
+                logStatus = 'SKIPPED';
+                logDetails = `Passo ${step.type} ignorado pelo worker.`;
+                response = { ok: true, result: { message_id: `skip_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }};
             }
-            
-            if (response && response.ok) {
-                // Não salva 'delay' ou 'check_pix' como uma mensagem no chat
-                if (step.type !== 'delay' && step.type !== 'check_pix') {
-                    await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot');
-                }
-            } else if(response && !response.ok) {
-                // Captura erros específicos do Telegram (ex: bot bloqueado)
-                throw new Error(response.description || 'Falha no Telegram');
-            } else if (!response) {
-                // Se não houve resposta (ex: passo 'check_pix' ou 'delay' pulado), não faça nada
-            }
-        } catch(e) {
-            logStatus = 'FAILED';
-            logDetails = e.message.substring(0, 255); // Limita a mensagem de erro
-            console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
-        }
-
-        // Verifica se o history_id ainda existe (proteção contra race condition)
-        const historyExists = await sqlWithRetry(
-            'SELECT id FROM disparo_history WHERE id = $1',
-            [history_id]
-        );
-
-        if (historyExists.length === 0) {
-            console.warn(`[WORKER-DISPARO] History ID ${history_id} não existe mais (race condition). Pulando inserção do log.`);
-            return;
+                
+                if (response && response.ok) {
+                    if (step.type !== 'delay' && step.type !== 'check_pix') {
+                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot');
+                    }
+                } else if(response && !response.ok) {
+                    throw new Error(response.description || 'Falha no Telegram');
+                }
+            } catch(e) {
+                logStatus = 'FAILED';
+                logDetails = e.message.substring(0, 255); 
+                console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
+            }
+    
+            // --- LÓGICA DE CONCLUSÃO ---
+            try {
+                // 1. Loga o resultado deste job
+                await sqlWithRetry(
+                    sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
+                       VALUES (${history_id}, ${chat_id}, ${bot_id}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
+                );
+    
+                // 2. Atualiza a contagem de falhas (se houver) e de processados
+            let query;
+            if (logStatus === 'FAILED') {
+                query = sql`UPDATE disparo_history
+                            SET processed_jobs = processed_jobs + 1,
+                                failure_count = failure_count + 1
+                            WHERE id = ${history_id}
+                            RETURNING processed_jobs, total_jobs, status`;
+            } else {
+                query = sql`UPDATE disparo_history
+                            SET processed_jobs = processed_jobs + 1
+                            WHERE id = ${history_id}
+                            RETURNING processed_jobs, total_jobs, status`;
+            }
+                const [history] = await sqlWithRetry(query);
+    
+                // 3. Verifica se a campanha terminou
+                if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
+                    console.log(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
+                    await sqlWithRetry(
+                        sql`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
+                    );
+                }
+        } catch (dbError) {
+            console.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
         }
-
-        // Loga o resultado no 'disparo_log' (o 'disparo_history' já foi criado)
-        await sqlWithRetry(
-            `INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [history_id, chat_id, bot_id, logStatus, logDetails, lastTransactionId]
-        );
-
-        // Se falhou, atualiza a contagem de falhas no histórico principal
-        if (logStatus === 'FAILED') {
-            await sqlWithRetry(
-                `UPDATE disparo_history SET failure_count = failure_count + 1 WHERE id = $1`,
-                [history_id]
+            // --- FIM DA LÓGICA DE CONCLUSÃO ---
+    
+            res.status(200).send('Worker de disparo finalizado.');
+    } catch (error) {
+        console.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
+        // Tenta logar a falha mesmo se o processamento principal quebrar
+        try {
+             await sqlWithRetry(
+                sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details) 
+                   VALUES (${history_id || 0}, ${chat_id || 0}, ${bot_id || 0}, 'FAILED', ${error.message.substring(0, 255)})`
             );
+        } catch(logFailError) {
+            console.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
         }
-
-        res.status(200).send('Worker de disparo finalizado.');
-    } catch (error) {
-        console.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
-        res.status(500).send('Erro interno no worker de disparo.');
-    }
+        res.status(500).send('Erro interno no worker de disparo.');
+    }
 }
 
 module.exports = handler;

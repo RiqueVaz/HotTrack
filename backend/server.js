@@ -2278,7 +2278,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         const sellerId = req.user.id;
         const { botIds, flowSteps, campaignName } = req.body;
     
-        // 1. Validar os dados
         if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
             return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
         }
@@ -2286,33 +2285,20 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         let historyId; 
     
         try {
-            // 2. Criar o registro mestre da campanha
-            // (Esta query está correta, pois você já adicionou a coluna failure_count)
-            const [history] = await sqlWithRetry(
-                sql`INSERT INTO disparo_history (seller_id, campaign_name, bot_ids, flow_steps, status, total_sent, failure_count) 
-                    VALUES (${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 'PENDING', 0, 0) 
-                    RETURNING id`
-            );
-            historyId = history.id;
-    
-            // 3. Buscar todos os contatos únicos
+            // 1. Buscar todos os contatos únicos (semelhante a antes)
             const allContacts = new Map();
             for (const botId of botIds) {
-                // Garante que o bot pertence ao vendedor
-                // *** CORREÇÃO 1: Mudar para template literal ***
                 const [botCheck] = await sqlWithRetry(
                     sql`SELECT id FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`
                 );
                 if (!botCheck) continue; 
     
-                // *** CORREÇÃO 2: Mudar a query principal para template literal ***
-                // Esta era a linha 2304 que causou o erro
-            const contacts = await sqlWithRetry(
-                'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
-                [botId, sellerId]
-            );
-                // *** FIM DA CORREÇÃO 2 ***
-    
+                const contacts = await sqlWithRetry(
+                    sql`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id
+                       FROM telegram_chats
+                       WHERE bot_id = ${botId} AND seller_id = ${sellerId}
+                       ORDER BY chat_id, created_at DESC`
+                );
                 contacts.forEach(c => {
                     if (!allContacts.has(c.chat_id)) {
                         allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
@@ -2322,14 +2308,36 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             const uniqueContacts = Array.from(allContacts.values());
     
             if (uniqueContacts.length === 0) {
-                // *** CORREÇÃO 3: Mudar para template literal ***
-                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
                 return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
             }
     
+            // --- MUDANÇA PRINCIPAL AQUI ---
+            // 2. Calcular o total de trabalhos (Contatos * Passos)
+            const total_jobs_to_queue = uniqueContacts.length * flowSteps.length;
+            if (total_jobs_to_queue === 0) {
+                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos ou 0 passos).' });
+            }
+    
+            // 3. Criar o registro mestre da campanha com os totais corretos
+            const [history] = await sqlWithRetry(
+                sql`INSERT INTO disparo_history (
+                    seller_id, campaign_name, bot_ids, flow_steps, 
+                    status, total_sent, failure_count, 
+                    total_jobs, processed_jobs
+                   ) 
+                   VALUES (
+                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 
+                    'PENDING', ${uniqueContacts.length}, 0, 
+                    ${total_jobs_to_queue}, 0
+                   ) 
+                   RETURNING id`
+            );
+            historyId = history.id;
+            // --- FIM DA MUDANÇA ---
+    
             // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
             let messageCounter = 0;
-            const delayBetweenMessages = 1; // 1 segundo de atraso entre cada mensagem
+            const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
             const qstashPromises = [];
     
             for (const contact of uniqueContacts) {
@@ -2361,40 +2369,34 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         })
                     );
                     
+                    const delayData = step.data || step; 
                     if (step.type === 'delay') {
-                        // Acessa o 'data' se existir, senão usa o 'step' (fallback para o seu frontend antigo)
-                        const delayData = step.data || step; 
                         currentStepDelay += (delayData.delayInSeconds || 1);
                     } else {
-                        currentStepDelay += 1; // Adiciona 1 seg entre passos normais
+                        currentStepDelay += 1; 
                     }
                 }
                 messageCounter++; 
             }
     
-            // Pequena pausa para garantir que o registro seja commitado antes dos workers
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
             await Promise.all(qstashPromises);
     
-            // 5. Atualizar o status da campanha para "RUNNING"
-            // *** CORREÇÃO 4: Mudar para template literal ***
-            await sqlWithRetry(
-                sql`UPDATE disparo_history SET status = 'RUNNING', total_sent = ${uniqueContacts.length} WHERE id = ${historyId}`
+            // 5. Atualizar o status da campanha para "RUNNING"
+            await sqlWithRetry(
+                sql`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
             );
     
             res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
     
-     } catch (error) {
-        console.error("Erro crítico no agendamento do disparo:", error);
-        if(historyId) {
-                // *** CORREÇÃO 5: Mudar para template literal ***
-                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
-        }
-        if (!res.headersSent) {
-      res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
-     }
-     }
+        } catch (error) {
+            console.error("Erro crítico no agendamento do disparo:", error);
+            if(historyId) {
+                await sqlWithRetry(sql`DELETE FROM disparo_history WHERE id = ${historyId}`).catch(e => console.error("Falha ao limpar histórico órfão:", e));
+            }
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
+            }
+        }
     });
 
 
