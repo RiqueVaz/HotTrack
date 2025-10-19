@@ -2288,17 +2288,16 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             // 1. Buscar todos os contatos únicos (semelhante a antes)
             const allContacts = new Map();
             for (const botId of botIds) {
-                const [botCheck] = await sqlWithRetry(
-                    sql`SELECT id FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`
+                const [botCheck] = await sqlWithRetry(
+                    'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
+                    [botId, sellerId]
                 );
                 if (!botCheck) continue; 
     
-                const contacts = await sqlWithRetry(
-                    sql`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id
-                       FROM telegram_chats
-                       WHERE bot_id = ${botId} AND seller_id = ${sellerId}
-                       ORDER BY chat_id, created_at DESC`
-                );
+            const contacts = await sqlWithRetry(
+                'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
+                [botId, sellerId]
+            );
                 contacts.forEach(c => {
                     if (!allContacts.has(c.chat_id)) {
                         allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
@@ -2391,7 +2390,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         } catch (error) {
             console.error("Erro crítico no agendamento do disparo:", error);
             if(historyId) {
-                await sqlWithRetry(sql`DELETE FROM disparo_history WHERE id = ${historyId}`).catch(e => console.error("Falha ao limpar histórico órfão:", e));
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
             }
             if (!res.headersSent) {
                 res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
