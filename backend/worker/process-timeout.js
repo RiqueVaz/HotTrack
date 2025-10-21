@@ -8,6 +8,7 @@ const { neon } = require('@neondatabase/serverless');
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const { Client } = require("@upstash/qstash");
 
 // ==========================================================
 //                     INICIALIZAÇÃO
@@ -22,6 +23,9 @@ const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 
 
+const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
+      token: process.env.QSTASH_TOKEN,
+    });
 // ==========================================================
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
 // ==========================================================
