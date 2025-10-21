@@ -1899,16 +1899,16 @@
                     this.navigateTo(sidebarLink.dataset.target);
                 }
 
-                // Botões Criador de Checkout
-                if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
-                if (e.target.id === 'back-to-checkouts-btn') { this.state.editingCheckoutId = null; this.navigateTo('checkouts'); }
-                const editCheckoutBtn = e.target.closest('.edit-checkout-btn');
-                if (editCheckoutBtn) { this.state.editingCheckoutId = editCheckoutBtn.dataset.id; this.navigateTo('pageCreator'); }
-                const copyCheckoutLinkBtn = e.target.closest('.copy-checkout-link-btn');
-                if (copyCheckoutLinkBtn) {
-                    const link = `${window.location.origin}/oferta/${copyCheckoutLinkBtn.dataset.id}`;
-                    try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
-                }
+                // Botões Criador de Checkout
+                if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
+                if (e.target.id === 'back-to-checkouts-btn') { this.state.editingCheckoutId = null; this.navigateTo('checkouts'); }
+                const editCheckoutBtn = e.target.closest('.edit-checkout-btn');
+                if (editCheckoutBtn) { this.state.editingCheckoutId = editCheckoutBtn.dataset.id; this.navigateTo('pageCreator'); }
+                const copyCheckoutLinkBtn = e.target.closest('.copy-checkout-link-btn');
+                if (copyCheckoutLinkBtn) {
+                    const link = `${window.location.origin}/oferta/${copyCheckoutLinkBtn.dataset.id}`;
+                    try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
+                }
 
                 // Botões Criador/Listagem Página de Obrigado
                 if (e.target.id === 'go-to-thankyou-creator-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouCreator'); }
