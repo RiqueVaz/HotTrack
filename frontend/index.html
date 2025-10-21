@@ -25,16 +25,26 @@
         /* == ESTILOS PRINCIPAIS (HOTTRACK) == */
         /* ================================== */
         :root {
-            --bg-primary: #0f172a; --bg-secondary: #1e293b; --bg-card: rgba(30, 41, 59, 0.6);
-            --border-color: #334155; --accent-primary: #38bdf8; --accent-secondary: #0ea5e9;
-            --text-primary: #f1f5f9; --text-secondary: #94a3b8; --success: #4ade80;
-            --danger: #f87171; --warning: #facc15;
+            --bg-primary: #0f172a; /* slate-900 */
+            --bg-secondary: #1e293b; /* slate-800 */
+            --bg-card: rgba(30, 41, 59, 0.6); /* slate-800 com transparência */
+            --border-color: #334155; /* slate-700 */
+            --accent-primary: #38bdf8; /* sky-400 */
+            --accent-secondary: #0ea5e9; /* sky-500 */
+            --text-primary: #f1f5f9; /* slate-100 */
+            --text-secondary: #94a3b8; /* slate-400 */
+            --success: #4ade80; /* green-400 */
+            --danger: #f87171; /* red-400 */
+            --warning: #facc15; /* yellow-400 */
         }
         body {
-            font-family: 'Inter', sans-serif; background-color: var(--bg-primary); color: var(--text-primary);
-            background-image: radial-gradient(circle at 1px 1px, rgba(56, 189, 248, 0.1) 1px, transparent 0),
-                              radial-gradient(circle at top left, rgba(56, 189, 248, 0.2), transparent 30%),
-                              radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.2), transparent 40%);
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            background-image:
+                radial-gradient(circle at 1px 1px, rgba(56, 189, 248, 0.1) 1px, transparent 0),
+                radial-gradient(circle at top left, rgba(56, 189, 248, 0.2), transparent 30%),
+                radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.2), transparent 40%);
             background-size: 20px 20px, 100% 100%, 100% 100%;
         }
 
@@ -42,15 +52,12 @@
             height: 100%;
             overflow: hidden; /* Impede scroll no body */
         }
-        main#content {
-            height: 100%; /* Altura total por padrão */
-        }
-        main#content.overflow-y-auto {
-             height: calc(100% - 72px); /* 100% da altura menos o header mobile */
+                main#content {
+            height: calc(100% - 72px); /* Altura padrão para mobile (considerando header) */
         }
         @media (min-width: 768px) { /* md */
-            main#content.overflow-y-auto {
-                height: 100%; /* Em desktop, o header não afeta */
+            main#content {
+                height: 100%; /* Em desktop, o header não afeta a altura */
             }
         }
 
@@ -808,7 +815,14 @@
 
                 const bgColor = config.style.background_color || '#0f172a';
                 const accentColor = config.style.accent_color || '#38bdf8';
-                const isDarkBg = (parseInt(bgColor.substring(1, 3), 16) * 0.299 + parseInt(bgColor.substring(3, 5), 16) * 0.587 + parseInt(bgColor.substring(5, 7), 16) * 0.114) < 186;
+                const isDarkBg = (bgColor = '#0f172a') => {
+                    const color = (bgColor.charAt(0) === '#') ? bgColor.substring(1, 7) : bgColor;
+                    const r = parseInt(color.substring(0, 2), 16); // Red
+                    const g = parseInt(color.substring(2, 4), 16); // Green
+                    const b = parseInt(color.substring(4, 6), 16); // Blue
+                    // Esta é a fórmula exata usada em renderCheckoutPage
+                    return (r * 0.299 + g * 0.587 + b * 0.114) < 186;
+                };
                 const primaryTextColor = isDarkBg ? '#f1f5f9' : '#111827';
                 const secondaryTextColor = isDarkBg ? '#94a3b8' : '#4b5563';
 
@@ -3106,11 +3120,140 @@
                  return{content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},pricing:pD,order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},tracking:{pixel_id:getElValue('#pixel_id',''),utmify_integration_id:getElValue('#utmify_integration_id','')||null}, redirects: { success_url: getElValue('#success_redirect_url') || null }}; // Adiciona redirects
             }
 
-            function generatePreviewHTML(data) {
-                 const fC=(c)=>(c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); const cdH=data.conversion_elements.countdown.enabled?`<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem;"><p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p><p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2,'0')}:00</p></div>`:''; const mH=data.content.media_url?`<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`:''; let pH; if(data.pricing.type==='open'){pH=`<div style="margin-top: 1.5rem;"><label ...>${data.pricing.label||'Escolha o valor'}</label><div ...><span ...>R$</span><input ... placeholder="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}" ...></div><p ...>Mínimo: ${fC(data.pricing.minimum_value_cents)}</p></div>`;}else{const p=Array.isArray(data.pricing.packages)?data.pricing.packages:[];pH=(p.length>0?p:[{title:'Configure',description:'',value_cents:0}]).map((pk,i)=>`<div style="border: 1px solid #e5e7eb; padding: 1rem; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s;" onclick="this.style.borderColor=getComputedStyle(document.documentElement).getPropertyValue('--preview-accent'); this.style.boxShadow = '0 0 0 2px '+getComputedStyle(document.documentElement).getPropertyValue('--preview-accent');"><h3 style="font-weight: 700; font-size: 1.1rem; color: #111827;">${pk.title||'Pacote'}</h3><p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.25rem;">${pk.description||'Descrição'}</p><p style="font-size: 1.5rem; font-weight: 800; color: var(--preview-accent, #38bdf8); margin-top: 0.75rem;">${fC(pk.value_cents)}</p></div>`).join(''); pH=`<div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">${pH}</div>`;}
-                 const obH=data.order_bump.enabled&&data.order_bump.product_name?`<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;"><input type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;"><div><h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4><p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p></div></div></div>`:''; const gH=data.conversion_elements.guarantee.text?`<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">${data.conversion_elements.guarantee.seal_url?`<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px;">`:''}<div><h4 style="font-weight: 700; color: #374151;">Garantia</h4><p style="font-size: 0.9rem; color: #6b7280;">${data.conversion_elements.guarantee.text}</p></div></div>`:''; const t=Array.isArray(data.testimonials)?data.testimonials:[]; const tH=t.filter(x=>x.name&&x.text).length>0?`<div style="margin-top: 2.5rem;"><h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'}; margin-bottom: 1.5rem;">Clientes Dizem</h3><div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">${t.map(x=>`<div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;"><div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">${x.photo_url?`<img src="${x.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">`:''}<p style="font-weight: 600; color: #111827;">${x.name}</p></div><p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${x.text}"</p></div>`).join('')}</div></div>`:'';
-                 return`<div id="preview-body" style="--preview-bg: ${data.style.background_color}; --preview-accent: ${data.style.accent_color}; background-color: var(--preview-bg); color: ${data.style.background_color==='#ffffff'?'#1f2937':'#f1f5f9'}; min-height: 100%; font-family: 'Inter', sans-serif;">${cdH}<div style="padding: 1.5rem 2rem;"><h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'};">${data.content.main_title||'Título'}</h1><p style="text-align: center; color: ${data.style.background_color==='#ffffff'?'#6b7280':'#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle||'Subtítulo'}</p>${mH}${pH}${obH}<button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed;">Comprar</button>${gH}${tH}</div></div>`;
-            }
+// DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
+// DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
+
+function generatePreviewHTML(data) {
+    const fC = (c) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    // Lógica CORRETA para determinar a cor do texto
+    const isDarkBg = (bgColor = '#0f172a') => {
+        let colorStr = (bgColor.charAt(0) === '#') ? bgColor.substring(1, 7) : bgColor;
+        if (colorStr.length === 3) { // Converte #RGB para #RRGGBB
+            colorStr = colorStr[0] + colorStr[0] + colorStr[1] + colorStr[1] + colorStr[2] + colorStr[2];
+        }
+        if (colorStr.length !== 6) {
+            return true; // Assume escuro por padrão se a cor for inválida
+        }
+        const r = parseInt(colorStr.substring(0, 2), 16);
+        const g = parseInt(colorStr.substring(2, 4), 16);
+        const b = parseInt(colorStr.substring(4, 6), 16);
+        // Fórmula exata usada em renderCheckoutPage
+        return (r * 0.299 + g * 0.587 + b * 0.114) < 186;
+    };
+
+    // --- CORREÇÃO DE BUG DE SINTAXE E LÓGICA ---
+    // Bug 1: Chamava isBgDark recursivamente. Corrigido para isDarkBg
+    const isBgDark = isDarkBg(data.style.background_color); 
+    
+    const primaryTextColor = isBgDark ? '#f1f5f9' : '#111827';
+    const secondaryTextColor = isBgDark ? '#94a3b8' : '#6b7280';
+    
+    // Bug 2: Lógica de cor do card estava invertida. Corrigida.
+    const cardBgColor = isBgDark ? '#1e293b' : '#ffffff'; // Card escuro em BG escuro, Card claro em BG claro
+    const cardBorderColor = isBgDark ? '#334155' : '#e5e7eb';
+    const cardTextColor = isBgDark ? primaryTextColor : '#111827';
+    const cardSecondaryTextColor = isBgDark ? secondaryTextColor : '#6b7280';
+    // --- FIM DAS CORREÇÕES DE COR ---
+
+    // Lógica para cor do botão
+    const accentColor = data.style.accent_color || '#38bdf8';
+    const isAccentDark = isDarkBg(accentColor);
+    const buttonTextColor = isAccentDark ? '#FFFFFF' : '#000000';
+
+    // --- GERAÇÃO DO HTML ---
+
+    const cdH = data.conversion_elements.countdown.enabled
+        ? `<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
+               <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
+               <p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2, '0')}:00</p>
+           </div>`
+        : '';
+
+    const mH = data.content.media_url
+        ? `<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
+        : '';
+
+    let pH;
+    if (data.pricing.type === 'fixed') {
+        const packages = Array.isArray(data.pricing.packages) ? data.pricing.packages : [];
+        const defaultBoxShadow = '0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1)';
+        
+        const packageItemsHTML = (packages.length > 0 ? packages : [{ title: 'Configure um pacote', description: '', value_cents: 0 }]).map((pk, i) => `
+            <div style="border: 1px solid ${cardBorderColor}; background-color: ${cardBgColor}; padding: 1rem; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s; box-shadow: ${defaultBoxShadow};"
+                 onclick="this.parentElement.querySelectorAll('div[style*=\'border: 1px\']').forEach(el => { el.style.borderColor='${cardBorderColor}'; el.style.boxShadow='${defaultBoxShadow}'; }); this.style.borderColor=getComputedStyle(document.documentElement).getPropertyValue('--preview-accent'); this.style.boxShadow = '0 0 0 2px '+getComputedStyle(document.documentElement).getPropertyValue('--preview-accent');">
+                 <h3 style="font-weight: 700; font-size: 1.1rem; color: ${cardTextColor}; pointer-events: none;">${pk.title || 'Pacote'}</h3>
+                 <p style="font-size: 0.9rem; color: ${cardSecondaryTextColor}; margin-top: 0.25rem; pointer-events: none;">${pk.description || 'Descrição'}</p>
+                 <p style="font-size: 1.5rem; font-weight: 800; color: var(--preview-accent, #38bdf8); margin-top: 0.75rem; pointer-events: none;">${fC(pk.value_cents)}</p>
+            </div>
+        `).join('');
+        pH = `<div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">${packageItemsHTML}</div>`;
+    } else {
+        pH = '<p style="color: red;">Modelo de preço aberto não implementado no preview.</p>';
+    }
+
+    // --- CORREÇÃO 3: ONCLICK DO ORDER BUMP ---
+    const obH = data.order_bump.enabled && data.order_bump.product_name
+        ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; cursor: pointer;"
+               onclick="var cb = this.querySelector('.preview-order-bump-checkbox'); if (event.target.tagName !== 'INPUT') { cb.checked = !cb.checked; }">
+               <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                   <input type="checkbox" class="preview-order-bump-checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04; flex-shrink: 0;">
+                   <div style="pointer-events: none;">
+                       <h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4>
+                       <p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p>
+                   </div>
+               </div>
+           </div>`
+        : '';
+    // --- FIM DA CORREÇÃO 3 ---
+
+    const gH = data.conversion_elements.guarantee.text
+        ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
+               ${data.conversion_elements.guarantee.seal_url ? `<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px; flex-shrink: 0;">` : ''}
+               <div>
+                   <h4 style="font-weight: 700; color: #374151;">Garantia Total</h4>
+                   <p style="font-size: 0.9rem; color: #6b7280;">${data.conversion_elements.guarantee.text}</p>
+               </div>
+           </div>`
+        : '';
+
+    const testimonials = Array.isArray(data.testimonials) ? data.testimonials : [];
+    const tH = testimonials.filter(t => t.name && t.text).length > 0
+        ? `<div style="margin-top: 2.5rem;">
+               <h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: ${primaryTextColor}; margin-bottom: 1.5rem;">O Que Nossos Clientes Dizem</h3>
+               <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                   ${testimonials.map(t => `
+                       <div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;">
+                           <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                               ${t.photo_url ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0;">` : ''}
+                               <p style="font-weight: 600; color: #111827;">${t.name}</p>
+                           </div>
+                           <p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${t.text}"</p>
+                       </div>
+                   `).join('')}
+               </div>
+           </div>`
+        : '';
+
+
+    return `
+        <div id="preview-body" style="--preview-bg: ${data.style.background_color || '#0f172a'}; --preview-accent: ${accentColor}; background-color: var(--preview-bg); color: ${primaryTextColor}; min-height: 100%; font-family: 'Inter', sans-serif;">
+            ${cdH}
+            <div style="padding: 1.5rem 2rem;">
+                 <h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${primaryTextColor};">${data.content.main_title || 'Título Principal'}</h1>
+                 <p style="text-align: center; color: ${secondaryTextColor}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle || 'Subtítulo da oferta'}</p>
+                 ${mH}
+                 ${pH}
+                 ${obH}
+                 <button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: ${buttonTextColor}; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed; transition: filter 0.2s;">
+                     Comprar Agora
+                 </button>
+                 ${gH}
+                 ${tH}
+            </div>
+        </div>
+    `;
+}
             function updatePreview() { if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) { try { const data = getFormData(); contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); if(pb) { pb.style.setProperty('--preview-bg', data.style.background_color); pb.style.setProperty('--preview-accent', data.style.accent_color); } } catch (e) { console.error("Erro no updatePreview:", e); } } }
             function showResultScreen(checkoutId) { if (!checkoutLinkOutput || !resultScreen) return; const link = `${FRONTEND_URL}/oferta/${checkoutId}`; checkoutLinkOutput.value = link; resultScreen.classList.remove('hidden'); }
             function hideResultScreen() { if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; resultScreen.classList.add('hidden'); checkoutForm.reset(); contentEl.querySelector('#pricing-type-select').value = 'fixed'; contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); contentEl.querySelector('#open-pricing-container').classList.add('hidden'); contentEl.querySelector('#enable_order_bump').checked = false; contentEl.querySelector('#order-bump-fields').classList.add('hidden'); contentEl.querySelector('#enable_countdown').checked = false; contentEl.querySelector('#countdown-fields').classList.add('hidden'); packagesContainer.innerHTML = ''; testimonialsContainer.innerHTML = ''; addPackage(); updatePreview(); }
