@@ -25,40 +25,158 @@
         /* == ESTILOS PRINCIPAIS (HOTTRACK) == */
         /* ================================== */
         :root {
-            --bg-primary: #0f172a; --bg-secondary: #1e293b; --bg-card: rgba(30, 41, 59, 0.6);
-            --border-color: #334155; --accent-primary: #38bdf8; --accent-secondary: #0ea5e9;
-            --text-primary: #f1f5f9; --text-secondary: #94a3b8; --success: #4ade80;
-            --danger: #f87171; --warning: #facc15;
+            --bg-primary: #0f172a; /* slate-900 */
+            --bg-secondary: #1e293b; /* slate-800 */
+            --bg-card: rgba(30, 41, 59, 0.6); /* slate-800 com transparência */
+            --border-color: #334155; /* slate-700 */
+            --accent-primary: #38bdf8; /* sky-400 */
+            --accent-secondary: #0ea5e9; /* sky-500 */
+            --text-primary: #f1f5f9; /* slate-100 */
+            --text-secondary: #94a3b8; /* slate-400 */
+            --success: #4ade80; /* green-400 */
+            --danger: #f87171; /* red-400 */
+            --warning: #facc15; /* yellow-400 */
         }
         body {
-            font-family: 'Inter', sans-serif; background-color: var(--bg-primary); color: var(--text-primary);
-            background-image: radial-gradient(circle at 1px 1px, rgba(56, 189, 248, 0.1) 1px, transparent 0),
-                              radial-gradient(circle at top left, rgba(56, 189, 248, 0.2), transparent 30%),
-                              radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.2), transparent 40%);
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            background-image:
+                radial-gradient(circle at 1px 1px, rgba(56, 189, 248, 0.1) 1px, transparent 0),
+                radial-gradient(circle at top left, rgba(56, 189, 248, 0.2), transparent 30%),
+                radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.2), transparent 40%);
             background-size: 20px 20px, 100% 100%, 100% 100%;
         }
-        .card { background-color: var(--bg-card); border: 1px solid var(--border-color); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); transition: all 0.3s ease; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37); }
-        .form-input, .form-select, .form-date { background-color: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); color: var(--text-primary); transition: all 0.3s ease; border-radius: 0.375rem; }
-        .form-input:focus, .form-select:focus, .form-date:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); }
-        .form-date::-webkit-calendar-picker-indicator { filter: invert(0.8); }
-        .btn { background-color: var(--accent-secondary); color: white; transition: all 0.3s ease; border: 1px solid var(--accent-primary); box-shadow: 0 0 15px rgba(14, 165, 233, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.1); position: relative; overflow: hidden; }
-        .btn:before { content: ''; position: absolute; top: 50%; left: 50%; width: 300%; height: 300%; background: radial-gradient(circle, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 70%); transform: translate(-50%, -50%) scale(0); transition: transform 0.5s ease; }
-        .btn:hover:before { transform: translate(-50%, -50%) scale(1); }
-        .btn:hover { background-color: var(--accent-primary); box-shadow: 0 0 25px rgba(56, 189, 248, 0.5); transform: translateY(-2px); }
-        .btn:disabled { background-color: #334155; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        html, body, #app, .md\:flex {
+            height: 100%;
+            overflow: hidden; /* Impede scroll no body */
+        }
+                main#content {
+            height: calc(100% - 72px); /* Altura padrão para mobile (considerando header) */
+        }
+        @media (min-width: 768px) { /* md */
+            main#content {
+                height: 100%; /* Em desktop, o header não afeta a altura */
+            }
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .form-input, .form-select, .form-date, .form-textarea {
+            background-color: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            border-radius: 0.375rem;
+        }
+
+        .form-input:focus, .form-select:focus, .form-date:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+        }
+
+        .form-date::-webkit-calendar-picker-indicator {
+            filter: invert(0.8);
+        }
+
+        .btn {
+            background-color: var(--accent-secondary);
+            color: white;
+            transition: all 0.3s ease;
+            border: 1px solid var(--accent-primary);
+            box-shadow: 0 0 15px rgba(14, 165, 233, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+            border-radius: 0.375rem;
+            font-weight: 600;
+        }
+        .btn:before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 300%;
+            height: 300%;
+            background: radial-gradient(circle, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 70%);
+            transform: translate(-50%, -50%) scale(0);
+            transition: transform 0.5s ease;
+        }
+        .btn:hover:before {
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        .btn:hover {
+            background-color: var(--accent-primary);
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.5);
+            transform: translateY(-2px);
+        }
+        .btn:disabled { background-color: #334155; cursor: not-allowed; transform: none; box-shadow: none; color: #64748b; }
+
         .btn-red { background-color: #991b1b; border-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
         .btn-red:hover { background-color: #b91c1c; box-shadow: 0 0 25px rgba(239, 68, 68, 0.5); }
         .btn-green { background-color: #047857; border-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
         .btn-green:hover { background-color: #059669; box-shadow: 0 0 25px rgba(16, 185, 129, 0.5); }
         .btn-secondary { background-color: var(--border-color); border-color: #475569; box-shadow: none; }
-        .btn-secondary:hover { background-color: #475569; transform: translateY(-2px); }
-        .nav-link { color: var(--text-secondary); position: relative; transition: all 0.3s ease; padding: 0.75rem 1rem; border-radius: 0.5rem; display: flex; align-items: center; gap: 0.75rem; cursor: pointer; text-decoration: none; }
-        .nav-link:before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 0; width: 4px; background-color: var(--accent-primary); border-radius: 0 4px 4px 0; transition: all 0.3s ease; }
-        .nav-link:hover { background-color: rgba(56, 189, 248, 0.1); color: var(--text-primary); }
-        .nav-link.active { background-color: rgba(14, 165, 233, 0.15); color: white; font-weight: 600; }
-        .nav-link.active:before { height: 60%; }
+        .btn-secondary:hover { background-color: #475569; transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); }
+
+        .nav-link {
+            color: var(--text-secondary);
+            position: relative;
+            transition: all 0.3s ease;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .nav-link:before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 0;
+            width: 4px;
+            background-color: var(--accent-primary);
+            border-radius: 0 4px 4px 0;
+            transition: all 0.3s ease;
+        }
+        .nav-link:hover {
+            background-color: rgba(56, 189, 248, 0.1);
+            color: var(--text-primary);
+        }
+        .nav-link.active {
+            background-color: rgba(14, 165, 233, 0.15);
+            color: white;
+            font-weight: 600;
+        }
+        .nav-link.active:before {
+            height: 60%;
+        }
+
         .modal { display: none; }
-        .modal.active { display: flex; align-items: center; justify-content: center; position: fixed; z-index: 50; inset: 0; background-color: rgba(15, 23, 42, 0.7); backdrop-filter: blur(8px); }
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            z-index: 50;
+            inset: 0;
+            background-color: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(8px);
+        }
+
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .animate-fade-in { animation: fadeIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
         .table-custom th { color: var(--text-primary); }
@@ -476,6 +594,42 @@
         .hotbot-scope .login-overlay { position: fixed; inset: 0; background-color: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(8px); }
         .hotbot-scope .login-box { background-color: var(--bg-secondary); padding: 2rem; border-radius: 0.75rem; width: 100%; max-width: 420px; border: 1px solid var(--border-color); }
     
+
+	 .form-checkbox { accent-color: var(--accent-primary); }
+        .btn-danger { background-color: #991b1b; }
+        .btn-danger:hover { background-color: #b91c1c; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.2); }
+        .btn-view { color: var(--text-secondary); }
+        .btn-view.active { background-color: var(--accent-secondary); color: white; }
+
+        #preview-wrapper {
+            background-color: #fff;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+            transition: all 0.3s ease-in-out;
+            overflow: hidden;
+        }
+        #preview-wrapper.mobile { max-width: 375px; height: 667px; border: 8px solid #1e293b; }
+        #preview-wrapper.desktop { width: 100%; height: 700px; }
+        #preview-content {
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: #888 #f1f1f1;
+        }
+        #preview-content::-webkit-scrollbar { width: 6px; }
+        #preview-content::-webkit-scrollbar-track { background: #f1f1f1; }
+        #preview-content::-webkit-scrollbar-thumb { background: #888; border-radius: 3px; }
+        #preview-content::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        #thankYouCreator #preview-wrapper {
+            background-color: var(--bg-secondary);
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
         /* Media queries para responsividade */
         @media (max-width: 768px) {
             .hotbot-nav-bar {
@@ -661,7 +815,14 @@
 
                 const bgColor = config.style.background_color || '#0f172a';
                 const accentColor = config.style.accent_color || '#38bdf8';
-                const isDarkBg = (parseInt(bgColor.substring(1, 3), 16) * 0.299 + parseInt(bgColor.substring(3, 5), 16) * 0.587 + parseInt(bgColor.substring(5, 7), 16) * 0.114) < 186;
+                const isDarkBg = (bgColor = '#0f172a') => {
+                    const color = (bgColor.charAt(0) === '#') ? bgColor.substring(1, 7) : bgColor;
+                    const r = parseInt(color.substring(0, 2), 16); // Red
+                    const g = parseInt(color.substring(2, 4), 16); // Green
+                    const b = parseInt(color.substring(4, 6), 16); // Blue
+                    // Esta é a fórmula exata usada em renderCheckoutPage
+                    return (r * 0.299 + g * 0.587 + b * 0.114) < 186;
+                };
                 const primaryTextColor = isDarkBg ? '#f1f5f9' : '#111827';
                 const secondaryTextColor = isDarkBg ? '#94a3b8' : '#4b5563';
 
@@ -736,6 +897,25 @@
 
                 appContainer.innerHTML = checkoutHTML;
 
+                // ***** NOVO: Listener DELEGADO para fechar o modal *****
+                appContainer.addEventListener('click', (e) => {
+                    const closeModalButton = e.target.closest('#closeModalBtn');
+                    const modalContainer = document.getElementById('modal-container');
+
+                    if (closeModalButton && modalContainer && modalContainer.contains(closeModalButton)) {
+                        console.log("Close button inside modal container clicked on /oferta/"); // Log para debug
+
+                        if (App.state.pixPollingIntervalId) {
+                            clearInterval(App.state.pixPollingIntervalId);
+                            App.state.pixPollingIntervalId = null;
+                            console.log("Polling PIX interrompido pelo fechamento manual do modal (Botão X).");
+                        }
+                        modalContainer.innerHTML = ''; // Limpa o container para fechar
+                    }
+                });
+                // ***** FIM DO NOVO LISTENER *****
+
+
                 if (config.pricing.type === 'fixed' && Array.isArray(config.pricing.packages) && config.pricing.packages.length > 0) {
                     let selectedPackage = null;
                     const packagesList = document.getElementById('packages-list');
@@ -744,28 +924,22 @@
 
                     function updatePayButtonText() {
                         if (!selectedPackage) return;
-
                         let totalValue = selectedPackage.value_cents;
                         let buttonText = `Pagar Agora (${formatCurrency(totalValue)})`;
-
                         if (orderBumpCheckbox && orderBumpCheckbox.checked && config.order_bump && config.order_bump.value_cents > 0) {
                             totalValue += config.order_bump.value_cents;
                             buttonText = `Pagar Agora (${formatCurrency(totalValue)})`;
                         }
-
                         payButton.textContent = buttonText;
                     }
 
                     packagesList.addEventListener('click', (e) => {
                         const clickedPackage = e.target.closest('.package-item');
                         if (!clickedPackage) return;
-
                         packagesList.querySelectorAll('.package-item').forEach(p => p.classList.remove('selected'));
                         clickedPackage.classList.add('selected');
-
                         const packageIndex = clickedPackage.dataset.packageIndex;
                         selectedPackage = config.pricing.packages[packageIndex];
-
                         updatePayButtonText();
                         payButton.disabled = false;
                     });
@@ -776,28 +950,21 @@
 
                     payButton.addEventListener('click', async () => {
                         if (!selectedPackage) { alert('Por favor, selecione um pacote válido.'); return; }
-
                         let totalValueCents = selectedPackage.value_cents;
                         if (orderBumpCheckbox && orderBumpCheckbox.checked && config.order_bump && config.order_bump.value_cents > 0) {
                             totalValueCents += config.order_bump.value_cents;
                         }
-
                         payButton.textContent = 'Gerando PIX...';
                         payButton.disabled = true;
-
-                        // 1. Captura o click_id da URL
                         const urlParams = new URLSearchParams(window.location.search);
-                        // Aceita 'click_id' ou 'cid' como parâmetro
                         const clickIdFromUrl = urlParams.get('click_id') || urlParams.get('cid') || null;
-
                         try {
-                            // 2. Envia o click_id (se existir) no corpo da requisição
                             const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
                                 checkoutId: checkoutId,
                                 value_cents: totalValueCents,
-                                click_id: clickIdFromUrl // Envia null ou o valor
+                                click_id: clickIdFromUrl
                             });
-                            this.showPixModal(pixData); // Mostra o modal com QR Code e inicia polling
+                            this.showPixModal(pixData); // Mostra o modal e inicia polling
                         } catch (error) {
                             alert('Erro ao gerar PIX. Tente novamente.');
                         } finally {
@@ -828,7 +995,7 @@
                 console.error("Erro ao renderizar página de checkout:", error);
                 appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Erro ao carregar oferta: ${error.message || 'Verifique o console.'}</p>`;
             }
-        },
+       },
 
         async renderStandaloneThankYouPage(pageId, originUrl) {
             const appContainer = document.getElementById('app');
@@ -904,86 +1071,67 @@
             }
         },
 
-        // ******** FUNÇÃO showPixModal ATUALIZADA ********
         async showPixModal(pixData) {
-            // Limpa qualquer polling anterior ao abrir um novo modal
-            if (this.state.pixPollingIntervalId) {
-                clearInterval(this.state.pixPollingIntervalId);
-                this.state.pixPollingIntervalId = null;
-            }
+            // 1. Limpa qualquer polling anterior (só por segurança)
+            if (this.state.pixPollingIntervalId) {
+                clearInterval(this.state.pixPollingIntervalId);
+                this.state.pixPollingIntervalId = null;
+            }
 
-            // Monta o HTML do QR Code (se base64 estiver disponível)
-            const qrCodeHTML = pixData.qr_code_base64
-                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
-                : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>'; // Fallback
+            // 2. Define o HTML do modal
+            const qrCodeHTML = pixData.qr_code_base64
+                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
+                : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>';
 
-            const modalContent = `
-                <div class="text-center">
-                    <h3 id="pix-modal-title" class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
-                    <p class="text-sm text-gray-400 mt-2 mb-4">Escaneie o QR Code ou copie o código abaixo e pague no seu aplicativo do banco.</p>
-                    ${qrCodeHTML}
-                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="4" readonly>${pixData.qr_code_text || 'Erro ao obter código'}</textarea>
-                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
-                    <p id="pix-status-message" class="text-xs text-sky-400 mt-3 animate-pulse">Aguardando pagamento...</p>
-                </div>
-            `;
-            const modalContainer = document.getElementById('modal-container');
-            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
+            // MODIFICADO: Removido o <p id="pix-status-message">...</p>
+            const modalContent = `
+                <div class="text-center">
+                    <h3 id="pix-modal-title" class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
+                    <p class="text-sm text-gray-400 mt-2 mb-4">Escaneie o QR Code ou copie o código abaixo e pague no seu aplicativo do banco.</p>
+                    ${qrCodeHTML}
+                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="4" readonly>${pixData.qr_code_text || 'Erro ao obter código'}</textarea>
+                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
+                </div>
+            `;
 
+            // 3. Renderiza o modal
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
 
-            await new Promise(resolve => setTimeout(resolve, 0));
+            // 4. Adiciona APENAS o listener de Copiar
+            const copyBtn = document.getElementById('copy-pix-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async (e) => {
+                    const textarea = document.getElementById('pix-code-textarea');
+                    if (!textarea || !textarea.value || textarea.value === 'Erro ao obter código') {
+                        alert('Sem código PIX para copiar.');
+                        return;
+                    }
+                    try {
+                        await navigator.clipboard.writeText(textarea.value);
+                        e.target.textContent = 'Copiado!';
+                        setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
+                    } catch (err) {
+                        console.warn('Falha no navigator.clipboard, a tentar fallback...', err);
+                        try {
+                            textarea.select();
+                            document.execCommand('copy');
+                            window.getSelection().removeAllRanges();
+                            e.target.textContent = 'Copiado!';
 
-            const copyBtn = document.getElementById('copy-pix-btn');
-            if (copyBtn) {
-                copyBtn.addEventListener('click', async (e) => { // Tornar async
-                    const textarea = document.getElementById('pix-code-textarea');
-                    if (textarea && textarea.value !== 'Erro ao obter código') {
-                        try {
-                            // ============ CORREÇÃO ============
-                            await navigator.clipboard.writeText(textarea.value);
-                            // ==================================
-                            
-                            e.target.textContent = 'Copiado!';
-                            setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
-                        } catch (err) {
-                            console.error('Falha ao copiar:', err); 
-                            alert('Não foi possível copiar.');
-                        }
-                    } else { 
-                        alert('Sem código PIX para copiar.'); 
-                    }
-                });
-            }
+                            setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
+                        } catch (fallbackErr) {
+                            console.error('Falha no fallback de cópia:', fallbackErr);
+                            alert('Não foi possível copiar automaticamente.');
+                        }
+                    }
+                });
+            }
 
-            // Inicia a verificação de status se tivermos um transaction_id
-            if (pixData.transaction_id) {
-                console.log("Iniciando polling para transaction_id:", pixData.transaction_id);
-                this.startPixStatusPolling(pixData.transaction_id);
-            } else {
-                 console.error("Não foi possível iniciar o polling: transaction_id ausente em pixData.");
-                 const statusMsg = document.getElementById('pix-status-message');
-                 if(statusMsg) statusMsg.textContent = "Erro: ID da transação não encontrado.";
-            }
-
-             // Adiciona listener para limpar o polling quando o modal for fechado (pelo botão X)
-             const closeModalBtn = document.getElementById('closeModalBtn');
-             if (closeModalBtn) {
-                 // Usamos uma função nomeada para poder remover depois se necessário
-                 const closeModalListener = () => {
-                     if (this.state.pixPollingIntervalId) {
-                         clearInterval(this.state.pixPollingIntervalId);
-                         this.state.pixPollingIntervalId = null;
-                         console.log("Polling interrompido pelo fechamento do modal (Botão X).");
-                     }
-                 };
-                 // Limpa listener antigo se existir antes de adicionar um novo
-                 if (closeModalBtn._listener) {
-                     closeModalBtn.removeEventListener('click', closeModalBtn._listener);
-                 }
-                 closeModalBtn.addEventListener('click', closeModalListener);
-                 closeModalBtn._listener = closeModalListener; // Guarda a referência
-             }
-        },
+            // 5. POLLING REMOVIDO
+            // Não há mais chamada para startPixStatusPolling
+            console.log("Modal do PIX exibido sem polling.");
+        },
 
         // ******** FUNÇÃO startPixStatusPolling ATUALIZADA ********
         startPixStatusPolling(transactionId) {
@@ -1096,16 +1244,17 @@
         renderLayout() { document.getElementById('app').innerHTML = this.templates.layout(); this.addDashboardEventListeners(); },
 
         formatNumber(number, isCurrency = false) {
-            if (typeof number !== 'number') {
-                number = parseFloat(number) || 0;
+            let num = parseFloat(number);
+            if (isNaN(num)) {
+                 num = 0;
             }
             if (isCurrency) {
-                return number.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                return num.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
             } else {
-                return number.toLocaleString('pt-BR');
+                return num.toLocaleString('pt-BR');
             }
         },
-        
+
         templates: {
             auth(page = 'login') {
                 return `<div class="flex items-center justify-center min-h-screen p-4">${page === 'login' ? this.loginForm() : this.registerForm()}</div>`;
@@ -1319,9 +1468,9 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 overflow-hidden p-4 md:p-8 pt-0">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 p-4 md:p-8 pt-0" style="min-height: 0;">
 
-                        <form id="checkout-form" class="space-y-6 overflow-y-auto pr-4">
+                        <form id="checkout-form" class="space-y-6 overflow-y-auto pr-4 h-full">
                             <div class="card p-6 rounded-xl">
                                 <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">1. Conteúdo da Página</h2>
                                 <div class="space-y-4">
@@ -1876,16 +2025,16 @@
                     this.navigateTo(sidebarLink.dataset.target);
                 }
 
-                // Botões Criador de Checkout
-                if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
-                if (e.target.id === 'back-to-checkouts-btn') { this.state.editingCheckoutId = null; this.navigateTo('checkouts'); }
-                const editCheckoutBtn = e.target.closest('.edit-checkout-btn');
-                if (editCheckoutBtn) { this.state.editingCheckoutId = editCheckoutBtn.dataset.id; this.navigateTo('pageCreator'); }
-                const copyCheckoutLinkBtn = e.target.closest('.copy-checkout-link-btn');
-                if (copyCheckoutLinkBtn) {
-                    const link = `${window.location.origin}/oferta/${copyCheckoutLinkBtn.dataset.id}`;
-                    try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
-                }
+                // Botões Criador de Checkout
+                if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
+                if (e.target.id === 'back-to-checkouts-btn') { this.state.editingCheckoutId = null; this.navigateTo('checkouts'); }
+                const editCheckoutBtn = e.target.closest('.edit-checkout-btn');
+                if (editCheckoutBtn) { this.state.editingCheckoutId = editCheckoutBtn.dataset.id; this.navigateTo('pageCreator'); }
+                const copyCheckoutLinkBtn = e.target.closest('.copy-checkout-link-btn');
+                if (copyCheckoutLinkBtn) {
+                    const link = `${window.location.origin}/oferta/${copyCheckoutLinkBtn.dataset.id}`;
+                    try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
+                }
 
                 // Botões Criador/Listagem Página de Obrigado
                 if (e.target.id === 'go-to-thankyou-creator-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouCreator'); }
@@ -2587,105 +2736,92 @@
         },
         generatePresselCode(pressel) {
             const { settings, pixels } = this.state.data;
-            const selectedPixels = pixels.filter(p => pressel.pixel_ids.includes(p.id));
-            const pixelsToTrackJSON = JSON.stringify(
-                selectedPixels.map(p => ({ id: p.pixel_id })),
-                null, 4
-            );
+            const presselPixelIds = Array.isArray(pressel.pixel_ids) ? pressel.pixel_ids : [];
+            const selectedPixels = pixels.filter(p => presselPixelIds.includes(p.id));
+            const pixelsToTrackJSON = JSON.stringify(selectedPixels.map(p => ({ id: p.pixel_id })), null, 4);
             const noscriptPixelId = selectedPixels.length > 0 ? selectedPixels[0].pixel_id : '';
-
-            const htmlContent = `<!DOCTYPE html>
+            const htmlContent = `
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Acesso VIP</title>
-    <style>
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif; background-color: #f0f2f5; color: #1c1e21; display: flex; justify-content: center; align-items: center; height: 100vh; text-align: center; }
-        .container { padding: 20px; }
-        .spinner { border: 4px solid rgba(0, 0, 0, 0.1); width: 36px; height: 36px; border-radius: 50%; border-left-color: #0d6efd; margin: 20px auto; animation: spin 1s ease infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        h1 { font-size: 1.5em; margin: 0 0 10px 0; }
-        p { font-size: 1em; color: #606770; }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carregando...</title>
     <script>
-        const API_BASE_URL = '${this.state.API_BASE_URL}';
-        const SELLER_API_KEY = '${settings.api_key}';
-        const PRESSEL_ID = ${pressel.id};
-        const TELEGRAM_USERNAME = '${pressel.bot_name}';
-        const WHITE_PAGE_URL = '${pressel.white_page_url || 'https://google.com'}';
-        const PIXELS_TO_TRACK = ${pixelsToTrackJSON};
-
-        const isBot = () => /bot|facebook|crawler|spider|preview/i.test(navigator.userAgent);
-        const isMobile = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
-        const getCookie = (name) => document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))?.[2] || null;
-
-        async function registerAndRedirect() {
-            try {
-                const params = new URLSearchParams(window.location.search);
-                const response = await fetch(\`\${API_BASE_URL}/api/registerClick\`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        sellerApiKey: SELLER_API_KEY,
-                        presselId: PRESSEL_ID,
-                        referer: document.referrer || null,
-                        fbclid: params.get("fbclid"),
-                        fbp: getCookie("_fbp"),
-                        fbc: getCookie("_fbc"),
-                        user_agent: navigator.userAgent,
-                        utm_source: params.get("utm_source"),
-                        utm_campaign: params.get("utm_campaign"),
-                        utm_medium: params.get("utm_medium"),
-                        utm_content: params.get("utm_content"),
-                        utm_term: params.get("utm_term")
-                    })
-                });
-                const data = await response.json();
-                if (response.ok && data.status === "success") {
-                    window.location.replace(\`https://t.me/\${TELEGRAM_USERNAME}?start=\${data.click_id}\`);
-                } else {
-                    window.location.replace(WHITE_PAGE_URL);
-                }
-            } catch (error) {
-                console.error("Erro ao registrar clique:", error);
-                window.location.replace(WHITE_PAGE_URL);
-            }
-        }
-
-        function waitForFbCookiesAndRedirect() {
-            if (isBot() || !isMobile()) {
-                window.location.replace(WHITE_PAGE_URL);
-                return;
-            }
-            let attempts = 0;
-            const maxAttempts = 15;
-            const interval = setInterval(() => {
-                const fbc = getCookie("_fbc");
-                const fbclid = new URLSearchParams(window.location.search).get("fbclid");
-                if (fbc || !fbclid || attempts >= maxAttempts) {
-                    clearInterval(interval);
-                    registerAndRedirect();
-                }
-                attempts++;
-            }, 200);
-        }
-        
-        window.onload = waitForFbCookiesAndRedirect;
-    <\/script>
-    <script>
-        !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src='https://connect.facebook.net/en_US/fbevents.js';s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script');
-        PIXELS_TO_TRACK.forEach(p => { fbq('init', p.id); });
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        ${selectedPixels.map(p => `fbq('init', '${p.pixel_id}');`).join('\n        ')}
         fbq('track', 'PageView');
     <\/script>
-    <noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=${noscriptPixelId}&ev=PageView&noscript=1"/></noscript>
+    ${noscriptPixelId ? `<noscript><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=${noscriptPixelId}&ev=PageView&noscript=1"
+    /></noscript>` : ''}
+    <script>
+        (async function() {
+            const CONFIG = {
+                SELLER_API_KEY: "${settings.api_key || 'SUA_API_KEY'}",
+                PRESSEL_ID: ${pressel.id},
+                WHITE_PAGE_URL: "${pressel.white_page_url}",
+                BOT_USERNAME: "${pressel.bot_name.replace('@', '')}",
+                API_BASE_URL: "${this.state.API_BASE_URL}"
+            };
+            function getQueryParam(param) {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get(param);
+            }
+            function getFacebookCookies() {
+                const cookies = document.cookie.split('; ');
+                let fbp = null, fbc = null;
+                for (const cookie of cookies) {
+                    const parts = cookie.split('=');
+                    if (parts[0] === '_fbp') fbp = parts[1];
+                    if (parts[0] === '_fbc') fbc = parts[1];
+                }
+                return { fbp, fbc };
+            }
+            try {
+                const { fbp, fbc } = getFacebookCookies();
+                const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sellerApiKey: CONFIG.SELLER_API_KEY,
+                        presselId: CONFIG.PRESSEL_ID,
+                        referer: document.referrer || null,
+                        fbclid: getQueryParam('fbclid'),
+                        fbp: fbp,
+                        fbc: fbc,
+                        user_agent: navigator.userAgent,
+                        utm_source: getQueryParam('utm_source'),
+                        utm_campaign: getQueryParam('utm_campaign'),
+                        utm_medium: getQueryParam('utm_medium'),
+                        utm_content: getQueryParam('utm_content'),
+                        utm_term: getQueryParam('utm_term')
+                    })
+                });
+                if (!response.ok) throw new Error('Falha ao registrar clique.');
+                const { click_id } = await response.json();
+
+                // Dispara ViewContent no Pixel da Meta
+                fbq('track', 'ViewContent', {}, { eventID: click_id });
+
+                const botUrl = \`https://t.me/\${CONFIG.BOT_USERNAME}?start=\${click_id}\`;
+                window.location.href = botUrl;
+            } catch (error) {
+                console.error("Erro na pressel:", error);
+                window.location.href = CONFIG.WHITE_PAGE_URL; // Redireciona para página branca em caso de erro
+            }
+        })();
+    <\/script>
 </head>
 <body>
-    <div class="container">
-        <div class="spinner"></div>
-        <h1>A preparar o seu acesso...</h1>
-        <p>Aguarde um momento, estamos a redirecioná-lo em segurança.</p>
-    </div>
+    <p>Carregando...</p>
 </body>
 </html>`;
 
@@ -2699,215 +2835,7 @@
         // FUNCIONALIDADES DE CHECKOUT E PÁGINAS DE OBRIGADO
         // ==========================================================
 
-        async renderCheckoutPage(checkoutId) {
-            const appContainer = document.getElementById('app');
-            appContainer.innerHTML = `<div id="app-loader" style="height: 100vh; display: flex; align-items: center; justify-content: center;"><svg class="animate-spin h-8 w-8 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-3">Carregando...</span></div>`;
 
-            try {
-                const { config } = await this.apiRequest(`/api/oferta/${checkoutId}`);
-                if (!config || !config.pricing || !config.content) {
-                     throw new Error("Configuração da oferta inválida recebida da API.");
-                }
-
-                const formatCurrency = (cents) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-                const countdownHTML = config.conversion_elements.countdown.enabled
-                    ? `<div style="background-color: var(--checkout-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
-                           <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
-                           <p id="countdown-timer" style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">--:--</p>
-                       </div>`
-                    : '';
-
-                const mediaHTML = config.content.media_url
-                    ? `<img src="${config.content.media_url}" alt="Preview da Oferta" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
-                    : '';
-
-                let pricingHTML = '';
-                if (config.pricing.type === 'fixed') {
-                    pricingHTML = `
-                        <div style="margin-top: 1.5rem;">
-                            <h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--checkout-accent, #38bdf8);">Escolha seu pacote:</h3>
-                            ${config.pricing.packages.map((pkg, index) => `
-                                <div style="border: 2px solid ${index === 0 ? 'var(--checkout-accent, #38bdf8)' : '#e5e7eb'}; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; cursor: pointer; transition: all 0.2s;" class="package-option" data-index="${index}">
-                                    <input type="radio" name="package" value="${index}" ${index === 0 ? 'checked' : ''} style="margin-right: 0.75rem; accent-color: var(--checkout-accent, #38bdf8);">
-                                    <div style="display: inline-block; width: calc(100% - 2rem);">
-                                        <h4 style="font-weight: 700; margin-bottom: 0.25rem; color: ${index === 0 ? 'var(--checkout-accent, #38bdf8)' : '#374151'};">${pkg.title}</h4>
-                                        <p style="font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem;">${pkg.description}</p>
-                                        <span style="font-weight: 700; font-size: 1.2rem; color: var(--checkout-accent, #38bdf8);">${formatCurrency(pkg.value_cents)}</span>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `;
-                } else {
-                    pricingHTML = `
-                        <div style="margin-top: 1.5rem;">
-                            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: var(--checkout-accent, #38bdf8);">${config.pricing.label || 'Escolha o valor'}</label>
-                            <div style="display: flex; align-items: center; gap: 0.5rem; background-color: white; border: 2px solid var(--checkout-accent, #38bdf8); border-radius: 0.5rem; padding: 0.75rem;">
-                                <span style="color: #6b7280;">R$</span>
-                                <input type="number" id="open-value-input" style="flex: 1; border: none; outline: none; font-size: 1.1rem;" placeholder="${(config.pricing.suggested_value_cents / 100).toFixed(2).replace('.', ',')}" value="${(config.pricing.suggested_value_cents / 100).toFixed(2).replace('.', ',')}">
-                            </div>
-                            <p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.5rem;">Mínimo: ${formatCurrency(config.pricing.minimum_value_cents)}</p>
-                        </div>
-                    `;
-                }
-
-                const orderBumpHTML = config.order_bump.enabled && config.order_bump.product_name
-                    ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-                           <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                               <input type="checkbox" id="order-bump-checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;">
-                               <div>
-                                   <h4 style="font-weight: 700; color: #ca8a04;">${config.order_bump.product_name}</h4>
-                                   <p style="font-size: 0.9rem; color: #4b5563;">${config.order_bump.description}</p>
-                               </div>
-                           </div>
-                       </div>`
-                    : '';
-
-                const guaranteeHTML = config.conversion_elements.guarantee.text
-                    ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
-                           ${config.conversion_elements.guarantee.seal_url ? `<img src="${config.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px;">` : ''}
-                           <div>
-                               <h4 style="font-weight: 700; color: #374151;">Garantia</h4>
-                               <p style="color: #6b7280;">${config.conversion_elements.guarantee.text}</p>
-                           </div>
-                       </div>`
-                    : '';
-
-                const testimonialsHTML = config.testimonials && config.testimonials.length > 0
-                    ? `<div style="margin-top: 2rem;">
-                           <h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--checkout-accent, #38bdf8);">Depoimentos</h3>
-                           ${config.testimonials.map(testimonial => `
-                               <div style="background-color: #f9fafb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
-                                   <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                                       ${testimonial.photo_url ? `<img src="${testimonial.photo_url}" alt="${testimonial.name}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover;">` : ''}
-                                       <div>
-                                           <h4 style="font-weight: 700; color: #374151;">${testimonial.name}</h4>
-                                           <p style="color: #6b7280; font-size: 0.9rem;">${testimonial.text}</p>
-                                       </div>
-                                   </div>
-                               </div>
-                           `).join('')}
-                       </div>`
-                    : '';
-
-                const checkoutHTML = `
-                    <div style="--checkout-bg: ${config.style.background_color}; --checkout-accent: ${config.style.accent_color}; background-color: var(--checkout-bg); color: ${config.style.background_color === '#ffffff' ? '#1f2937' : '#f1f5f9'}; min-height: 100vh; font-family: 'Inter', sans-serif;">
-                        ${countdownHTML}
-                        <div style="padding: 1.5rem 2rem;">
-                            <h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${config.style.background_color === '#ffffff' ? '#111827' : '#f1f5f9'};">${config.content.main_title}</h1>
-                            <p style="text-align: center; color: ${config.style.background_color === '#ffffff' ? '#6b7280' : '#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${config.content.subtitle}</p>
-                            ${mediaHTML}
-                            ${pricingHTML}
-                            ${orderBumpHTML}
-                            <button id="pay-button" style="width: 100%; background-color: var(--checkout-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: pointer; transition: background-color 0.2s ease;" disabled>
-                                Comprar
-                            </button>
-                            ${guaranteeHTML}
-                            ${testimonialsHTML}
-                        </div>
-                    </div>
-                `;
-
-                appContainer.innerHTML = checkoutHTML;
-
-                // Event listeners
-                const packageOptions = document.querySelectorAll('.package-option');
-                const payButton = document.getElementById('pay-button');
-                const openValueInput = document.getElementById('open-value-input');
-                const orderBumpCheckbox = document.getElementById('order-bump-checkbox');
-
-                let selectedPackage = null;
-
-                function updatePayButtonText() {
-                    if (config.pricing.type === 'fixed') {
-                        payButton.textContent = selectedPackage ? `Comprar por ${formatCurrency(selectedPackage.value_cents)}` : 'Selecione um pacote';
-                        payButton.disabled = !selectedPackage;
-                    } else {
-                        const value = parseFloat(openValueInput?.value) || 0;
-                        const minValue = config.pricing.minimum_value_cents / 100;
-                        payButton.textContent = value >= minValue ? `Comprar por ${formatCurrency(value * 100)}` : `Valor mínimo: ${formatCurrency(config.pricing.minimum_value_cents)}`;
-                        payButton.disabled = value < minValue;
-                    }
-                }
-
-                if (config.pricing.type === 'fixed') {
-                    packageOptions.forEach((option, index) => {
-                        option.addEventListener('click', () => {
-                            packageOptions.forEach(opt => opt.style.borderColor = '#e5e7eb');
-                            option.style.borderColor = 'var(--checkout-accent, #38bdf8)';
-                            option.querySelector('input[type="radio"]').checked = true;
-                            selectedPackage = config.pricing.packages[index];
-                            updatePayButtonText();
-                        });
-                    });
-                } else {
-                    openValueInput?.addEventListener('input', updatePayButtonText);
-                }
-
-                payButton.addEventListener('click', async () => {
-                    if (payButton.disabled) return;
-
-                    payButton.textContent = 'Gerando PIX...';
-                    payButton.disabled = true;
-
-                    try {
-                        let value = 0;
-                        if (config.pricing.type === 'fixed') {
-                            value = selectedPackage.value_cents;
-                        } else {
-                            value = Math.round((parseFloat(openValueInput?.value) || 0) * 100);
-                        }
-
-                        // Adiciona order bump se selecionado
-                        if (orderBumpCheckbox?.checked) {
-                            value += config.order_bump.value_cents;
-                        }
-
-                        const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
-                            checkoutId,
-                            value_cents: value,
-                            order_bump: orderBumpCheckbox?.checked || false
-                        });
-
-                        this.showPixModal(pixData);
-                    } catch (error) {
-                        alert('Erro ao gerar PIX. Tente novamente.');
-                    } finally {
-                        updatePayButtonText();
-                        payButton.disabled = !selectedPackage;
-                    }
-                });
-
-                if (config.conversion_elements.countdown.enabled) {
-                    const timerEl = document.getElementById('countdown-timer');
-                    if (timerEl) {
-                        let duration = (config.conversion_elements.countdown.minutes || 15) * 60;
-                        const interval = setInterval(() => {
-                            const minutes = Math.floor(duration / 60).toString().padStart(2, '0');
-                            const seconds = (duration % 60).toString().padStart(2, '0');
-                            timerEl.textContent = `${minutes}:${seconds}`;
-                            duration--;
-                            if (duration < 0) {
-                                clearInterval(interval);
-                                timerEl.textContent = 'OFERTA EXPIRADA';
-                            }
-                        }, 1000);
-                    }
-                }
-
-            } catch (error) {
-                console.error('Erro ao carregar checkout:', error);
-                appContainer.innerHTML = `
-                    <div style="height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center;">
-                        <div>
-                            <h1 style="color: #ef4444; margin-bottom: 1rem;">Erro ao carregar oferta</h1>
-                            <p style="color: #6b7280;">A oferta solicitada não foi encontrada ou está indisponível.</p>
-                        </div>
-                    </div>
-                `;
-            }
-        },
 
         async renderThankYouPage(pageId) {
             const appContainer = document.getElementById('app');
@@ -2990,26 +2918,7 @@
             }
         },
 
-        showPixModal(pixData) {
-            const modalContent = `
-                <div class="text-center">
-                    <h3 class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
-                    <p class="text-sm text-gray-400 mt-2 mb-4">Copie o código abaixo e pague no seu aplicativo do banco.</p>
-                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="5" readonly>${pixData.qr_code_text}</textarea>
-                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
-                </div>
-            `;
-            const modalContainer = document.getElementById('modal-container');
-            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
-            
-            // Adicionar funcionalidade de cópia
-            document.getElementById('copy-pix-btn').addEventListener('click', () => {
-                const textarea = document.getElementById('pix-code-textarea');
-                textarea.select();
-                document.execCommand('copy');
-                this.showToast('Código PIX copiado!', 'success');
-            });
-        },
+
         
         async loadCheckouts() {
             try {
@@ -3196,193 +3105,194 @@
 
             function populateCreatorForm(config) {
                 const get = (selector) => contentEl.querySelector(selector);
-                get('#main_title').value = config.content?.main_title || ''; 
-                get('#subtitle').value = config.content?.subtitle || ''; 
-                get('#media_url').value = config.content?.media_url || '';
-                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; 
-                packagesContainer.innerHTML=''; 
-                if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { 
-                    config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); 
-                } else { 
-                    addPackage(); 
-                }
-                get('#enable_order_bump').checked = config.order_bump?.enabled; 
-                get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); 
-                get('#order_bump_product_name').value = config.order_bump?.product_name || ''; 
-                get('#order_bump_description').value = config.order_bump?.description || ''; 
-                get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
-                get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; 
-                get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); 
-                get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
-                get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; 
-                get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
-                testimonialsContainer.innerHTML=''; 
-                if (config.testimonials?.length > 0) { 
-                    config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); 
-                }
-                get('#pixel_id').value = config.tracking?.pixel_id || ''; 
-                get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; 
-                get('#background_color').value = config.style?.background_color || '#0f172a'; 
-                get('#accent_color').value = config.style?.accent_color || '#38bdf8';
-                get('#success_redirect_url').value = config.redirects?.success_url || '';
+                get('#main_title').value = config.content?.main_title || ''; get('#subtitle').value = config.content?.subtitle || ''; get('#media_url').value = config.content?.media_url || '';
+                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; packagesContainer.innerHTML=''; if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); } else { addPackage(); }
+                get('#enable_order_bump').checked = config.order_bump?.enabled; get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); get('#order_bump_product_name').value = config.order_bump?.product_name || ''; get('#order_bump_description').value = config.order_bump?.description || ''; get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
+                get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
+                get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
+                testimonialsContainer.innerHTML=''; if (config.testimonials?.length > 0) { config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); }
+                get('#pixel_id').value = config.tracking?.pixel_id || ''; get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; get('#background_color').value = config.style?.background_color || '#0f172a'; get('#accent_color').value = config.style?.accent_color || '#38bdf8';
+                get('#success_redirect_url').value = config.redirects?.success_url || ''; // Popula o campo novo
             }
 
             function getFormData() {
-                const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; 
-                const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; 
-                const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; 
-                const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; 
-                const pT=getElValue('#pricing-type-select','fixed'); 
-                let pD; 
-                if(pT==='fixed'){
-                    pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};
-                }else{
-                    pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};
-                }
-                return{
-                    content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},
-                    pricing:pD,
-                    order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},
-                    conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},
-                    testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),
-                    style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},
-                    tracking:{pixel_id:getElValue('#pixel_id')||null,utmify_integration_id:getElValue('#utmify_integration_id')||null},
-                    redirects:{success_url:getElValue('#success_redirect_url')||null}
-                };
+                 const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; const pT=getElValue('#pricing-type-select','fixed'); let pD; if(pT==='fixed'){pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};}else{pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};}
+                 return{content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},pricing:pD,order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},tracking:{pixel_id:getElValue('#pixel_id',''),utmify_integration_id:getElValue('#utmify_integration_id','')||null}, redirects: { success_url: getElValue('#success_redirect_url') || null }}; // Adiciona redirects
             }
 
-            function generatePreviewHTML(data) {
-                const fC=(c)=>(c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); 
-                const cdH=data.conversion_elements.countdown.enabled?`<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem;"><p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p><p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2,'0')}:00</p></div>`:''; 
-                const mH=data.content.media_url?`<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`:''; 
-                let pH; 
-                if(data.pricing.type==='open'){
-                    pH=`<div style="margin-top: 1.5rem;"><label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: var(--preview-accent, #38bdf8);">${data.pricing.label||'Escolha o valor'}</label><div style="display: flex; align-items: center; gap: 0.5rem; background-color: white; border: 2px solid var(--preview-accent, #38bdf8); border-radius: 0.5rem; padding: 0.75rem;"><span style="color: #6b7280;">R$</span><input type="number" style="flex: 1; border: none; outline: none; font-size: 1.1rem;" placeholder="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}" value="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}"></div><p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.5rem;">Mínimo: ${fC(data.pricing.minimum_value_cents)}</p></div>`;
-                }else{
-                    pH=`<div style="margin-top: 1.5rem;"><h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--preview-accent, #38bdf8);">Escolha seu pacote:</h3>${data.pricing.packages.map((p,i)=>`<div style="border: 2px solid ${i===0?'var(--preview-accent, #38bdf8)':'#e5e7eb'}; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; cursor: pointer; transition: all 0.2s;"><input type="radio" name="package" value="${i}" ${i===0?'checked':''} style="margin-right: 0.75rem; accent-color: var(--preview-accent, #38bdf8);"><div style="display: inline-block; width: calc(100% - 2rem);"><h4 style="font-weight: 700; margin-bottom: 0.25rem; color: ${i===0?'var(--preview-accent, #38bdf8)':'#374151'};">${p.title}</h4><p style="font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem;">${p.description}</p><span style="font-weight: 700; font-size: 1.2rem; color: var(--preview-accent, #38bdf8);">${fC(p.value_cents)}</span></div></div>`).join('')}</div>`;
-                }
-                const obH=data.order_bump.enabled&&data.order_bump.product_name?`<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;"><input type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;"><div><h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4><p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p></div></div></div>`:''; 
-                const gH=data.conversion_elements.guarantee.text?`<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">${data.conversion_elements.guarantee.seal_url?`<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height:60px;">`:''}<div><h4 style="font-weight: 700; color: #374151;">Garantia</h4><p style="color: #6b7280;">${data.conversion_elements.guarantee.text}</p></div></div>`:''; 
-                const tH=data.testimonials.length>0?`<div style="margin-top: 2rem;"><h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--preview-accent, #38bdf8);">Depoimentos</h3>${data.testimonials.map(t=>`<div style="background-color: #f9fafb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;">${t.photo_url?`<img src="${t.photo_url}" alt="${t.name}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover;">`:''}<div><h4 style="font-weight: 700; color: #374151;">${t.name}</h4><p style="color: #6b7280; font-size: 0.9rem;">${t.text}</p></div></div></div>`).join('')}</div>`:''; 
-                return`<div id="preview-body" style="--preview-bg: ${data.style.background_color}; --preview-accent: ${data.style.accent_color}; background-color: var(--preview-bg); color: ${data.style.background_color==='#ffffff'?'#1f2937':'#f1f5f9'}; min-height: 100%; font-family: 'Inter', sans-serif;">${cdH}<div style="padding: 1.5rem 2rem;"><h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'};">${data.content.main_title||'Título'}</h1><p style="text-align: center; color: ${data.style.background_color==='#ffffff'?'#6b7280':'#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle||'Subtítulo'}</p>${mH}${pH}${obH}<button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed;">Comprar</button>${gH}${tH}</div></div>`;
-            }
+// DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
+// DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
 
-            function updatePreview() { 
-                if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) {
-                    try { 
-                        const data = getFormData(); 
-                        contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); 
-                        const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); 
-                        if(pb) { 
-                            pb.style.setProperty('--preview-bg', data.style.background_color); 
-                            pb.style.setProperty('--preview-accent', data.style.accent_color); 
-                        } 
-                    } catch (e) { 
-                        console.error("Erro no updatePreview:", e); 
-                    } 
-                } 
-            }
+function generatePreviewHTML(data) {
+    const fC = (c) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-            function showResultScreen(checkoutId) { 
-                if (!checkoutLinkOutput || !resultScreen) return; 
-                const link = `${FRONTEND_URL}/oferta/${checkoutId}`; 
-                checkoutLinkOutput.value = link; 
-                resultScreen.classList.remove('hidden'); 
-            }
+    // Lógica CORRETA para determinar a cor do texto
+    const isDarkBg = (bgColor = '#0f172a') => {
+        let colorStr = (bgColor.charAt(0) === '#') ? bgColor.substring(1, 7) : bgColor;
+        if (colorStr.length === 3) { // Converte #RGB para #RRGGBB
+            colorStr = colorStr[0] + colorStr[0] + colorStr[1] + colorStr[1] + colorStr[2] + colorStr[2];
+        }
+        if (colorStr.length !== 6) {
+            return true; // Assume escuro por padrão se a cor for inválida
+        }
+        const r = parseInt(colorStr.substring(0, 2), 16);
+        const g = parseInt(colorStr.substring(2, 4), 16);
+        const b = parseInt(colorStr.substring(4, 6), 16);
+        // Fórmula exata usada em renderCheckoutPage
+        return (r * 0.299 + g * 0.587 + b * 0.114) < 186;
+    };
 
-            function hideResultScreen() { 
-                if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; 
-                resultScreen.classList.add('hidden'); 
-                checkoutForm.reset(); 
-                contentEl.querySelector('#pricing-type-select').value = 'fixed'; 
-                contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); 
-                contentEl.querySelector('#open-pricing-container').classList.add('hidden'); 
-                contentEl.querySelector('#enable_order_bump').checked = false; 
-                contentEl.querySelector('#order-bump-fields').classList.add('hidden'); 
-                contentEl.querySelector('#enable_countdown').checked = false; 
-                contentEl.querySelector('#countdown-fields').classList.add('hidden'); 
-                packagesContainer.innerHTML = ''; 
-                testimonialsContainer.innerHTML = ''; 
-                addPackage(); 
-                updatePreview(); 
-            }
+    // --- CORREÇÃO DE BUG DE SINTAXE E LÓGICA ---
+    // Bug 1: Chamava isBgDark recursivamente. Corrigido para isDarkBg
+    const isBgDark = isDarkBg(data.style.background_color); 
+    
+    const primaryTextColor = isBgDark ? '#f1f5f9' : '#111827';
+    const secondaryTextColor = isBgDark ? '#94a3b8' : '#6b7280';
+    
+    // Bug 2: Lógica de cor do card estava invertida. Corrigida.
+    const cardBgColor = isBgDark ? '#1e293b' : '#ffffff'; // Card escuro em BG escuro, Card claro em BG claro
+    const cardBorderColor = isBgDark ? '#334155' : '#e5e7eb';
+    const cardTextColor = isBgDark ? primaryTextColor : '#111827';
+    const cardSecondaryTextColor = isBgDark ? secondaryTextColor : '#6b7280';
+    // --- FIM DAS CORREÇÕES DE COR ---
+
+    // Lógica para cor do botão
+    const accentColor = data.style.accent_color || '#38bdf8';
+    const isAccentDark = isDarkBg(accentColor);
+    const buttonTextColor = isAccentDark ? '#FFFFFF' : '#000000';
+
+    // --- GERAÇÃO DO HTML ---
+
+    const cdH = data.conversion_elements.countdown.enabled
+        ? `<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
+               <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
+               <p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2, '0')}:00</p>
+           </div>`
+        : '';
+
+    const mH = data.content.media_url
+        ? `<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
+        : '';
+
+    let pH;
+    if (data.pricing.type === 'fixed') {
+        const packages = Array.isArray(data.pricing.packages) ? data.pricing.packages : [];
+        const defaultBoxShadow = '0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1)';
+        
+        const packageItemsHTML = (packages.length > 0 ? packages : [{ title: 'Configure um pacote', description: '', value_cents: 0 }]).map((pk, i) => `
+            <div style="border: 1px solid ${cardBorderColor}; background-color: ${cardBgColor}; padding: 1rem; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s; box-shadow: ${defaultBoxShadow};"
+                 onclick="this.parentElement.querySelectorAll('div[style*=\'border: 1px\']').forEach(el => { el.style.borderColor='${cardBorderColor}'; el.style.boxShadow='${defaultBoxShadow}'; }); this.style.borderColor=getComputedStyle(document.documentElement).getPropertyValue('--preview-accent'); this.style.boxShadow = '0 0 0 2px '+getComputedStyle(document.documentElement).getPropertyValue('--preview-accent');">
+                 <h3 style="font-weight: 700; font-size: 1.1rem; color: ${cardTextColor}; pointer-events: none;">${pk.title || 'Pacote'}</h3>
+                 <p style="font-size: 0.9rem; color: ${cardSecondaryTextColor}; margin-top: 0.25rem; pointer-events: none;">${pk.description || 'Descrição'}</p>
+                 <p style="font-size: 1.5rem; font-weight: 800; color: var(--preview-accent, #38bdf8); margin-top: 0.75rem; pointer-events: none;">${fC(pk.value_cents)}</p>
+            </div>
+        `).join('');
+        pH = `<div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">${packageItemsHTML}</div>`;
+    } else {
+        pH = '<p style="color: red;">Modelo de preço aberto não implementado no preview.</p>';
+    }
+
+    // --- CORREÇÃO 3: ONCLICK DO ORDER BUMP ---
+    const obH = data.order_bump.enabled && data.order_bump.product_name
+        ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; cursor: pointer;"
+               onclick="var cb = this.querySelector('.preview-order-bump-checkbox'); if (event.target.tagName !== 'INPUT') { cb.checked = !cb.checked; }">
+               <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                   <input type="checkbox" class="preview-order-bump-checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04; flex-shrink: 0;">
+                   <div style="pointer-events: none;">
+                       <h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4>
+                       <p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p>
+                   </div>
+               </div>
+           </div>`
+        : '';
+    // --- FIM DA CORREÇÃO 3 ---
+
+    const gH = data.conversion_elements.guarantee.text
+        ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
+               ${data.conversion_elements.guarantee.seal_url ? `<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px; flex-shrink: 0;">` : ''}
+               <div>
+                   <h4 style="font-weight: 700; color: #374151;">Garantia Total</h4>
+                   <p style="font-size: 0.9rem; color: #6b7280;">${data.conversion_elements.guarantee.text}</p>
+               </div>
+           </div>`
+        : '';
+
+    const testimonials = Array.isArray(data.testimonials) ? data.testimonials : [];
+    const tH = testimonials.filter(t => t.name && t.text).length > 0
+        ? `<div style="margin-top: 2.5rem;">
+               <h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: ${primaryTextColor}; margin-bottom: 1.5rem;">O Que Nossos Clientes Dizem</h3>
+               <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                   ${testimonials.map(t => `
+                       <div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;">
+                           <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                               ${t.photo_url ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0;">` : ''}
+                               <p style="font-weight: 600; color: #111827;">${t.name}</p>
+                           </div>
+                           <p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${t.text}"</p>
+                       </div>
+                   `).join('')}
+               </div>
+           </div>`
+        : '';
+
+
+    return `
+        <div id="preview-body" style="--preview-bg: ${data.style.background_color || '#0f172a'}; --preview-accent: ${accentColor}; background-color: var(--preview-bg); color: ${primaryTextColor}; min-height: 100%; font-family: 'Inter', sans-serif;">
+            ${cdH}
+            <div style="padding: 1.5rem 2rem;">
+                 <h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${primaryTextColor};">${data.content.main_title || 'Título Principal'}</h1>
+                 <p style="text-align: center; color: ${secondaryTextColor}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle || 'Subtítulo da oferta'}</p>
+                 ${mH}
+                 ${pH}
+                 ${obH}
+                 <button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: ${buttonTextColor}; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed; transition: filter 0.2s;">
+                     Comprar Agora
+                 </button>
+                 ${gH}
+                 ${tH}
+            </div>
+        </div>
+    `;
+}
+            function updatePreview() { if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) { try { const data = getFormData(); contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); if(pb) { pb.style.setProperty('--preview-bg', data.style.background_color); pb.style.setProperty('--preview-accent', data.style.accent_color); } } catch (e) { console.error("Erro no updatePreview:", e); } } }
+            function showResultScreen(checkoutId) { if (!checkoutLinkOutput || !resultScreen) return; const link = `${FRONTEND_URL}/oferta/${checkoutId}`; checkoutLinkOutput.value = link; resultScreen.classList.remove('hidden'); }
+            function hideResultScreen() { if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; resultScreen.classList.add('hidden'); checkoutForm.reset(); contentEl.querySelector('#pricing-type-select').value = 'fixed'; contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); contentEl.querySelector('#open-pricing-container').classList.add('hidden'); contentEl.querySelector('#enable_order_bump').checked = false; contentEl.querySelector('#order-bump-fields').classList.add('hidden'); contentEl.querySelector('#enable_countdown').checked = false; contentEl.querySelector('#countdown-fields').classList.add('hidden'); packagesContainer.innerHTML = ''; testimonialsContainer.innerHTML = ''; addPackage(); updatePreview(); }
 
             if (this.state.editingCheckoutId) {
-                creatorTitle.textContent = 'Editar Checkout'; 
-                submitBtn.textContent = 'Carregando...'; 
-                submitBtn.disabled = true;
+                creatorTitle.textContent = 'Editar Checkout'; submitBtn.textContent = 'Carregando...'; submitBtn.disabled = true;
                 try {
                     const data = await this.apiRequest(`/api/oferta/${this.state.editingCheckoutId}`);
-                    if (data && data.config) { 
-                        populateCreatorForm(data.config); 
-                        submitBtn.textContent = 'Salvar Alterações'; 
-                    } else { 
-                        throw new Error('Config não encontrada.'); 
-                    }
-                } catch (e) { 
-                    this.showToast('Erro ao carregar.', 'error'); 
-                    this.state.editingCheckoutId = null; 
-                    creatorTitle.textContent = 'Criador'; 
-                    submitBtn.textContent = 'Criar'; 
-                    addPackage(); 
-                }
-                finally { 
-                    submitBtn.disabled = false; 
-                    updatePreview(); 
-                }
+                    if (data && data.config) { populateCreatorForm(data.config); submitBtn.textContent = 'Salvar Alterações'; } else { throw new Error('Config não encontrada.'); }
+                } catch (e) { this.showToast('Erro ao carregar.', 'error'); this.state.editingCheckoutId = null; creatorTitle.textContent = 'Criador'; submitBtn.textContent = 'Criar'; addPackage(); }
+                finally { submitBtn.disabled = false; updatePreview(); }
             } else {
-                creatorTitle.textContent = 'Criador de Ofertas'; 
-                submitBtn.textContent = 'Criar Checkout'; 
-                addPackage(); 
-                updatePreview();
+                creatorTitle.textContent = 'Criador de Ofertas'; submitBtn.textContent = 'Criar Checkout'; addPackage(); updatePreview();
             }
 
-            // Event listeners
+            // Listeners
+            contentEl.removeEventListener('input', updatePreview); // Garante que não haja duplicatas
+            contentEl.addEventListener('input', updatePreview);
+            contentEl.removeEventListener('change', contentEl._changeListener);
+            contentEl._changeListener = (e) => {
+                 if (e.target.matches('#pricing-type-select, #enable_order_bump, #enable_countdown')) { const pS=contentEl.querySelector('#pricing-type-select'); const fC=contentEl.querySelector('#fixed-pricing-container'); const oC=contentEl.querySelector('#open-pricing-container'); const eOB=contentEl.querySelector('#enable_order_bump'); const oBF=contentEl.querySelector('#order-bump-fields'); const eC=contentEl.querySelector('#enable_countdown'); const cF=contentEl.querySelector('#countdown-fields'); const iF=pS.value==='fixed'; if(fC)fC.classList.toggle('hidden',!iF); if(oC)oC.classList.toggle('hidden',iF); if(oBF)oBF.classList.toggle('hidden',!eOB.checked); if(cF)cF.classList.toggle('hidden',!eC.checked); updatePreview(); } if (e.target.matches('#pixel_id')) updatePreview();
+            };
+            contentEl.addEventListener('change', contentEl._changeListener);
+
             contentEl.removeEventListener('click', contentEl._clickListener);
             contentEl._clickListener = (e) => {
-                if(e.target.id==='add-package-btn'){addPackage(); updatePreview();} 
-                if(e.target.id==='add-testimonial-btn'){addTestimonial(); updatePreview();} 
-                if(e.target.classList.contains('remove-package-btn')){e.target.closest('div').remove(); updatePreview();} 
-                if(e.target.classList.contains('remove-testimonial-btn')){e.target.closest('div').remove(); updatePreview();} 
-                if(e.target.id==='pricing-type-select'){const isOpen=e.target.value==='open'; contentEl.querySelector('#fixed-pricing-container').classList.toggle('hidden',isOpen); contentEl.querySelector('#open-pricing-container').classList.toggle('hidden',!isOpen); updatePreview();} 
-                if(e.target.id==='enable_order_bump'){contentEl.querySelector('#order-bump-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
-                if(e.target.id==='enable_countdown'){contentEl.querySelector('#countdown-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
-                if(e.target.id==='copy-link-btn'){checkoutLinkOutput.select(); document.execCommand('copy'); e.target.textContent='Copiado!'; setTimeout(()=>{e.target.textContent='Copiar Link'},2000);} 
-                if(e.target.id==='create-another-btn'){hideResultScreen(); this.navigateTo('checkouts');}
+                 if(e.target.id==='add-package-btn')addPackage(); if(e.target.id==='add-testimonial-btn')addTestimonial(); const rPB=e.target.closest('.remove-package-btn'); if(rPB){contentEl.querySelector(`#package-${rPB.dataset.id}`)?.remove();updatePreview();} const rTB=e.target.closest('.remove-testimonial-btn'); if(rTB){contentEl.querySelector(`#testimonial-${rTB.dataset.id}`)?.remove();updatePreview();}
+                 const pW=contentEl.querySelector('#preview-wrapper'); if(e.target.id==='desktop-view-btn'){pW.className='desktop mx-auto'; e.target.classList.add('active'); contentEl.querySelector('#mobile-view-btn').classList.remove('active');} if(e.target.id==='mobile-view-btn'){pW.className='mobile mx-auto'; e.target.classList.add('active'); contentEl.querySelector('#desktop-view-btn').classList.remove('active');}
+                 if(e.target.id==='copy-link-btn'){checkoutLinkOutput.select(); document.execCommand('copy'); e.target.textContent='Copiado!'; setTimeout(()=>{e.target.textContent='Copiar Link'},2000);} if(e.target.id==='create-another-btn'){hideResultScreen(); App.navigateTo('checkouts');} // Ajustado para ir para lista
             };
             contentEl.addEventListener('click', contentEl._clickListener);
 
-            checkoutForm.removeEventListener('submit', checkoutForm._submitListener);
-            checkoutForm._submitListener = async (e) => {
-                e.preventDefault(); 
-                const b=submitBtn; 
-                const oT=b.textContent; 
-                b.disabled=true; 
-                b.textContent='Salvando...'; 
-                try { 
-                    const cD=getFormData(); 
-                    cD.name=contentEl.querySelector('#main_title').value;
-                    if(this.state.editingCheckoutId){
-                        await this.apiRequest(`/api/checkouts/${this.state.editingCheckoutId}`,'PUT',cD); 
-                        this.showToast('Checkout atualizado com sucesso!', 'success'); 
-                        this.state.editingCheckoutId=null; 
-                        this.navigateTo('checkouts');
-                    }else{
-                        const r=await this.apiRequest('/api/checkouts/create-hosted','POST',cD); 
-                        if(r&&r.checkoutId){
-                            showResultScreen(r.checkoutId);
-                        }else{
-                            throw new Error('Erro ao criar checkout. Resposta da API inválida.');
-                        }
-                    }
-                }catch(error){
-                    this.showToast(error.message||'Erro ao salvar checkout. Verifique os campos.','error');
-                } finally { 
-                    b.disabled=false; 
-                    b.textContent=oT;
-                }
-            };
-            checkoutForm.addEventListener('submit', checkoutForm._submitListener);
+             checkoutForm.removeEventListener('submit', checkoutForm._submitListener);
+             checkoutForm._submitListener = async (e) => {
+                 e.preventDefault(); const b=submitBtn; const oT=b.textContent; b.textContent='Salvando...'; b.disabled=true;
+                 try{ const cD=getFormData(); if(cD.pricing.type==='fixed'&&(!cD.pricing.packages||cD.pricing.packages.length===0))throw new Error('Adicione pelo menos um pacote de preço.'); if(!cD.tracking.pixel_id)throw new Error('A seleção de um Pixel da Meta é obrigatória.');
+                 if(App.state.editingCheckoutId){await App.apiRequest(`/api/checkouts/${App.state.editingCheckoutId}`,'PUT',cD); App.showToast('Checkout atualizado com sucesso!', 'success'); App.state.editingCheckoutId=null; App.navigateTo('checkouts');}else{const r=await App.apiRequest('/api/checkouts/create-hosted','POST',cD); if(r&&r.checkoutId){showResultScreen(r.checkoutId);}else{throw new Error('Erro ao criar checkout. Resposta da API inválida.');}}}catch(error){App.showToast(error.message||'Erro ao salvar checkout. Verifique os campos.','error');} finally { b.disabled=false; b.textContent=oT;} // Garante restauração do botão
+             };
+             checkoutForm.addEventListener('submit', checkoutForm._submitListener);
         },
 
         // *** FUNÇÃO initThankYouCreatorPage ATUALIZADA (refatorada) ***
