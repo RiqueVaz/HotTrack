@@ -527,9 +527,13 @@
                 settings: {}, 
                 transactions: [],
                 dashboard: {},
-                utmifyIntegrations: []
+                utmifyIntegrations: [],
+                checkouts: []
             },
             currentPage: 'dashboard',
+            editingCheckoutId: null,
+            editingThankYouPageId: null,
+            pixPollingIntervalId: null,
             dateFilter: {
                 period: 'all',
                 startDate: null,
@@ -539,10 +543,12 @@
         },
 
         async init() {
-            // Carregar configuração dinamicamente
-            await this.loadConfig();
-            
+            if (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')) {
+                this.state.API_BASE_URL = 'http://localhost:3001';
+            }
+
             const path = window.location.pathname;
+            const origin = window.location.origin;
 
             // Verificar se é uma página de oferta
             if (path.startsWith('/oferta/')) {
@@ -550,63 +556,544 @@
                 this.renderCheckoutPage(checkoutId);
                 return;
             }
-
-            // Verificar se é uma página de obrigado
-            if (path.startsWith('/obrigado/')) {
+            else if (path.startsWith('/obrigado/')) {
                 const pageId = path.split('/')[2];
-                this.renderThankYouPage(pageId);
+                this.renderStandaloneThankYouPage(pageId, origin);
                 return;
             }
-            
+
             this.state.token = localStorage.getItem('hottrack_token');
             if (this.state.token) {
                 try {
-                    const [staticData, transactions] = await Promise.all([
+                    const [staticData] = await Promise.all([
                         this.apiRequest('/api/dashboard/data'),
                         this.apiRequest('/api/transactions'),
                     ]);
-                    this.state.data = { ...this.state.data, ...staticData, transactions };
+                    this.state.data = { ...this.state.data, ...staticData };
                     this.renderLayout();
                     this.navigateTo('dashboard');
-                } catch (e) { 
+                } catch (e) {
+                    console.error("Erro ao inicializar:", e);
                     this.logout();
                 }
             } else {
                 this.renderLogin();
-                this.addAuthEventListeners(); 
+                this.addAuthEventListeners();
             }
         },
 
-        async loadConfig() {
+        async renderCheckoutPage(checkoutId) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `<div id="app-loader" style="height: 100vh; display: flex; align-items: center; justify-content: center;"><svg class="animate-spin h-8 w-8 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-3">Carregando...</span></div>`;
+
             try {
-                // Usar uma URL base temporária para buscar a config
-                const tempBaseUrl = window.location.origin.includes('localhost') 
-                    ? 'http://localhost:3001' 
-                    : window.location.origin;
-                
-                const response = await fetch(`${tempBaseUrl}/api/config`);
-                const config = await response.json();
-                
-                // Forçar HTTP para localhost
-                this.state.API_BASE_URL = config.apiUrl.replace('https://localhost', 'http://localhost');
-                console.log('🔧 Config carregada:', config);
+                const { config } = await this.apiRequest(`/api/oferta/${checkoutId}`);
+                if (!config || !config.pricing || !config.content) {
+                     throw new Error("Configuração da oferta inválida recebida da API.");
+                }
+
+                const formatCurrency = (cents) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+                const countdownHTML = config.conversion_elements.countdown.enabled
+                    ? `<div style="background-color: var(--checkout-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
+                           <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
+                           <p id="countdown-timer" style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">--:--</p>
+                       </div>`
+                    : '';
+
+                const mediaHTML = config.content.media_url
+                    ? `<img src="${config.content.media_url}" alt="Preview da Oferta" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
+                    : '';
+
+                let pricingHTML = '';
+                if (config.pricing.type === 'fixed' && Array.isArray(config.pricing.packages)) {
+                    pricingHTML = config.pricing.packages.map((pkg, index) => `
+                        <div data-package-index="${index}" class="package-item p-4 rounded-lg cursor-pointer hover:border-sky-400 border border-gray-300 bg-white hover:bg-gray-50 transition-all shadow-sm">
+                            <h3 class="font-bold text-lg text-gray-900 pointer-events-none">${pkg.title || 'Pacote'}</h3>
+                            <p class="text-sm text-gray-600 pointer-events-none">${pkg.description || ''}</p>
+                            <p class="text-2xl font-bold mt-2 pointer-events-none" style="color: var(--checkout-accent);">${formatCurrency(pkg.value_cents)}</p>
+                        </div>
+                    `).join('');
+                     pricingHTML = `<div id="packages-list" class="space-y-4 mt-6">${pricingHTML}</div>`;
+                } else {
+                     pricingHTML = '<p class="text-center text-red-400">Erro na configuração de preços.</p>';
+                }
+
+                const orderBumpHTML = config.order_bump.enabled && config.order_bump.product_name
+                    ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
+                           <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                               <input id="order-bump-checkbox" type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;">
+                               <div>
+                                   <h4 style="font-weight: 700; color: #ca8a04;">${config.order_bump.product_name}</h4>
+                                   <p style="font-size: 0.9rem; color: #4b5563;">${config.order_bump.description}</p>
+                               </div>
+                           </div>
+                       </div>`
+                    : '';
+
+                const guaranteeHTML = config.conversion_elements.guarantee.text
+                    ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
+                            ${config.conversion_elements.guarantee.seal_url ? `<img src="${config.conversion_elements.guarantee.seal_url}" alt="Selo de Garantia" style="width: 60px; height: 60px;">` : ''}
+                            <div>
+                                <h4 style="font-weight: 700; color: #374151;">Garantia Total</h4>
+                                <p style="font-size: 0.9rem; color: #6b7280;">${config.conversion_elements.guarantee.text}</p>
+                            </div>
+                        </div>`
+                    : '';
+
+                const testimonials = Array.isArray(config.testimonials) ? config.testimonials : [];
+                const testimonialsHTML = testimonials.filter(t => t.name && t.text).length > 0
+                    ? `<div style="margin-top: 2.5rem;">
+                           <h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: var(--checkout-text-primary); margin-bottom: 1.5rem;">O Que Nossos Clientes Dizem</h3>
+                           <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                               ${testimonials.map(t => `
+                                   <div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;">
+                                       <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                                           ${t.photo_url ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">` : ''}
+                                           <p style="font-weight: 600; color: #111827;">${t.name}</p>
+                                       </div>
+                                       <p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${t.text}"</p>
+                                   </div>
+                               `).join('')}
+                           </div>
+                       </div>`
+                    : '';
+
+                const bgColor = config.style.background_color || '#0f172a';
+                const accentColor = config.style.accent_color || '#38bdf8';
+                const isDarkBg = (parseInt(bgColor.substring(1, 3), 16) * 0.299 + parseInt(bgColor.substring(3, 5), 16) * 0.587 + parseInt(bgColor.substring(5, 7), 16) * 0.114) < 186;
+                const primaryTextColor = isDarkBg ? '#f1f5f9' : '#111827';
+                const secondaryTextColor = isDarkBg ? '#94a3b8' : '#4b5563';
+
+                const checkoutHTML = `
+                    <style>
+                        :root {
+                            --checkout-bg: ${bgColor};
+                            --checkout-accent: ${accentColor};
+                            --checkout-text-primary: ${primaryTextColor};
+                            --checkout-text-secondary: ${secondaryTextColor};
+                        }
+                        body, #app {
+                            background-color: var(--checkout-bg) !important;
+                            font-family: 'Inter', sans-serif;
+                            color: var(--checkout-text-primary);
+                            height: auto;
+                            overflow-y: auto;
+                        }
+                        .checkout-card {
+                            background-color: ${isDarkBg ? 'rgba(30, 41, 59, 0.6)' : 'rgba(255, 255, 255, 0.8)'};
+                            border: 1px solid ${isDarkBg ? '#334155' : '#e5e7eb'};
+                            backdrop-filter: blur(16px);
+                            -webkit-backdrop-filter: blur(16px);
+                            color: var(--checkout-text-primary);
+                        }
+                        .package-item {
+                            background-color: ${isDarkBg ? '#1e293b' : '#ffffff'};
+                            border-color: ${isDarkBg ? '#334155' : '#e5e7eb'};
+                        }
+                        .package-item h3 { color: ${isDarkBg ? '#f1f5f9' : '#111827'}; }
+                        .package-item p { color: ${isDarkBg ? '#94a3b8' : '#6b7280'}; }
+                        .package-item:hover { border-color: var(--checkout-accent); }
+                        .package-item.selected {
+                            border-color: var(--checkout-accent);
+                            box-shadow: 0 0 0 2px var(--checkout-accent);
+                        }
+                        .final-pay-btn {
+                            background-color: var(--checkout-accent);
+                            color: ${ (parseInt(accentColor.substring(1, 3), 16) * 0.299 + parseInt(accentColor.substring(3, 5), 16) * 0.587 + parseInt(accentColor.substring(5, 7), 16) * 0.114) < 186 ? '#FFFFFF' : '#000000' };
+                            font-weight: 700;
+                            padding: 1rem;
+                            border-radius: 0.5rem;
+                            margin-top: 1.5rem;
+                            font-size: 1.1rem;
+                            text-transform: uppercase;
+                            border: none;
+                            width: 100%;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                        }
+                        .final-pay-btn:hover { filter: brightness(1.1); }
+                        .final-pay-btn:disabled { background-color: #334155; color: #64748b; cursor: not-allowed; filter: none; }
+                    </style>
+
+                    ${countdownHTML}
+                    <div id="checkout-body-wrapper" class="min-h-screen flex items-center justify-center p-4 animate-fade-in">
+                        <div class="checkout-card w-full max-w-lg p-6 md:p-8 rounded-2xl shadow-lg">
+                            ${mediaHTML}
+                            <h1 class="text-2xl font-bold text-center" style="color: var(--checkout-text-primary);">${config.content.main_title || 'Oferta Especial'}</h1>
+                            <p style="color: var(--checkout-text-secondary);" class="text-center mb-6">${config.content.subtitle || ''}</p>
+
+                            ${pricingHTML}
+                            ${orderBumpHTML}
+
+                            <button id="pay-button" class="final-pay-btn" disabled>Selecione um pacote</button>
+
+                            ${guaranteeHTML}
+                            ${testimonialsHTML}
+                        </div>
+                    </div>
+                `;
+
+                appContainer.innerHTML = checkoutHTML;
+
+                if (config.pricing.type === 'fixed' && Array.isArray(config.pricing.packages) && config.pricing.packages.length > 0) {
+                    let selectedPackage = null;
+                    const packagesList = document.getElementById('packages-list');
+                    const payButton = document.getElementById('pay-button');
+                    const orderBumpCheckbox = document.getElementById('order-bump-checkbox');
+
+                    function updatePayButtonText() {
+                        if (!selectedPackage) return;
+
+                        let totalValue = selectedPackage.value_cents;
+                        let buttonText = `Pagar Agora (${formatCurrency(totalValue)})`;
+
+                        if (orderBumpCheckbox && orderBumpCheckbox.checked && config.order_bump && config.order_bump.value_cents > 0) {
+                            totalValue += config.order_bump.value_cents;
+                            buttonText = `Pagar Agora (${formatCurrency(totalValue)})`;
+                        }
+
+                        payButton.textContent = buttonText;
+                    }
+
+                    packagesList.addEventListener('click', (e) => {
+                        const clickedPackage = e.target.closest('.package-item');
+                        if (!clickedPackage) return;
+
+                        packagesList.querySelectorAll('.package-item').forEach(p => p.classList.remove('selected'));
+                        clickedPackage.classList.add('selected');
+
+                        const packageIndex = clickedPackage.dataset.packageIndex;
+                        selectedPackage = config.pricing.packages[packageIndex];
+
+                        updatePayButtonText();
+                        payButton.disabled = false;
+                    });
+
+                    if (orderBumpCheckbox) {
+                        orderBumpCheckbox.addEventListener('change', updatePayButtonText);
+                    }
+
+                    payButton.addEventListener('click', async () => {
+                        if (!selectedPackage) { alert('Por favor, selecione um pacote válido.'); return; }
+
+                        let totalValueCents = selectedPackage.value_cents;
+                        if (orderBumpCheckbox && orderBumpCheckbox.checked && config.order_bump && config.order_bump.value_cents > 0) {
+                            totalValueCents += config.order_bump.value_cents;
+                        }
+
+                        payButton.textContent = 'Gerando PIX...';
+                        payButton.disabled = true;
+
+                        // 1. Captura o click_id da URL
+                        const urlParams = new URLSearchParams(window.location.search);
+                        // Aceita 'click_id' ou 'cid' como parâmetro
+                        const clickIdFromUrl = urlParams.get('click_id') || urlParams.get('cid') || null;
+
+                        try {
+                            // 2. Envia o click_id (se existir) no corpo da requisição
+                            const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
+                                checkoutId: checkoutId,
+                                value_cents: totalValueCents,
+                                click_id: clickIdFromUrl // Envia null ou o valor
+                            });
+                            this.showPixModal(pixData); // Mostra o modal com QR Code e inicia polling
+                        } catch (error) {
+                            alert('Erro ao gerar PIX. Tente novamente.');
+                        } finally {
+                            updatePayButtonText();
+                            payButton.disabled = !selectedPackage;
+                        }
+                    });
+                }
+
+                if (config.conversion_elements.countdown.enabled) {
+                    const timerEl = document.getElementById('countdown-timer');
+                    if (timerEl) {
+                        let duration = (config.conversion_elements.countdown.minutes || 15) * 60;
+                        const interval = setInterval(() => {
+                            const minutes = Math.floor(duration / 60).toString().padStart(2, '0');
+                            const seconds = (duration % 60).toString().padStart(2, '0');
+                            timerEl.textContent = `${minutes}:${seconds}`;
+                            duration--;
+                            if (duration < 0) {
+                                clearInterval(interval);
+                                timerEl.textContent = "00:00";
+                            }
+                        }, 1000);
+                    }
+                }
+
             } catch (error) {
-                console.warn('⚠️ Erro ao carregar config, usando fallback:', error);
-                // Fallback para detecção manual - sempre HTTP para localhost
-                this.state.API_BASE_URL = window.location.origin.includes('localhost') 
-                    ? 'http://localhost:3001' 
-                    : window.location.origin;
+                console.error("Erro ao renderizar página de checkout:", error);
+                appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Erro ao carregar oferta: ${error.message || 'Verifique o console.'}</p>`;
             }
         },
 
-        renderLogin(page = 'login') {
-            document.getElementById('app').innerHTML = this.templates.auth(page);
+        async renderStandaloneThankYouPage(pageId, originUrl) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `<div id="app-loader" style="height: 100vh; display: flex; align-items: center; justify-content: center;"><svg class="animate-spin h-8 w-8 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-3">Carregando...</span></div>`;
+
+            try {
+                const { config } = await this.apiRequest(`/api/obrigado/${pageId}`);
+                if (!config) {
+                    throw new Error("Configuração da página de obrigado não encontrada.");
+                }
+
+                const thankYouHTML = `
+                    <div style="background-color: var(--bg-secondary, #0f172a); color: var(--text-primary, #f1f5f9); font-family: 'Inter', sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem;">
+                        <div class="animate-fade-in">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-green-400 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                            </svg>
+                            <h1 style="font-size: 2.25rem; font-weight: 800; color: white;">${config.main_title || 'Obrigado!'}</h1>
+                            <p style="color: var(--text-secondary, #94a3b8); margin-top: 0.5rem; max-width: 450px; margin-left: auto; margin-right: auto;">${config.subtitle || 'Sua compra foi concluída com sucesso.'}</p>
+                            <a id="redirect-button" href="${config.redirect_url || '#'}" style="display: inline-block; background-color: var(--accent-secondary, #0ea5e9); color: white; font-weight: 600; padding: 0.75rem 1.5rem; border-radius: 0.375rem; margin-top: 1.5rem; text-decoration: none; transition: background-color 0.2s ease;">
+                                ${config.button_text || 'Acessar Conteúdo'}
+                            </a>
+                        </div>
+                    </div>
+                `;
+                appContainer.innerHTML = thankYouHTML;
+
+                if (config.pixel_id && config.purchase_value > 0) {
+                    if (!document.getElementById('facebook-pixel-script')) {
+                        const script = document.createElement('script'); script.id = 'facebook-pixel-script';
+                        script.innerHTML = `!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window, document,'script','https://connect.facebook.net/en_US/fbevents.js');`;
+                        document.head.appendChild(script);
+                    }
+                    window.fbq('init', config.pixel_id); window.fbq('track', 'Purchase', { value: config.purchase_value, currency: 'BRL' }); console.log(`Pixel ${config.pixel_id} init and Purchase fired.`);
+                }
+
+                if (config.utmify_integration_id) {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const trackingParameters = {};
+                    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'src', 'sck'].forEach(param => {
+                        if (urlParams.has(param)) {
+                            trackingParameters[param] = urlParams.get(param);
+                        }
+                    });
+
+                    // Captura o click_id e adiciona aos parâmetros de rastreamento
+                    const clickIdFromUrl = urlParams.get('click_id') || urlParams.get('cid');
+                    if (clickIdFromUrl) {
+                        trackingParameters.click_id = clickIdFromUrl; // Adiciona o click_id
+                    }
+
+                    const customerData = {
+                        name: urlParams.get('name') || null,
+                        email: urlParams.get('email') || null,
+                        phone: urlParams.get('phone') || null
+                    };
+
+                    try {
+                        await this.apiRequest('/api/thank-you-pages/fire-utmify', 'POST', {
+                            pageId: pageId,
+                            trackingParameters: trackingParameters, // Agora inclui o click_id, se existir
+                            customerData: customerData
+                        });
+                        console.log("Utmify event fired (via backend).");
+                    } catch (utmifyError) {
+                        console.error("Error firing Utmify event via backend:", utmifyError);
+                    }
+                }
+
+            } catch (error) {
+                console.error("Erro ao renderizar página de obrigado:", error);
+                appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Erro ao carregar página: ${error.message || 'Verifique o console.'}</p>`;
+            }
         },
 
-        renderLayout() {
-            document.getElementById('app').innerHTML = this.templates.layout();
-            this.addDashboardEventListeners();
+        // ******** FUNÇÃO showPixModal ATUALIZADA ********
+        async showPixModal(pixData) {
+            // Limpa qualquer polling anterior ao abrir um novo modal
+            if (this.state.pixPollingIntervalId) {
+                clearInterval(this.state.pixPollingIntervalId);
+                this.state.pixPollingIntervalId = null;
+            }
+
+            // Monta o HTML do QR Code (se base64 estiver disponível)
+            const qrCodeHTML = pixData.qr_code_base64
+                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
+                : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>'; // Fallback
+
+            const modalContent = `
+                <div class="text-center">
+                    <h3 id="pix-modal-title" class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
+                    <p class="text-sm text-gray-400 mt-2 mb-4">Escaneie o QR Code ou copie o código abaixo e pague no seu aplicativo do banco.</p>
+                    ${qrCodeHTML}
+                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="4" readonly>${pixData.qr_code_text || 'Erro ao obter código'}</textarea>
+                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
+                    <p id="pix-status-message" class="text-xs text-sky-400 mt-3 animate-pulse">Aguardando pagamento...</p>
+                </div>
+            `;
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
+
+
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            const copyBtn = document.getElementById('copy-pix-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async (e) => { // Tornar async
+                    const textarea = document.getElementById('pix-code-textarea');
+                    if (textarea && textarea.value !== 'Erro ao obter código') {
+                        try {
+                            // ============ CORREÇÃO ============
+                            await navigator.clipboard.writeText(textarea.value);
+                            // ==================================
+                            
+                            e.target.textContent = 'Copiado!';
+                            setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
+                        } catch (err) {
+                            console.error('Falha ao copiar:', err); 
+                            alert('Não foi possível copiar.');
+                        }
+                    } else { 
+                        alert('Sem código PIX para copiar.'); 
+                    }
+                });
+            }
+
+            // Inicia a verificação de status se tivermos um transaction_id
+            if (pixData.transaction_id) {
+                console.log("Iniciando polling para transaction_id:", pixData.transaction_id);
+                this.startPixStatusPolling(pixData.transaction_id);
+            } else {
+                 console.error("Não foi possível iniciar o polling: transaction_id ausente em pixData.");
+                 const statusMsg = document.getElementById('pix-status-message');
+                 if(statusMsg) statusMsg.textContent = "Erro: ID da transação não encontrado.";
+            }
+
+             // Adiciona listener para limpar o polling quando o modal for fechado (pelo botão X)
+             const closeModalBtn = document.getElementById('closeModalBtn');
+             if (closeModalBtn) {
+                 // Usamos uma função nomeada para poder remover depois se necessário
+                 const closeModalListener = () => {
+                     if (this.state.pixPollingIntervalId) {
+                         clearInterval(this.state.pixPollingIntervalId);
+                         this.state.pixPollingIntervalId = null;
+                         console.log("Polling interrompido pelo fechamento do modal (Botão X).");
+                     }
+                 };
+                 // Limpa listener antigo se existir antes de adicionar um novo
+                 if (closeModalBtn._listener) {
+                     closeModalBtn.removeEventListener('click', closeModalBtn._listener);
+                 }
+                 closeModalBtn.addEventListener('click', closeModalListener);
+                 closeModalBtn._listener = closeModalListener; // Guarda a referência
+             }
         },
+
+        // ******** FUNÇÃO startPixStatusPolling ATUALIZADA ********
+        startPixStatusPolling(transactionId) {
+            // Limpa qualquer intervalo anterior
+            if (this.state.pixPollingIntervalId) {
+                clearInterval(this.state.pixPollingIntervalId);
+            }
+
+            // Define o intervalo para verificar a cada 5 segundos
+            this.state.pixPollingIntervalId = setInterval(async () => {
+                console.log(`Verificando status PIX para ${transactionId}...`);
+                try {
+                    // Assume que a API Key está no settings (se necessário para a rota de status)
+                    const apiKey = this.state.data?.settings?.api_key;
+                    // Monta o header apenas se a apiKey existir
+                    const headers = apiKey ? { 'x-api-key': apiKey } : {};
+                    // Passa os headers para a requisição
+                    const response = await this.apiRequest(`/api/pix/status/${transactionId}`, 'GET', null, headers);
+
+                    const statusMsg = document.getElementById('pix-status-message');
+                    const modalTitle = document.getElementById('pix-modal-title');
+
+                    if (response.status === 'paid') {
+                        console.log("PIX Pago detectado!", response);
+                        clearInterval(this.state.pixPollingIntervalId); // Para o polling
+                        this.state.pixPollingIntervalId = null;
+
+                        if (statusMsg) {
+                            statusMsg.textContent = "Pagamento confirmado! Redirecionando...";
+                            statusMsg.classList.remove('animate-pulse', 'text-sky-400');
+                            statusMsg.classList.add('text-green-400', 'font-bold');
+                        }
+                         if (modalTitle) {
+                             modalTitle.textContent = "Pagamento Aprovado!";
+                             modalTitle.classList.remove('text-green-400');
+                             modalTitle.classList.add('text-green-500');
+                         }
+
+
+                        // Tenta redirecionar se a URL foi fornecida
+                        if (response.redirectUrl) {
+                             // Pega os parâmetros da URL ATUAL
+                             const currentParams = new URLSearchParams(window.location.search);
+                             // Pega o click_id retornado pelo backend (garante que é o correto associado à transação)
+                             const clickIdFromStatus = response.click_id?.replace('/start ', ''); // Remove /start
+                             if (clickIdFromStatus) {
+                                 currentParams.set('click_id', clickIdFromStatus); // Define ou atualiza o click_id
+                             } else {
+                                // Se o backend não retornar, tenta pegar da URL atual como fallback
+                                const clickIdCurrent = currentParams.get('click_id') || currentParams.get('cid');
+                                if (clickIdCurrent) {
+                                    currentParams.set('click_id', clickIdCurrent); // Garante que 'click_id' seja usado
+                                    currentParams.delete('cid'); // Remove 'cid' se existir
+                                }
+                             }
+
+                             // Remove parâmetros potencialmente sensíveis ou desnecessários antes de anexar
+                             currentParams.delete('name');
+                             currentParams.delete('email');
+                             currentParams.delete('phone');
+
+                             // Constrói a URL final
+                             const finalRedirectUrl = `${response.redirectUrl}${currentParams.toString() ? '?' + currentParams.toString() : ''}`;
+
+                             console.log("Redirecionando para:", finalRedirectUrl);
+                             setTimeout(() => {
+                                 window.location.href = finalRedirectUrl;
+                             }, 1500); // Pequeno delay para o usuário ver a mensagem
+                        } else {
+                            console.log("Pagamento confirmado, mas nenhuma URL de redirecionamento configurada no checkout.");
+                            if (statusMsg) statusMsg.textContent = "Pagamento confirmado com sucesso!";
+                        }
+
+                    } else if (response.status === 'pending') {
+                        // Continua aguardando
+                        if (statusMsg) statusMsg.textContent = "Aguardando pagamento...";
+                    } else if (response.status === 'not_found') {
+                         console.warn("Transação não encontrada durante o polling. Interrompendo.");
+                         clearInterval(this.state.pixPollingIntervalId);
+                         this.state.pixPollingIntervalId = null;
+                         if (statusMsg) statusMsg.textContent = "Erro: Transação não encontrada.";
+                    } else {
+                         // Outros status (ex: 'expired', 'failed')
+                         console.warn("Status inesperado recebido:", response.status);
+                         clearInterval(this.state.pixPollingIntervalId);
+                         this.state.pixPollingIntervalId = null;
+                         if (statusMsg) {
+                             statusMsg.textContent = `Status: ${response.status}`;
+                             statusMsg.classList.remove('animate-pulse', 'text-sky-400');
+                             statusMsg.classList.add('text-red-400');
+                         }
+                    }
+
+                } catch (error) {
+                    console.error("Erro durante o polling do status PIX:", error);
+                    // Considera parar o polling em caso de erro grave (ex: API Key inválida)
+                    if (error.message.includes('API Key inválida')) {
+                         clearInterval(this.state.pixPollingIntervalId);
+                         this.state.pixPollingIntervalId = null;
+                         console.error("Polling interrompido devido a erro de API Key.");
+                    }
+                    const statusMsg = document.getElementById('pix-status-message');
+                     if (statusMsg) statusMsg.textContent = "Erro ao verificar status.";
+                }
+            }, 5000); // Verifica a cada 5 segundos
+        },
+        // ******** FIM DAS FUNÇÕES ATUALIZADAS ********
+
+        renderLogin(page = 'login') { document.getElementById('app').innerHTML = this.templates.auth(page); },
+        renderLayout() { document.getElementById('app').innerHTML = this.templates.layout(); this.addDashboardEventListeners(); },
 
         formatNumber(number, isCurrency = false) {
             if (typeof number !== 'number') {
@@ -693,10 +1180,18 @@
                             </div>
                             <div data-target="bots" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M11 17a1 1 0 001.447.894l4-2A1 1 0 0017 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 0011 7v10zM4 17a1 1 0 001.447.894l4-2A1 1 0 0010 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 004 7v10z" /></svg>Gerenciar Bots</div>
                             <div data-target="pressels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>Criador de Pressel</div>
+                            <div data-target="checkouts" class="nav-link">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1H2V6z" clip-rule="evenodd" /><path d="M2 12a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2z" /></svg>
+                                <span>Checkouts</span>
+                            </div>
+                            <div data-target="thankYouPages" class="nav-link">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                </svg>
+                                <span>Págs. de Obrigado</span>
+                            </div>
                             <div data-target="pixels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h10a3 3 0 013 3v5a.997.997 0 01-.293-.707zM5 4a1 1 0 00-1 1v.01L8 9.01l4-4.002V5a1 1 0 00-1-1H5z" clip-rule="evenodd" /></svg>Gerenciar Pixels</div>
                             <div data-target="transactions" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.158-.103.346-.196.567-.267v1.698a2.5 2.5 0 00-1.168-.217c-.165 0-.33.018-.488.054a1 1 0 01-.502 1.765l.986.328c.73.243 1.196.96 1.196 1.765 0 1.132-.98 1.99-2.206 1.99-1.225 0-2.205-.858-2.205-1.99 0-.962.63-1.698 1.447-1.938l.986-.329a1 1 0 01.502-1.765z" /><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.5 4.5 0 00-1.838.385l-.234-.14a1 1 0 00-1.18.157l-1 1.732a1 1 0 00.157 1.18l.234.14A4.5 4.5 0 005.5 8.5v.092l-1.07.356a1 1 0 00-.503 1.765l.986.329a2.5 2.5 0 001.09.243v.092a4.5 4.5 0 001.838-.385l.234.14a1 1 0 001.18-.157l1-1.732a1 1 0 00-.157-1.18l-.234-.14a4.5 4.5 0 001.03-2.062V5z" clip-rule="evenodd" /></svg>Transações</div>
-                            <div data-target="checkouts" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2L3 7v11a1 1 0 001 1h12a1 1 0 001-1V7l-7-5zM8 15a1 1 0 100-2 1 1 0 000 2zm4 0a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" /></svg>Checkouts</div>
-                            <div data-target="thank-you-pages" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>Páginas de Obrigado</div>
                             <div class="h-px bg-slate-700 my-2"></div>
                             <div data-target="settings" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" /></svg>API PIX</div>
                             <div data-target="integrations" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M6.414 11.586a2 2 0 10-2.828 2.828l3 3a2 2 0 002.828 0l1.5-1.5a2 2 0 10-2.828-2.828l-1.5 1.5z" clip-rule="evenodd" /></svg>Integrações</div>
@@ -779,6 +1274,272 @@
                                 <p class="text-gray-500 text-sm">Carregando ranking...</p>
                             </div>
                             <p id="user-rank-status" class="mt-4 text-center text-sm font-medium text-sky-400"></p>
+                        </div>
+                    </div>
+                </div>`;
+            },
+            checkouts() {
+                return `
+                <div class="animate-fade-in p-4 md:p-8"> <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                        <div>
+                            <h1 class="text-3xl font-bold text-white">Meus Checkouts</h1>
+                            <p class="text-slate-400">Gerencie suas páginas de oferta criadas.</p>
+                        </div>
+                        <button id="go-to-creator-btn" class="btn">Criar Novo Checkout</button>
+                    </div>
+                    <div class="card p-0 md:p-6 rounded-lg">
+                        <div id="checkouts-table-container" class="overflow-x-auto">
+                            <table class="table-custom w-full text-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Nome da Oferta</th>
+                                        <th>Data de Criação</th>
+                                        <th class="text-right">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="checkouts-table-body">
+                                    <tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando checkouts...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>`;
+            },
+            pageCreator() {
+                 return `
+                <div id="creator-screen" class="animate-fade-in flex flex-col h-full">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 flex-shrink-0 p-4 md:p-8 pb-0">
+                        <div>
+                            <h1 id="creator-title" class="text-3xl font-bold text-white">Criador de Ofertas</h1>
+                            <p class="text-slate-400 mt-1">Configure à esquerda e veja o resultado à direita em tempo real.</p>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button type="button" id="back-to-checkouts-btn" class="btn btn-secondary">Cancelar</button>
+                            <button type="submit" form="checkout-form" id="submit-btn" class="btn font-bold text-lg py-2 px-6">Criar Checkout</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 overflow-hidden p-4 md:p-8 pt-0">
+
+                        <form id="checkout-form" class="space-y-6 overflow-y-auto pr-4">
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">1. Conteúdo da Página</h2>
+                                <div class="space-y-4">
+                                    <div><label for="main_title" class="text-sm font-medium text-gray-400 mb-1 block">Título Principal</label><input id="main_title" type="text" class="form-input w-full p-2" value="Desbloqueie o Segredo Para um Corpo Definido" required></div>
+                                    <div><label for="subtitle" class="text-sm font-medium text-gray-400 mb-1 block">Subtítulo</label><input id="subtitle" type="text" class="form-input w-full p-2" value="Acesso exclusivo por tempo limitado à metodologia que já transformou 5.000+ vidas." required></div>
+                                    <div><label for="media_url" class="text-sm font-medium text-gray-400 mb-1 block">URL da Imagem/Vídeo (Opcional)</label><input id="media_url" type="url" class="form-input w-full p-2" placeholder="https://exemplo.com/imagem.png"></div>
+                                </div>
+                            </div>
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">2. Preços</h2>
+                                <div class="mb-4">
+                                    <label for="pricing-type-select" class="text-sm font-medium text-gray-400 mb-1 block">Modelo de Preço</label>
+                                    <select id="pricing-type-select" class="form-select w-full p-2">
+                                        <option value="fixed">Pacotes com Preço Fixo</option>
+                                        <option value="open" disabled>Valor Aberto (Em breve)</option>
+                                    </select>
+                                </div>
+                                <div id="fixed-pricing-container">
+                                    <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-medium">Pacotes de Preços</h3><button type="button" id="add-package-btn" class="btn btn-secondary text-sm py-1 px-3">+ Pacote</button></div>
+                                    <div id="packages-container" class="space-y-4"></div>
+                                </div>
+                                <div id="open-pricing-container" class="hidden space-y-4">
+                                </div>
+                            </div>
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">3. Order Bump (Opcional)</h2>
+                                <div class="flex items-center space-x-3 mb-4"><input id="enable_order_bump" type="checkbox" class="form-checkbox h-5 w-5 rounded"><label for="enable_order_bump" class="font-medium">Ativar Order Bump</label></div>
+                                <div id="order-bump-fields" class="hidden space-y-4">
+                                    <div><label for="order_bump_product_name" class="text-sm font-medium text-gray-400 mb-1 block">Nome do Produto</label><input id="order_bump_product_name" type="text" class="form-input w-full p-2" value="Ebook de Receitas Fit"></div>
+                                    <div><label for="order_bump_description" class="text-sm font-medium text-gray-400 mb-1 block">Descrição da Oferta</label><input id="order_bump_description" type="text" class="form-input w-full p-2" value="SIM! Quero adicionar o guia completo por apenas R$9,90!"></div>
+                                    <div><label for="order_bump_value" class="text-sm font-medium text-gray-400 mb-1 block">Valor (R$)</label><input id="order_bump_value" type="number" step="0.01" min="0" class="form-input w-full p-2" value="9.90"></div>
+                                </div>
+                            </div>
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">4. Elementos de Conversão</h2>
+                                <div class="space-y-6">
+                                    <div>
+                                        <div class="flex items-center space-x-3 mb-2"><input id="enable_countdown" type="checkbox" class="form-checkbox h-5 w-5 rounded"><label for="enable_countdown" class="font-medium">Ativar Contador Regressivo</label></div>
+                                        <div id="countdown-fields" class="hidden"><label for="countdown_minutes" class="text-sm font-medium text-gray-400 mb-1 block">Duração em Minutos</label><input id="countdown_minutes" type="number" min="1" class="form-input w-full max-w-xs p-2" value="15"></div>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-medium mb-2">Selo de Garantia</h3>
+                                        <div class="space-y-4">
+                                            <div><label for="guarantee_text" class="text-sm font-medium text-gray-400 mb-1 block">Texto da Garantia</label><textarea id="guarantee_text" class="form-textarea w-full p-2" rows="3">Sua satisfação garantida ou seu dinheiro de volta em 7 dias. Risco zero!</textarea></div>
+                                            <div><label for="guarantee_seal_url" class="text-sm font-medium text-gray-400 mb-1 block">URL da Imagem do Selo (Opcional)</label><input id="guarantee_seal_url" type="url" class="form-input w-full p-2" placeholder="https://exemplo.com/selo.png"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="card p-6 rounded-xl">
+                                <div class="flex justify-between items-center mb-4 border-b border-slate-700 pb-2"><h2 class="text-xl font-semibold">5. Prova Social</h2><button type="button" id="add-testimonial-btn" class="btn btn-secondary text-sm py-1 px-3">+ Depoimento</button></div>
+                                <div id="testimonials-container" class="space-y-4"></div>
+                            </div>
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">6. Rastreamento e Estilo</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label for="pixel_id" class="text-sm font-medium text-gray-400 mb-1 block">Pixel da Meta</label>
+                                        <select id="pixel_id" class="form-select w-full p-2" required>
+                                            <option value="">-- Selecione um Pixel --</option>
+                                            </select>
+                                    </div>
+                                    <div>
+                                        <label for="utmify_integration_id" class="text-sm font-medium text-gray-400 mb-1 block">Integração Utmify (Opcional)</label>
+                                        <select id="utmify_integration_id" class="form-select w-full p-2">
+                                            <option value="">-- Nenhuma --</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center gap-4">
+                                        <div><label for="background_color" class="text-sm font-medium text-gray-400 mb-1 block">Fundo</label><input id="background_color" type="color" value="#0f172a" class="form-input h-10 w-16 p-1"></div>
+                                        <div><label for="accent_color" class="text-sm font-medium text-gray-400 mb-1 block">Destaque</label><input id="accent_color" type="color" value="#38bdf8" class="form-input h-10 w-16 p-1"></div>
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label for="success_redirect_url" class="text-sm font-medium text-gray-400 mb-1 block">URL de Redirecionamento Pós-Pagamento (Opcional)</label>
+                                        <input id="success_redirect_url" type="url" class="form-input w-full p-2" placeholder="https://seu-site.com/obrigado">
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+
+                        <div class="relative h-full">
+                            <div class="sticky top-0">
+                                <div class="flex justify-center items-center gap-2 mb-4">
+                                    <div class="flex rounded-lg bg-slate-700 p-1">
+                                        <button id="desktop-view-btn" class="btn-view active px-3 py-1 text-xs rounded-md">Desktop</button>
+                                        <button id="mobile-view-btn" class="btn-view px-3 py-1 text-xs rounded-md">Mobile</button>
+                                    </div>
+                                </div>
+                                <div id="preview-wrapper" class="desktop mx-auto">
+                                    <div id="preview-content"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="result-screen" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center animate-fade-in z-50 p-4">
+                        <div class="card p-8 rounded-2xl w-full max-w-2xl mx-auto">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-2xl font-bold text-center text-green-400">Checkout Criado com Sucesso!</h2>
+                                <button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button>
+                            </div>
+                            <p class="text-slate-400 text-center mt-2 mb-6">Este é o link <span class="font-bold text-white">único e exclusivo</span> da sua nova página de oferta. Guarde-o e use-o em suas campanhas.</p>
+                            <div class="bg-slate-900 p-4 rounded-lg flex items-center gap-4">
+                                <input id="checkout-link-output" type="text" class="form-input flex-grow bg-transparent border-0" readonly>
+                                <button id="copy-link-btn" class="btn btn-secondary text-sm py-2 px-4 whitespace-nowrap">Copiar Link</button>
+                            </div>
+                            <div class="text-center mt-6">
+                                <button id="create-another-btn" class="btn text-sm py-2 px-5">Ver Meus Checkouts</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                `;
+            },
+
+            thankYouCreator() {
+                return `
+                <div id="creator-screen" class="animate-fade-in p-4 md:p-8">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                        <div>
+                            <h1 id="ty-creator-title" class="text-3xl font-bold text-white">Criador de Página de Obrigado</h1>
+                            <p class="text-slate-400 mt-1">Gere links para disparar eventos de compra no navegador.</p>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button type="button" id="back-to-ty-list-btn" class="btn btn-secondary">Cancelar</button>
+                            <button type="submit" form="thank-you-form" id="submit-btn" class="btn font-bold text-lg py-2 px-6">Gerar Página</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <form id="thank-you-form" class="space-y-6">
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">1. Configurações da Página</h2>
+                                <div class="space-y-4">
+                                    <input id="page_name" type="text" class="form-input w-full p-2" placeholder="Nome da Página (Ex: Compra Ebook X)" required>
+                                    <input id="main_title" type="text" class="form-input w-full p-2" placeholder="Título (Ex: Obrigado pela sua compra!)" value="Obrigado pela sua compra!" required>
+                                    <input id="subtitle" type="text" class="form-input w-full p-2" placeholder="Subtítulo (Ex: Clique abaixo para acessar)" value="Seu acesso foi enviado para seu email. Clique no botão abaixo para ir para a área de membros." required>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <input id="button_text" type="text" class="form-input w-full p-2" placeholder="Texto do Botão" value="Acessar Conteúdo" required>
+                                        <input id="redirect_url" type="url" class="form-input w-full p-2" placeholder="URL de Redirecionamento" required>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card p-6 rounded-xl">
+                                <h2 class="text-xl font-semibold mb-4 border-b border-slate-700 pb-2">2. Configurações de Conversão</h2>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label for="purchase_value" class="text-sm font-medium text-gray-400 mb-1 block">Valor da Compra (R$)</label>
+                                        <input id="purchase_value" type="number" step="0.01" min="0" class="form-input w-full p-2" placeholder="97.90" required>
+                                    </div>
+                                    <div>
+                                        <label for="pixel_id" class="text-sm font-medium text-gray-400 mb-1 block">ID do Pixel da Meta</label>
+                                        <input id="pixel_id" type="text" class="form-input w-full p-2" placeholder="Cole o ID do seu Pixel" required>
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label for="utmify_integration_id" class="text-sm font-medium text-gray-400 mb-1 block">Enviar evento para Utmify (Opcional)</label>
+                                        <select id="utmify_integration_id" class="form-select w-full p-2">
+                                            <option value="">Não enviar</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </form>
+
+                        <div class="sticky top-8">
+                            <h3 class="text-lg font-semibold text-center mb-4">Visualização</h3>
+                            <div id="preview-wrapper" class="w-full h-[500px]">
+                                <div id="preview-content"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="result-screen" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center animate-fade-in z-50 p-4">
+                        <div class="card p-8 rounded-2xl w-full max-w-2xl mx-auto">
+                             <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-2xl font-bold text-center text-green-400">Página Criada com Sucesso!</h2>
+                                <button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button>
+                            </div>
+                            <p class="text-slate-400 text-center mt-2 mb-6">Use este link como a URL de obrigado na sua plataforma de pagamento.</p>
+                            <div class="bg-slate-900 p-4 rounded-lg flex items-center gap-4">
+                                <input id="page-link-output" type="text" class="form-input flex-grow bg-transparent border-0" readonly>
+                                <button id="copy-link-btn" class="btn btn-secondary text-sm py-2 px-4 whitespace-nowrap">Copiar Link</button>
+                            </div>
+                            <div class="text-center mt-6">
+                                <button id="create-another-btn" class="btn text-sm py-2 px-5">Criar Outra Página</button>
+                                <button id="view-ty-pages-btn" class="btn btn-secondary text-sm py-2 px-5 ml-2">Ver Minhas Páginas</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                `;
+            },
+
+            thankYouPages() {
+                return `
+                <div class="animate-fade-in p-4 md:p-8">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                        <div>
+                            <h1 class="text-3xl font-bold text-white">Minhas Páginas de Obrigado</h1>
+                            <p class="text-slate-400">Gerencie suas páginas de obrigado criadas.</p>
+                        </div>
+                        <button id="go-to-thankyou-creator-btn" class="btn">Criar Nova Página</button>
+                    </div>
+                    <div class="card p-0 md:p-6 rounded-lg">
+                        <div id="thankyou-table-container" class="overflow-x-auto">
+                            <table class="table-custom w-full text-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Nome da Página</th>
+                                        <th>Data de Criação</th>
+                                        <th class="text-right">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="thankyou-table-body">
+                                    <tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando páginas...</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>`;
@@ -996,102 +1757,10 @@
                     </div>
                 </div>`;
             },
-            checkouts() {
-                return `
-                <div class="animate-fade-in">
-                    <div class="mb-6">
-                        <h1 class="text-3xl font-bold text-white">Gerenciar Checkouts</h1>
-                        <p class="text-slate-400">Crie e gerencie seus checkouts hospedados para páginas de oferta.</p>
-                    </div>
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <div class="card p-6 rounded-lg">
-                            <h2 class="text-xl font-bold mb-4 text-white">Criar Novo Checkout</h2>
-                            <form id="checkoutForm" class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Nome do Checkout</label>
-                                    <input name="name" placeholder="Ex: Oferta Black Friday" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Título Principal</label>
-                                    <input name="main_title" placeholder="Ex: Oferta Especial em {cidade}" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Subtítulo</label>
-                                    <input name="subtitle" placeholder="Ex: Aproveite esta oportunidade única" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">URL da Mídia (Opcional)</label>
-                                    <input name="media_url" type="url" placeholder="https://exemplo.com/imagem.jpg" class="form-input w-full p-2">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Pacotes de Preço</label>
-                                    <div id="packages-container" class="space-y-3">
-                                        <div class="package-item p-3 bg-slate-800/50 rounded-lg">
-                                            <input name="package_title[]" placeholder="Título do Pacote" class="form-input w-full p-2 mb-2" required>
-                                            <input name="package_description[]" placeholder="Descrição do Pacote" class="form-input w-full p-2 mb-2" required>
-                                            <input name="package_value_cents[]" type="number" placeholder="Valor em centavos (Ex: 1990)" class="form-input w-full p-2" required>
-                                        </div>
-                                    </div>
-                                    <button type="button" id="add-package-btn" class="btn btn-secondary text-sm py-1 px-3 mt-2">Adicionar Pacote</button>
-                                </div>
-                                <button type="submit" class="btn w-full p-3 font-bold rounded-md">Criar Checkout</button>
-                            </form>
-                        </div>
-                        <div class="card p-6 rounded-lg">
-                            <h2 class="text-xl font-bold mb-4 text-white">Checkouts Criados</h2>
-                            <div id="checkouts-list" class="space-y-3 max-h-96 overflow-y-auto">
-                                <p class="text-gray-500 text-sm">Carregando checkouts...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-            },
-            'thank-you-pages'() {
-                return `
-                <div class="animate-fade-in">
-                    <div class="mb-6">
-                        <h1 class="text-3xl font-bold text-white">Gerenciar Páginas de Obrigado</h1>
-                        <p class="text-slate-400">Crie e gerencie suas páginas de obrigado para após a compra.</p>
-                    </div>
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <div class="card p-6 rounded-lg">
-                            <h2 class="text-xl font-bold mb-4 text-white">Criar Nova Página de Obrigado</h2>
-                            <form id="thankYouPageForm" class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Nome da Página</label>
-                                    <input name="page_name" placeholder="Ex: Obrigado pela Compra!" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Valor da Compra (em centavos)</label>
-                                    <input name="purchase_value" type="number" placeholder="Ex: 1990" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">Pixel ID (Opcional)</label>
-                                    <input name="pixel_id" placeholder="ID do Pixel do Facebook" class="form-input w-full p-2">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">URL de Redirecionamento</label>
-                                    <input name="redirect_url" type="url" placeholder="https://seu-site.com" class="form-input w-full p-2" required>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-1">ID de Integração Utmify (Opcional)</label>
-                                    <input name="utmify_integration_id" placeholder="ID da integração Utmify" class="form-input w-full p-2">
-                                </div>
-                                <button type="submit" class="btn w-full p-3 font-bold rounded-md">Criar Página</button>
-                            </form>
-                        </div>
-                        <div class="card p-6 rounded-lg">
-                            <h2 class="text-xl font-bold mb-4 text-white">Páginas Criadas</h2>
-                            <div id="thank-you-pages-list" class="space-y-3 max-h-96 overflow-y-auto">
-                                <p class="text-gray-500 text-sm">Carregando páginas...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-            },
             modal(title, content) {
-                return `<div id="modal" class="modal active"><div class="card p-6 rounded-lg w-full max-w-md animate-fade-in"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-white">${title}</h2><button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>${content}</div></div>`;
-            }
+                return `<div id="modal" class="modal active"><div class="card p-6 rounded-lg w-full max-w-md animate-fade-in"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-white">${title}</h2><button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>${content}</div></div>`;
+            }
+
         },
 
         addAuthEventListeners() {
@@ -1124,137 +1793,228 @@
         },
 
         addDashboardEventListeners() {
-            document.addEventListener('click', async (e) => {
-                const sidebar = document.getElementById('sidebar');
-                const overlay = document.getElementById('sidebar-overlay');
 
-                if (sidebar && overlay) { 
-                    const isOpenBtn = e.target.closest('#open-sidebar-btn');
-                    const isCloseBtn = e.target.closest('#close-sidebar-btn');
-                    const isOverlay = e.target.id === 'sidebar-overlay';
-                    const isNavLink = e.target.closest('.nav-link');
+             const listenerTarget = document.body; // USE document.body instead
 
-                    if (isOpenBtn) {
-                        sidebar.classList.remove('-translate-x-full');
-                        overlay.classList.remove('hidden');
-                    } else if (isCloseBtn || isOverlay || (isNavLink && window.innerWidth < 768)) {
-                        sidebar.classList.add('-translate-x-full');
-                        overlay.classList.add('hidden');
-                    }
-                }
+            // Remove listener antigo para evitar duplicação
+            if (listenerTarget._clickListener) {
+                listenerTarget.removeEventListener('click', listenerTarget._clickListener); // Target document.body
+            }
+            if (listenerTarget._submitListener) {
+                listenerTarget.removeEventListener('submit', listenerTarget._submitListener); // Target document.body
+            }
 
-                if (e.target.id === 'logoutButton') this.logout();
-                if (e.target.closest('#closeModalBtn')) document.getElementById('modal-container').innerHTML = '';
-                
-                if (e.target.id === 'add-utmify-btn') {
-                    this.showAddUtmifyModal();
-                }
-                
-                if (e.target.id === 'add-package-btn') {
-                    this.addPackageField();
-                }
+            listenerTarget._clickListener = async (e) => { // Guarda a referência
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('sidebar-overlay');
 
-                const sidebarLink = e.target.closest('.nav-link[data-target]');
-                if (sidebarLink && sidebarLink.dataset.target) this.navigateTo(sidebarLink.dataset.target);
+                // Toggle Sidebar
+                if (sidebar && overlay) {
+                    const isOpenBtn = e.target.closest('#open-sidebar-btn');
+                    const isCloseBtn = e.target.closest('#close-sidebar-btn');
+                    const isOverlay = e.target.id === 'sidebar-overlay';
+                    const isNavLink = e.target.closest('.nav-link');
 
-                const copyBtn = e.target.closest('.copy-btn');
-                if (copyBtn) {
-                    const targetInput = document.querySelector(copyBtn.dataset.target);
-                    if(targetInput) {
-                        const textToCopy = targetInput.value || targetInput.textContent;
-                        navigator.clipboard.writeText(textToCopy).then(() => {
-                            const originalText = copyBtn.textContent;
-                            copyBtn.textContent = 'Copiado!';
-                            setTimeout(() => { copyBtn.textContent = originalText; }, 2000);
-                        });
-                    }
-                }
-                const toggleBtn = e.target.closest('.toggle-visibility-btn');
-                if (toggleBtn) {
-                    const targetInput = document.querySelector(toggleBtn.dataset.target);
-                    const isPassword = targetInput.type === 'password';
-                    targetInput.type = isPassword ? 'text' : 'password';
-                    toggleBtn.innerHTML = isPassword 
-                        ? `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781z" clip-rule="evenodd" /><path d="M12.454 16.697L9.75 13.992a2.5 2.5 0 01-3.482-3.482l-2.455-2.455a10.048 10.048 0 00-3.263 5.218C1.732 14.057 5.522 17 10 17a9.95 9.95 0 005.023-1.303l-2.57-2.57z" /></svg>` 
-                        : `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>`;
-                }
-                if (e.target.classList.contains('generate-pressel-code-btn')) {
-                    const presselId = e.target.dataset.id;
-                    const pressel = this.state.data.pressels.find(p => p.id == presselId);
-                    if (pressel) this.generatePresselCode(pressel);
-                }
-                if (e.target.classList.contains('test-pix-btn')) {
-                    const provider = e.target.dataset.provider;
-                    this.testIndividualPixConnection(provider, e.target);
-                }
-                if (e.target.id === 'testPriorityRouteBtn') {
-                    this.testPriorityRoute(e.target);
-                }
-                const tabButton = e.target.closest('.tab-button');
-                if (tabButton) {
-                    const tabName = tabButton.dataset.tab;
-                    document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-                    tabButton.classList.add('active');
-                    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                    document.getElementById(`tab-${tabName}`).classList.add('active');
-                }
-                if (e.target.classList.contains('delete-pixel-btn') || e.target.classList.contains('delete-bot-btn') || e.target.classList.contains('delete-pressel-btn') || e.target.classList.contains('delete-utmify-btn') || e.target.classList.contains('delete-checkout-btn') || e.target.classList.contains('delete-thank-you-page-btn')) {
-                    const id = e.target.dataset.id;
-                    let type = '', endpoint = '';
-                    if (e.target.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; }
-                    if (e.target.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; }
-                    if (e.target.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; }
-                    if (e.target.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; }
-                    if (e.target.classList.contains('delete-checkout-btn')) { type = 'checkouts'; endpoint = 'checkouts'; }
-                    if (e.target.classList.contains('delete-thank-you-page-btn')) { type = 'thankYouPages'; endpoint = 'thank-you-pages'; }
-                    
-                    if (confirm(`Tem certeza que deseja excluir este item?`)) {
-                        try {
-                            await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
-                            this.state.data[type] = this.state.data[type].filter(item => item.id != id);
-                            this.navigateTo(this.state.currentPage);
-                            this.showToast('Item excluído com sucesso!', 'success');
-                        } catch(err) {}
-                    }
-                }
-                const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
-                if (filterContainer) {
-                    const page = filterContainer.id.split('-')[0];
-                    const button = e.target.closest('button');
-                    if (button?.dataset.period) { this.handleFilterChange(page, button.dataset.period); }
-                    else if (button?.id === `apply-custom-date-filter-${page}`) {
-                        const startDate = document.getElementById(`${page}-start-date`).value;
-                        const endDate = document.getElementById(`${page}-end-date`).value;
-                        if (startDate && endDate) { this.handleFilterChange(page, 'custom', startDate, endDate); }
-                        else { this.showToast('Por favor, selecione data de início e fim.', 'error'); }
-                    } else if (button?.id === `clear-date-filter-${page}`) { this.handleFilterChange(page, 'all'); }
-                }
-            });
+                    if (isOpenBtn) {
+                        sidebar.classList.remove('-translate-x-full');
+                        overlay.classList.remove('hidden');
+                    } else if (isCloseBtn || isOverlay || (isNavLink && window.innerWidth < 768 && !isNavLink.closest('a[target="_blank"]'))) {
+                        sidebar.classList.add('-translate-x-full');
+                        overlay.classList.add('hidden');
+                    }
+                }
 
-            document.addEventListener('submit', async (e) => {
-                const form = e.target.closest('form');
-                if (!form || form.id === 'loginForm' || form.id === 'registerForm' || form.id === 'verificationForm') return;
-                e.preventDefault();
-                const button = form.querySelector('button[type="submit"]');
-                const originalButtonText = button.innerHTML;
-                button.innerHTML = 'Salvando...';
-                button.disabled = true;
-                let data = Object.fromEntries(new FormData(form).entries());
-                try {
-                    if (form.id === 'pixSettingsForm') {
-                        await this.apiRequest('/api/settings/pix', 'POST', data);
-                        App.state.data.settings = { ...App.state.data.settings, ...data };
-                        this.showToast('Configurações PIX salvas!', 'success');
-                    }
-                    else if (form.id === 'utmifySettingsForm') {
-                        const newIntegration = await this.apiRequest('/api/integrations/utmify', 'POST', data);
-                        if(newIntegration) {
-                            this.state.data.utmifyIntegrations.unshift(newIntegration);
-                            document.getElementById('modal-container').innerHTML = '';
-                            this.navigateTo('integrations');
-                            this.showToast('Conta Utmify adicionada!', 'success');
+                // Logout
+                if (e.target.id === 'logoutButton') this.logout();
+
+                // Close Modal (Atualizado)
+                const closeModalButton = e.target.closest('#closeModalBtn');
+                if (closeModalButton) {
+                    const modalContainer = document.getElementById('modal-container');
+                    const isInsideModalContainer = modalContainer && modalContainer.contains(closeModalButton);
+                    const creatorResultScreen = closeModalButton.closest('#result-screen'); // Check if it's inside a result screen
+
+                    // Lógica para fechar modais DENTRO de #modal-container
+                    if (isInsideModalContainer) {
+                        const pixModalActive = modalContainer.querySelector('#pix-code-textarea'); // Verifica se é o modal do PIX
+
+                        // Lógica específica para o Modal do PIX
+                        if (pixModalActive && this.state.pixPollingIntervalId) {
+                            clearInterval(this.state.pixPollingIntervalId);
+                            this.state.pixPollingIntervalId = null;
+                            console.log("Polling PIX interrompido pelo fechamento manual do modal (Botão X).");
                         }
+                        modalContainer.innerHTML = ''; // Limpa o container geral de modais
                     }
+                    // Lógica específica para o Modal de Resultado (Checkout/Página de Obrigado) QUE ESTÁ FORA do #modal-container
+                    else if (creatorResultScreen) {
+                        creatorResultScreen.classList.add('hidden'); // Esconde a tela de resultado
+                        // Decide para onde navegar:
+                        if (document.getElementById('thank-you-form')) { // Verifica pelo form, mais específico que o ID do container
+                           this.navigateTo('thankYouPages');
+                        } else if (document.getElementById('checkout-form')) {
+                            this.navigateTo('checkouts');
+                        }
+                     }
+                }
+
+
+                // Open Add Utmify Modal
+                if (e.target.id === 'add-utmify-btn') {
+                    this.showAddUtmifyModal();
+                }
+
+                // Navigate SPA
+                const sidebarLink = e.target.closest('.nav-link[data-target]');
+                if (sidebarLink && sidebarLink.dataset.target) {
+                    // Limpa estados de edição ao navegar pelo menu
+                    if (sidebarLink.dataset.target === 'checkouts') { this.state.editingCheckoutId = null; }
+                    if (sidebarLink.dataset.target === 'thankYouPages') { this.state.editingThankYouPageId = null; }
+                    if (sidebarLink.dataset.target === 'pageCreator') { this.state.editingCheckoutId = null; }
+                    if (sidebarLink.dataset.target === 'thankYouCreator') { this.state.editingThankYouPageId = null; }
+
+                    this.navigateTo(sidebarLink.dataset.target);
+                }
+
+                // Botões Criador de Checkout
+                if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
+                if (e.target.id === 'back-to-checkouts-btn') { this.state.editingCheckoutId = null; this.navigateTo('checkouts'); }
+                const editCheckoutBtn = e.target.closest('.edit-checkout-btn');
+                if (editCheckoutBtn) { this.state.editingCheckoutId = editCheckoutBtn.dataset.id; this.navigateTo('pageCreator'); }
+                const copyCheckoutLinkBtn = e.target.closest('.copy-checkout-link-btn');
+                if (copyCheckoutLinkBtn) {
+                    const link = `${window.location.origin}/oferta/${copyCheckoutLinkBtn.dataset.id}`;
+                    try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
+                }
+
+                // Botões Criador/Listagem Página de Obrigado
+                if (e.target.id === 'go-to-thankyou-creator-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouCreator'); }
+                if (e.target.id === 'back-to-ty-list-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouPages'); }
+                const editThankYouBtn = e.target.closest('.edit-thankyou-btn');
+                if (editThankYouBtn) { this.state.editingThankYouPageId = editThankYouBtn.dataset.id; this.navigateTo('thankYouCreator'); }
+                const copyThankYouLinkBtn = e.target.closest('.copy-thankyou-link-btn');
+                if (copyThankYouLinkBtn) {
+                     const link = `${window.location.origin}/obrigado/${copyThankYouLinkBtn.dataset.id}`;
+                     try { await navigator.clipboard.writeText(link); const o=copyThankYouLinkBtn.textContent; copyThankYouLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyThankYouLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
+                }
+                if (e.target.id === 'view-ty-pages-btn') { // Botão "Ver Minhas Páginas" no modal de sucesso TY
+                    const resultScreen = e.target.closest('#result-screen');
+                    if(resultScreen) resultScreen.classList.add('hidden');
+                    this.navigateTo('thankYouPages');
+                }
+                 if (e.target.id === 'create-another-btn') { // Botão "Criar Outra" ou "Ver Meus Checkouts" no modal de sucesso
+                     const resultScreen = e.target.closest('#result-screen');
+                     if(resultScreen) resultScreen.classList.add('hidden');
+
+                     if (document.getElementById('thankYouCreator')) {
+                         // Se estava no criador de TY, reinicia ele
+                         this.state.editingThankYouPageId = null;
+                         this.initThankYouCreatorPage();
+                     } else if (document.getElementById('pageCreator')) {
+                          // Se estava no criador de Checkout, vai para a lista
+                         this.navigateTo('checkouts');
+                     }
+                }
+
+
+                // Copy Buttons Genérico
+                const copyBtn = e.target.closest('.copy-btn');
+                if (copyBtn) {
+                     const targetSelector = copyBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const textToCopy=targetInput.value||targetInput.textContent; try { await navigator.clipboard.writeText(textToCopy); const o=copyBtn.textContent; copyBtn.textContent='Copiado!'; setTimeout(()=>{copyBtn.textContent=o},2000); } catch(err){ console.error('Falha:',err); this.showToast('Erro.', 'error'); } }
+                }
+
+                // Toggle Password Visibility
+                const toggleBtn = e.target.closest('.toggle-visibility-btn');
+                if (toggleBtn) {
+                    const targetSelector = toggleBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const isPassword=targetInput.type==='password'; targetInput.type=isPassword?'text':'password'; toggleBtn.innerHTML=isPassword ? `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781z" clip-rule="evenodd" /><path d="M12.454 16.697L9.75 13.992a2.5 2.5 0 01-3.482-3.482l-2.455-2.455a10.048 10.048 0 00-3.263 5.218C1.732 14.057 5.522 17 10 17a9.95 9.95 0 005.023-1.303l-2.57-2.57z" /></svg>` : `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>`; }
+                }
+
+                // Generate Pressel Code
+                if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
+
+                // Test PIX Buttons
+                if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
+                if (e.target.id === 'testPriorityRouteBtn') { this.testPriorityRoute(e.target); }
+
+                // Tab Buttons (Lógica Corrigida e Isolada)
+                const tabButton = e.target.closest('.tab-button');
+                if (tabButton && tabButton.dataset.tab) {
+                    const tabName = tabButton.dataset.tab;
+                    // Encontra o container pai mais próximo (o form ou uma div que contenha as abas)
+                    const container = tabButton.closest('form, div.hotbot-scope'); // Procura no form ou no escopo do hotbot
+                    if (container) {
+                        // Procura botões e conteúdos APENAS dentro deste container
+                        container.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+                        tabButton.classList.add('active');
+                        container.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                        const activeContent = container.querySelector(`#tab-${tabName}`);
+                        if (activeContent) activeContent.classList.add('active');
+                    }
+                }
+
+                // Delete Buttons (Atualizado)
+                const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
+                if (deleteBtn) {
+                     const id = deleteBtn.dataset.id;
+                    let type = '', endpoint = '', itemName = 'item', refreshFunction = () => this.navigateTo(this.state.currentPage); // Default refresh
+
+                    if (deleteBtn.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; itemName = 'pixel'; }
+                    if (deleteBtn.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; itemName = 'bot'; }
+                    if (deleteBtn.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; itemName = 'pressel'; }
+                    if (deleteBtn.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; itemName = 'integração Utmify'; }
+                    if (deleteBtn.classList.contains('delete-checkout-btn')) { /* type = 'checkouts' - não precisa atualizar state direto */ endpoint = 'checkouts'; itemName = 'checkout'; refreshFunction = this.fetchAndRenderCheckouts; } // Refresh específico
+                    if (deleteBtn.classList.contains('delete-thankyou-btn')) { /* type = 'thankYouPages' */; endpoint = 'thank-you-pages'; itemName = 'página de obrigado'; refreshFunction = this.fetchAndRenderThankYouPages; } // Refresh específico
+
+                    if (confirm(`Tem certeza que deseja excluir est${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'e'} ${itemName}?`)) {
+                        deleteBtn.textContent = 'Excluindo...'; deleteBtn.disabled = true; // Feedback visual
+                        try {
+                            await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
+                            // Remove do state apenas se não tiver refreshFunction específica
+                            if(type && Array.isArray(this.state.data[type]) && refreshFunction === this.navigateTo) {
+                                this.state.data[type] = this.state.data[type].filter(item => item.id != id);
+                            }
+                            await refreshFunction.call(this); // Chama a função de refresh (seja a genérica ou específica)
+                            this.showToast(`${itemName.charAt(0).toUpperCase() + itemName.slice(1)} excluíd${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'o'} com sucesso!`, 'success');
+                        } catch(err) {
+                             this.showToast(`Erro ao excluir ${itemName === 'integração Utmify' || itemName === 'página de obrigado' ? 'a' : 'o'} ${itemName}. Detalhes: ${err.message}`, 'error');
+                             // Restaura o botão em caso de erro
+                             deleteBtn.textContent = 'Excluir'; deleteBtn.disabled = false;
+                        }
+                    }
+                }
+
+                // Date Filters
+                const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
+                if (filterContainer) { const p=filterContainer.id.split('-')[0]; const b=e.target.closest('button'); if(b?.dataset.period){this.handleFilterChange(p,b.dataset.period);}else if(b?.id===`apply-custom-date-filter-${p}`){const sD=document.getElementById(`${p}-start-date`).value; const eD=document.getElementById(`${p}-end-date`).value; if(sD&&eD){this.handleFilterChange(p,'custom',sD,eD);}else{this.showToast('Selecione datas.','error');}}else if(b?.id===`clear-date-filter-${p}`){this.handleFilterChange(p,'all');} }
+            };
+            listenerTarget.addEventListener('click', listenerTarget._clickListener); // Attach to document.body
+
+            listenerTarget._submitListener = async (e) => {
+                const form = e.target.closest('form');
+                if (!form || ['loginForm', 'registerForm', 'checkout-form', 'thank-you-form'].includes(form.id)) return;
+
+                e.preventDefault();
+                const button = form.querySelector('button[type="submit"]');
+                const originalButtonText = button ? button.innerHTML : 'Salvar';
+                 if(button){ button.innerHTML = 'Salvando...'; button.disabled = true; }
+
+                let data = Object.fromEntries(new FormData(form).entries());
+                try {
+                    if (form.id === 'pixSettingsForm') {
+                        await this.apiRequest('/api/settings/pix', 'POST', data);
+                        App.state.data.settings = { ...App.state.data.settings, ...data };
+                        this.showToast('Configurações PIX salvas!', 'success');
+                         this.updateAllPixStatusIndicators();
+                    }
+                    else if (form.id === 'utmifySettingsForm') {
+                        const newIntegration = await this.apiRequest('/api/integrations/utmify', 'POST', data);
+                        if(newIntegration) {
+                            this.state.data.utmifyIntegrations.unshift(newIntegration);
+                             document.getElementById('modal-container').innerHTML = '';
+                            this.navigateTo('integrations');
+                            this.showToast('Conta Utmify adicionada!', 'success');
+                        }
+                    }
                     else if (form.id === 'pixelForm') {
                         const newPixel = await this.apiRequest('/api/pixels', 'POST', data);
                         if (newPixel) { this.state.data.pixels.unshift(newPixel); this.navigateTo('pixels'); }
@@ -1342,7 +2102,8 @@
                         button.disabled = false;
                     }
                 }
-            });
+            };
+            listenerTarget.addEventListener('submit', listenerTarget._submitListener); // <<<====== PUT IT RIGHT HERE
             
             document.addEventListener('change', e => {
                 if (e.target.id === 'value-type-selector') {
@@ -1380,21 +2141,70 @@
             });
         },
 
-        async apiRequest(endpoint, method = 'GET', body = null) {
+        // Adicionada sobrecarga para aceitar headers customizados
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
             try {
-                const headers = { 'Content-Type': 'application/json' };
+                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
                 if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+
+                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                                       endpoint.includes('/api/thank-you-pages/create') ||
+                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+
+                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+                    headers['x-api-key'] = this.state.data.settings.api_key;
+                }
+
                 const options = { method, headers };
                 if (body) { options.body = JSON.stringify(body); }
+
+
                 const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
-                if (response.status === 204) return null;
-                const data = await response.json();
-                if (!response.ok) throw data;
+
+                if (response.status === 204) return null; // No Content
+
+                const responseBody = await response.text(); // Lê como texto primeiro
+                let data;
+                try {
+                    data = JSON.parse(responseBody); // Tenta parsear como JSON
+                } catch (jsonError) {
+                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
+                    if (!response.ok) {
+                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
+                        throw new Error(responseBody || `Erro ${response.status}`);
+                    }
+                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
+                    data = responseBody;
+                }
+
+
+                if (!response.ok) {
+                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
+                    let errorMsg = 'Erro desconhecido da API.';
+                    if (data && data.message) {
+                       errorMsg = data.message;
+                    } else if (typeof data === 'string') {
+                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
+                    }
+                    throw new Error(errorMsg);
+                }
                 return data;
             } catch (error) {
-                this.showToast(error.message || 'Falha na conexão', 'error');
-                if (error.message && (error.message.includes('inválido') || error.message.includes('expirado'))) this.logout();
-                throw error;
+                 if (error instanceof Error) {
+                    this.showToast(error.message, 'error');
+                     // Verifica se o erro é de autenticação e desloga, exceto em rotas específicas
+                    const isAuthError = error.message.includes('inválido') || error.message.includes('expirado') || error.message.includes('API Key inválida');
+                    const shouldLogout = isAuthError && !endpoint.includes('/sellers/login') && !endpoint.startsWith('/oferta/') && !endpoint.startsWith('/obrigado/');
+                    if (shouldLogout) {
+                       this.logout();
+                    }
+                 } else {
+                    console.error(`Network Error on ${method} ${endpoint}:`, error);
+                    this.showToast('Falha na conexão com o servidor.', 'error');
+                 }
+                 throw error; // Re-throw para quem chamou poder tratar
             }
         },
         
@@ -1426,8 +2236,17 @@
 
         logout() {
             this.state.token = null;
+            this.state.editingCheckoutId = null;
+            this.state.editingThankYouPageId = null;
+            this.state.pixPollingIntervalId = null; // Limpa o ID do polling
             localStorage.removeItem('hottrack_token');
-            this.init();
+            // Limpa cache de status de PIX (opcional)
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
+            providers.forEach(p => {
+                localStorage.removeItem(`pix_status_${p}`);
+                localStorage.removeItem(`pix_timestamp_${p}`);
+            });
+            window.location.reload();
         },
 
         showAddUtmifyModal() {
@@ -1476,53 +2295,66 @@
         },
         
         async navigateTo(page) {
+    // Lógica de limpeza de estado (do Arquivo 2)
+    if (this.state.currentPage === 'pageCreator' && page !== 'pageCreator') {
+        this.state.editingCheckoutId = null;
+    }
+    if (this.state.currentPage === 'thankYouCreator' && page !== 'thankYouCreator') {
+        this.state.editingThankYouPageId = null;
+    }
+
     this.state.currentPage = page;
     const contentContainer = document.getElementById('content');
-    if (!contentContainer || !this.templates[page]) return;
+    if (!contentContainer) { console.error("Container #content não encontrado."); return; }
+    if (!this.templates[page]) { console.error(`Template para a página "${page}" não encontrado.`); contentContainer.innerHTML = `<p class="text-red-500 p-8">Erro: Template da página "${page}" não definido.</p>`; return; }
 
     contentContainer.innerHTML = `<div class="flex items-center justify-center h-full"><svg class="animate-spin h-6 w-6 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>`;
 
-    setTimeout(() => {
-        contentContainer.innerHTML = this.templates[page]();
-        document.querySelectorAll('.nav-link[data-target]').forEach(item => item.classList.toggle('active', item.dataset.target === page));
+    // Lógica de ajuste de layout (do Arquivo 2)
+    if (page === 'pageCreator' || page === 'thankYouCreator') {
+        contentContainer.classList.remove('overflow-y-auto', 'p-4', 'md:p-8');
+        contentContainer.classList.add('overflow-hidden');
+    } else {
+        contentContainer.classList.add('overflow-y-auto', 'p-4', 'md:p-8');
+        contentContainer.classList.remove('overflow-hidden');
+    }
 
-        // Inicialização específica para o HotBot
-        if (page === 'hotbot') {
-            setTimeout(() => {
+    // Lógica de limpeza do React/HotBot (do Arquivo 1)
+    if (page !== 'hotbot' && window.hotBotRoot) {
+        window.hotBotRoot.unmount();
+        window.hotBotRoot = null;
+    }
+
+    setTimeout(async () => {
+        try {
+            contentContainer.innerHTML = this.templates[page](); // Renderiza o template HTML
+            document.querySelectorAll('.nav-link[data-target]').forEach(item => item.classList.toggle('active', item.dataset.target === page));
+
+            // Lógica de inicialização de TODAS as páginas (Mesclado)
+            if (page === 'hotbot') {
+                // Lógica de inicialização do HotBot (do Arquivo 1)
                 const container = document.getElementById('hotbot-container');
                 if (container) {
-                    // Limpa qualquer instância anterior
-                    if (window.hotBotRoot) {
-                        window.hotBotRoot.unmount();
-                    }
-                    // Inicializa o HotBot
+                    if (window.hotBotRoot) window.hotBotRoot.unmount();
                     launchHotBot(container);
                 }
-            }, 100);
-        } else {
-            // Para outras páginas, remove o HotBot se estiver montado
-            if (window.hotBotRoot) {
-                window.hotBotRoot.unmount();
-                window.hotBotRoot = null;
-            }
-        }
+            } 
+            // Lógica de inicialização das outras páginas (do Arquivo 2)
+            else if (page === 'dashboard') { this.handleFilterChange(page, this.state.dateFilter.period || 'last7days'); }
+            else if (page === 'transactions') { await this.fetchTransactions(); this.handleFilterChange(page, this.state.dateFilter.period || 'all'); } 
+            else if (page === 'settings') { this.updateAllPixStatusIndicators(); }
+            else if (page === 'bots') { this.updateAllBotStatusIndicators(); }
+            else if (page === 'pageCreator') { await this.initCreatorPage(); }
+            else if (page === 'thankYouCreator') { await this.initThankYouCreatorPage(); }
+            else if (page === 'thankYouPages') { await this.fetchAndRenderThankYouPages(); }
+            else if (page === 'checkouts') { await this.fetchAndRenderCheckouts(); }
 
-        // Restante do código para outras páginas...
-        if (page === 'dashboard') {
-            this.handleFilterChange(page, this.state.dateFilter.period || 'last7days');
-        } else if (page === 'transactions') {
-            this.handleFilterChange(page, this.state.dateFilter.period || 'all');
-        } else if (page === 'settings') {
-            this.updateAllPixStatusIndicators();
-                } else if (page === 'bots') {
-                    this.updateAllBotStatusIndicators();
-                } else if (page === 'checkouts') {
-                    this.loadCheckouts();
-                } else if (page === 'thank-you-pages') {
-                    this.loadThankYouPages();
-                }
-            }, 50);
-        },
+        } catch (renderError) {
+            console.error(`Erro ao renderizar ou inicializar a página "${page}":`, renderError);
+            contentContainer.innerHTML = `<p class="text-center text-red-400 p-8">Erro ao carregar a seção ${page}. Verifique o console.</p>`;
+        }
+    }, 10);
+},
         
         async fetchDashboardMetrics() {
             try {
@@ -1612,36 +2444,39 @@
                 console.error("Erro ao carregar conquistas e ranking:", e);
             }
         },
-        
+
+        async fetchTransactions() {
+            const tableBody = document.getElementById('transactions-table-body');
+            if (!tableBody) { console.warn("Transactions table body not found."); return; }
+            tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 py-8">Carregando transações...</td></tr>';
+
+            try {
+                const { startDate, endDate } = this.state.dateFilter;
+                const query = new URLSearchParams({ startDate: startDate || '', endDate: endDate || '' }).toString();
+                const transactions = await this.apiRequest(`/api/transactions?${query}`);
+                this.state.data.transactions = transactions;
+                this.renderTransactionsTable();
+            } catch (e) {
+                console.error("Erro ao buscar transações:", e);
+                if (tableBody) tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-red-400 py-8">Erro ao carregar transações.</td></tr>';
+            }
+        },
+
         renderTransactionsTable() {
             const tableBody = document.getElementById('transactions-table-body');
             if (!tableBody) return;
-
-            const { period, startDate, endDate } = this.state.dateFilter;
-            let filteredTransactions = this.state.data.transactions;
-
-            if (period !== 'all' && startDate && endDate) {
-                const start = new Date(startDate).getTime();
-                const end = new Date(endDate).getTime();
-                
-                filteredTransactions = this.state.data.transactions.filter(t => {
-                    const transactionDate = new Date(t.created_at).getTime();
-                    return transactionDate >= start && transactionDate <= end;
-                });
-            }
-
-            if (filteredTransactions.length > 0) {
-                tableBody.innerHTML = filteredTransactions.map(t => {
+            const transactionsToRender = this.state.data.transactions || [];
+            if (transactionsToRender.length > 0) {
+                tableBody.innerHTML = transactionsToRender.map(t => {
                     const statusClass = t.status === 'paid' ? 'text-green-400 bg-green-500/10' : 'text-yellow-400 bg-yellow-500/10';
                     const statusText = t.status === 'paid' ? 'Pago' : 'Pendente';
                     const formattedValue = this.formatNumber(t.pix_value, true);
-                    const formattedDate = new Date(t.created_at).toLocaleString('pt-BR');
-                    const sourceName = t.transaction_type === 'disparo' 
-                        ? (t.campaign_name ? `Disparo: ${t.campaign_name}` : 'Disparo')
-                        : (t.source_name === 'Checkout' || !t.source_name) ? 'Checkout' : t.source_name;
+                    const formattedDate = t.created_at ? new Date(t.created_at).toLocaleString('pt-BR') : 'Data inválida';
+                    const sourceName = t.source_name || 'Desconhecida';
+                    const providerName = t.provider ? t.provider.toUpperCase() : 'N/A';
                     return `<tr class="hover:bg-slate-800/50">
                                 <td><span class="px-2 py-1 rounded-full text-xs font-medium ${statusClass}">${statusText}</span></td>
-                                <td>${formattedValue}</td><td>${sourceName}</td><td>${t.provider.toUpperCase()}</td><td>${formattedDate}</td>
+                                <td>${formattedValue}</td><td>${sourceName}</td><td>${providerName}</td><td>${formattedDate}</td>
                             </tr>`;
                 }).join('');
             } else {
@@ -1703,7 +2538,7 @@
             }
 
             if (page === 'dashboard') this.fetchDashboardMetrics();
-            else if (page === 'transactions') this.renderTransactionsTable();
+            else if (page === 'transactions') this.fetchTransactions();
         },
         
         renderRevenueChart() {
@@ -1867,81 +2702,211 @@
 
         async renderCheckoutPage(checkoutId) {
             const appContainer = document.getElementById('app');
-            appContainer.innerHTML = '<p class="text-center text-lg mt-20">Carregando oferta...</p>';
+            appContainer.innerHTML = `<div id="app-loader" style="height: 100vh; display: flex; align-items: center; justify-content: center;"><svg class="animate-spin h-8 w-8 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-3">Carregando...</span></div>`;
 
             try {
-                const checkoutData = await this.apiRequest(`/api/oferta/${checkoutId}`);
-                const { config } = checkoutData;
+                const { config } = await this.apiRequest(`/api/oferta/${checkoutId}`);
+                if (!config || !config.pricing || !config.content) {
+                     throw new Error("Configuração da oferta inválida recebida da API.");
+                }
 
-                const packagesHTML = config.pricing.packages.map((pkg, index) => `
-                    <div data-package-index="${index}" class="package-item p-4 rounded-lg cursor-pointer hover:border-sky-400 border border-slate-700 bg-slate-800/50 transition-all">
-                        <h3 class="font-bold text-lg text-white pointer-events-none">${pkg.title}</h3>
-                        <p class="text-sm text-gray-400 pointer-events-none">${pkg.description}</p>
-                        <p class="text-2xl font-bold text-sky-400 mt-2 pointer-events-none">R$ ${(pkg.value_cents / 100).toFixed(2).replace('.', ',')}</p>
-                    </div>
-                `).join('');
+                const formatCurrency = (cents) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+                const countdownHTML = config.conversion_elements.countdown.enabled
+                    ? `<div style="background-color: var(--checkout-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
+                           <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
+                           <p id="countdown-timer" style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">--:--</p>
+                       </div>`
+                    : '';
+
+                const mediaHTML = config.content.media_url
+                    ? `<img src="${config.content.media_url}" alt="Preview da Oferta" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
+                    : '';
+
+                let pricingHTML = '';
+                if (config.pricing.type === 'fixed') {
+                    pricingHTML = `
+                        <div style="margin-top: 1.5rem;">
+                            <h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--checkout-accent, #38bdf8);">Escolha seu pacote:</h3>
+                            ${config.pricing.packages.map((pkg, index) => `
+                                <div style="border: 2px solid ${index === 0 ? 'var(--checkout-accent, #38bdf8)' : '#e5e7eb'}; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; cursor: pointer; transition: all 0.2s;" class="package-option" data-index="${index}">
+                                    <input type="radio" name="package" value="${index}" ${index === 0 ? 'checked' : ''} style="margin-right: 0.75rem; accent-color: var(--checkout-accent, #38bdf8);">
+                                    <div style="display: inline-block; width: calc(100% - 2rem);">
+                                        <h4 style="font-weight: 700; margin-bottom: 0.25rem; color: ${index === 0 ? 'var(--checkout-accent, #38bdf8)' : '#374151'};">${pkg.title}</h4>
+                                        <p style="font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem;">${pkg.description}</p>
+                                        <span style="font-weight: 700; font-size: 1.2rem; color: var(--checkout-accent, #38bdf8);">${formatCurrency(pkg.value_cents)}</span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    pricingHTML = `
+                        <div style="margin-top: 1.5rem;">
+                            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: var(--checkout-accent, #38bdf8);">${config.pricing.label || 'Escolha o valor'}</label>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; background-color: white; border: 2px solid var(--checkout-accent, #38bdf8); border-radius: 0.5rem; padding: 0.75rem;">
+                                <span style="color: #6b7280;">R$</span>
+                                <input type="number" id="open-value-input" style="flex: 1; border: none; outline: none; font-size: 1.1rem;" placeholder="${(config.pricing.suggested_value_cents / 100).toFixed(2).replace('.', ',')}" value="${(config.pricing.suggested_value_cents / 100).toFixed(2).replace('.', ',')}">
+                            </div>
+                            <p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.5rem;">Mínimo: ${formatCurrency(config.pricing.minimum_value_cents)}</p>
+                        </div>
+                    `;
+                }
+
+                const orderBumpHTML = config.order_bump.enabled && config.order_bump.product_name
+                    ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
+                           <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                               <input type="checkbox" id="order-bump-checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;">
+                               <div>
+                                   <h4 style="font-weight: 700; color: #ca8a04;">${config.order_bump.product_name}</h4>
+                                   <p style="font-size: 0.9rem; color: #4b5563;">${config.order_bump.description}</p>
+                               </div>
+                           </div>
+                       </div>`
+                    : '';
+
+                const guaranteeHTML = config.conversion_elements.guarantee.text
+                    ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
+                           ${config.conversion_elements.guarantee.seal_url ? `<img src="${config.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px;">` : ''}
+                           <div>
+                               <h4 style="font-weight: 700; color: #374151;">Garantia</h4>
+                               <p style="color: #6b7280;">${config.conversion_elements.guarantee.text}</p>
+                           </div>
+                       </div>`
+                    : '';
+
+                const testimonialsHTML = config.testimonials && config.testimonials.length > 0
+                    ? `<div style="margin-top: 2rem;">
+                           <h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--checkout-accent, #38bdf8);">Depoimentos</h3>
+                           ${config.testimonials.map(testimonial => `
+                               <div style="background-color: #f9fafb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
+                                   <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                                       ${testimonial.photo_url ? `<img src="${testimonial.photo_url}" alt="${testimonial.name}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover;">` : ''}
+                                       <div>
+                                           <h4 style="font-weight: 700; color: #374151;">${testimonial.name}</h4>
+                                           <p style="color: #6b7280; font-size: 0.9rem;">${testimonial.text}</p>
+                                       </div>
+                                   </div>
+                               </div>
+                           `).join('')}
+                       </div>`
+                    : '';
 
                 const checkoutHTML = `
-                    <div class="min-h-screen flex items-center justify-center p-4 animate-fade-in">
-                        <div class="card w-full max-w-md p-6 md:p-8 rounded-2xl">
-                            ${config.content.media_url ? `<img src="${config.content.media_url}" alt="Preview" class="w-full h-48 object-cover rounded-lg mb-6">` : ''}
-                            <h1 class="text-2xl font-bold text-center text-white">${config.content.main_title.replace('{cidade}', 'sua Cidade')}</h1>
-                            <p class="text-gray-400 text-center mb-6">${config.content.subtitle}</p>
-                            <div id="packages-list" class="space-y-4">
-                                ${packagesHTML}
-                            </div>
-                            <button id="pay-button" class="btn w-full mt-6 py-3 font-bold" disabled>Selecione um pacote</button>
+                    <div style="--checkout-bg: ${config.style.background_color}; --checkout-accent: ${config.style.accent_color}; background-color: var(--checkout-bg); color: ${config.style.background_color === '#ffffff' ? '#1f2937' : '#f1f5f9'}; min-height: 100vh; font-family: 'Inter', sans-serif;">
+                        ${countdownHTML}
+                        <div style="padding: 1.5rem 2rem;">
+                            <h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${config.style.background_color === '#ffffff' ? '#111827' : '#f1f5f9'};">${config.content.main_title}</h1>
+                            <p style="text-align: center; color: ${config.style.background_color === '#ffffff' ? '#6b7280' : '#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${config.content.subtitle}</p>
+                            ${mediaHTML}
+                            ${pricingHTML}
+                            ${orderBumpHTML}
+                            <button id="pay-button" style="width: 100%; background-color: var(--checkout-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: pointer; transition: background-color 0.2s ease;" disabled>
+                                Comprar
+                            </button>
+                            ${guaranteeHTML}
+                            ${testimonialsHTML}
                         </div>
                     </div>
                 `;
-                
+
                 appContainer.innerHTML = checkoutHTML;
 
-                let selectedPackage = null;
-                const packagesList = document.getElementById('packages-list');
+                // Event listeners
+                const packageOptions = document.querySelectorAll('.package-option');
                 const payButton = document.getElementById('pay-button');
+                const openValueInput = document.getElementById('open-value-input');
+                const orderBumpCheckbox = document.getElementById('order-bump-checkbox');
 
-                packagesList.addEventListener('click', (e) => {
-                    const clickedPackage = e.target.closest('.package-item');
-                    if (!clickedPackage) return;
+                let selectedPackage = null;
 
-                    packagesList.querySelectorAll('.package-item').forEach(p => {
-                        p.classList.remove('border-sky-400', 'ring-2', 'ring-sky-400');
+                function updatePayButtonText() {
+                    if (config.pricing.type === 'fixed') {
+                        payButton.textContent = selectedPackage ? `Comprar por ${formatCurrency(selectedPackage.value_cents)}` : 'Selecione um pacote';
+                        payButton.disabled = !selectedPackage;
+                    } else {
+                        const value = parseFloat(openValueInput?.value) || 0;
+                        const minValue = config.pricing.minimum_value_cents / 100;
+                        payButton.textContent = value >= minValue ? `Comprar por ${formatCurrency(value * 100)}` : `Valor mínimo: ${formatCurrency(config.pricing.minimum_value_cents)}`;
+                        payButton.disabled = value < minValue;
+                    }
+                }
+
+                if (config.pricing.type === 'fixed') {
+                    packageOptions.forEach((option, index) => {
+                        option.addEventListener('click', () => {
+                            packageOptions.forEach(opt => opt.style.borderColor = '#e5e7eb');
+                            option.style.borderColor = 'var(--checkout-accent, #38bdf8)';
+                            option.querySelector('input[type="radio"]').checked = true;
+                            selectedPackage = config.pricing.packages[index];
+                            updatePayButtonText();
+                        });
                     });
-                    clickedPackage.classList.add('border-sky-400', 'ring-2', 'ring-sky-400');
-                    
-                    const packageIndex = clickedPackage.dataset.packageIndex;
-                    selectedPackage = config.pricing.packages[packageIndex];
-                    
-                    payButton.textContent = `Pagar Agora (${(selectedPackage.value_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
-                    payButton.disabled = false;
-                });
+                } else {
+                    openValueInput?.addEventListener('input', updatePayButtonText);
+                }
 
                 payButton.addEventListener('click', async () => {
-                    if (!selectedPackage) {
-                        alert('Por favor, selecione um pacote.');
-                        return;
-                    }
+                    if (payButton.disabled) return;
 
                     payButton.textContent = 'Gerando PIX...';
                     payButton.disabled = true;
 
                     try {
+                        let value = 0;
+                        if (config.pricing.type === 'fixed') {
+                            value = selectedPackage.value_cents;
+                        } else {
+                            value = Math.round((parseFloat(openValueInput?.value) || 0) * 100);
+                        }
+
+                        // Adiciona order bump se selecionado
+                        if (orderBumpCheckbox?.checked) {
+                            value += config.order_bump.value_cents;
+                        }
+
                         const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
-                            checkoutId: checkoutId,
-                            value_cents: selectedPackage.value_cents
+                            checkoutId,
+                            value_cents: value,
+                            order_bump: orderBumpCheckbox?.checked || false
                         });
+
                         this.showPixModal(pixData);
                     } catch (error) {
                         alert('Erro ao gerar PIX. Tente novamente.');
                     } finally {
-                        payButton.textContent = `Pagar Agora (${(selectedPackage.value_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
-                        payButton.disabled = false;
+                        updatePayButtonText();
+                        payButton.disabled = !selectedPackage;
                     }
                 });
 
+                if (config.conversion_elements.countdown.enabled) {
+                    const timerEl = document.getElementById('countdown-timer');
+                    if (timerEl) {
+                        let duration = (config.conversion_elements.countdown.minutes || 15) * 60;
+                        const interval = setInterval(() => {
+                            const minutes = Math.floor(duration / 60).toString().padStart(2, '0');
+                            const seconds = (duration % 60).toString().padStart(2, '0');
+                            timerEl.textContent = `${minutes}:${seconds}`;
+                            duration--;
+                            if (duration < 0) {
+                                clearInterval(interval);
+                                timerEl.textContent = 'OFERTA EXPIRADA';
+                            }
+                        }, 1000);
+                    }
+                }
+
             } catch (error) {
-                appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Oferta não encontrada ou inválida.</p>`;
+                console.error('Erro ao carregar checkout:', error);
+                appContainer.innerHTML = `
+                    <div style="height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center;">
+                        <div>
+                            <h1 style="color: #ef4444; margin-bottom: 1rem;">Erro ao carregar oferta</h1>
+                            <p style="color: #6b7280;">A oferta solicitada não foi encontrada ou está indisponível.</p>
+                        </div>
+                    </div>
+                `;
             }
         },
 
@@ -2057,6 +3022,61 @@
                 document.getElementById('checkouts-list').innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar checkouts.</p>';
             }
         },
+
+        async fetchAndRenderCheckouts() {
+            const tableBody = document.getElementById('checkouts-table-body');
+            if (!tableBody) return;
+            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            try {
+                const checkouts = await this.apiRequest('/api/checkouts');
+                this.state.data.checkouts = checkouts || []; // Garante que seja um array
+                if (checkouts && checkouts.length > 0) {
+                    tableBody.innerHTML = checkouts.map(c => `
+                        <tr class="hover:bg-slate-800/50">
+                            <td class="font-medium">${c.name || 'Checkout Sem Título'}</td>
+                            <td>${new Date(c.created_at).toLocaleString('pt-BR')}</td>
+                            <td class="text-right space-x-2">
+                                <button class="btn-secondary btn-sm py-1 px-2 copy-checkout-link-btn" data-id="${c.id}">Copiar Link</button>
+                                <button class="btn-secondary btn-sm py-1 px-2 edit-checkout-btn" data-id="${c.id}">Editar</button>
+                                <button class="btn-red btn-sm py-1 px-2 delete-checkout-btn" data-id="${c.id}">Excluir</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhum checkout criado ainda.</td></tr>';
+                }
+            } catch (e) {
+                console.error("Erro ao buscar checkouts:", e);
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar checkouts.</td></tr>';
+            }
+        },
+
+        async fetchAndRenderThankYouPages() {
+            const tableBody = document.getElementById('thankyou-table-body');
+            if (!tableBody) return;
+            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            try {
+                const pages = await this.apiRequest('/api/thank-you-pages');
+                if (pages && pages.length > 0) {
+                    tableBody.innerHTML = pages.map(p => `
+                        <tr class="hover:bg-slate-800/50">
+                            <td class="font-medium">${p.name || 'Página Sem Nome'}</td>
+                            <td>${new Date(p.created_at).toLocaleString('pt-BR')}</td>
+                            <td class="text-right space-x-2">
+                                <button class="btn-secondary btn-sm py-1 px-2 copy-thankyou-link-btn" data-id="${p.id}">Copiar Link</button>
+                                <button class="btn-secondary btn-sm py-1 px-2 edit-thankyou-btn" data-id="${p.id}">Editar</button>
+                                <button class="btn-red btn-sm py-1 px-2 delete-thankyou-btn" data-id="${p.id}">Excluir</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhuma página de obrigado criada ainda.</td></tr>';
+                }
+            } catch (e) {
+                console.error("Erro ao buscar páginas de obrigado:", e);
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar páginas.</td></tr>';
+            }
+        },
         
         renderCheckoutsList() {
             const container = document.getElementById('checkouts-list');
@@ -2130,6 +3150,410 @@
             `;
             
             container.insertAdjacentHTML('beforeend', packageHTML);
+        },
+
+        // *** FUNÇÃO initCreatorPage ATUALIZADA para incluir success_redirect_url ***
+        async initCreatorPage() {
+            const FRONTEND_URL = window.location.origin;
+            const contentEl = document.getElementById('content');
+            if (!contentEl) { console.error("Container #content não encontrado."); return; }
+
+            // Verifica se os elementos existem antes de acessá-los
+            const creatorTitle = contentEl.querySelector('#creator-title');
+            const submitBtn = contentEl.querySelector('#submit-btn');
+            const checkoutForm = contentEl.querySelector('#checkout-form');
+            const packagesContainer = contentEl.querySelector('#packages-container');
+            const testimonialsContainer = contentEl.querySelector('#testimonials-container');
+            const pixelSelect = contentEl.querySelector('#pixel_id');
+            const utmifySelect = contentEl.querySelector('#utmify_integration_id');
+            const resultScreen = contentEl.querySelector('#result-screen');
+            const checkoutLinkOutput = contentEl.querySelector('#checkout-link-output');
+            const successRedirectUrlInput = contentEl.querySelector('#success_redirect_url'); // Campo novo
+
+            if (!creatorTitle || !submitBtn || !checkoutForm || !packagesContainer || !testimonialsContainer || !pixelSelect || !utmifySelect || !resultScreen || !checkoutLinkOutput || !successRedirectUrlInput) {
+                console.error("Um ou mais elementos do Criador de Ofertas não foram encontrados no DOM.");
+                this.showToast("Erro ao carregar o criador de ofertas.", "error");
+                return;
+            }
+
+            packagesContainer.innerHTML = '';
+            testimonialsContainer.innerHTML = '';
+
+            pixelSelect.innerHTML = '<option value="">-- Selecione um Pixel --</option>' + App.state.data.pixels.map(p => `<option value="${p.pixel_id}">${p.account_name} (${p.pixel_id})</option>`).join('');
+            utmifySelect.innerHTML = '<option value="">-- Nenhuma --</option>' + App.state.data.utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
+
+            let packageCount = 0;
+            function addPackage(title = 'Acesso Completo', desc = 'Todo o conteúdo liberado.', val = '29.90') {
+                packageCount++; const el = document.createElement('div'); el.id = `package-${packageCount}`; el.className = 'grid grid-cols-1 md:grid-cols-7 gap-4 border border-slate-700 p-4 rounded-lg';
+                el.innerHTML = `<div class="md:col-span-2"><label class="text-xs text-gray-400 mb-1 block">Nome</label><input type="text" class="form-input w-full p-2 package-title" value="${title}" required></div> <div class="md:col-span-3"><label class="text-xs text-gray-400 mb-1 block">Descrição</label><input type="text" class="form-input w-full p-2 package-description" value="${desc}" required></div> <div class="md:col-span-1"><label class="text-xs text-gray-400 mb-1 block">Valor (R$)</label><input type="number" step="0.01" min="0" class="form-input w-full p-2 package-value" value="${val}" required></div> <div class="flex items-end"><button type="button" class="btn btn-danger w-full h-10 remove-package-btn" data-id="${packageCount}">X</button></div>`;
+                packagesContainer.appendChild(el);
+            }
+            let testimonialCount = 0;
+            function addTestimonial(name = '', photo_url = '', text = '') {
+                testimonialCount++; const el = document.createElement('div'); el.id = `testimonial-${testimonialCount}`; el.className = 'border border-slate-700 p-4 rounded-lg space-y-3';
+                el.innerHTML = `<div class="flex justify-end"><button type="button" class="btn btn-danger text-xs py-1 px-2 remove-testimonial-btn" data-id="${testimonialCount}">Remover</button></div> <div class="grid grid-cols-1 md:grid-cols-2 gap-4"> <div><label class="text-xs text-gray-400 mb-1 block">Nome</label><input type="text" class="form-input w-full p-2 testimonial-name" value="${name}" placeholder="Ex: João da Silva"></div> <div><label class="text-xs text-gray-400 mb-1 block">URL da Foto (Opcional)</label><input type="url" class="form-input w-full p-2 testimonial-photo" value="${photo_url}" placeholder="https://..."></div> </div> <div><label class="text-xs text-gray-400 mb-1 block">Texto</label><textarea class="form-textarea w-full p-2 testimonial-text" rows="3" placeholder="Excelente produto...">${text}</textarea></div>`;
+                testimonialsContainer.appendChild(el);
+            }
+
+            function populateCreatorForm(config) {
+                const get = (selector) => contentEl.querySelector(selector);
+                get('#main_title').value = config.content?.main_title || ''; 
+                get('#subtitle').value = config.content?.subtitle || ''; 
+                get('#media_url').value = config.content?.media_url || '';
+                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; 
+                packagesContainer.innerHTML=''; 
+                if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { 
+                    config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); 
+                } else { 
+                    addPackage(); 
+                }
+                get('#enable_order_bump').checked = config.order_bump?.enabled; 
+                get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); 
+                get('#order_bump_product_name').value = config.order_bump?.product_name || ''; 
+                get('#order_bump_description').value = config.order_bump?.description || ''; 
+                get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
+                get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; 
+                get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); 
+                get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
+                get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; 
+                get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
+                testimonialsContainer.innerHTML=''; 
+                if (config.testimonials?.length > 0) { 
+                    config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); 
+                }
+                get('#pixel_id').value = config.tracking?.pixel_id || ''; 
+                get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; 
+                get('#background_color').value = config.style?.background_color || '#0f172a'; 
+                get('#accent_color').value = config.style?.accent_color || '#38bdf8';
+                get('#success_redirect_url').value = config.redirects?.success_url || '';
+            }
+
+            function getFormData() {
+                const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; 
+                const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; 
+                const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; 
+                const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; 
+                const pT=getElValue('#pricing-type-select','fixed'); 
+                let pD; 
+                if(pT==='fixed'){
+                    pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};
+                }else{
+                    pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};
+                }
+                return{
+                    content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},
+                    pricing:pD,
+                    order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},
+                    conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},
+                    testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),
+                    style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},
+                    tracking:{pixel_id:getElValue('#pixel_id')||null,utmify_integration_id:getElValue('#utmify_integration_id')||null},
+                    redirects:{success_url:getElValue('#success_redirect_url')||null}
+                };
+            }
+
+            function generatePreviewHTML(data) {
+                const fC=(c)=>(c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); 
+                const cdH=data.conversion_elements.countdown.enabled?`<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem;"><p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p><p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2,'0')}:00</p></div>`:''; 
+                const mH=data.content.media_url?`<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`:''; 
+                let pH; 
+                if(data.pricing.type==='open'){
+                    pH=`<div style="margin-top: 1.5rem;"><label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: var(--preview-accent, #38bdf8);">${data.pricing.label||'Escolha o valor'}</label><div style="display: flex; align-items: center; gap: 0.5rem; background-color: white; border: 2px solid var(--preview-accent, #38bdf8); border-radius: 0.5rem; padding: 0.75rem;"><span style="color: #6b7280;">R$</span><input type="number" style="flex: 1; border: none; outline: none; font-size: 1.1rem;" placeholder="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}" value="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}"></div><p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.5rem;">Mínimo: ${fC(data.pricing.minimum_value_cents)}</p></div>`;
+                }else{
+                    pH=`<div style="margin-top: 1.5rem;"><h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--preview-accent, #38bdf8);">Escolha seu pacote:</h3>${data.pricing.packages.map((p,i)=>`<div style="border: 2px solid ${i===0?'var(--preview-accent, #38bdf8)':'#e5e7eb'}; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; cursor: pointer; transition: all 0.2s;"><input type="radio" name="package" value="${i}" ${i===0?'checked':''} style="margin-right: 0.75rem; accent-color: var(--preview-accent, #38bdf8);"><div style="display: inline-block; width: calc(100% - 2rem);"><h4 style="font-weight: 700; margin-bottom: 0.25rem; color: ${i===0?'var(--preview-accent, #38bdf8)':'#374151'};">${p.title}</h4><p style="font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem;">${p.description}</p><span style="font-weight: 700; font-size: 1.2rem; color: var(--preview-accent, #38bdf8);">${fC(p.value_cents)}</span></div></div>`).join('')}</div>`;
+                }
+                const obH=data.order_bump.enabled&&data.order_bump.product_name?`<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;"><input type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;"><div><h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4><p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p></div></div></div>`:''; 
+                const gH=data.conversion_elements.guarantee.text?`<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">${data.conversion_elements.guarantee.seal_url?`<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height:60px;">`:''}<div><h4 style="font-weight: 700; color: #374151;">Garantia</h4><p style="color: #6b7280;">${data.conversion_elements.guarantee.text}</p></div></div>`:''; 
+                const tH=data.testimonials.length>0?`<div style="margin-top: 2rem;"><h3 style="font-weight: 700; margin-bottom: 1rem; color: var(--preview-accent, #38bdf8);">Depoimentos</h3>${data.testimonials.map(t=>`<div style="background-color: #f9fafb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;">${t.photo_url?`<img src="${t.photo_url}" alt="${t.name}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover;">`:''}<div><h4 style="font-weight: 700; color: #374151;">${t.name}</h4><p style="color: #6b7280; font-size: 0.9rem;">${t.text}</p></div></div></div>`).join('')}</div>`:''; 
+                return`<div id="preview-body" style="--preview-bg: ${data.style.background_color}; --preview-accent: ${data.style.accent_color}; background-color: var(--preview-bg); color: ${data.style.background_color==='#ffffff'?'#1f2937':'#f1f5f9'}; min-height: 100%; font-family: 'Inter', sans-serif;">${cdH}<div style="padding: 1.5rem 2rem;"><h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'};">${data.content.main_title||'Título'}</h1><p style="text-align: center; color: ${data.style.background_color==='#ffffff'?'#6b7280':'#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle||'Subtítulo'}</p>${mH}${pH}${obH}<button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed;">Comprar</button>${gH}${tH}</div></div>`;
+            }
+
+            function updatePreview() { 
+                if (this.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) { 
+                    try { 
+                        const data = getFormData(); 
+                        contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); 
+                        const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); 
+                        if(pb) { 
+                            pb.style.setProperty('--preview-bg', data.style.background_color); 
+                            pb.style.setProperty('--preview-accent', data.style.accent_color); 
+                        } 
+                    } catch (e) { 
+                        console.error("Erro no updatePreview:", e); 
+                    } 
+                } 
+            }
+
+            function showResultScreen(checkoutId) { 
+                if (!checkoutLinkOutput || !resultScreen) return; 
+                const link = `${FRONTEND_URL}/oferta/${checkoutId}`; 
+                checkoutLinkOutput.value = link; 
+                resultScreen.classList.remove('hidden'); 
+            }
+
+            function hideResultScreen() { 
+                if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; 
+                resultScreen.classList.add('hidden'); 
+                checkoutForm.reset(); 
+                contentEl.querySelector('#pricing-type-select').value = 'fixed'; 
+                contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); 
+                contentEl.querySelector('#open-pricing-container').classList.add('hidden'); 
+                contentEl.querySelector('#enable_order_bump').checked = false; 
+                contentEl.querySelector('#order-bump-fields').classList.add('hidden'); 
+                contentEl.querySelector('#enable_countdown').checked = false; 
+                contentEl.querySelector('#countdown-fields').classList.add('hidden'); 
+                packagesContainer.innerHTML = ''; 
+                testimonialsContainer.innerHTML = ''; 
+                addPackage(); 
+                updatePreview(); 
+            }
+
+            if (this.state.editingCheckoutId) {
+                creatorTitle.textContent = 'Editar Checkout'; 
+                submitBtn.textContent = 'Carregando...'; 
+                submitBtn.disabled = true;
+                try {
+                    const data = await this.apiRequest(`/api/oferta/${this.state.editingCheckoutId}`);
+                    if (data && data.config) { 
+                        populateCreatorForm(data.config); 
+                        submitBtn.textContent = 'Salvar Alterações'; 
+                    } else { 
+                        throw new Error('Config não encontrada.'); 
+                    }
+                } catch (e) { 
+                    this.showToast('Erro ao carregar.', 'error'); 
+                    this.state.editingCheckoutId = null; 
+                    creatorTitle.textContent = 'Criador'; 
+                    submitBtn.textContent = 'Criar'; 
+                    addPackage(); 
+                }
+                finally { 
+                    submitBtn.disabled = false; 
+                    updatePreview(); 
+                }
+            } else {
+                creatorTitle.textContent = 'Criador de Ofertas'; 
+                submitBtn.textContent = 'Criar Checkout'; 
+                addPackage(); 
+                updatePreview();
+            }
+
+            // Event listeners
+            contentEl.removeEventListener('click', contentEl._clickListener);
+            contentEl._clickListener = (e) => {
+                if(e.target.id==='add-package-btn'){addPackage(); updatePreview();} 
+                if(e.target.id==='add-testimonial-btn'){addTestimonial(); updatePreview();} 
+                if(e.target.classList.contains('remove-package-btn')){e.target.closest('div').remove(); updatePreview();} 
+                if(e.target.classList.contains('remove-testimonial-btn')){e.target.closest('div').remove(); updatePreview();} 
+                if(e.target.id==='pricing-type-select'){const isOpen=e.target.value==='open'; contentEl.querySelector('#fixed-pricing-container').classList.toggle('hidden',isOpen); contentEl.querySelector('#open-pricing-container').classList.toggle('hidden',!isOpen); updatePreview();} 
+                if(e.target.id==='enable_order_bump'){contentEl.querySelector('#order-bump-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
+                if(e.target.id==='enable_countdown'){contentEl.querySelector('#countdown-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
+                if(e.target.id==='copy-link-btn'){checkoutLinkOutput.select(); document.execCommand('copy'); e.target.textContent='Copiado!'; setTimeout(()=>{e.target.textContent='Copiar Link'},2000);} 
+                if(e.target.id==='create-another-btn'){hideResultScreen(); this.navigateTo('checkouts');}
+            };
+            contentEl.addEventListener('click', contentEl._clickListener);
+
+            checkoutForm.removeEventListener('submit', checkoutForm._submitListener);
+            checkoutForm._submitListener = async (e) => {
+                e.preventDefault(); 
+                const b=submitBtn; 
+                const oT=b.textContent; 
+                b.disabled=true; 
+                b.textContent='Salvando...'; 
+                try { 
+                    const cD=getFormData(); 
+                    cD.name=contentEl.querySelector('#main_title').value;
+                    if(this.state.editingCheckoutId){
+                        await this.apiRequest(`/api/checkouts/${this.state.editingCheckoutId}`,'PUT',cD); 
+                        this.showToast('Checkout atualizado com sucesso!', 'success'); 
+                        this.state.editingCheckoutId=null; 
+                        this.navigateTo('checkouts');
+                    }else{
+                        const r=await this.apiRequest('/api/checkouts/create-hosted','POST',cD); 
+                        if(r&&r.checkoutId){
+                            showResultScreen(r.checkoutId);
+                        }else{
+                            throw new Error('Erro ao criar checkout. Resposta da API inválida.');
+                        }
+                    }
+                }catch(error){
+                    this.showToast(error.message||'Erro ao salvar checkout. Verifique os campos.','error');
+                } finally { 
+                    b.disabled=false; 
+                    b.textContent=oT;
+                }
+            };
+            checkoutForm.addEventListener('submit', checkoutForm._submitListener);
+        },
+
+        // *** FUNÇÃO initThankYouCreatorPage ATUALIZADA (refatorada) ***
+        async initThankYouCreatorPage() {
+            const FRONTEND_URL = window.location.origin;
+            const creatorScreen = document.getElementById('creator-screen');
+            if (!creatorScreen) { console.error("Creator screen not found."); return; }
+
+            const thankYouForm = document.getElementById('thank-you-form');
+            const submitBtn = document.getElementById('submit-btn');
+            const resultScreen = document.getElementById('result-screen');
+            const pageLinkOutput = document.getElementById('page-link-output');
+            const copyLinkBtn = document.getElementById('copy-link-btn');
+            const createAnotherBtn = document.getElementById('create-another-btn');
+            const utmifySelect = document.getElementById('utmify_integration_id');
+            const previewContent = document.getElementById('preview-content');
+            const pageTitle = document.getElementById('ty-creator-title');
+            const backBtn = document.getElementById('back-to-ty-list-btn');
+
+            if (!thankYouForm || !submitBtn || !resultScreen || !pageLinkOutput || !copyLinkBtn || !createAnotherBtn || !utmifySelect || !previewContent || !pageTitle || !backBtn) {
+                 console.error("Um ou mais elementos do Criador TY não foram encontrados.");
+                 this.showToast("Erro ao carregar o criador de página.", "error");
+                 return;
+            }
+
+            // Popula select Utmify
+            utmifySelect.innerHTML = '<option value="">-- Nenhuma --</option>' + this.state.data.utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
+
+            // Funções auxiliares
+            function populateForm(config) {
+                const get = (selector) => creatorScreen.querySelector(selector);
+                get('#page_name').value = config.name || '';
+                get('#main_title').value = config.main_title || '';
+                get('#subtitle').value = config.subtitle || '';
+                get('#button_text').value = config.button_text || '';
+                get('#redirect_url').value = config.redirect_url || '';
+                get('#purchase_value').value = config.purchase_value || '';
+                get('#pixel_id').value = config.pixel_id || '';
+                get('#utmify_integration_id').value = config.utmify_integration_id || '';
+            }
+
+            function getFormDataFromTY() {
+                const get = (selector) => creatorScreen.querySelector(selector);
+                return {
+                    name: get('#page_name').value,
+                    main_title: get('#main_title').value,
+                    subtitle: get('#subtitle').value,
+                    button_text: get('#button_text').value,
+                    redirect_url: get('#redirect_url').value,
+                    purchase_value: parseInt(get('#purchase_value').value) || 0,
+                    pixel_id: get('#pixel_id').value || null,
+                    utmify_integration_id: get('#utmify_integration_id').value || null
+                };
+            }
+
+            function updatePreviewTY() {
+                if (this.state.currentPage === 'thankYouCreator' && previewContent) {
+                    try {
+                        const data = getFormDataFromTY();
+                        const previewHTML = `
+                            <div style="background-color: var(--bg-secondary, #0f172a); color: var(--text-primary, #f1f5f9); font-family: 'Inter', sans-serif; min-height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem;">
+                                <div class="animate-fade-in">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-green-400 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                                    </svg>
+                                    <h1 style="font-size: 2.25rem; font-weight: 800; color: white;">${data.main_title || 'Obrigado!'}</h1>
+                                    <p style="color: var(--text-secondary, #94a3b8); margin-top: 0.5rem; max-width: 450px; margin-left: auto; margin-right: auto;">${data.subtitle || 'Sua compra foi concluída com sucesso.'}</p>
+                                    <a href="${data.redirect_url || '#'}" style="display: inline-block; background-color: var(--accent-secondary, #0ea5e9); color: white; font-weight: 600; padding: 0.75rem 1.5rem; border-radius: 0.375rem; margin-top: 1.5rem; text-decoration: none; transition: background-color 0.2s ease;">
+                                        ${data.button_text || 'Acessar Conteúdo'}
+                                    </a>
+                                </div>
+                            </div>
+                        `;
+                        previewContent.innerHTML = previewHTML;
+                    } catch (e) {
+                        console.error("Erro no updatePreviewTY:", e);
+                    }
+                }
+            }
+
+            function showResultScreenTY(pageId) { 
+                const link = `${FRONTEND_URL}/obrigado/${pageId}`; 
+                pageLinkOutput.value = link; 
+                resultScreen.classList.remove('hidden'); 
+            }
+
+            function hideResultScreenTY() { 
+                resultScreen.classList.add('hidden'); 
+                thankYouForm.reset(); 
+                updatePreviewTY(); 
+            }
+
+            // Configuração inicial
+            if (this.state.editingThankYouPageId) {
+                pageTitle.textContent = 'Editar Página de Obrigado';
+                submitBtn.textContent = 'Carregando...';
+                submitBtn.disabled = true;
+                try {
+                    const pageData = await this.apiRequest(`/api/thank-you-pages/${this.state.editingThankYouPageId}`);
+                    if (pageData) {
+                        populateForm(pageData);
+                        submitBtn.textContent = 'Salvar Alterações';
+                    }
+                } catch (e) { 
+                    this.showToast('Erro ao carregar dados da página.', 'error'); 
+                    this.state.editingThankYouPageId = null; 
+                    pageTitle.textContent = 'Criador de Página de Obrigado'; 
+                    submitBtn.textContent = 'Gerar Página'; 
+                    backBtn.textContent = 'Voltar para Lista'; 
+                    thankYouForm.reset(); 
+                }
+                finally { 
+                    submitBtn.disabled = false; 
+                    updatePreviewTY(); 
+                }
+            } else {
+                pageTitle.textContent = 'Criador de Página de Obrigado';
+                submitBtn.textContent = 'Gerar Página';
+                updatePreviewTY();
+            }
+
+            // Event listeners
+            thankYouForm.removeEventListener('submit', thankYouForm._submitListener);
+            thankYouForm._submitListener = async (e) => {
+                e.preventDefault();
+                const button = submitBtn;
+                const originalText = button.textContent;
+                button.disabled = true;
+                button.textContent = 'Salvando...';
+                
+                try {
+                    const payload = getFormDataFromTY();
+                    if (this.state.editingThankYouPageId) {
+                         await this.apiRequest(`/api/thank-you-pages/${this.state.editingThankYouPageId}`, 'PUT', payload);
+                         this.showToast('Página atualizada com sucesso!', 'success'); 
+                         this.state.editingThankYouPageId = null; 
+                         this.navigateTo('thankYouPages');
+                    } else {
+                        const result = await this.apiRequest(`/api/thank-you-pages/create`, 'POST', payload);
+                        showResultScreenTY(result.pageId);
+                    }
+                } catch (error) { /* Erro já tratado no apiRequest */ }
+                finally { button.disabled = false; button.textContent = originalText; }
+            };
+            thankYouForm.addEventListener('submit', thankYouForm._submitListener);
+
+            copyLinkBtn.removeEventListener('click', copyLinkBtn._clickListener);
+            copyLinkBtn._clickListener = () => { 
+                pageLinkOutput.select(); 
+                document.execCommand('copy'); 
+                copyLinkBtn.textContent = 'Copiado!'; 
+                setTimeout(() => { copyLinkBtn.textContent = 'Copiar Link'; }, 2000); 
+            };
+            copyLinkBtn.addEventListener('click', copyLinkBtn._clickListener);
+
+            createAnotherBtn.removeEventListener('click', createAnotherBtn._clickListener);
+            createAnotherBtn._clickListener = () => { 
+                hideResultScreenTY(); 
+                this.state.editingThankYouPageId = null; 
+                pageTitle.textContent = 'Criador de Página de Obrigado'; 
+                submitBtn.textContent = 'Gerar Página'; 
+            };
+            createAnotherBtn.addEventListener('click', createAnotherBtn._clickListener);
+
+            backBtn.removeEventListener('click', backBtn._clickListener);
+            backBtn._clickListener = () => { 
+                this.state.editingThankYouPageId = null; 
+                this.navigateTo('thankYouPages'); 
+            };
+            backBtn.addEventListener('click', backBtn._clickListener);
         },
         
         async testIndividualPixConnection(provider, button) {
