@@ -602,7 +602,24 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-
+// --- MIDDLEWARE DE AUTENTICAÇÃO POR API KEY ---
+async function authenticateApiKey(req, res, next) {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+        return res.status(401).json({ message: 'Chave de API não fornecida.' });
+    }
+    try {
+        const sellerResult = await sql`SELECT id FROM sellers WHERE api_key = ${apiKey}`;
+        if (sellerResult.length === 0) {
+            return res.status(401).json({ message: 'Chave de API inválida.' });
+        }
+        req.sellerId = sellerResult[0].id;
+        next();
+    } catch (error) {
+        console.error("Erro na autenticação por API Key:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+}
 
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
@@ -1400,13 +1417,41 @@ app.post('/api/checkouts', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao salvar o checkout.' });
     }
 });
-app.delete('/api/checkouts/:id', authenticateJwt, async (req, res) => {
+// EXCLUIR CHECKOUT
+app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
+    const { checkoutId } = req.params;
+    const sellerId = req.user.id;
+
+    if (!checkoutId.startsWith('cko_')) {
+        return res.status(400).json({ message: 'ID de checkout inválido.' });
+    }
+
     try {
-        await sql`DELETE FROM checkouts WHERE id = ${req.params.id} AND seller_id = ${req.user.id}`;
-        res.status(204).send();
+        // IMPORTANT: First, delete associated clicks to avoid foreign key constraint errors
+        await sql `DELETE FROM clicks WHERE checkout_id = ${checkoutId} AND seller_id = ${sellerId}`;
+
+        // Now, delete the checkout itself
+        const result = await sql`
+            DELETE FROM hosted_checkouts
+            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
+            RETURNING id; -- Return ID to confirm deletion
+        `;
+
+        if (result.length === 0) {
+            console.warn(`Tentativa de excluir checkout não encontrado ou não pertencente ao seller: ${checkoutId}, Seller: ${sellerId}`);
+            // Still return success as the end state (checkout doesn't exist) is achieved
+        }
+
+        res.status(200).json({ message: 'Checkout excluído com sucesso!' }); // Use 200 with message
+
     } catch (error) {
-        console.error("Erro ao excluir checkout:", error);
-        res.status(500).json({ message: 'Erro ao excluir o checkout.' });
+        console.error(`Erro ao excluir checkout ${checkoutId}:`, error);
+        // Specifically handle foreign key violations if pix_transactions block deletion
+        if (error.code === '23503') { // PostgreSQL foreign key violation error code
+             console.error(`Erro de chave estrangeira ao excluir checkout ${checkoutId}. Pode haver transações PIX associadas.`);
+             return res.status(409).json({ message: 'Não é possível excluir este checkout pois existem transações PIX associadas a ele através de cliques. Contacte o suporte se necessário.' });
+        }
+        res.status(500).json({ message: 'Erro interno ao excluir o checkout.' });
     }
 });
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
@@ -1634,38 +1679,47 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
+// ########## ROTA DE TRANSAÇÕES CORRIGIDA ##########
 app.get('/api/transactions', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        
-        // Buscar transações regulares (de pressels/checkouts)
-        const regularTransactions = await sql`
-            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at, 'regular' as transaction_type
-            FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
-            LEFT JOIN pressels p ON c.pressel_id = p.id LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
-            LEFT JOIN checkouts ch ON c.checkout_id = ch.id WHERE c.seller_id = ${sellerId}
+        const { startDate, endDate } = req.query; // Pega as datas da query string
+        const hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+
+        // 1. Iniciar a string da query e o array de parâmetros
+        let queryString = `
+            SELECT
+                pt.status,
+                pt.pix_value,
+                COALESCE(tb.bot_name, hc.config->'content'->>'main_title', 'Checkout Desconhecido') as source_name,
+                pt.provider,
+                pt.created_at
+            FROM pix_transactions pt
+            JOIN clicks c ON pt.click_id_internal = c.id
+            LEFT JOIN pressels p ON c.pressel_id = p.id
+            LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
+            LEFT JOIN hosted_checkouts hc ON c.checkout_id = hc.id
+            WHERE c.seller_id = $1
         `;
-        
-        // Buscar transações de disparo
-        const disparoTransactions = await sql`
-            SELECT pt.status, pt.pix_value, 
-                   COALESCE(tb.bot_name, 'Disparo') as source_name, 
-                   pt.provider, pt.created_at, 'disparo' as transaction_type,
-                   dh.campaign_name
-            FROM pix_transactions pt 
-            JOIN disparo_log dl ON pt.provider_transaction_id = dl.transaction_id
-            JOIN disparo_history dh ON dl.history_id = dh.id
-            LEFT JOIN telegram_bots tb ON dl.bot_id = tb.id
-            WHERE dh.seller_id = ${sellerId} AND dl.transaction_id IS NOT NULL
-        `;
-        
-        // Combinar e ordenar todas as transações
-        const allTransactions = [...regularTransactions, ...disparoTransactions]
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            
-        res.status(200).json(allTransactions);
+        const queryParams = [sellerId]; // $1 é sellerId
+
+        if (hasDateFilter) {
+            // 2. Adicionar o filtro de data à string e os parâmetros ao array
+            queryString += ` AND pt.created_at BETWEEN $2 AND $3`;
+            queryParams.push(startDate); // $2 é startDate
+            queryParams.push(endDate);   // $3 é endDate
+        }
+
+        // 3. Adicionar a ordenação
+        queryString += ` ORDER BY pt.created_at DESC;`;
+
+        // 4. Executar a consulta usando a sintaxe de função sql(query, params)
+        //    Isto é diferente do "sql`...`" (template tag) e é o que resolve o erro.
+        const transactions = await sql(queryString, queryParams);
+
+        res.status(200).json(transactions);
     } catch (error) {
-        console.error("Erro ao buscar transações:", error);
+        console.error("Erro ao buscar transações:", error); // Loga o erro completo no console
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });
     }
 });
@@ -3499,6 +3553,483 @@ app.get('/api/config', (req, res) => {
         apiUrl: process.env.HOTTRACK_API_URL || `http://localhost:${PORT}`,
         environment: process.env.NODE_ENV || 'development'
     });
+});
+
+// ==========================================================
+// ROTAS CHECKOUTS HOSPEDADOS E PÁGINAS DE OBRIGADO
+// ==========================================================
+
+// LISTAR CHECKOUTS
+app.get('/api/checkouts', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        // Select the ID, extract the main title from the config JSON, and the creation date
+        const checkouts = await sql`
+            SELECT
+                id,
+                config->'content'->>'main_title' as name, -- Extracts 'main_title' from the 'content' object within 'config'
+                created_at
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC;
+        `;
+        res.status(200).json(checkouts);
+    } catch (error) {
+        console.error("Erro ao listar checkouts hospedados:", error);
+        res.status(500).json({ message: 'Erro ao buscar seus checkouts.' });
+    }
+});
+
+// EDITAR (ATUALIZAR) CHECKOUT
+app.put('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
+    const { checkoutId } = req.params;
+    const sellerId = req.user.id;
+    const newConfig = req.body; // Expects the full updated config object from the frontend
+
+    // Basic validation
+    if (!checkoutId.startsWith('cko_')) {
+        return res.status(400).json({ message: 'ID de checkout inválido.' });
+    }
+    if (!newConfig || typeof newConfig !== 'object') {
+        return res.status(400).json({ message: 'Configuração inválida fornecida.' });
+    }
+
+    try {
+        // Update the config JSON and updated_at timestamp for the specific checkout ID and seller ID
+        const result = await sql`
+            UPDATE hosted_checkouts
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
+            RETURNING id; -- Return the ID to confirm update occurred
+        `;
+
+        // Check if any row was updated
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Checkout não encontrado ou você não tem permissão para editá-lo.' });
+        }
+
+        res.status(200).json({ message: 'Checkout atualizado com sucesso!', checkoutId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar checkout ${checkoutId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar o checkout.' });
+    }
+});
+
+
+// ROTA CRIAÇÃO CHECKOUT HOSPEDADO
+app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+    const config = req.body; // Expects the full config object from the frontend
+
+    // Generate a unique ID for the new checkout, prefixed for easy identification
+    const checkoutId = `cko_${uuidv4()}`;
+
+    try {
+        // Insert into the hosted_checkouts table
+        await sql`
+            INSERT INTO hosted_checkouts (id, seller_id, config)
+            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        // Return the generated ID to the frontend
+        res.status(201).json({
+            message: 'Checkout hospedado criado com sucesso!',
+            checkoutId: checkoutId
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar o checkout.' });
+    }
+});
+
+// ROTA PÁGINA DE OFERTA
+app.get('/api/oferta/:checkoutId', async (req, res) => {
+    const { checkoutId } = req.params;
+
+    try {
+        // Fetch the configuration JSON for the given checkout ID
+        const [checkout] = await sql`
+            SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}
+        `;
+
+        if (!checkout) {
+            return res.status(404).json({ message: 'Checkout não encontrado.' });
+        }
+
+        // Return the configuration object
+        res.status(200).json(checkout); // Returns { config: { ... } }
+
+    } catch (error) {
+        console.error("Erro ao buscar dados do checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno no servidor.' });
+    }
+});
+
+app.post('/api/oferta/generate-pix', async (req, res) => {
+    const { checkoutId, value_cents, click_id } = req.body;
+
+    if (!checkoutId || !value_cents) {
+        return res.status(400).json({ message: 'Dados insuficientes para gerar o PIX.' });
+    }
+
+    let seller, clickData, clickIdInternal; // Variáveis de escopo mais amplo
+
+    try {
+        // 1. Find the seller associated with this checkout
+        const [hostedCheckout] = await sql`
+            SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
+        `;
+
+        if (!hostedCheckout) {
+            return res.status(404).json({ message: 'Checkout não encontrado.' });
+        }
+
+        const sellerId = hostedCheckout.seller_id;
+        [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`; // Atribui ao seller
+
+        if (!seller) {
+            return res.status(404).json({ message: 'Vendedor associado a este checkout não foi encontrado.' });
+        }
+
+        // 2. Lógica de Rastreamento de Clique (Modificada)
+        const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        const user_agent = req.headers['user-agent'];
+
+        if (click_id) {
+            const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
+            const [existingClick] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+
+            if (existingClick) {
+                clickData = existingClick;
+                clickIdInternal = existingClick.id;
+                console.log(`[Checkout PIX] Usando click_id existente: ${click_id} (ID: ${clickIdInternal})`);
+                if (!existingClick.checkout_id || existingClick.checkout_id !== checkoutId) {
+                    await sql`UPDATE clicks SET checkout_id = ${checkoutId} WHERE id = ${clickIdInternal}`;
+                    clickData.checkout_id = checkoutId;
+                }
+            } else {
+                console.warn(`[Checkout PIX] Click ID ${db_click_id} não encontrado. Criando um novo clique.`);
+                [clickData] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${db_click_id})
+                    RETURNING *;
+                `;
+                clickIdInternal = clickData.id;
+            }
+        } else {
+            console.log(`[Checkout PIX] Nenhum click_id. Criando novo clique.`);
+            [clickData] = await sql`
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
+                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
+                RETURNING *;
+            `;
+            clickIdInternal = clickData.id;
+
+            const clean_click_id = `lead${clickIdInternal.toString().padStart(6, '0')}`;
+            const db_click_id_new = `/start ${clean_click_id}`;
+            await sql`UPDATE clicks SET click_id = ${db_click_id_new} WHERE id = ${clickIdInternal}`;
+            clickData.click_id = db_click_id_new;
+        }
+
+        // 3. Generate PIX (LÓGICA NOVA COM FALLBACK)
+        const pixResult = await generatePixWithFallback(seller, value_cents, req.headers.host, seller.api_key, ip_address, clickIdInternal);
+
+        // 4. O INSERT no pix_transactions JÁ FOI FEITO DENTRO de generatePixWithFallback
+        //    O pixResult contém 'internal_transaction_id'
+        const internalTransactionId = pixResult.internal_transaction_id;
+
+        // 5. Send 'InitiateCheckout' event to Meta Pixel API
+        await sendMetaEvent('InitiateCheckout', clickData, { id: internalTransactionId, pix_value: value_cents / 100 }, null);
+        
+        // 6. Send 'waiting_payment' event to Utmify
+        await sendEventToUtmify(
+            'waiting_payment',
+            clickData,
+            { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() },
+            seller,
+            { name: "Cliente Checkout", email: "cliente@checkout.com" }, // Dados genéricos
+            { id: checkoutId, name: hostedCheckout.config?.content?.main_title || "Produto Checkout" }
+        );
+
+        // 7. Return PIX details to the frontend (removendo o ID interno)
+        const { internal_transaction_id, ...apiResponse } = pixResult;
+        res.status(200).json(apiResponse);
+
+    } catch (error) {
+        // O erro agora pode vir do generatePixWithFallback se todos os provedores falharem
+        console.error("Erro ao gerar PIX da página de oferta:", error.message);
+        res.status(500).json({ message: error.message || 'Não foi possível gerar o PIX no momento.' });
+    }
+});
+
+// ==========================================================
+// ROTAS PÁGINAS DE OBRIGADO
+// ==========================================================
+// ROTA CRIAÇÃO CHECKOUT HOSPEDADO (create-hosted)
+app.post('/api/checkouts/create-hosted', authenticateApiKey, async (req, res) => {
+    const sellerId = req.sellerId;
+    const config = req.body; // Expects the full config object from the frontend
+
+    // Generate a unique ID for the new checkout, prefixed for easy identification
+    const checkoutId = `cko_${uuidv4()}`;
+
+    try {
+        // Insert into the hosted_checkouts table
+        await sql`
+            INSERT INTO hosted_checkouts (id, seller_id, config)
+            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        // Return the generated ID to the frontend
+        res.status(201).json({
+            message: 'Checkout hospedado criado com sucesso!',
+            checkoutId: checkoutId
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar o checkout.' });
+    }
+});
+
+// ATUALIZAR UMA PÁGINA DE OBRIGADO
+app.put('/api/thank-you-pages/:pageId', authenticateApiKey, async (req, res) => { // Usando ApiKey para consistência com create
+    const { pageId } = req.params;
+    const sellerId = req.sellerId;
+    const newConfig = req.body; // Espera o objeto config atualizado
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+    if (!newConfig || typeof newConfig !== 'object') {
+        return res.status(400).json({ message: 'Configuração inválida fornecida.' });
+    }
+     // Valida campos essenciais no newConfig
+    if (!newConfig.page_name || !newConfig.purchase_value || !newConfig.pixel_id || !newConfig.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para atualizar a página.' });
+    }
+
+    try {
+        const result = await sql`
+            UPDATE thank_you_pages
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Página não encontrada ou você não tem permissão para editá-la.' });
+        }
+        res.status(200).json({ message: 'Página de obrigado atualizada com sucesso!', pageId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar a página.' });
+    }
+});
+
+app.post('/api/thank-you-pages/create', authenticateApiKey, async (req, res) => {
+    const sellerId = req.sellerId;
+    const config = req.body; // Expects config object { page_name, purchase_value, pixel_id, redirect_url, utmify_integration_id? }
+
+    // Validate essential fields
+    if (!config.page_name || !config.purchase_value || !config.pixel_id || !config.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para criar a página.' });
+    }
+
+    // Generate unique ID for the page
+    const pageId = `ty_${uuidv4()}`;
+
+    try {
+        // Insert the configuration into the database
+        await sql`
+            INSERT INTO thank_you_pages (id, seller_id, config)
+            VALUES (${pageId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        res.status(201).json({
+            message: 'Página de obrigado criada com sucesso!',
+            pageId: pageId // Return the generated ID
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar página de obrigado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar a página.' });
+    }
+});
+
+// Fetch configuration for a specific Thank You Page
+app.get('/api/obrigado/:pageId', async (req, res) => {
+    const { pageId } = req.params;
+
+    try {
+        const [page] = await sql`
+            SELECT seller_id, config FROM thank_you_pages WHERE id = ${pageId}
+        `;
+
+        if (!page) {
+            return res.status(404).json({ message: 'Página de obrigado não encontrada.' });
+        }
+
+        res.status(200).json({
+            config: page.config,
+        });
+
+    } catch (error) {
+        console.error("Erro ao buscar dados da página de obrigado:", error);
+        res.status(500).json({ message: 'Erro interno no servidor.' });
+    }
+});
+
+// Trigger Utmify event from the Thank You Page frontend
+app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
+    const { pageId, trackingParameters, customerData } = req.body;
+
+    try {
+        const [page] = await sql`
+            SELECT seller_id, config FROM thank_you_pages WHERE id = ${pageId}
+        `;
+
+        if (!page || !page.config.utmify_integration_id) {
+            return res.status(404).json({ message: 'Página ou integração Utmify não configurada.' });
+        }
+
+        const sellerId = page.seller_id;
+        const utmifyIntegrationId = page.config.utmify_integration_id;
+
+        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+        if (!seller) {
+            return res.status(404).json({ message: 'Vendedor não encontrado.' });
+        }
+
+        const utmifyData = {
+            integration_id: utmifyIntegrationId,
+            event_name: 'Purchase',
+            customer_data: {
+                email: customerData.email || '',
+                phone: customerData.phone || '',
+                name: customerData.name || '',
+                ...trackingParameters
+            },
+            purchase_data: {
+                value: page.config.purchase_value,
+                currency: 'BRL'
+            }
+        };
+
+        const utmifyResponse = await fetch('https://api.utmify.com.br/v1/events', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${seller.utmify_token}`
+            },
+            body: JSON.stringify(utmifyData)
+        });
+
+        if (!utmifyResponse.ok) {
+            throw new Error(`Utmify API error: ${utmifyResponse.status}`);
+        }
+
+        res.status(200).json({ message: 'Evento enviado para Utmify com sucesso!' });
+
+    } catch (error) {
+        console.error(`[Utmify TY Page Error]`, error.response?.data || error.message);
+        res.status(500).json({ message: 'Erro ao enviar evento para Utmify.' });
+    }
+});
+
+// LISTAR PÁGINAS DE OBRIGADO DO VENDEDOR
+app.get('/api/thank-you-pages', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        const pages = await sql`
+            SELECT
+                id,
+                config->>'page_name' as name,
+                created_at
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC;
+        `;
+        res.status(200).json(pages);
+    } catch (error) {
+        console.error("Erro ao listar páginas de obrigado:", error);
+        res.status(500).json({ message: 'Erro ao buscar suas páginas de obrigado.' });
+    }
+});
+
+// BUSCAR UMA PÁGINA DE OBRIGADO ESPECÍFICA
+app.get('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+    try {
+        const [page] = await sql`
+            SELECT id, config FROM thank_you_pages
+            WHERE id = ${pageId} AND seller_id = ${sellerId};
+        `;
+        if (!page) {
+            return res.status(404).json({ message: 'Página de obrigado não encontrada ou não pertence a você.' });
+        }
+        res.status(200).json(page);
+    } catch (error) {
+        console.error(`Erro ao buscar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao buscar a página.' });
+    }
+});
+
+// ATUALIZAR UMA PÁGINA DE OBRIGADO
+app.put('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+    const newConfig = req.body;
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+
+    if (!newConfig.page_name || !newConfig.purchase_value || !newConfig.pixel_id || !newConfig.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para atualizar a página.' });
+    }
+
+    try {
+        const result = await sql`
+            UPDATE thank_you_pages
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Página não encontrada ou você não tem permissão para editá-la.' });
+        }
+        res.status(200).json({ message: 'Página de obrigado atualizada com sucesso!', pageId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar a página.' });
+    }
+});
+
+// DELETAR UMA PÁGINA DE OBRIGADO
+app.delete('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+
+    try {
+        const result = await sql`
+            DELETE FROM thank_you_pages
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+             console.warn(`Tentativa de excluir página TY não encontrada ou não pertencente ao seller: ${pageId}, Seller: ${sellerId}`);
+        }
+        res.status(200).json({ message: 'Página de obrigado excluída com sucesso!' });
+    } catch (error) {
+        console.error(`Erro ao excluir página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao excluir a página.' });
+    }
 });
 
 // ==========================================================
