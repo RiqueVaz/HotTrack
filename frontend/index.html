@@ -1230,16 +1230,17 @@
         renderLayout() { document.getElementById('app').innerHTML = this.templates.layout(); this.addDashboardEventListeners(); },
 
         formatNumber(number, isCurrency = false) {
-            if (typeof number !== 'number') {
-                number = parseFloat(number) || 0;
+            let num = parseFloat(number);
+            if (isNaN(num)) {
+                 num = 0;
             }
             if (isCurrency) {
-                return number.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                return num.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
             } else {
-                return number.toLocaleString('pt-BR');
+                return num.toLocaleString('pt-BR');
             }
         },
-        
+
         templates: {
             auth(page = 'login') {
                 return `<div class="flex items-center justify-center min-h-screen p-4">${page === 'login' ? this.loginForm() : this.registerForm()}</div>`;
