@@ -602,7 +602,24 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-
+// --- MIDDLEWARE DE AUTENTICAÇÃO POR API KEY ---
+async function authenticateApiKey(req, res, next) {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+        return res.status(401).json({ message: 'Chave de API não fornecida.' });
+    }
+    try {
+        const sellerResult = await sql`SELECT id FROM sellers WHERE api_key = ${apiKey}`;
+        if (sellerResult.length === 0) {
+            return res.status(401).json({ message: 'Chave de API inválida.' });
+        }
+        req.sellerId = sellerResult[0].id;
+        next();
+    } catch (error) {
+        console.error("Erro na autenticação por API Key:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+}
 
 // --- ROTAS DO PAINEL ADMINISTRATIVO ---
 function authenticateAdmin(req, res, next) {
@@ -1662,38 +1679,47 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
+// ########## ROTA DE TRANSAÇÕES CORRIGIDA ##########
 app.get('/api/transactions', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        
-        // Buscar transações regulares (de pressels/checkouts)
-        const regularTransactions = await sql`
-            SELECT pt.status, pt.pix_value, COALESCE(tb.bot_name, ch.name, 'Checkout') as source_name, pt.provider, pt.created_at, 'regular' as transaction_type
-            FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
-            LEFT JOIN pressels p ON c.pressel_id = p.id LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
-            LEFT JOIN checkouts ch ON c.checkout_id = ch.id WHERE c.seller_id = ${sellerId}
+        const { startDate, endDate } = req.query; // Pega as datas da query string
+        const hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+
+        // 1. Iniciar a string da query e o array de parâmetros
+        let queryString = `
+            SELECT
+                pt.status,
+                pt.pix_value,
+                COALESCE(tb.bot_name, hc.config->'content'->>'main_title', 'Checkout Desconhecido') as source_name,
+                pt.provider,
+                pt.created_at
+            FROM pix_transactions pt
+            JOIN clicks c ON pt.click_id_internal = c.id
+            LEFT JOIN pressels p ON c.pressel_id = p.id
+            LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
+            LEFT JOIN hosted_checkouts hc ON c.checkout_id = hc.id
+            WHERE c.seller_id = $1
         `;
-        
-        // Buscar transações de disparo
-        const disparoTransactions = await sql`
-            SELECT pt.status, pt.pix_value, 
-                   COALESCE(tb.bot_name, 'Disparo') as source_name, 
-                   pt.provider, pt.created_at, 'disparo' as transaction_type,
-                   dh.campaign_name
-            FROM pix_transactions pt 
-            JOIN disparo_log dl ON pt.provider_transaction_id = dl.transaction_id
-            JOIN disparo_history dh ON dl.history_id = dh.id
-            LEFT JOIN telegram_bots tb ON dl.bot_id = tb.id
-            WHERE dh.seller_id = ${sellerId} AND dl.transaction_id IS NOT NULL
-        `;
-        
-        // Combinar e ordenar todas as transações
-        const allTransactions = [...regularTransactions, ...disparoTransactions]
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            
-        res.status(200).json(allTransactions);
+        const queryParams = [sellerId]; // $1 é sellerId
+
+        if (hasDateFilter) {
+            // 2. Adicionar o filtro de data à string e os parâmetros ao array
+            queryString += ` AND pt.created_at BETWEEN $2 AND $3`;
+            queryParams.push(startDate); // $2 é startDate
+            queryParams.push(endDate);   // $3 é endDate
+        }
+
+        // 3. Adicionar a ordenação
+        queryString += ` ORDER BY pt.created_at DESC;`;
+
+        // 4. Executar a consulta usando a sintaxe de função sql(query, params)
+        //    Isto é diferente do "sql`...`" (template tag) e é o que resolve o erro.
+        const transactions = await sql(queryString, queryParams);
+
+        res.status(200).json(transactions);
     } catch (error) {
-        console.error("Erro ao buscar transações:", error);
+        console.error("Erro ao buscar transações:", error); // Loga o erro completo no console
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });
     }
 });
@@ -3733,19 +3759,81 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
 // ==========================================================
 // ROTAS PÁGINAS DE OBRIGADO
 // ==========================================================
+// ROTA CRIAÇÃO CHECKOUT HOSPEDADO (create-hosted)
+app.post('/api/checkouts/create-hosted', authenticateApiKey, async (req, res) => {
+    const sellerId = req.sellerId;
+    const config = req.body; // Expects the full config object from the frontend
 
-// Create a new Thank You Page configuration
-app.post('/api/thank-you-pages/create', authenticateJwt, async (req, res) => {
-    const sellerId = req.user.id;
-    const config = req.body;
+    // Generate a unique ID for the new checkout, prefixed for easy identification
+    const checkoutId = `cko_${uuidv4()}`;
 
+    try {
+        // Insert into the hosted_checkouts table
+        await sql`
+            INSERT INTO hosted_checkouts (id, seller_id, config)
+            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        // Return the generated ID to the frontend
+        res.status(201).json({
+            message: 'Checkout hospedado criado com sucesso!',
+            checkoutId: checkoutId
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar o checkout.' });
+    }
+});
+
+// ATUALIZAR UMA PÁGINA DE OBRIGADO
+app.put('/api/thank-you-pages/:pageId', authenticateApiKey, async (req, res) => { // Usando ApiKey para consistência com create
+    const { pageId } = req.params;
+    const sellerId = req.sellerId;
+    const newConfig = req.body; // Espera o objeto config atualizado
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+    if (!newConfig || typeof newConfig !== 'object') {
+        return res.status(400).json({ message: 'Configuração inválida fornecida.' });
+    }
+     // Valida campos essenciais no newConfig
+    if (!newConfig.page_name || !newConfig.purchase_value || !newConfig.pixel_id || !newConfig.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para atualizar a página.' });
+    }
+
+    try {
+        const result = await sql`
+            UPDATE thank_you_pages
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Página não encontrada ou você não tem permissão para editá-la.' });
+        }
+        res.status(200).json({ message: 'Página de obrigado atualizada com sucesso!', pageId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar a página.' });
+    }
+});
+
+app.post('/api/thank-you-pages/create', authenticateApiKey, async (req, res) => {
+    const sellerId = req.sellerId;
+    const config = req.body; // Expects config object { page_name, purchase_value, pixel_id, redirect_url, utmify_integration_id? }
+
+    // Validate essential fields
     if (!config.page_name || !config.purchase_value || !config.pixel_id || !config.redirect_url) {
         return res.status(400).json({ message: 'Dados insuficientes para criar a página.' });
     }
 
+    // Generate unique ID for the page
     const pageId = `ty_${uuidv4()}`;
 
     try {
+        // Insert the configuration into the database
         await sql`
             INSERT INTO thank_you_pages (id, seller_id, config)
             VALUES (${pageId}, ${sellerId}, ${JSON.stringify(config)});
@@ -3753,7 +3841,7 @@ app.post('/api/thank-you-pages/create', authenticateJwt, async (req, res) => {
 
         res.status(201).json({
             message: 'Página de obrigado criada com sucesso!',
-            pageId: pageId
+            pageId: pageId // Return the generated ID
         });
 
     } catch (error) {

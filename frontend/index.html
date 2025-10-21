@@ -2160,7 +2160,6 @@
                 const options = { method, headers };
                 if (body) { options.body = JSON.stringify(body); }
 
-
                 const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
 
                 if (response.status === 204) return null; // No Content
@@ -3409,120 +3408,86 @@
                  return;
             }
 
-            // Popula select Utmify
-            utmifySelect.innerHTML = '<option value="">-- Nenhuma --</option>' + this.state.data.utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
-
-            // Funções auxiliares
-            function populateForm(config) {
-                const get = (selector) => creatorScreen.querySelector(selector);
-                get('#page_name').value = config.name || '';
-                get('#main_title').value = config.main_title || '';
-                get('#subtitle').value = config.subtitle || '';
-                get('#button_text').value = config.button_text || '';
-                get('#redirect_url').value = config.redirect_url || '';
-                get('#purchase_value').value = config.purchase_value || '';
-                get('#pixel_id').value = config.pixel_id || '';
-                get('#utmify_integration_id').value = config.utmify_integration_id || '';
+            // Garante que o botão de voltar não apareça se não houver sidebar (página standalone)
+            if (!document.getElementById('sidebar')) {
+                backBtn.style.display = 'none';
             }
 
+            const apiKey = App.state.data.settings?.api_key;
+            if (!apiKey) {
+                App.showToast("Chave de API não encontrada. Salve-a na página 'API PIX' antes de criar páginas.", "error");
+                submitBtn.disabled = true;
+                thankYouForm.querySelectorAll('input, select, button').forEach(el => el.disabled = true); // Desabilita o form
+                return;
+            } else {
+                 submitBtn.disabled = false;
+                 thankYouForm.querySelectorAll('input, select, button').forEach(el => el.disabled = false); // Habilita o form
+            }
+
+            utmifySelect.innerHTML = '<option value="">Não enviar</option>';
+            if (App.state.data.utmifyIntegrations && Array.isArray(App.state.data.utmifyIntegrations)) {
+                App.state.data.utmifyIntegrations.forEach(int => {
+                    const option = document.createElement('option'); option.value = int.id; option.textContent = int.account_name; utmifySelect.appendChild(option);
+                });
+            }
+
+            function populateForm(config) {
+                 document.getElementById('page_name').value = config.page_name || ''; document.getElementById('main_title').value = config.main_title || ''; document.getElementById('subtitle').value = config.subtitle || ''; document.getElementById('button_text').value = config.button_text || ''; document.getElementById('redirect_url').value = config.redirect_url || ''; document.getElementById('purchase_value').value = config.purchase_value || ''; document.getElementById('pixel_id').value = config.pixel_id || ''; document.getElementById('utmify_integration_id').value = config.utmify_integration_id || '';
+            }
             function getFormDataFromTY() {
-                const get = (selector) => creatorScreen.querySelector(selector);
+                const getV = (id) => document.getElementById(id)?.value || '';
                 return {
-                    name: get('#page_name').value,
-                    main_title: get('#main_title').value,
-                    subtitle: get('#subtitle').value,
-                    button_text: get('#button_text').value,
-                    redirect_url: get('#redirect_url').value,
-                    purchase_value: parseInt(get('#purchase_value').value) || 0,
-                    pixel_id: get('#pixel_id').value || null,
-                    utmify_integration_id: get('#utmify_integration_id').value || null
+                    page_name: getV('page_name'), main_title: getV('main_title'), subtitle: getV('subtitle'), button_text: getV('button_text'), redirect_url: getV('redirect_url'), purchase_value: parseFloat(getV('purchase_value')) || 0, pixel_id: getV('pixel_id'), utmify_integration_id: getV('utmify_integration_id') || null
                 };
             }
-
             function updatePreviewTY() {
-                if (App.state.currentPage === 'thankYouCreator' && previewContent) {
-                    try {
-                        const data = getFormDataFromTY();
-                        const previewHTML = `
-                            <div style="background-color: var(--bg-secondary, #0f172a); color: var(--text-primary, #f1f5f9); font-family: 'Inter', sans-serif; min-height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem;">
-                                <div class="animate-fade-in">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-green-400 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-                                    </svg>
-                                    <h1 style="font-size: 2.25rem; font-weight: 800; color: white;">${data.main_title || 'Obrigado!'}</h1>
-                                    <p style="color: var(--text-secondary, #94a3b8); margin-top: 0.5rem; max-width: 450px; margin-left: auto; margin-right: auto;">${data.subtitle || 'Sua compra foi concluída com sucesso.'}</p>
-                                    <a href="${data.redirect_url || '#'}" style="display: inline-block; background-color: var(--accent-secondary, #0ea5e9); color: white; font-weight: 600; padding: 0.75rem 1.5rem; border-radius: 0.375rem; margin-top: 1.5rem; text-decoration: none; transition: background-color 0.2s ease;">
-                                        ${data.button_text || 'Acessar Conteúdo'}
-                                    </a>
-                                </div>
-                            </div>
-                        `;
-                        previewContent.innerHTML = previewHTML;
-                    } catch (e) {
-                        console.error("Erro no updatePreviewTY:", e);
-                    }
-                }
+                 if (!previewContent) return;
+                 const data = getFormDataFromTY();
+                 previewContent.innerHTML = `
+                    <div style="background-color: var(--bg-secondary); color: var(--text-primary); font-family: 'Inter', sans-serif; min-height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem;">
+                        <div>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-green-400 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor"> <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /> </svg>
+                            <h1 style="font-size: 2.25rem; font-weight: 800; color: white;">${data.main_title || 'Obrigado!'}</h1>
+                            <p style="color: var(--text-secondary); margin-top: 0.5rem; max-width: 450px; margin-left: auto; margin-right: auto;">${data.subtitle || 'Subtítulo...'}</p>
+                            <a href="${data.redirect_url || '#'}" target="_blank" style="display: inline-block; background-color: var(--accent-secondary); color: white; font-weight: 600; padding: 0.75rem 1.5rem; border-radius: 0.375rem; margin-top: 1.5rem; text-decoration: none;">
+                                ${data.button_text || 'Botão'}
+                            </a>
+                        </div>
+                    </div>`;
             }
+            function showResultScreenTY(pageId) { const link = `${FRONTEND_URL}/obrigado/${pageId}`; pageLinkOutput.value = link; resultScreen.classList.remove('hidden'); }
+            function hideResultScreenTY() { resultScreen.classList.add('hidden'); thankYouForm.reset(); updatePreviewTY(); }
 
-            function showResultScreenTY(pageId) { 
-                const link = `${FRONTEND_URL}/obrigado/${pageId}`; 
-                pageLinkOutput.value = link; 
-                resultScreen.classList.remove('hidden'); 
-            }
-
-            function hideResultScreenTY() { 
-                resultScreen.classList.add('hidden'); 
-                thankYouForm.reset(); 
-                updatePreviewTY(); 
-            }
-
-            // Configuração inicial
-            if (this.state.editingThankYouPageId) {
-                pageTitle.textContent = 'Editar Página de Obrigado';
-                submitBtn.textContent = 'Carregando...';
-                submitBtn.disabled = true;
+            // Lógica de Edição ou Criação
+            if (App.state.editingThankYouPageId) {
+                pageTitle.textContent = 'Editar Página de Obrigado'; submitBtn.textContent = 'Carregando...'; submitBtn.disabled = true; backBtn.textContent = 'Cancelar Edição';
                 try {
-                    const pageData = await this.apiRequest(`/api/thank-you-pages/${this.state.editingThankYouPageId}`);
-                    if (pageData) {
-                        populateForm(pageData);
-                        submitBtn.textContent = 'Salvar Alterações';
-                    }
-                } catch (e) { 
-                    this.showToast('Erro ao carregar dados da página.', 'error'); 
-                    this.state.editingThankYouPageId = null; 
-                    pageTitle.textContent = 'Criador de Página de Obrigado'; 
-                    submitBtn.textContent = 'Gerar Página'; 
-                    backBtn.textContent = 'Voltar para Lista'; 
-                    thankYouForm.reset(); 
-                }
-                finally { 
-                    submitBtn.disabled = false; 
-                    updatePreviewTY(); 
-                }
+                    const pageData = await App.apiRequest(`/api/thank-you-pages/${App.state.editingThankYouPageId}`);
+                    if (pageData && pageData.config) { populateForm(pageData.config); submitBtn.textContent = 'Salvar Alterações'; } else { throw new Error('Configuração não encontrada.'); }
+                } catch (e) { App.showToast('Erro ao carregar dados da página.', 'error'); App.state.editingThankYouPageId = null; pageTitle.textContent = 'Criador de Página de Obrigado'; submitBtn.textContent = 'Gerar Página'; backBtn.textContent = 'Voltar para Lista'; thankYouForm.reset(); }
+                finally { submitBtn.disabled = false; updatePreviewTY(); }
             } else {
-                pageTitle.textContent = 'Criador de Página de Obrigado';
-                submitBtn.textContent = 'Gerar Página';
-                updatePreviewTY();
+                pageTitle.textContent = 'Criador de Página de Obrigado'; submitBtn.textContent = 'Gerar Página'; backBtn.textContent = 'Voltar para Lista'; thankYouForm.reset(); updatePreviewTY();
             }
 
-            // Event listeners
+            // Listeners
+            thankYouForm.removeEventListener('input', updatePreviewTY);
+            thankYouForm.addEventListener('input', updatePreviewTY);
+
             thankYouForm.removeEventListener('submit', thankYouForm._submitListener);
             thankYouForm._submitListener = async (e) => {
-                e.preventDefault();
-                const button = submitBtn;
-                const originalText = button.textContent;
-                button.disabled = true;
-                button.textContent = 'Salvando...';
-                
+                e.preventDefault(); const button = submitBtn; const originalText = button.textContent; button.textContent = 'Salvando...'; button.disabled = true;
+                const payload = getFormDataFromTY();
+                 // Validação básica no frontend
+                if (!payload.page_name || !payload.purchase_value || !payload.pixel_id || !payload.redirect_url) {
+                    App.showToast('Preencha todos os campos obrigatórios.', 'error'); button.disabled = false; button.textContent = originalText; return;
+                }
                 try {
-                    const payload = getFormDataFromTY();
-                    if (this.state.editingThankYouPageId) {
-                         await this.apiRequest(`/api/thank-you-pages/${this.state.editingThankYouPageId}`, 'PUT', payload);
-                         this.showToast('Página atualizada com sucesso!', 'success'); 
-                         this.state.editingThankYouPageId = null; 
-                         this.navigateTo('thankYouPages');
+                    if (App.state.editingThankYouPageId) {
+                         await App.apiRequest(`/api/thank-you-pages/${App.state.editingThankYouPageId}`, 'PUT', payload);
+                         App.showToast('Página atualizada com sucesso!', 'success'); App.state.editingThankYouPageId = null; App.navigateTo('thankYouPages');
                     } else {
-                        const result = await this.apiRequest(`/api/thank-you-pages/create`, 'POST', payload);
+                        const result = await App.apiRequest(`/api/thank-you-pages/create`, 'POST', payload);
                         showResultScreenTY(result.pageId);
                     }
                 } catch (error) { /* Erro já tratado no apiRequest */ }
@@ -3531,32 +3496,21 @@
             thankYouForm.addEventListener('submit', thankYouForm._submitListener);
 
             copyLinkBtn.removeEventListener('click', copyLinkBtn._clickListener);
-            copyLinkBtn._clickListener = () => { 
-                pageLinkOutput.select(); 
-                document.execCommand('copy'); 
-                copyLinkBtn.textContent = 'Copiado!'; 
-                setTimeout(() => { copyLinkBtn.textContent = 'Copiar Link'; }, 2000); 
-            };
+            copyLinkBtn._clickListener = () => { pageLinkOutput.select(); document.execCommand('copy'); copyLinkBtn.textContent = 'Copiado!'; setTimeout(() => { copyLinkBtn.textContent = 'Copiar Link'; }, 2000); };
             copyLinkBtn.addEventListener('click', copyLinkBtn._clickListener);
 
             createAnotherBtn.removeEventListener('click', createAnotherBtn._clickListener);
-            createAnotherBtn._clickListener = () => { 
-                hideResultScreenTY(); 
-                this.state.editingThankYouPageId = null; 
-                pageTitle.textContent = 'Criador de Página de Obrigado'; 
-                submitBtn.textContent = 'Gerar Página'; 
-            };
+            createAnotherBtn._clickListener = () => { hideResultScreenTY(); App.state.editingThankYouPageId = null; pageTitle.textContent = 'Criador de Página de Obrigado'; submitBtn.textContent = 'Gerar Página'; };
             createAnotherBtn.addEventListener('click', createAnotherBtn._clickListener);
 
             backBtn.removeEventListener('click', backBtn._clickListener);
-            backBtn._clickListener = () => { 
-                this.state.editingThankYouPageId = null; 
-                this.navigateTo('thankYouPages'); 
-            };
+            backBtn._clickListener = () => { App.state.editingThankYouPageId = null; App.navigateTo('thankYouPages'); };
             backBtn.addEventListener('click', backBtn._clickListener);
         },
+    
+    
         
-        async testIndividualPixConnection(provider, button) {
+    async testIndividualPixConnection(provider, button) {
             const originalText = button.innerHTML;
             button.innerHTML = 'Testando...';
             button.disabled = true;
