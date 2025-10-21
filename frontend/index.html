@@ -2979,292 +2979,65 @@
 
             function populateCreatorForm(config) {
                 const get = (selector) => contentEl.querySelector(selector);
-                get('#main_title').value = config.content?.main_title || ''; 
-                get('#subtitle').value = config.content?.subtitle || ''; 
-                get('#media_url').value = config.content?.media_url || '';
-                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; 
-                packagesContainer.innerHTML=''; 
-                if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { 
-                    config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); 
-                } else { 
-                    addPackage(); 
-                }
-                get('#enable_order_bump').checked = config.order_bump?.enabled; 
-                get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); 
-                get('#order_bump_product_name').value = config.order_bump?.product_name || ''; 
-                get('#order_bump_description').value = config.order_bump?.description || ''; 
-                get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
-                get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; 
-                get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); 
-                get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
-                get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; 
-                get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
-                testimonialsContainer.innerHTML=''; 
-                if (config.testimonials?.length > 0) { 
-                    config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); 
-                }
-                get('#pixel_id').value = config.tracking?.pixel_id || ''; 
-                get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; 
-                get('#background_color').value = config.style?.background_color || '#0f172a'; 
-                get('#accent_color').value = config.style?.accent_color || '#38bdf8';
-                get('#success_redirect_url').value = config.redirects?.success_url || '';
+                get('#main_title').value = config.content?.main_title || ''; get('#subtitle').value = config.content?.subtitle || ''; get('#media_url').value = config.content?.media_url || '';
+                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; packagesContainer.innerHTML=''; if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); } else { addPackage(); }
+                get('#enable_order_bump').checked = config.order_bump?.enabled; get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); get('#order_bump_product_name').value = config.order_bump?.product_name || ''; get('#order_bump_description').value = config.order_bump?.description || ''; get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
+                get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
+                get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
+                testimonialsContainer.innerHTML=''; if (config.testimonials?.length > 0) { config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); }
+                get('#pixel_id').value = config.tracking?.pixel_id || ''; get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; get('#background_color').value = config.style?.background_color || '#0f172a'; get('#accent_color').value = config.style?.accent_color || '#38bdf8';
+                get('#success_redirect_url').value = config.redirects?.success_url || ''; // Popula o campo novo
             }
 
             function getFormData() {
-                const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; 
-                const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; 
-                const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; 
-                const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; 
-                const pT=getElValue('#pricing-type-select','fixed'); 
-                let pD; 
-                if(pT==='fixed'){
-                    pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};
-                }else{
-                    pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};
-                }
-                return{
-                    content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},
-                    pricing:pD,
-                    order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},
-                    conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},
-                    testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),
-                    style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},
-                    tracking:{pixel_id:getElValue('#pixel_id')||null,utmify_integration_id:getElValue('#utmify_integration_id')||null},
-                    redirects:{success_url:getElValue('#success_redirect_url')||null}
-                };
+                 const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; const pT=getElValue('#pricing-type-select','fixed'); let pD; if(pT==='fixed'){pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};}else{pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};}
+                 return{content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},pricing:pD,order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},tracking:{pixel_id:getElValue('#pixel_id',''),utmify_integration_id:getElValue('#utmify_integration_id','')||null}, redirects: { success_url: getElValue('#success_redirect_url') || null }}; // Adiciona redirects
             }
 
             function generatePreviewHTML(data) {
-    const fC = (c) => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-    // Determina cores baseadas no fundo (claro ou escuro)
-    const isDarkBg = (bgColor = '#0f172a') => {
-        const color = bgColor.substring(1); // remove #
-        const rgb = parseInt(color, 16);
-        const r = (rgb >> 16) & 0xff;
-        const g = (rgb >> 8) & 0xff;
-        const b = (rgb >> 0) & 0xff;
-        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b; // per ITU-R BT.709
-        return luma < 128; // Considera escuro se luma < 128
-    };
-
-    const isBgDark = isDarkBg(data.style.background_color);
-    const primaryTextColor = isBgDark ? '#f1f5f9' : '#111827'; // slate-100 ou gray-900
-    const secondaryTextColor = isBgDark ? '#94a3b8' : '#6b7280'; // slate-400 ou gray-500
-    const cardBgColor = isBgDark ? '#1e293b' : '#ffffff'; // slate-800 ou white
-    const cardBorderColor = isBgDark ? '#334155' : '#e5e7eb'; // slate-700 ou gray-200
-    const cardTextColor = isBgDark ? primaryTextColor : '#111827'; // Cor de texto dentro de cards claros
-    const cardSecondaryTextColor = isBgDark ? secondaryTextColor : '#6b7280'; // Cor secundária dentro de cards claros
-
-
-    const cdH = data.conversion_elements.countdown.enabled
-        ? `<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem; position: sticky; top: 0; z-index: 10;">
-               <p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p>
-               <p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2, '0')}:00</p>
-           </div>`
-        : '';
-
-    const mH = data.content.media_url
-        ? `<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`
-        : '';
-
-    let pH;
-    if (data.pricing.type === 'fixed') {
-        const packages = Array.isArray(data.pricing.packages) ? data.pricing.packages : [];
-        const packageItemsHTML = (packages.length > 0 ? packages : [{ title: 'Configure um pacote', description: '', value_cents: 0 }]).map((pk, i) => `
-            <div style="border: 1px solid ${cardBorderColor}; background-color: ${cardBgColor}; padding: 1rem; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1);"
-                 onclick="this.parentElement.querySelectorAll('div').forEach(el => { el.style.borderColor='${cardBorderColor}'; el.style.boxShadow='0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1)'; }); this.style.borderColor=getComputedStyle(document.documentElement).getPropertyValue('--preview-accent'); this.style.boxShadow = '0 0 0 2px '+getComputedStyle(document.documentElement).getPropertyValue('--preview-accent');">
-                 <h3 style="font-weight: 700; font-size: 1.1rem; color: ${cardTextColor};">${pk.title || 'Pacote'}</h3>
-                 <p style="font-size: 0.9rem; color: ${cardSecondaryTextColor}; margin-top: 0.25rem;">${pk.description || 'Descrição'}</p>
-                 <p style="font-size: 1.5rem; font-weight: 800; color: var(--preview-accent, #38bdf8); margin-top: 0.75rem;">${fC(pk.value_cents)}</p>
-            </div>
-        `).join('');
-        pH = `<div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">${packageItemsHTML}</div>`;
-    } else {
-        // Lógica para preço aberto (se implementada)
-        pH = '<p style="color: red;">Modelo de preço aberto não implementado no preview.</p>';
-    }
-
-    const obH = data.order_bump.enabled && data.order_bump.product_name
-        ? `<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-               <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                   <input type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04; flex-shrink: 0;">
-                   <div>
-                       <h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4>
-                       <p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p>
-                   </div>
-               </div>
-           </div>`
-        : '';
-
-    const gH = data.conversion_elements.guarantee.text
-        ? `<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
-               ${data.conversion_elements.guarantee.seal_url ? `<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px; flex-shrink: 0;">` : ''}
-               <div>
-                   <h4 style="font-weight: 700; color: #374151;">Garantia Total</h4>
-                   <p style="font-size: 0.9rem; color: #6b7280;">${data.conversion_elements.guarantee.text}</p>
-               </div>
-           </div>`
-        : '';
-
-    const testimonials = Array.isArray(data.testimonials) ? data.testimonials : [];
-    const tH = testimonials.filter(t => t.name && t.text).length > 0
-        ? `<div style="margin-top: 2.5rem;">
-               <h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: ${primaryTextColor}; margin-bottom: 1.5rem;">O Que Nossos Clientes Dizem</h3>
-               <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
-                   ${testimonials.map(t => `
-                       <div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;">
-                           <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
-                               ${t.photo_url ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0;">` : ''}
-                               <p style="font-weight: 600; color: #111827;">${t.name}</p>
-                           </div>
-                           <p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${t.text}"</p>
-                       </div>
-                   `).join('')}
-               </div>
-           </div>`
-        : '';
-
-    // Calcula a cor do texto do botão com base na cor de destaque
-    const accentColor = data.style.accent_color || '#38bdf8';
-    const isAccentDark = isDarkBg(accentColor);
-    const buttonTextColor = isAccentDark ? '#FFFFFF' : '#000000'; // Branco para fundos escuros, preto para claros
-
-    return `
-        <div id="preview-body" style="--preview-bg: ${data.style.background_color || '#0f172a'}; --preview-accent: ${accentColor}; background-color: var(--preview-bg); color: ${primaryTextColor}; min-height: 100%; font-family: 'Inter', sans-serif;">
-            ${cdH}
-            <div style="padding: 1.5rem 2rem;">
-                 <h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${primaryTextColor};">${data.content.main_title || 'Título Principal'}</h1>
-                 <p style="text-align: center; color: ${secondaryTextColor}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle || 'Subtítulo da oferta'}</p>
-                 ${mH}
-                 ${pH}
-                 ${obH}
-                 <button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: ${buttonTextColor}; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed; transition: filter 0.2s;">
-                     Comprar Agora
-                 </button>
-                 ${gH}
-                 ${tH}
-            </div>
-        </div>
-    `;
-}
-
-            function updatePreview() { 
-                if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) {
-                    try { 
-                        const data = getFormData(); 
-                        contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); 
-                        const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); 
-                        if(pb) { 
-                            pb.style.setProperty('--preview-bg', data.style.background_color); 
-                            pb.style.setProperty('--preview-accent', data.style.accent_color); 
-                        } 
-                    } catch (e) { 
-                        console.error("Erro no updatePreview:", e); 
-                    } 
-                } 
+                 const fC=(c)=>(c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); const cdH=data.conversion_elements.countdown.enabled?`<div style="background-color: var(--preview-accent, #38bdf8); color: white; text-align: center; padding: 0.75rem;"><p style="font-weight: 600; font-size: 0.9rem;">A OFERTA TERMINA EM</p><p style="font-size: 1.5rem; font-weight: 800; letter-spacing: 0.1em;">${String(data.conversion_elements.countdown.minutes).padStart(2,'0')}:00</p></div>`:''; const mH=data.content.media_url?`<img src="${data.content.media_url}" alt="Preview" style="width: 100%; max-height: 300px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1.5rem;">`:''; let pH; if(data.pricing.type==='open'){pH=`<div style="margin-top: 1.5rem;"><label ...>${data.pricing.label||'Escolha o valor'}</label><div ...><span ...>R$</span><input ... placeholder="${(data.pricing.suggested_value_cents/100).toFixed(2).replace('.',',')}" ...></div><p ...>Mínimo: ${fC(data.pricing.minimum_value_cents)}</p></div>`;}else{const p=Array.isArray(data.pricing.packages)?data.pricing.packages:[];pH=(p.length>0?p:[{title:'Configure',description:'',value_cents:0}]).map((pk,i)=>`<div style="border: 1px solid #e5e7eb; padding: 1rem; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s;" onclick="this.style.borderColor=getComputedStyle(document.documentElement).getPropertyValue('--preview-accent'); this.style.boxShadow = '0 0 0 2px '+getComputedStyle(document.documentElement).getPropertyValue('--preview-accent');"><h3 style="font-weight: 700; font-size: 1.1rem; color: #111827;">${pk.title||'Pacote'}</h3><p style="font-size: 0.9rem; color: #6b7280; margin-top: 0.25rem;">${pk.description||'Descrição'}</p><p style="font-size: 1.5rem; font-weight: 800; color: var(--preview-accent, #38bdf8); margin-top: 0.75rem;">${fC(pk.value_cents)}</p></div>`).join(''); pH=`<div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">${pH}</div>`;}
+                 const obH=data.order_bump.enabled&&data.order_bump.product_name?`<div style="background-color: #fefce8; border: 2px dashed #facc15; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;"><div style="display: flex; align-items: flex-start; gap: 0.75rem;"><input type="checkbox" style="width: 1.5rem; height: 1.5rem; margin-top: 0.25rem; accent-color: #ca8a04;"><div><h4 style="font-weight: 700; color: #ca8a04;">${data.order_bump.product_name}</h4><p style="font-size: 0.9rem; color: #4b5563;">${data.order_bump.description}</p></div></div></div>`:''; const gH=data.conversion_elements.guarantee.text?`<div style="margin-top: 2rem; display: flex; align-items: center; gap: 1rem; background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb;">${data.conversion_elements.guarantee.seal_url?`<img src="${data.conversion_elements.guarantee.seal_url}" alt="Selo" style="width: 60px; height: 60px;">`:''}<div><h4 style="font-weight: 700; color: #374151;">Garantia</h4><p style="font-size: 0.9rem; color: #6b7280;">${data.conversion_elements.guarantee.text}</p></div></div>`:''; const t=Array.isArray(data.testimonials)?data.testimonials:[]; const tH=t.filter(x=>x.name&&x.text).length>0?`<div style="margin-top: 2.5rem;"><h3 style="font-size: 1.5rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'}; margin-bottom: 1.5rem;">Clientes Dizem</h3><div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">${t.map(x=>`<div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;"><div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">${x.photo_url?`<img src="${x.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">`:''}<p style="font-weight: 600; color: #111827;">${x.name}</p></div><p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${x.text}"</p></div>`).join('')}</div></div>`:'';
+                 return`<div id="preview-body" style="--preview-bg: ${data.style.background_color}; --preview-accent: ${data.style.accent_color}; background-color: var(--preview-bg); color: ${data.style.background_color==='#ffffff'?'#1f2937':'#f1f5f9'}; min-height: 100%; font-family: 'Inter', sans-serif;">${cdH}<div style="padding: 1.5rem 2rem;"><h1 style="font-size: 1.8rem; font-weight: 800; text-align: center; color: ${data.style.background_color==='#ffffff'?'#111827':'#f1f5f9'};">${data.content.main_title||'Título'}</h1><p style="text-align: center; color: ${data.style.background_color==='#ffffff'?'#6b7280':'#94a3b8'}; margin-top: 0.5rem; margin-bottom: 2rem;">${data.content.subtitle||'Subtítulo'}</p>${mH}${pH}${obH}<button disabled style="width: 100%; background-color: var(--preview-accent, #38bdf8); color: white; font-weight: 700; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-size: 1.1rem; text-transform: uppercase; border: none; cursor: not-allowed;">Comprar</button>${gH}${tH}</div></div>`;
             }
-
-            function showResultScreen(checkoutId) { 
-                if (!checkoutLinkOutput || !resultScreen) return; 
-                const link = `${FRONTEND_URL}/oferta/${checkoutId}`; 
-                checkoutLinkOutput.value = link; 
-                resultScreen.classList.remove('hidden'); 
-            }
-
-            function hideResultScreen() { 
-                if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; 
-                resultScreen.classList.add('hidden'); 
-                checkoutForm.reset(); 
-                contentEl.querySelector('#pricing-type-select').value = 'fixed'; 
-                contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); 
-                contentEl.querySelector('#open-pricing-container').classList.add('hidden'); 
-                contentEl.querySelector('#enable_order_bump').checked = false; 
-                contentEl.querySelector('#order-bump-fields').classList.add('hidden'); 
-                contentEl.querySelector('#enable_countdown').checked = false; 
-                contentEl.querySelector('#countdown-fields').classList.add('hidden'); 
-                packagesContainer.innerHTML = ''; 
-                testimonialsContainer.innerHTML = ''; 
-                addPackage(); 
-                updatePreview(); 
-            }
+            function updatePreview() { if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) { try { const data = getFormData(); contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); const pb = contentEl.querySelector('#preview-content').querySelector('#preview-body'); if(pb) { pb.style.setProperty('--preview-bg', data.style.background_color); pb.style.setProperty('--preview-accent', data.style.accent_color); } } catch (e) { console.error("Erro no updatePreview:", e); } } }
+            function showResultScreen(checkoutId) { if (!checkoutLinkOutput || !resultScreen) return; const link = `${FRONTEND_URL}/oferta/${checkoutId}`; checkoutLinkOutput.value = link; resultScreen.classList.remove('hidden'); }
+            function hideResultScreen() { if (!resultScreen || !checkoutForm || !packagesContainer || !testimonialsContainer) return; resultScreen.classList.add('hidden'); checkoutForm.reset(); contentEl.querySelector('#pricing-type-select').value = 'fixed'; contentEl.querySelector('#fixed-pricing-container').classList.remove('hidden'); contentEl.querySelector('#open-pricing-container').classList.add('hidden'); contentEl.querySelector('#enable_order_bump').checked = false; contentEl.querySelector('#order-bump-fields').classList.add('hidden'); contentEl.querySelector('#enable_countdown').checked = false; contentEl.querySelector('#countdown-fields').classList.add('hidden'); packagesContainer.innerHTML = ''; testimonialsContainer.innerHTML = ''; addPackage(); updatePreview(); }
 
             if (this.state.editingCheckoutId) {
-                creatorTitle.textContent = 'Editar Checkout'; 
-                submitBtn.textContent = 'Carregando...'; 
-                submitBtn.disabled = true;
+                creatorTitle.textContent = 'Editar Checkout'; submitBtn.textContent = 'Carregando...'; submitBtn.disabled = true;
                 try {
                     const data = await this.apiRequest(`/api/oferta/${this.state.editingCheckoutId}`);
-                    if (data && data.config) { 
-                        populateCreatorForm(data.config); 
-                        submitBtn.textContent = 'Salvar Alterações'; 
-                    } else { 
-                        throw new Error('Config não encontrada.'); 
-                    }
-                } catch (e) { 
-                    this.showToast('Erro ao carregar.', 'error'); 
-                    this.state.editingCheckoutId = null; 
-                    creatorTitle.textContent = 'Criador'; 
-                    submitBtn.textContent = 'Criar'; 
-                    addPackage(); 
-                }
-                finally { 
-                    submitBtn.disabled = false; 
-                    updatePreview(); 
-                }
+                    if (data && data.config) { populateCreatorForm(data.config); submitBtn.textContent = 'Salvar Alterações'; } else { throw new Error('Config não encontrada.'); }
+                } catch (e) { this.showToast('Erro ao carregar.', 'error'); this.state.editingCheckoutId = null; creatorTitle.textContent = 'Criador'; submitBtn.textContent = 'Criar'; addPackage(); }
+                finally { submitBtn.disabled = false; updatePreview(); }
             } else {
-                creatorTitle.textContent = 'Criador de Ofertas'; 
-                submitBtn.textContent = 'Criar Checkout'; 
-                addPackage(); 
-                updatePreview();
+                creatorTitle.textContent = 'Criador de Ofertas'; submitBtn.textContent = 'Criar Checkout'; addPackage(); updatePreview();
             }
 
-            // Event listeners
+            // Listeners
+            contentEl.removeEventListener('input', updatePreview); // Garante que não haja duplicatas
+            contentEl.addEventListener('input', updatePreview);
+            contentEl.removeEventListener('change', contentEl._changeListener);
+            contentEl._changeListener = (e) => {
+                 if (e.target.matches('#pricing-type-select, #enable_order_bump, #enable_countdown')) { const pS=contentEl.querySelector('#pricing-type-select'); const fC=contentEl.querySelector('#fixed-pricing-container'); const oC=contentEl.querySelector('#open-pricing-container'); const eOB=contentEl.querySelector('#enable_order_bump'); const oBF=contentEl.querySelector('#order-bump-fields'); const eC=contentEl.querySelector('#enable_countdown'); const cF=contentEl.querySelector('#countdown-fields'); const iF=pS.value==='fixed'; if(fC)fC.classList.toggle('hidden',!iF); if(oC)oC.classList.toggle('hidden',iF); if(oBF)oBF.classList.toggle('hidden',!eOB.checked); if(cF)cF.classList.toggle('hidden',!eC.checked); updatePreview(); } if (e.target.matches('#pixel_id')) updatePreview();
+            };
+            contentEl.addEventListener('change', contentEl._changeListener);
+
             contentEl.removeEventListener('click', contentEl._clickListener);
             contentEl._clickListener = (e) => {
-                if(e.target.id==='add-package-btn'){addPackage(); updatePreview();} 
-                if(e.target.id==='add-testimonial-btn'){addTestimonial(); updatePreview();} 
-                if(e.target.classList.contains('remove-package-btn')){e.target.closest('div').remove(); updatePreview();} 
-                if(e.target.classList.contains('remove-testimonial-btn')){e.target.closest('div').remove(); updatePreview();} 
-                if(e.target.id==='pricing-type-select'){const isOpen=e.target.value==='open'; contentEl.querySelector('#fixed-pricing-container').classList.toggle('hidden',isOpen); contentEl.querySelector('#open-pricing-container').classList.toggle('hidden',!isOpen); updatePreview();} 
-                if(e.target.id==='enable_order_bump'){contentEl.querySelector('#order-bump-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
-                if(e.target.id==='enable_countdown'){contentEl.querySelector('#countdown-fields').classList.toggle('hidden',!e.target.checked); updatePreview();} 
-                if(e.target.id==='copy-link-btn'){checkoutLinkOutput.select(); document.execCommand('copy'); e.target.textContent='Copiado!'; setTimeout(()=>{e.target.textContent='Copiar Link'},2000);} 
-                if(e.target.id==='create-another-btn'){hideResultScreen(); this.navigateTo('checkouts');}
+                 if(e.target.id==='add-package-btn')addPackage(); if(e.target.id==='add-testimonial-btn')addTestimonial(); const rPB=e.target.closest('.remove-package-btn'); if(rPB){contentEl.querySelector(`#package-${rPB.dataset.id}`)?.remove();updatePreview();} const rTB=e.target.closest('.remove-testimonial-btn'); if(rTB){contentEl.querySelector(`#testimonial-${rTB.dataset.id}`)?.remove();updatePreview();}
+                 const pW=contentEl.querySelector('#preview-wrapper'); if(e.target.id==='desktop-view-btn'){pW.className='desktop mx-auto'; e.target.classList.add('active'); contentEl.querySelector('#mobile-view-btn').classList.remove('active');} if(e.target.id==='mobile-view-btn'){pW.className='mobile mx-auto'; e.target.classList.add('active'); contentEl.querySelector('#desktop-view-btn').classList.remove('active');}
+                 if(e.target.id==='copy-link-btn'){checkoutLinkOutput.select(); document.execCommand('copy'); e.target.textContent='Copiado!'; setTimeout(()=>{e.target.textContent='Copiar Link'},2000);} if(e.target.id==='create-another-btn'){hideResultScreen(); App.navigateTo('checkouts');} // Ajustado para ir para lista
             };
             contentEl.addEventListener('click', contentEl._clickListener);
 
-            checkoutForm.removeEventListener('submit', checkoutForm._submitListener);
-            checkoutForm._submitListener = async (e) => {
-                e.preventDefault(); 
-                const b=submitBtn; 
-                const oT=b.textContent; 
-                b.disabled=true; 
-                b.textContent='Salvando...'; 
-                try { 
-                    const cD=getFormData(); 
-                    cD.name=contentEl.querySelector('#main_title').value;
-                    if(this.state.editingCheckoutId){
-                        await this.apiRequest(`/api/checkouts/${this.state.editingCheckoutId}`,'PUT',cD); 
-                        this.showToast('Checkout atualizado com sucesso!', 'success'); 
-                        this.state.editingCheckoutId=null; 
-                        this.navigateTo('checkouts');
-                    }else{
-                        const r=await this.apiRequest('/api/checkouts/create-hosted','POST',cD); 
-                        if(r&&r.checkoutId){
-                            showResultScreen(r.checkoutId);
-                        }else{
-                            throw new Error('Erro ao criar checkout. Resposta da API inválida.');
-                        }
-                    }
-                }catch(error){
-                    this.showToast(error.message||'Erro ao salvar checkout. Verifique os campos.','error');
-                } finally { 
-                    b.disabled=false; 
-                    b.textContent=oT;
-                }
-            };
-            checkoutForm.addEventListener('submit', checkoutForm._submitListener);
+             checkoutForm.removeEventListener('submit', checkoutForm._submitListener);
+             checkoutForm._submitListener = async (e) => {
+                 e.preventDefault(); const b=submitBtn; const oT=b.textContent; b.textContent='Salvando...'; b.disabled=true;
+                 try{ const cD=getFormData(); if(cD.pricing.type==='fixed'&&(!cD.pricing.packages||cD.pricing.packages.length===0))throw new Error('Adicione pelo menos um pacote de preço.'); if(!cD.tracking.pixel_id)throw new Error('A seleção de um Pixel da Meta é obrigatória.');
+                 if(App.state.editingCheckoutId){await App.apiRequest(`/api/checkouts/${App.state.editingCheckoutId}`,'PUT',cD); App.showToast('Checkout atualizado com sucesso!', 'success'); App.state.editingCheckoutId=null; App.navigateTo('checkouts');}else{const r=await App.apiRequest('/api/checkouts/create-hosted','POST',cD); if(r&&r.checkoutId){showResultScreen(r.checkoutId);}else{throw new Error('Erro ao criar checkout. Resposta da API inválida.');}}}catch(error){App.showToast(error.message||'Erro ao salvar checkout. Verifique os campos.','error');} finally { b.disabled=false; b.textContent=oT;} // Garante restauração do botão
+             };
+             checkoutForm.addEventListener('submit', checkoutForm._submitListener);
         },
 
         // *** FUNÇÃO initThankYouCreatorPage ATUALIZADA (refatorada) ***
