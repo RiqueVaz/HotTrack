@@ -542,6 +542,22 @@
             // Carregar configuração dinamicamente
             await this.loadConfig();
             
+            const path = window.location.pathname;
+
+            // Verificar se é uma página de oferta
+            if (path.startsWith('/oferta/')) {
+                const checkoutId = path.split('/')[2];
+                this.renderCheckoutPage(checkoutId);
+                return;
+            }
+
+            // Verificar se é uma página de obrigado
+            if (path.startsWith('/obrigado/')) {
+                const pageId = path.split('/')[2];
+                this.renderThankYouPage(pageId);
+                return;
+            }
+            
             this.state.token = localStorage.getItem('hottrack_token');
             if (this.state.token) {
                 try {
@@ -679,6 +695,8 @@
                             <div data-target="pressels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>Criador de Pressel</div>
                             <div data-target="pixels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h10a3 3 0 013 3v5a.997.997 0 01-.293-.707zM5 4a1 1 0 00-1 1v.01L8 9.01l4-4.002V5a1 1 0 00-1-1H5z" clip-rule="evenodd" /></svg>Gerenciar Pixels</div>
                             <div data-target="transactions" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.158-.103.346-.196.567-.267v1.698a2.5 2.5 0 00-1.168-.217c-.165 0-.33.018-.488.054a1 1 0 01-.502 1.765l.986.328c.73.243 1.196.96 1.196 1.765 0 1.132-.98 1.99-2.206 1.99-1.225 0-2.205-.858-2.205-1.99 0-.962.63-1.698 1.447-1.938l.986-.329a1 1 0 01.502-1.765z" /><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.5 4.5 0 00-1.838.385l-.234-.14a1 1 0 00-1.18.157l-1 1.732a1 1 0 00.157 1.18l.234.14A4.5 4.5 0 005.5 8.5v.092l-1.07.356a1 1 0 00-.503 1.765l.986.329a2.5 2.5 0 001.09.243v.092a4.5 4.5 0 001.838-.385l.234.14a1 1 0 001.18-.157l1-1.732a1 1 0 00-.157-1.18l-.234-.14a4.5 4.5 0 001.03-2.062V5z" clip-rule="evenodd" /></svg>Transações</div>
+                            <div data-target="checkouts" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2L3 7v11a1 1 0 001 1h12a1 1 0 001-1V7l-7-5zM8 15a1 1 0 100-2 1 1 0 000 2zm4 0a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" /></svg>Checkouts</div>
+                            <div data-target="thank-you-pages" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>Páginas de Obrigado</div>
                             <div class="h-px bg-slate-700 my-2"></div>
                             <div data-target="settings" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" /></svg>API PIX</div>
                             <div data-target="integrations" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M6.414 11.586a2 2 0 10-2.828 2.828l3 3a2 2 0 002.828 0l1.5-1.5a2 2 0 10-2.828-2.828l-1.5 1.5z" clip-rule="evenodd" /></svg>Integrações</div>
@@ -978,6 +996,99 @@
                     </div>
                 </div>`;
             },
+            checkouts() {
+                return `
+                <div class="animate-fade-in">
+                    <div class="mb-6">
+                        <h1 class="text-3xl font-bold text-white">Gerenciar Checkouts</h1>
+                        <p class="text-slate-400">Crie e gerencie seus checkouts hospedados para páginas de oferta.</p>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div class="card p-6 rounded-lg">
+                            <h2 class="text-xl font-bold mb-4 text-white">Criar Novo Checkout</h2>
+                            <form id="checkoutForm" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Nome do Checkout</label>
+                                    <input name="name" placeholder="Ex: Oferta Black Friday" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Título Principal</label>
+                                    <input name="main_title" placeholder="Ex: Oferta Especial em {cidade}" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Subtítulo</label>
+                                    <input name="subtitle" placeholder="Ex: Aproveite esta oportunidade única" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">URL da Mídia (Opcional)</label>
+                                    <input name="media_url" type="url" placeholder="https://exemplo.com/imagem.jpg" class="form-input w-full p-2">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Pacotes de Preço</label>
+                                    <div id="packages-container" class="space-y-3">
+                                        <div class="package-item p-3 bg-slate-800/50 rounded-lg">
+                                            <input name="package_title[]" placeholder="Título do Pacote" class="form-input w-full p-2 mb-2" required>
+                                            <input name="package_description[]" placeholder="Descrição do Pacote" class="form-input w-full p-2 mb-2" required>
+                                            <input name="package_value_cents[]" type="number" placeholder="Valor em centavos (Ex: 1990)" class="form-input w-full p-2" required>
+                                        </div>
+                                    </div>
+                                    <button type="button" id="add-package-btn" class="btn btn-secondary text-sm py-1 px-3 mt-2">Adicionar Pacote</button>
+                                </div>
+                                <button type="submit" class="btn w-full p-3 font-bold rounded-md">Criar Checkout</button>
+                            </form>
+                        </div>
+                        <div class="card p-6 rounded-lg">
+                            <h2 class="text-xl font-bold mb-4 text-white">Checkouts Criados</h2>
+                            <div id="checkouts-list" class="space-y-3 max-h-96 overflow-y-auto">
+                                <p class="text-gray-500 text-sm">Carregando checkouts...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            },
+            'thank-you-pages'() {
+                return `
+                <div class="animate-fade-in">
+                    <div class="mb-6">
+                        <h1 class="text-3xl font-bold text-white">Gerenciar Páginas de Obrigado</h1>
+                        <p class="text-slate-400">Crie e gerencie suas páginas de obrigado para após a compra.</p>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div class="card p-6 rounded-lg">
+                            <h2 class="text-xl font-bold mb-4 text-white">Criar Nova Página de Obrigado</h2>
+                            <form id="thankYouPageForm" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Nome da Página</label>
+                                    <input name="page_name" placeholder="Ex: Obrigado pela Compra!" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Valor da Compra (em centavos)</label>
+                                    <input name="purchase_value" type="number" placeholder="Ex: 1990" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Pixel ID (Opcional)</label>
+                                    <input name="pixel_id" placeholder="ID do Pixel do Facebook" class="form-input w-full p-2">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">URL de Redirecionamento</label>
+                                    <input name="redirect_url" type="url" placeholder="https://seu-site.com" class="form-input w-full p-2" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">ID de Integração Utmify (Opcional)</label>
+                                    <input name="utmify_integration_id" placeholder="ID da integração Utmify" class="form-input w-full p-2">
+                                </div>
+                                <button type="submit" class="btn w-full p-3 font-bold rounded-md">Criar Página</button>
+                            </form>
+                        </div>
+                        <div class="card p-6 rounded-lg">
+                            <h2 class="text-xl font-bold mb-4 text-white">Páginas Criadas</h2>
+                            <div id="thank-you-pages-list" class="space-y-3 max-h-96 overflow-y-auto">
+                                <p class="text-gray-500 text-sm">Carregando páginas...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            },
             modal(title, content) {
                 return `<div id="modal" class="modal active"><div class="card p-6 rounded-lg w-full max-w-md animate-fade-in"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-white">${title}</h2><button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>${content}</div></div>`;
             }
@@ -1038,6 +1149,10 @@
                 if (e.target.id === 'add-utmify-btn') {
                     this.showAddUtmifyModal();
                 }
+                
+                if (e.target.id === 'add-package-btn') {
+                    this.addPackageField();
+                }
 
                 const sidebarLink = e.target.closest('.nav-link[data-target]');
                 if (sidebarLink && sidebarLink.dataset.target) this.navigateTo(sidebarLink.dataset.target);
@@ -1083,13 +1198,15 @@
                     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
                     document.getElementById(`tab-${tabName}`).classList.add('active');
                 }
-                if (e.target.classList.contains('delete-pixel-btn') || e.target.classList.contains('delete-bot-btn') || e.target.classList.contains('delete-pressel-btn') || e.target.classList.contains('delete-utmify-btn')) {
+                if (e.target.classList.contains('delete-pixel-btn') || e.target.classList.contains('delete-bot-btn') || e.target.classList.contains('delete-pressel-btn') || e.target.classList.contains('delete-utmify-btn') || e.target.classList.contains('delete-checkout-btn') || e.target.classList.contains('delete-thank-you-page-btn')) {
                     const id = e.target.dataset.id;
                     let type = '', endpoint = '';
                     if (e.target.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; }
                     if (e.target.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; }
                     if (e.target.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; }
                     if (e.target.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; }
+                    if (e.target.classList.contains('delete-checkout-btn')) { type = 'checkouts'; endpoint = 'checkouts'; }
+                    if (e.target.classList.contains('delete-thank-you-page-btn')) { type = 'thankYouPages'; endpoint = 'thank-you-pages'; }
                     
                     if (confirm(`Tem certeza que deseja excluir este item?`)) {
                         try {
@@ -1158,6 +1275,64 @@
                                 this.navigateTo('pressels');
                                 this.generatePresselCode(newPressel);
                             }
+                        }
+                    }
+                    else if (form.id === 'checkoutForm') {
+                        const packages = [];
+                        const packageTitles = form.querySelectorAll('input[name="package_title[]"]');
+                        const packageDescriptions = form.querySelectorAll('input[name="package_description[]"]');
+                        const packageValues = form.querySelectorAll('input[name="package_value_cents[]"]');
+                        
+                        for (let i = 0; i < packageTitles.length; i++) {
+                            if (packageTitles[i].value && packageDescriptions[i].value && packageValues[i].value) {
+                                packages.push({
+                                    title: packageTitles[i].value,
+                                    description: packageDescriptions[i].value,
+                                    value_cents: parseInt(packageValues[i].value)
+                                });
+                            }
+                        }
+                        
+                        if (packages.length === 0) {
+                            this.showToast('Adicione pelo menos um pacote.', 'error');
+                            return;
+                        }
+                        
+                        const payload = {
+                            name: data.name,
+                            content: {
+                                main_title: data.main_title,
+                                subtitle: data.subtitle,
+                                media_url: data.media_url || null
+                            },
+                            pricing: {
+                                packages: packages
+                            }
+                        };
+                        
+                        const newCheckout = await this.apiRequest('/api/checkouts/create-hosted', 'POST', payload);
+                        if (newCheckout) {
+                            this.state.data.checkouts = this.state.data.checkouts || [];
+                            this.state.data.checkouts.unshift(newCheckout);
+                            this.navigateTo('checkouts');
+                            this.showToast('Checkout criado com sucesso!', 'success');
+                        }
+                    }
+                    else if (form.id === 'thankYouPageForm') {
+                        const payload = {
+                            page_name: data.page_name,
+                            purchase_value: parseInt(data.purchase_value),
+                            pixel_id: data.pixel_id || null,
+                            redirect_url: data.redirect_url,
+                            utmify_integration_id: data.utmify_integration_id || null
+                        };
+                        
+                        const newPage = await this.apiRequest('/api/thank-you-pages/create', 'POST', payload);
+                        if (newPage) {
+                            this.state.data.thankYouPages = this.state.data.thankYouPages || [];
+                            this.state.data.thankYouPages.unshift(newPage);
+                            this.navigateTo('thank-you-pages');
+                            this.showToast('Página de obrigado criada com sucesso!', 'success');
                         }
                     }
                 } catch(e) { /* Errors are handled by apiRequest */ }
@@ -1339,11 +1514,15 @@
             this.handleFilterChange(page, this.state.dateFilter.period || 'all');
         } else if (page === 'settings') {
             this.updateAllPixStatusIndicators();
-        } else if (page === 'bots') {
-            this.updateAllBotStatusIndicators();
-        }
-    }, 50);
-},
+                } else if (page === 'bots') {
+                    this.updateAllBotStatusIndicators();
+                } else if (page === 'checkouts') {
+                    this.loadCheckouts();
+                } else if (page === 'thank-you-pages') {
+                    this.loadThankYouPages();
+                }
+            }, 50);
+        },
         
         async fetchDashboardMetrics() {
             try {
@@ -1682,6 +1861,277 @@
             document.getElementById('pressel-code-textarea').value = htmlContent;
         },
 
+        // ==========================================================
+        // FUNCIONALIDADES DE CHECKOUT E PÁGINAS DE OBRIGADO
+        // ==========================================================
+
+        async renderCheckoutPage(checkoutId) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = '<p class="text-center text-lg mt-20">Carregando oferta...</p>';
+
+            try {
+                const checkoutData = await this.apiRequest(`/api/oferta/${checkoutId}`);
+                const { config } = checkoutData;
+
+                const packagesHTML = config.pricing.packages.map((pkg, index) => `
+                    <div data-package-index="${index}" class="package-item p-4 rounded-lg cursor-pointer hover:border-sky-400 border border-slate-700 bg-slate-800/50 transition-all">
+                        <h3 class="font-bold text-lg text-white pointer-events-none">${pkg.title}</h3>
+                        <p class="text-sm text-gray-400 pointer-events-none">${pkg.description}</p>
+                        <p class="text-2xl font-bold text-sky-400 mt-2 pointer-events-none">R$ ${(pkg.value_cents / 100).toFixed(2).replace('.', ',')}</p>
+                    </div>
+                `).join('');
+
+                const checkoutHTML = `
+                    <div class="min-h-screen flex items-center justify-center p-4 animate-fade-in">
+                        <div class="card w-full max-w-md p-6 md:p-8 rounded-2xl">
+                            ${config.content.media_url ? `<img src="${config.content.media_url}" alt="Preview" class="w-full h-48 object-cover rounded-lg mb-6">` : ''}
+                            <h1 class="text-2xl font-bold text-center text-white">${config.content.main_title.replace('{cidade}', 'sua Cidade')}</h1>
+                            <p class="text-gray-400 text-center mb-6">${config.content.subtitle}</p>
+                            <div id="packages-list" class="space-y-4">
+                                ${packagesHTML}
+                            </div>
+                            <button id="pay-button" class="btn w-full mt-6 py-3 font-bold" disabled>Selecione um pacote</button>
+                        </div>
+                    </div>
+                `;
+                
+                appContainer.innerHTML = checkoutHTML;
+
+                let selectedPackage = null;
+                const packagesList = document.getElementById('packages-list');
+                const payButton = document.getElementById('pay-button');
+
+                packagesList.addEventListener('click', (e) => {
+                    const clickedPackage = e.target.closest('.package-item');
+                    if (!clickedPackage) return;
+
+                    packagesList.querySelectorAll('.package-item').forEach(p => {
+                        p.classList.remove('border-sky-400', 'ring-2', 'ring-sky-400');
+                    });
+                    clickedPackage.classList.add('border-sky-400', 'ring-2', 'ring-sky-400');
+                    
+                    const packageIndex = clickedPackage.dataset.packageIndex;
+                    selectedPackage = config.pricing.packages[packageIndex];
+                    
+                    payButton.textContent = `Pagar Agora (${(selectedPackage.value_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
+                    payButton.disabled = false;
+                });
+
+                payButton.addEventListener('click', async () => {
+                    if (!selectedPackage) {
+                        alert('Por favor, selecione um pacote.');
+                        return;
+                    }
+
+                    payButton.textContent = 'Gerando PIX...';
+                    payButton.disabled = true;
+
+                    try {
+                        const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
+                            checkoutId: checkoutId,
+                            value_cents: selectedPackage.value_cents
+                        });
+                        this.showPixModal(pixData);
+                    } catch (error) {
+                        alert('Erro ao gerar PIX. Tente novamente.');
+                    } finally {
+                        payButton.textContent = `Pagar Agora (${(selectedPackage.value_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
+                        payButton.disabled = false;
+                    }
+                });
+
+            } catch (error) {
+                appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Oferta não encontrada ou inválida.</p>`;
+            }
+        },
+
+        async renderThankYouPage(pageId) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = '<p class="text-center text-lg mt-20">Carregando página...</p>';
+
+            try {
+                const pageData = await this.apiRequest(`/api/obrigado/${pageId}`);
+                const { config } = pageData;
+
+                const thankYouHTML = `
+                    <div class="min-h-screen flex items-center justify-center p-4">
+                        <div class="card w-full max-w-md p-6 md:p-8 rounded-2xl text-center">
+                            <div class="mb-6">
+                                <div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                </div>
+                                <h1 class="text-2xl font-bold text-white mb-2">${config.page_name}</h1>
+                                <p class="text-gray-400">Obrigado pela sua compra!</p>
+                            </div>
+                            
+                            <div class="space-y-4 mb-6">
+                                <div class="bg-slate-800/50 p-4 rounded-lg">
+                                    <p class="text-sm text-gray-400">Valor da compra:</p>
+                                    <p class="text-xl font-bold text-green-400">R$ ${(config.purchase_value / 100).toFixed(2).replace('.', ',')}</p>
+                                </div>
+                            </div>
+
+                            <div class="space-y-3">
+                                <button id="redirect-btn" class="btn w-full py-3 font-bold">
+                                    Continuar
+                                </button>
+                                <p class="text-xs text-gray-500">
+                                    Você será redirecionado automaticamente em alguns segundos...
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                appContainer.innerHTML = thankYouHTML;
+
+                // Configurar redirecionamento
+                const redirectBtn = document.getElementById('redirect-btn');
+                redirectBtn.addEventListener('click', () => {
+                    window.location.href = config.redirect_url;
+                });
+
+                // Redirecionamento automático após 5 segundos
+                setTimeout(() => {
+                    window.location.href = config.redirect_url;
+                }, 5000);
+
+                // Enviar evento para Utmify se configurado
+                if (config.utmify_integration_id) {
+                    try {
+                        await this.apiRequest('/api/thank-you-pages/fire-utmify', 'POST', {
+                            pageId: pageId,
+                            trackingParameters: {
+                                utm_source: new URLSearchParams(window.location.search).get('utm_source'),
+                                utm_campaign: new URLSearchParams(window.location.search).get('utm_campaign'),
+                                utm_medium: new URLSearchParams(window.location.search).get('utm_medium'),
+                                utm_content: new URLSearchParams(window.location.search).get('utm_content'),
+                                utm_term: new URLSearchParams(window.location.search).get('utm_term')
+                            },
+                            customerData: {
+                                email: '',
+                                phone: '',
+                                name: ''
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Erro ao enviar evento para Utmify:', error);
+                    }
+                }
+
+            } catch (error) {
+                appContainer.innerHTML = `<p class="text-center text-red-400 text-lg mt-20">Página não encontrada ou inválida.</p>`;
+            }
+        },
+
+        showPixModal(pixData) {
+            const modalContent = `
+                <div class="text-center">
+                    <h3 class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
+                    <p class="text-sm text-gray-400 mt-2 mb-4">Copie o código abaixo e pague no seu aplicativo do banco.</p>
+                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="5" readonly>${pixData.qr_code_text}</textarea>
+                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
+                </div>
+            `;
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
+            
+            // Adicionar funcionalidade de cópia
+            document.getElementById('copy-pix-btn').addEventListener('click', () => {
+                const textarea = document.getElementById('pix-code-textarea');
+                textarea.select();
+                document.execCommand('copy');
+                this.showToast('Código PIX copiado!', 'success');
+            });
+        },
+        
+        async loadCheckouts() {
+            try {
+                const checkouts = await this.apiRequest('/api/checkouts');
+                this.state.data.checkouts = checkouts;
+                this.renderCheckoutsList();
+            } catch (error) {
+                console.error('Erro ao carregar checkouts:', error);
+                document.getElementById('checkouts-list').innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar checkouts.</p>';
+            }
+        },
+        
+        renderCheckoutsList() {
+            const container = document.getElementById('checkouts-list');
+            if (!container) return;
+            
+            const checkouts = this.state.data.checkouts || [];
+            if (checkouts.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-sm">Nenhum checkout criado.</p>';
+                return;
+            }
+            
+            container.innerHTML = checkouts.map(checkout => `
+                <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
+                    <div>
+                        <p class="font-semibold text-sm">${checkout.name}</p>
+                        <p class="text-xs text-gray-400">ID: ${checkout.id}</p>
+                    </div>
+                    <div class="flex space-x-2">
+                        <a href="/oferta/${checkout.id}" target="_blank" class="btn btn-secondary text-xs py-1 px-2">Ver</a>
+                        <button data-id="${checkout.id}" class="delete-checkout-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                    </div>
+                </div>
+            `).join('');
+        },
+        
+        async loadThankYouPages() {
+            try {
+                const pages = await this.apiRequest('/api/thank-you-pages');
+                this.state.data.thankYouPages = pages;
+                this.renderThankYouPagesList();
+            } catch (error) {
+                console.error('Erro ao carregar páginas de obrigado:', error);
+                document.getElementById('thank-you-pages-list').innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar páginas.</p>';
+            }
+        },
+        
+        renderThankYouPagesList() {
+            const container = document.getElementById('thank-you-pages-list');
+            if (!container) return;
+            
+            const pages = this.state.data.thankYouPages || [];
+            if (pages.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-sm">Nenhuma página criada.</p>';
+                return;
+            }
+            
+            container.innerHTML = pages.map(page => `
+                <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
+                    <div>
+                        <p class="font-semibold text-sm">${page.page_name}</p>
+                        <p class="text-xs text-gray-400">ID: ${page.id}</p>
+                    </div>
+                    <div class="flex space-x-2">
+                        <a href="/obrigado/${page.id}" target="_blank" class="btn btn-secondary text-xs py-1 px-2">Ver</a>
+                        <button data-id="${page.id}" class="delete-thank-you-page-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                    </div>
+                </div>
+            `).join('');
+        },
+        
+        addPackageField() {
+            const container = document.getElementById('packages-container');
+            if (!container) return;
+            
+            const packageHTML = `
+                <div class="package-item p-3 bg-slate-800/50 rounded-lg">
+                    <input name="package_title[]" placeholder="Título do Pacote" class="form-input w-full p-2 mb-2" required>
+                    <input name="package_description[]" placeholder="Descrição do Pacote" class="form-input w-full p-2 mb-2" required>
+                    <input name="package_value_cents[]" type="number" placeholder="Valor em centavos (Ex: 1990)" class="form-input w-full p-2" required>
+                </div>
+            `;
+            
+            container.insertAdjacentHTML('beforeend', packageHTML);
+        },
+        
         async testIndividualPixConnection(provider, button) {
             const originalText = button.innerHTML;
             button.innerHTML = 'Testando...';

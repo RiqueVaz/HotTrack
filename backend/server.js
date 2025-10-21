@@ -3502,6 +3502,357 @@ app.get('/api/config', (req, res) => {
 });
 
 // ==========================================================
+// ROTAS CHECKOUTS HOSPEDADOS E PÁGINAS DE OBRIGADO
+// ==========================================================
+
+// ROTA CRIAÇÃO CHECKOUT HOSPEDADO
+app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+    const config = req.body; // Expects the full config object from the frontend
+
+    // Generate a unique ID for the new checkout, prefixed for easy identification
+    const checkoutId = `cko_${uuidv4()}`;
+
+    try {
+        // Insert into the hosted_checkouts table
+        await sql`
+            INSERT INTO hosted_checkouts (id, seller_id, config)
+            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        // Return the generated ID to the frontend
+        res.status(201).json({
+            message: 'Checkout hospedado criado com sucesso!',
+            checkoutId: checkoutId
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar o checkout.' });
+    }
+});
+
+// ROTA PÁGINA DE OFERTA
+app.get('/api/oferta/:checkoutId', async (req, res) => {
+    const { checkoutId } = req.params;
+
+    try {
+        // Fetch the configuration JSON for the given checkout ID
+        const [checkout] = await sql`
+            SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}
+        `;
+
+        if (!checkout) {
+            return res.status(404).json({ message: 'Checkout não encontrado.' });
+        }
+
+        // Return the configuration object
+        res.status(200).json(checkout); // Returns { config: { ... } }
+
+    } catch (error) {
+        console.error("Erro ao buscar dados do checkout hospedado:", error);
+        res.status(500).json({ message: 'Erro interno no servidor.' });
+    }
+});
+
+// ROTA GERAR PIX DA PÁGINA DE OFERTA
+app.post('/api/oferta/generate-pix', async (req, res) => {
+    const { checkoutId, value_cents, click_id } = req.body;
+
+    if (!checkoutId || !value_cents) {
+        return res.status(400).json({ message: 'Dados insuficientes para gerar o PIX.' });
+    }
+
+    try {
+        // Find the seller associated with this checkout
+        const [hostedCheckout] = await sql`
+            SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
+        `;
+
+        if (!hostedCheckout) {
+            return res.status(404).json({ message: 'Checkout não encontrado.' });
+        }
+
+        const sellerId = hostedCheckout.seller_id;
+        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+
+        if (!seller) {
+            return res.status(404).json({ message: 'Vendedor associado a este checkout não foi encontrado.' });
+        }
+
+        // Lógica de Rastreamento de Clique
+        const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        const user_agent = req.headers['user-agent'];
+
+        let clickData;
+        let clickIdInternal;
+
+        if (click_id) {
+            const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
+            const [existingClick] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+
+            if (existingClick) {
+                clickData = existingClick;
+                clickIdInternal = existingClick.id;
+                console.log(`[Checkout PIX] Usando click_id existente: ${click_id} (ID: ${clickIdInternal})`);
+                if (!existingClick.checkout_id || existingClick.checkout_id !== checkoutId) {
+                    await sql`UPDATE clicks SET checkout_id = ${checkoutId} WHERE id = ${clickIdInternal}`;
+                    clickData.checkout_id = checkoutId;
+                }
+            } else {
+                console.warn(`[Checkout PIX] Click ID ${db_click_id} não encontrado. Criando um novo clique.`);
+                [clickData] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${db_click_id})
+                    RETURNING *;
+                `;
+                clickIdInternal = clickData.id;
+            }
+        } else {
+            console.log(`[Checkout PIX] Nenhum click_id. Criando novo clique.`);
+            [clickData] = await sql`
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
+                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
+                RETURNING *;
+            `;
+            clickIdInternal = clickData.id;
+
+            const clean_click_id = `lead${clickIdInternal.toString().padStart(6, '0')}`;
+            const db_click_id_new = `/start ${clean_click_id}`;
+            await sql`UPDATE clicks SET click_id = ${db_click_id_new} WHERE id = ${clickIdInternal}`;
+            clickData.click_id = db_click_id_new;
+        }
+
+        // Generate PIX
+        const provider = seller.pix_provider_primary || 'pushinpay';
+        const pixResult = await generatePixForProvider(provider, seller, value_cents, req.headers.host, seller.api_key, ip_address);
+
+        // Save the PIX transaction
+        const [transaction] = await sql`
+            INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
+            VALUES (${clickIdInternal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
+            RETURNING id;
+        `;
+
+        // Send 'InitiateCheckout' event to Meta Pixel API
+        await sendMetaEvent('InitiateCheckout', clickData, { id: transaction.id, pix_value: value_cents / 100 }, null);
+
+        res.status(200).json(pixResult);
+
+    } catch (error) {
+        console.error("Erro ao gerar PIX da página de oferta:", error);
+        res.status(500).json({ message: 'Não foi possível gerar o PIX no momento.' });
+    }
+});
+
+// ==========================================================
+// ROTAS PÁGINAS DE OBRIGADO
+// ==========================================================
+
+// Create a new Thank You Page configuration
+app.post('/api/thank-you-pages/create', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+    const config = req.body;
+
+    if (!config.page_name || !config.purchase_value || !config.pixel_id || !config.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para criar a página.' });
+    }
+
+    const pageId = `ty_${uuidv4()}`;
+
+    try {
+        await sql`
+            INSERT INTO thank_you_pages (id, seller_id, config)
+            VALUES (${pageId}, ${sellerId}, ${JSON.stringify(config)});
+        `;
+
+        res.status(201).json({
+            message: 'Página de obrigado criada com sucesso!',
+            pageId: pageId
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar página de obrigado:", error);
+        res.status(500).json({ message: 'Erro interno ao criar a página.' });
+    }
+});
+
+// Fetch configuration for a specific Thank You Page
+app.get('/api/obrigado/:pageId', async (req, res) => {
+    const { pageId } = req.params;
+
+    try {
+        const [page] = await sql`
+            SELECT seller_id, config FROM thank_you_pages WHERE id = ${pageId}
+        `;
+
+        if (!page) {
+            return res.status(404).json({ message: 'Página de obrigado não encontrada.' });
+        }
+
+        res.status(200).json({
+            config: page.config,
+        });
+
+    } catch (error) {
+        console.error("Erro ao buscar dados da página de obrigado:", error);
+        res.status(500).json({ message: 'Erro interno no servidor.' });
+    }
+});
+
+// Trigger Utmify event from the Thank You Page frontend
+app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
+    const { pageId, trackingParameters, customerData } = req.body;
+
+    try {
+        const [page] = await sql`
+            SELECT seller_id, config FROM thank_you_pages WHERE id = ${pageId}
+        `;
+
+        if (!page || !page.config.utmify_integration_id) {
+            return res.status(404).json({ message: 'Página ou integração Utmify não configurada.' });
+        }
+
+        const sellerId = page.seller_id;
+        const utmifyIntegrationId = page.config.utmify_integration_id;
+
+        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+        if (!seller) {
+            return res.status(404).json({ message: 'Vendedor não encontrado.' });
+        }
+
+        const utmifyData = {
+            integration_id: utmifyIntegrationId,
+            event_name: 'Purchase',
+            customer_data: {
+                email: customerData.email || '',
+                phone: customerData.phone || '',
+                name: customerData.name || '',
+                ...trackingParameters
+            },
+            purchase_data: {
+                value: page.config.purchase_value,
+                currency: 'BRL'
+            }
+        };
+
+        const utmifyResponse = await fetch('https://api.utmify.com.br/v1/events', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${seller.utmify_token}`
+            },
+            body: JSON.stringify(utmifyData)
+        });
+
+        if (!utmifyResponse.ok) {
+            throw new Error(`Utmify API error: ${utmifyResponse.status}`);
+        }
+
+        res.status(200).json({ message: 'Evento enviado para Utmify com sucesso!' });
+
+    } catch (error) {
+        console.error(`[Utmify TY Page Error]`, error.response?.data || error.message);
+        res.status(500).json({ message: 'Erro ao enviar evento para Utmify.' });
+    }
+});
+
+// LISTAR PÁGINAS DE OBRIGADO DO VENDEDOR
+app.get('/api/thank-you-pages', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        const pages = await sql`
+            SELECT
+                id,
+                config->>'page_name' as name,
+                created_at
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC;
+        `;
+        res.status(200).json(pages);
+    } catch (error) {
+        console.error("Erro ao listar páginas de obrigado:", error);
+        res.status(500).json({ message: 'Erro ao buscar suas páginas de obrigado.' });
+    }
+});
+
+// BUSCAR UMA PÁGINA DE OBRIGADO ESPECÍFICA
+app.get('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+    try {
+        const [page] = await sql`
+            SELECT id, config FROM thank_you_pages
+            WHERE id = ${pageId} AND seller_id = ${sellerId};
+        `;
+        if (!page) {
+            return res.status(404).json({ message: 'Página de obrigado não encontrada ou não pertence a você.' });
+        }
+        res.status(200).json(page);
+    } catch (error) {
+        console.error(`Erro ao buscar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao buscar a página.' });
+    }
+});
+
+// ATUALIZAR UMA PÁGINA DE OBRIGADO
+app.put('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+    const newConfig = req.body;
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+
+    if (!newConfig.page_name || !newConfig.purchase_value || !newConfig.pixel_id || !newConfig.redirect_url) {
+        return res.status(400).json({ message: 'Dados insuficientes para atualizar a página.' });
+    }
+
+    try {
+        const result = await sql`
+            UPDATE thank_you_pages
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Página não encontrada ou você não tem permissão para editá-la.' });
+        }
+        res.status(200).json({ message: 'Página de obrigado atualizada com sucesso!', pageId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar a página.' });
+    }
+});
+
+// DELETAR UMA PÁGINA DE OBRIGADO
+app.delete('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
+    const { pageId } = req.params;
+    const sellerId = req.user.id;
+
+    if (!pageId.startsWith('ty_')) {
+        return res.status(400).json({ message: 'ID de página inválido.' });
+    }
+
+    try {
+        const result = await sql`
+            DELETE FROM thank_you_pages
+            WHERE id = ${pageId} AND seller_id = ${sellerId}
+            RETURNING id;
+        `;
+        if (result.length === 0) {
+             console.warn(`Tentativa de excluir página TY não encontrada ou não pertencente ao seller: ${pageId}, Seller: ${sellerId}`);
+        }
+        res.status(200).json({ message: 'Página de obrigado excluída com sucesso!' });
+    } catch (error) {
+        console.error(`Erro ao excluir página de obrigado ${pageId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao excluir a página.' });
+    }
+});
+
+// ==========================================================
 //          SERVIÇO DE ARQUIVOS ESTÁTICOS (FRONTEND & ADMIN)
 // ==========================================================
 
