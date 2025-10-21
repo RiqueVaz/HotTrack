@@ -1400,13 +1400,41 @@ app.post('/api/checkouts', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao salvar o checkout.' });
     }
 });
-app.delete('/api/checkouts/:id', authenticateJwt, async (req, res) => {
+// EXCLUIR CHECKOUT
+app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
+    const { checkoutId } = req.params;
+    const sellerId = req.user.id;
+
+    if (!checkoutId.startsWith('cko_')) {
+        return res.status(400).json({ message: 'ID de checkout inválido.' });
+    }
+
     try {
-        await sql`DELETE FROM checkouts WHERE id = ${req.params.id} AND seller_id = ${req.user.id}`;
-        res.status(204).send();
+        // IMPORTANT: First, delete associated clicks to avoid foreign key constraint errors
+        await sql `DELETE FROM clicks WHERE checkout_id = ${checkoutId} AND seller_id = ${sellerId}`;
+
+        // Now, delete the checkout itself
+        const result = await sql`
+            DELETE FROM hosted_checkouts
+            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
+            RETURNING id; -- Return ID to confirm deletion
+        `;
+
+        if (result.length === 0) {
+            console.warn(`Tentativa de excluir checkout não encontrado ou não pertencente ao seller: ${checkoutId}, Seller: ${sellerId}`);
+            // Still return success as the end state (checkout doesn't exist) is achieved
+        }
+
+        res.status(200).json({ message: 'Checkout excluído com sucesso!' }); // Use 200 with message
+
     } catch (error) {
-        console.error("Erro ao excluir checkout:", error);
-        res.status(500).json({ message: 'Erro ao excluir o checkout.' });
+        console.error(`Erro ao excluir checkout ${checkoutId}:`, error);
+        // Specifically handle foreign key violations if pix_transactions block deletion
+        if (error.code === '23503') { // PostgreSQL foreign key violation error code
+             console.error(`Erro de chave estrangeira ao excluir checkout ${checkoutId}. Pode haver transações PIX associadas.`);
+             return res.status(409).json({ message: 'Não é possível excluir este checkout pois existem transações PIX associadas a ele através de cliques. Contacte o suporte se necessário.' });
+        }
+        res.status(500).json({ message: 'Erro interno ao excluir o checkout.' });
     }
 });
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
@@ -3504,6 +3532,63 @@ app.get('/api/config', (req, res) => {
 // ==========================================================
 // ROTAS CHECKOUTS HOSPEDADOS E PÁGINAS DE OBRIGADO
 // ==========================================================
+
+// LISTAR CHECKOUTS
+app.get('/api/checkouts', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        // Select the ID, extract the main title from the config JSON, and the creation date
+        const checkouts = await sql`
+            SELECT
+                id,
+                config->'content'->>'main_title' as name, -- Extracts 'main_title' from the 'content' object within 'config'
+                created_at
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC;
+        `;
+        res.status(200).json(checkouts);
+    } catch (error) {
+        console.error("Erro ao listar checkouts hospedados:", error);
+        res.status(500).json({ message: 'Erro ao buscar seus checkouts.' });
+    }
+});
+
+// EDITAR (ATUALIZAR) CHECKOUT
+app.put('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
+    const { checkoutId } = req.params;
+    const sellerId = req.user.id;
+    const newConfig = req.body; // Expects the full updated config object from the frontend
+
+    // Basic validation
+    if (!checkoutId.startsWith('cko_')) {
+        return res.status(400).json({ message: 'ID de checkout inválido.' });
+    }
+    if (!newConfig || typeof newConfig !== 'object') {
+        return res.status(400).json({ message: 'Configuração inválida fornecida.' });
+    }
+
+    try {
+        // Update the config JSON and updated_at timestamp for the specific checkout ID and seller ID
+        const result = await sql`
+            UPDATE hosted_checkouts
+            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
+            RETURNING id; -- Return the ID to confirm update occurred
+        `;
+
+        // Check if any row was updated
+        if (result.length === 0) {
+            return res.status(404).json({ message: 'Checkout não encontrado ou você não tem permissão para editá-lo.' });
+        }
+
+        res.status(200).json({ message: 'Checkout atualizado com sucesso!', checkoutId: result[0].id });
+    } catch (error) {
+        console.error(`Erro ao atualizar checkout ${checkoutId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao atualizar o checkout.' });
+    }
+});
+
 
 // ROTA CRIAÇÃO CHECKOUT HOSPEDADO
 app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {

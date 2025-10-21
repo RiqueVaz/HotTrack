@@ -2296,14 +2296,14 @@
         
         async navigateTo(page) {
     // Lógica de limpeza de estado (do Arquivo 2)
-    if (this.state.currentPage === 'pageCreator' && page !== 'pageCreator') {
-        this.state.editingCheckoutId = null;
+    if (App.state.currentPage === 'pageCreator' && page !== 'pageCreator') {
+        App.state.editingCheckoutId = null;
     }
-    if (this.state.currentPage === 'thankYouCreator' && page !== 'thankYouCreator') {
-        this.state.editingThankYouPageId = null;
+    if (App.state.currentPage === 'thankYouCreator' && page !== 'thankYouCreator') {
+        App.state.editingThankYouPageId = null;
     }
 
-    this.state.currentPage = page;
+    App.state.currentPage = page;
     const contentContainer = document.getElementById('content');
     if (!contentContainer) { console.error("Container #content não encontrado."); return; }
     if (!this.templates[page]) { console.error(`Template para a página "${page}" não encontrado.`); contentContainer.innerHTML = `<p class="text-red-500 p-8">Erro: Template da página "${page}" não definido.</p>`; return; }
@@ -3269,7 +3269,7 @@
             }
 
             function updatePreview() { 
-                if (this.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) { 
+                if (App.state.currentPage === 'pageCreator' && contentEl.querySelector('#creator-screen') && contentEl.querySelector('#preview-content')) {
                     try { 
                         const data = getFormData(); 
                         contentEl.querySelector('#preview-content').innerHTML = generatePreviewHTML(data); 
@@ -3440,7 +3440,7 @@
             }
 
             function updatePreviewTY() {
-                if (this.state.currentPage === 'thankYouCreator' && previewContent) {
+                if (App.state.currentPage === 'thankYouCreator' && previewContent) {
                     try {
                         const data = getFormDataFromTY();
                         const previewHTML = `
