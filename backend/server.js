@@ -3666,95 +3666,103 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
     }
 });
 
-// ROTA GERAR PIX DA PÁGINA DE OFERTA
 app.post('/api/oferta/generate-pix', async (req, res) => {
-    const { checkoutId, value_cents, click_id } = req.body;
-
-    if (!checkoutId || !value_cents) {
-        return res.status(400).json({ message: 'Dados insuficientes para gerar o PIX.' });
-    }
-
-    try {
-        // Find the seller associated with this checkout
-        const [hostedCheckout] = await sql`
-            SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
-        `;
-
-        if (!hostedCheckout) {
-            return res.status(404).json({ message: 'Checkout não encontrado.' });
-        }
-
-        const sellerId = hostedCheckout.seller_id;
-        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-
-        if (!seller) {
-            return res.status(404).json({ message: 'Vendedor associado a este checkout não foi encontrado.' });
-        }
-
-        // Lógica de Rastreamento de Clique
-        const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
-        const user_agent = req.headers['user-agent'];
-
-        let clickData;
-        let clickIdInternal;
-
-        if (click_id) {
-            const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
-            const [existingClick] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-
-            if (existingClick) {
-                clickData = existingClick;
-                clickIdInternal = existingClick.id;
-                console.log(`[Checkout PIX] Usando click_id existente: ${click_id} (ID: ${clickIdInternal})`);
-                if (!existingClick.checkout_id || existingClick.checkout_id !== checkoutId) {
-                    await sql`UPDATE clicks SET checkout_id = ${checkoutId} WHERE id = ${clickIdInternal}`;
-                    clickData.checkout_id = checkoutId;
-                }
-            } else {
-                console.warn(`[Checkout PIX] Click ID ${db_click_id} não encontrado. Criando um novo clique.`);
-                [clickData] = await sql`
-                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id)
-                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${db_click_id})
-                    RETURNING *;
-                `;
-                clickIdInternal = clickData.id;
-            }
-        } else {
-            console.log(`[Checkout PIX] Nenhum click_id. Criando novo clique.`);
-            [clickData] = await sql`
-                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
-                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
-                RETURNING *;
-            `;
-            clickIdInternal = clickData.id;
-
-            const clean_click_id = `lead${clickIdInternal.toString().padStart(6, '0')}`;
-            const db_click_id_new = `/start ${clean_click_id}`;
-            await sql`UPDATE clicks SET click_id = ${db_click_id_new} WHERE id = ${clickIdInternal}`;
-            clickData.click_id = db_click_id_new;
-        }
-
-        // Generate PIX
-        const provider = seller.pix_provider_primary || 'pushinpay';
-        const pixResult = await generatePixForProvider(provider, seller, value_cents, req.headers.host, seller.api_key, ip_address);
-
-        // Save the PIX transaction
-        const [transaction] = await sql`
-            INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
-            VALUES (${clickIdInternal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
-            RETURNING id;
-        `;
-
-        // Send 'InitiateCheckout' event to Meta Pixel API
-        await sendMetaEvent('InitiateCheckout', clickData, { id: transaction.id, pix_value: value_cents / 100 }, null);
-
-        res.status(200).json(pixResult);
-
-    } catch (error) {
-        console.error("Erro ao gerar PIX da página de oferta:", error);
-        res.status(500).json({ message: 'Não foi possível gerar o PIX no momento.' });
-    }
-});
+        const { checkoutId, value_cents, click_id } = req.body;
+    
+        if (!checkoutId || !value_cents) {
+            return res.status(400).json({ message: 'Dados insuficientes para gerar o PIX.' });
+        }
+    
+        let seller, clickData, clickIdInternal; // Variáveis de escopo mais amplo
+    
+        try {
+            // 1. Find the seller associated with this checkout
+            const [hostedCheckout] = await sql`
+                SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
+            `;
+    
+            if (!hostedCheckout) {
+                return res.status(404).json({ message: 'Checkout não encontrado.' });
+            }
+    
+            const sellerId = hostedCheckout.seller_id;
+            [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`; // Atribui ao seller
+    
+            if (!seller) {
+                return res.status(404).json({ message: 'Vendedor associado a este checkout não foi encontrado.' });
+            }
+    
+            // 2. Lógica de Rastreamento de Clique (Modificada)
+            const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+            const user_agent = req.headers['user-agent'];
+    
+            if (click_id) {
+                const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
+                const [existingClick] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+    
+                if (existingClick) {
+                    clickData = existingClick;
+                    clickIdInternal = existingClick.id;
+                    console.log(`[Checkout PIX] Usando click_id existente: ${click_id} (ID: ${clickIdInternal})`);
+                    if (!existingClick.checkout_id || existingClick.checkout_id !== checkoutId) {
+                        await sql`UPDATE clicks SET checkout_id = ${checkoutId} WHERE id = ${clickIdInternal}`;
+                        clickData.checkout_id = checkoutId;
+                    }
+                } else {
+                    console.warn(`[Checkout PIX] Click ID ${db_click_id} não encontrado. Criando um novo clique.`);
+                    [clickData] = await sql`
+                        INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id)
+                        VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${db_click_id})
+                        RETURNING *;
+                    `;
+                    clickIdInternal = clickData.id;
+                }
+            } else {
+                console.log(`[Checkout PIX] Nenhum click_id. Criando novo clique.`);
+                [clickData] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
+                    RETURNING *;
+                `;
+                clickIdInternal = clickData.id;
+    
+                const clean_click_id = `lead${clickIdInternal.toString().padStart(6, '0')}`;
+                const db_click_id_new = `/start ${clean_click_id}`;
+                await sql`UPDATE clicks SET click_id = ${db_click_id_new} WHERE id = ${clickIdInternal}`;
+                clickData.click_id = db_click_id_new;
+            }
+    
+            // 3. Generate PIX (LÓGICA NOVA COM FALLBACK)
+            const pixResult = await generatePixWithFallback(seller, value_cents, req.headers.host, seller.api_key, ip_address, clickIdInternal);
+    
+            // 4. O INSERT no pix_transactions JÁ FOI FEITO DENTRO de generatePixWithFallback
+            //    O pixResult contém 'internal_transaction_id'
+            const internalTransactionId = pixResult.internal_transaction_id;
+    
+            // 5. Send 'InitiateCheckout' event to Meta Pixel API
+            await sendMetaEvent('InitiateCheckout', clickData, { id: internalTransactionId, pix_value: value_cents / 100 }, null);
+            
+            // 6. Send 'waiting_payment' event to Utmify
+            // (Esta etapa também existe em /api/pix/generate, é bom tê-la aqui)
+            await sendEventToUtmify(
+                'waiting_payment',
+                clickData,
+                { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() },
+                seller,
+                { name: "Cliente Checkout", email: "cliente@checkout.com" }, // Dados genéricos
+                { id: checkoutId, name: hostedCheckout.config?.content?.main_title || "Produto Checkout" }
+            );
+    
+            // 7. Return PIX details to the frontend (removendo o ID interno)
+            const { internal_transaction_id, ...apiResponse } = pixResult;
+            res.status(200).json(apiResponse);
+    
+        } catch (error) {
+            // O erro agora pode vir do generatePixWithFallback se todos os provedores falharem
+            console.error("Erro ao gerar PIX da página de oferta:", error.message);
+            res.status(500).json({ message: error.message || 'Não foi possível gerar o PIX no momento.' });
+        }
+    });
 
 // ==========================================================
 // ROTAS PÁGINAS DE OBRIGADO
