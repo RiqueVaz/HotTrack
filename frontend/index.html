@@ -37,15 +37,83 @@
                               radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.2), transparent 40%);
             background-size: 20px 20px, 100% 100%, 100% 100%;
         }
-        .card { background-color: var(--bg-card); border: 1px solid var(--border-color); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); transition: all 0.3s ease; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37); }
-        .form-input, .form-select, .form-date { background-color: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); color: var(--text-primary); transition: all 0.3s ease; border-radius: 0.375rem; }
-        .form-input:focus, .form-select:focus, .form-date:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); }
-        .form-date::-webkit-calendar-picker-indicator { filter: invert(0.8); }
-        .btn { background-color: var(--accent-secondary); color: white; transition: all 0.3s ease; border: 1px solid var(--accent-primary); box-shadow: 0 0 15px rgba(14, 165, 233, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.1); position: relative; overflow: hidden; }
-        .btn:before { content: ''; position: absolute; top: 50%; left: 50%; width: 300%; height: 300%; background: radial-gradient(circle, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 70%); transform: translate(-50%, -50%) scale(0); transition: transform 0.5s ease; }
-        .btn:hover:before { transform: translate(-50%, -50%) scale(1); }
-        .btn:hover { background-color: var(--accent-primary); box-shadow: 0 0 25px rgba(56, 189, 248, 0.5); transform: translateY(-2px); }
-        .btn:disabled { background-color: #334155; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        html, body, #app, .md\:flex {
+            height: 100%;
+            overflow: hidden; /* Impede scroll no body */
+        }
+        main#content {
+            height: 100%; /* Altura total por padrão */
+        }
+        main#content.overflow-y-auto {
+             height: calc(100% - 72px); /* 100% da altura menos o header mobile */
+        }
+        @media (min-width: 768px) { /* md */
+            main#content.overflow-y-auto {
+                height: 100%; /* Em desktop, o header não afeta */
+            }
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .form-input, .form-select, .form-date, .form-textarea {
+            background-color: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            border-radius: 0.375rem;
+        }
+
+        .form-input:focus, .form-select:focus, .form-date:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+        }
+
+        .form-date::-webkit-calendar-picker-indicator {
+            filter: invert(0.8);
+        }
+
+        .btn {
+            background-color: var(--accent-secondary);
+            color: white;
+            transition: all 0.3s ease;
+            border: 1px solid var(--accent-primary);
+            box-shadow: 0 0 15px rgba(14, 165, 233, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+            border-radius: 0.375rem;
+            font-weight: 600;
+        }
+        .btn:before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 300%;
+            height: 300%;
+            background: radial-gradient(circle, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 70%);
+            transform: translate(-50%, -50%) scale(0);
+            transition: transform 0.5s ease;
+        }
+        .btn:hover:before {
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        .btn:hover {
+            background-color: var(--accent-primary);
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.5);
+            transform: translateY(-2px);
+        }
+        .btn:disabled { background-color: #334155; cursor: not-allowed; transform: none; box-shadow: none; color: #64748b; }
+
         .btn-red { background-color: #991b1b; border-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
         .btn-red:hover { background-color: #b91c1c; box-shadow: 0 0 25px rgba(239, 68, 68, 0.5); }
         .btn-green { background-color: #047857; border-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
