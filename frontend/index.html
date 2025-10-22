@@ -3148,8 +3148,9 @@
         async addModalDomain() {
             const presselId = document.getElementById('modal-pressel-selector').value;
             const domainInput = document.getElementById('modal-domain-input');
-            const domain = domainInput.value.trim();
-            
+            let domain = domainInput.value.trim();
+            domain = domain.replace(/^(https?:\/\/)?/, '').split('/')[0];
+           
             if (!presselId) {
                 this.showToast('Selecione uma pressel primeiro.', 'error');
                 return;
