@@ -348,7 +348,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
 
                         try {
-                            // CORREÇÃO FINAL: Cancela qualquer tarefa antiga antes de agendar uma nova.
+                            // Cancela qualquer tarefa antiga antes de agendar uma nova.
                             const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                             if (existingState && existingState.scheduled_message_id) {
                                 try {
@@ -367,7 +367,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                                 contentBasedDeduplication: true,
                                 method: "POST"
                             });
-                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId[0]} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                         } catch (error) {
                             console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
                             console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
