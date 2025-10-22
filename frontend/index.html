@@ -1763,7 +1763,19 @@
                                 <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">Salvar e Gerar Código</button>
                             </form>
                         </div>
-                        <div class="card p-6 rounded-lg"><h2 class="text-xl font-bold mb-4 text-white">Pressels Criadas</h2><div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div></div>
+                        <div class="card p-6 rounded-lg">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-bold text-white">Pressels Criadas</h2>
+                                <button 
+                                    type="button" 
+                                    class="btn text-sm py-2 px-4"
+                                    onclick="App.openDomainManagerModal()"
+                                >
+                                    🌐 Gerenciar Domínios
+                                </button>
+                            </div>
+                            <div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div>
+                        </div>
                     </div>
                 </div>`;
             },
@@ -2185,6 +2197,14 @@
                                 this.generatePresselCode(newPressel);
                             }
                         }
+                    }
+                    else if (form.id === 'domain-form') {
+                        e.preventDefault();
+                        await this.addDomain();
+                    }
+                    else if (form.id === 'modal-domain-form') {
+                        e.preventDefault();
+                        await this.addModalDomain();
                     }
                     else if (form.id === 'checkoutForm') {
                         const packages = [];
@@ -2830,6 +2850,296 @@
             document.getElementById('modal-container').innerHTML = this.templates.modal(`Código da Pressel: ${pressel.name}`, modalContent);
             document.getElementById('pressel-code-textarea').value = htmlContent;
         },
+
+        // ==========================================================
+        // FUNCIONALIDADES DE GERENCIAMENTO DE DOMÍNIOS
+        // ==========================================================
+
+        async loadDomainsForPressel() {
+            const presselId = document.getElementById('pressel-selector').value;
+            const domainsSection = document.getElementById('domains-section');
+            const publicLinkInput = document.getElementById('public-link');
+            
+            if (!presselId) {
+                domainsSection.style.display = 'none';
+                publicLinkInput.value = '';
+                return;
+            }
+            
+            // Atualizar link público
+            const publicLink = `${window.location.origin}/presselteste/domain-manager.html?pressel=${presselId}`;
+            publicLinkInput.value = publicLink;
+            
+            // Mostrar seção de domínios
+            domainsSection.style.display = 'block';
+            
+            try {
+                const domains = await this.apiRequest(`/api/pressels/${presselId}/domains`);
+                this.displayDomains(domains);
+            } catch (error) {
+                console.error('Erro ao carregar domínios:', error);
+                document.getElementById('domains-list').innerHTML = `
+                    <div class="text-center text-red-400 py-8">
+                        <p>Erro ao carregar domínios. Tente novamente.</p>
+                    </div>
+                `;
+            }
+        },
+
+        displayDomains(domains) {
+            const container = document.getElementById('domains-list');
+            
+            if (domains.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <p>Nenhum domínio registrado ainda.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = domains.map(domain => `
+                <div class="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
+                    <div>
+                        <div class="font-mono text-sky-400 font-semibold">${domain.domain}</div>
+                        <div class="text-xs text-gray-400">
+                            Registrado em: ${new Date(domain.created_at).toLocaleString('pt-BR')}
+                        </div>
+                    </div>
+                    <button 
+                        class="btn btn-red text-xs py-1 px-2"
+                        onclick="App.deleteDomain(${domain.id})"
+                    >
+                        Remover
+                    </button>
+                </div>
+            `).join('');
+        },
+
+        async addDomain() {
+            const presselId = document.getElementById('pressel-selector').value;
+            const domainInput = document.getElementById('domain-input');
+            const domain = domainInput.value.trim();
+            
+            if (!presselId) {
+                this.showToast('Selecione uma pressel primeiro.', 'error');
+                return;
+            }
+            
+            if (!domain) {
+                this.showToast('Digite um domínio válido.', 'error');
+                return;
+            }
+            
+            try {
+                await this.apiRequest(`/api/pressels/${presselId}/domains`, 'POST', { domain });
+                this.showToast('Domínio adicionado com sucesso!', 'success');
+                domainInput.value = '';
+                this.loadDomainsForPressel();
+            } catch (error) {
+                console.error('Erro ao adicionar domínio:', error);
+                this.showToast('Erro ao adicionar domínio. Tente novamente.', 'error');
+            }
+        },
+
+        async deleteDomain(domainId) {
+            const presselId = document.getElementById('pressel-selector').value;
+            
+            if (!confirm('Tem certeza que deseja remover este domínio?')) {
+                return;
+            }
+            
+            try {
+                await this.apiRequest(`/api/pressels/${presselId}/domains/${domainId}`, 'DELETE');
+                this.showToast('Domínio removido com sucesso!', 'success');
+                this.loadDomainsForPressel();
+            } catch (error) {
+                console.error('Erro ao remover domínio:', error);
+                this.showToast('Erro ao remover domínio. Tente novamente.', 'error');
+            }
+        },
+
+        copyPublicLink() {
+            const publicLinkInput = document.getElementById('public-link');
+            const presselId = document.getElementById('pressel-selector').value;
+            
+            if (!presselId) {
+                this.showToast('Selecione uma pressel primeiro.', 'error');
+                return;
+            }
+            
+            publicLinkInput.select();
+            publicLinkInput.setSelectionRange(0, 99999);
+            
+            try {
+                document.execCommand('copy');
+                this.showToast('Link copiado para a área de transferência!', 'success');
+            } catch (error) {
+                console.error('Erro ao copiar link:', error);
+                this.showToast('Erro ao copiar link. Tente novamente.', 'error');
+            }
+        },
+
+        openDomainManagerModal() {
+            const { pressels } = this.state.data;
+            const presselOptions = pressels.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+            
+            const modalContent = `
+                <div class="space-y-6">
+                    <div class="text-center">
+                        <h2 class="text-2xl font-bold text-white mb-2">🌐 Gerenciador de Domínios</h2>
+                        <p class="text-gray-400">Configure os domínios permitidos para suas pressels</p>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Seleção de Pressel -->
+                        <div class="card p-4 rounded-lg">
+                            <h3 class="text-lg font-bold mb-3 text-white">Selecionar Pressel</h3>
+                            <div class="space-y-3">
+                                <select id="modal-pressel-selector" class="form-select w-full p-3" onchange="App.loadDomainsForModal()">
+                                    <option value="">Selecione uma pressel</option>
+                                    ${presselOptions}
+                                </select>
+                                <div class="text-sm text-gray-400">
+                                    <p>Selecione uma pressel para gerenciar seus domínios permitidos.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Adicionar Domínio -->
+                        <div class="card p-4 rounded-lg">
+                            <h3 class="text-lg font-bold mb-3 text-white">Adicionar Domínio</h3>
+                            <form id="modal-domain-form" class="space-y-3">
+                                <input 
+                                    type="text" 
+                                    id="modal-domain-input" 
+                                    name="domain" 
+                                    placeholder="exemplo.com ou https://exemplo.com"
+                                    class="form-input w-full p-3"
+                                    required
+                                />
+                                <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">
+                                    Adicionar Domínio
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- Lista de Domínios -->
+                    <div class="card p-4 rounded-lg" id="modal-domains-section" style="display: none;">
+                        <h3 class="text-lg font-bold mb-3 text-white">Domínios Registrados</h3>
+                        <div id="modal-domains-list" class="space-y-3">
+                            <div class="text-center text-gray-500 py-8">
+                                <div class="spinner mx-auto mb-4"></div>
+                                <p>Carregando domínios...</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                </div>
+            `;
+            
+            document.getElementById('modal-container').innerHTML = this.templates.modal('Gerenciador de Domínios', modalContent);
+        },
+
+        async loadDomainsForModal() {
+            const presselId = document.getElementById('modal-pressel-selector').value;
+            const domainsSection = document.getElementById('modal-domains-section');
+            
+            if (!presselId) {
+                domainsSection.style.display = 'none';
+                return;
+            }
+            
+            // Mostrar seção de domínios
+            domainsSection.style.display = 'block';
+            
+            try {
+                const domains = await this.apiRequest(`/api/pressels/${presselId}/domains`);
+                this.displayModalDomains(domains);
+            } catch (error) {
+                console.error('Erro ao carregar domínios:', error);
+                document.getElementById('modal-domains-list').innerHTML = `
+                    <div class="text-center text-red-400 py-8">
+                        <p>Erro ao carregar domínios. Tente novamente.</p>
+                    </div>
+                `;
+            }
+        },
+
+        displayModalDomains(domains) {
+            const container = document.getElementById('modal-domains-list');
+            
+            if (domains.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <p>Nenhum domínio registrado ainda.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = domains.map(domain => `
+                <div class="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
+                    <div>
+                        <div class="font-mono text-sky-400 font-semibold">${domain.domain}</div>
+                        <div class="text-xs text-gray-400">
+                            Registrado em: ${new Date(domain.created_at).toLocaleString('pt-BR')}
+                        </div>
+                    </div>
+                    <button 
+                        class="btn btn-red text-xs py-1 px-2"
+                        onclick="App.deleteModalDomain(${domain.id})"
+                    >
+                        Remover
+                    </button>
+                </div>
+            `).join('');
+        },
+
+        async addModalDomain() {
+            const presselId = document.getElementById('modal-pressel-selector').value;
+            const domainInput = document.getElementById('modal-domain-input');
+            const domain = domainInput.value.trim();
+            
+            if (!presselId) {
+                this.showToast('Selecione uma pressel primeiro.', 'error');
+                return;
+            }
+            
+            if (!domain) {
+                this.showToast('Digite um domínio válido.', 'error');
+                return;
+            }
+            
+            try {
+                await this.apiRequest(`/api/pressels/${presselId}/domains`, 'POST', { domain });
+                this.showToast('Domínio adicionado com sucesso!', 'success');
+                domainInput.value = '';
+                this.loadDomainsForModal();
+            } catch (error) {
+                console.error('Erro ao adicionar domínio:', error);
+                this.showToast('Erro ao adicionar domínio. Tente novamente.', 'error');
+            }
+        },
+
+        async deleteModalDomain(domainId) {
+            const presselId = document.getElementById('modal-pressel-selector').value;
+            
+            if (!confirm('Tem certeza que deseja remover este domínio?')) {
+                return;
+            }
+            
+            try {
+                await this.apiRequest(`/api/pressels/${presselId}/domains/${domainId}`, 'DELETE');
+                this.showToast('Domínio removido com sucesso!', 'success');
+                this.loadDomainsForModal();
+            } catch (error) {
+                console.error('Erro ao remover domínio:', error);
+                this.showToast('Erro ao remover domínio. Tente novamente.', 'error');
+            }
+        },
+
 
         // ==========================================================
         // FUNCIONALIDADES DE CHECKOUT E PÁGINAS DE OBRIGADO
