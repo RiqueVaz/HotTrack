@@ -3035,8 +3035,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     
         // 1. Busque o estado do usuário
         const [userState] = await sql`SELECT scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        
-        // --- BLOCO CORRIGIDO ---
+
         // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
         if (userState && userState.scheduled_message_id) {
             const messageIdToCancel = userState.scheduled_message_id;
@@ -3047,35 +3046,41 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                 console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
             } catch (error) {
                 const errorMessage = error.response?.data?.error || error.message || '';
-                if (errorMessage.includes('invalid message id')) {
-                    console.warn(`[Webhook] QStash retornou 'invalid message id' para ${messageIdToCancel}. A mensagem pode já ter sido executada ou ainda não está pronta para cancelamento. Ignorando.`);
+                if (errorMessage.includes('invalid message id') || (error.response && error.response.status === 404)) {
+                    console.warn(`[Webhook] QStash retornou 'not found' para ${messageIdToCancel}. A mensagem pode já ter sido executada ou cancelada. Ignorando.`);
                 } else {
                     console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
                 }
             }
         }
-        // --- FIM DO BLOCO CORRIGIDO ---
-        
-        // 3. Continue com o processamento normal da mensagem (esta parte não muda)
+
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
             console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
             return;
         }
-        
         const { seller_id: sellerId, bot_token: botToken } = bot;
+
+        // Salva a mensagem do usuário no banco de dados.
+        await saveMessageToDb(sellerId, botId, message, 'user');
+
+        // Se o usuário estava aguardando uma resposta, o trabalho do webhook termina aqui.
+        if (userState && userState.waiting_for_input) {
+            console.log(`[Webhook] Usuário respondeu. O fluxo continuará a partir da próxima etapa programada.`);
+            return; 
+        }
+
+        // Se não estava esperando resposta, verifica se é um comando /start para iniciar um novo fluxo.
         const text = message.text || '';
-        let clickIdValue = null;
         const isStartCommand = text.startsWith('/start');
 
         if (isStartCommand) {
+            let clickIdValue = null;
             const parts = text.split(' ');
             if (parts.length > 1 && parts[1].trim() !== '') {
-                // Caso 1: /start com parâmetro (tráfego de campanha)
-                clickIdValue = text; // Mantém o formato '/start ABCDE'
+                clickIdValue = text;
                 console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
             } else {
-                // Caso 2: /start sem parâmetro (tráfego orgânico do bot)
                 console.log(`[Webhook] Tráfego orgânico do bot detectado para chat ${chatId}. Gerando novo click_id.`);
                 const [newClick] = await sql`
                     INSERT INTO clicks (seller_id, bot_id, is_organic)
@@ -3083,41 +3088,19 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                     RETURNING id;
                 `;
                 clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
-                await sql`
-                    UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}
-                `;
+                await sql`UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}`;
                 console.log(`[Webhook] Novo click_id orgânico gerado e associado: ${clickIdValue}`);
             }
-        }
-    
-        await sql`
-            INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
-            VALUES (${sellerId}, ${botId}, ${chatId}, ${message.message_id}, ${message.from.id}, ${message.from.first_name}, ${message.from.last_name || null}, ${message.from.username || null}, ${clickIdValue}, ${text}, 'user')
-            ON CONFLICT (chat_id, message_id) DO NOTHING;
-        `;
-        
-        // Busca o click_id mais recente, seja ele de campanha ou orgânico recém-criado
-        const [chat] = await sql`
-            SELECT click_id FROM telegram_chats 
-            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
-            ORDER BY created_at DESC LIMIT 1
-        `;
-
-        let initialVars = {};
-        if (chat?.click_id) {
-            initialVars.click_id = chat.click_id;
-        }
-        
-        // CORREÇÃO: Só processa o fluxo se for um comando /start ou se um fluxo já estiver ativo esperando resposta.
-        if (isStartCommand || userState?.waiting_for_input) {
-            await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
+            // Inicia o fluxo APENAS para o comando /start.
+            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
         } else {
-            console.log(`[Webhook] Mensagem de ${chatId} ignorada. Não é /start e não há fluxo ativo.`);
+            console.log(`[Webhook] Mensagem de ${chatId} ignorada. Não é /start e não há fluxo ativo esperando resposta.`);
         }
     
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
+// ... (restante do código permanece igual a partir daqui)
     }
 });
 
