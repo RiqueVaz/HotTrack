@@ -3069,7 +3069,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             console.log(`[Webhook] Resposta recebida. Reativando fluxo a partir do nó seguinte.`);
 
             // Busca a definição do fluxo (que está toda na coluna 'nodes')
-            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = true`;
+            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId}`;
             if (!flow || !flow.nodes) {
                 console.error(`[Webhook] Fluxo ativo ou dados do fluxo para o bot ${botId} não encontrados.`);
                 return;
