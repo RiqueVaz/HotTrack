@@ -697,8 +697,24 @@
         },
 
         async init() {
-            if (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')) {
-                this.state.API_BASE_URL = 'http://localhost:3001';
+            // Determina a URL base do backend para buscar a configuração
+            const backendHost = (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1'))
+                ? 'http://localhost:3001'
+                : 'http://localhost:3001'; // URL do backend em produção
+
+            try {
+                // Busca a configuração do backend
+                const response = await fetch(`${backendHost}/api/config`);
+                if (!response.ok) throw new Error('Falha ao carregar configuração do servidor.');
+                const config = await response.json();
+                this.state.API_BASE_URL = config.apiBaseUrl;
+                console.log('API Base URL carregada:', this.state.API_BASE_URL);
+            } catch (error) {
+                console.error('Erro crítico ao inicializar o App:', error);
+                // Define um fallback ou mostra uma mensagem de erro para o usuário
+                this.state.API_BASE_URL = backendHost; // Fallback para a URL conhecida
+                document.body.innerHTML = '<p style="color: red; text-align: center; margin-top: 50px;">Erro ao conectar com o servidor. Tente recarregar a página.</p>';
+                return; // Impede o resto da inicialização
             }
 
             const path = window.location.pathname;
@@ -2200,6 +2216,7 @@
                              this.showToast('Selecione ao menos um pixel.', 'error');
                         } else {
                             const payload = { ...data, pixel_ids };
+                            console.log('Payload sendo enviado:', payload); // Debug
                             const newPressel = await this.apiRequest('/api/pressels', 'POST', payload);
                             if (newPressel) {
                                 this.state.data.pressels.unshift(newPressel);

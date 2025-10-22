@@ -749,6 +749,20 @@ function authenticateAdmin(req, res, next) {
 }
 
 // Endpoint para validar chave de admin
+// Endpoint para fornecer configurações ao frontend
+app.get('/api/config', (req, res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    // Em produção, use a variável de ambiente do Vercel/Render. Caso contrário, localhost.
+    // O cabeçalho 'host' da requisição é uma forma confiável de determinar a URL base.
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const host = req.headers['host'];
+    const apiBaseUrl = isProduction ? `${protocol}://${host}` : 'http://localhost:3001';
+
+    res.json({
+        apiBaseUrl: apiBaseUrl
+    });
+});
+
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
@@ -1459,6 +1473,7 @@ app.get('/api/bots/users', authenticateJwt, async (req, res) => {
 });
 app.post('/api/pressels', authenticateJwt, async (req, res) => {
     const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type } = req.body;
+    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type }); // Debug
     if (!name || !bot_id || !white_page_url || !Array.isArray(pixel_ids) || pixel_ids.length === 0) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     
     try {
