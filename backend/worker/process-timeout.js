@@ -230,11 +230,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    // Pega os dados do usuário da última mensagem ENVIADA PELO USUÁRIO
     const [user] = await sql`
         SELECT first_name, last_name 
         FROM telegram_chats 
-        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
         ORDER BY created_at DESC LIMIT 1`;
 
     if (user) {
