@@ -1,5 +1,5 @@
 // /backend/worker/process-disparo.js
-// Este worker é responsável por processar UM ÚNICO PASSO de um disparo em massa.
+// Este worker não tem a função processFlow, a correção não é aplicável aqui. disparo em massa.
 
 if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ path: '../../.env' });
@@ -72,7 +72,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     }
 }
 
-async function saveMessageToDb(sellerId, botId, message, senderType) {
+async function saveMessageToDb(sellerId, botId, message, senderType, variables = {}) {
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -90,13 +90,22 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
         mediaFileId = voice.file_id;
         messageText = '[Mensagem de Voz]';
     }
-    const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Disparo)' } : {};
+    
     const fromUser = from || chat;
+
+    // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
     await sqlWithRetry(`
-        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (chat_id, message_id) DO NOTHING;
-    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId]);
+    `, [
+        sellerId, botId, chat.id, message_id, fromUser.id, 
+        senderType === 'user' ? fromUser.first_name : null, 
+        senderType === 'user' ? fromUser.last_name : null, 
+        senderType === 'user' ? fromUser.username : null, 
+        messageText, senderType, mediaType, mediaFileId, 
+        variables.click_id || null
+    ]);
 }
 
 
@@ -238,8 +247,18 @@ async function handler(req, res) {
             if (!seller) {
                 throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
             }
-                
-        let response;
+
+            // Busca o click_id mais recente para garantir que está atualizado
+            const [chat] = await sqlWithRetry(sql`
+                SELECT click_id FROM telegram_chats 
+                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
+                ORDER BY created_at DESC LIMIT 1
+            `);
+            if (chat?.click_id) {
+                userVariables.click_id = chat.click_id;
+            }
+    
+                let response;
             const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
     
         try {
@@ -299,7 +318,7 @@ async function handler(req, res) {
                 
                 if (response && response.ok) {
                     if (step.type !== 'delay' && step.type !== 'check_pix') {
-                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot');
+                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
                     }
                 } else if(response && !response.ok) {
                     throw new Error(response.description || 'Falha no Telegram');

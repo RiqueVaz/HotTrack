@@ -763,6 +763,34 @@ app.get('/api/config', (req, res) => {
     });
 });
 
+app.get('/api/pix-status/:transaction_id', async (req, res) => {
+    const { transaction_id } = req.params;
+
+    if (!transaction_id) {
+        return res.status(400).json({ error: 'ID da transação não fornecido.' });
+    }
+
+    try {
+        const result = await sql`
+            SELECT status, pix_value FROM pix_transactions WHERE provider_transaction_id = ${transaction_id}
+        `;
+
+        if (result.length === 0) {
+            return res.status(404).json({ error: 'Transação não encontrada.' });
+        }
+
+        const transaction = result[0];
+        res.status(200).json({ 
+            status: transaction.status, 
+            pix_value: transaction.pix_value 
+        });
+
+    } catch (error) {
+        console.error('Erro ao consultar status do PIX:', error);
+        res.status(500).json({ error: 'Erro interno ao verificar o status do PIX.' });
+    }
+});
+
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
@@ -1102,12 +1130,17 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
         const users = await sqlWithRetry(`
-            SELECT * FROM (
-                SELECT DISTINCT ON (chat_id) * FROM telegram_chats 
-                WHERE bot_id = $1 AND seller_id = $2
-                ORDER BY chat_id, created_at DESC
-            ) AS latest_chats
-            ORDER BY created_at DESC;
+            SELECT 
+                t.chat_id,
+                (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
+                (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
+                (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
+                (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
+                MAX(t.created_at) as last_message_at
+            FROM telegram_chats t
+            WHERE t.bot_id = $1 AND t.seller_id = $2
+            GROUP BY t.chat_id
+            ORDER BY last_message_at DESC;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
@@ -2385,7 +2418,7 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
             paid_revenue: parseFloat(paidRevenue),
             bots_performance: botsPerformance.map(b => ({ ...b, total_clicks: parseInt(b.total_clicks), total_pix_paid: parseInt(b.total_pix_paid), paid_revenue: parseFloat(b.paid_revenue) })),
             clicks_by_state: clicksByState.map(s => ({ ...s, total_clicks: parseInt(s.total_clicks) })),
-            daily_revenue: dailyRevenue.map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
+            daily_revenue: dailyRevenue.filter(d => d.date).map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
         });
     } catch (error) {
         console.error("Erro ao buscar métricas do dashboard:", error);
@@ -2655,33 +2688,26 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) {
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
     if (!text || text.trim() === '') return;
-    const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
     try {
         if (showTyping) {
             await sendTypingAction(chatId, botToken);
-            let typingDuration = text.length * 50;
-            typingDuration = Math.max(500, typingDuration);
-            typingDuration = Math.min(2000, typingDuration);
+            let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
             await new Promise(resolve => setTimeout(resolve, typingDuration));
         }
-
-        const response = await axios.post(apiUrl, { chat_id: chatId, text: text, parse_mode: 'HTML' });
-        
+        const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            const [botInfo] = await sql`SELECT bot_name FROM telegram_bots WHERE id = ${botId}`;
-            const botName = botInfo ? botInfo.bot_name : 'Bot';
-
+            // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
             await sql`
-                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type)
-                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, ${botName}, '(Fluxo)', ${text}, 'bot')
+                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
+                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
             `;
         }
     } catch (error) {
-        console.error(`[Flow Engine] Erro ao enviar/salvar mensagem para ${chatId}:`, error.response?.data || error.message);
+        console.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
 
@@ -2695,11 +2721,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    // Pega os dados do usuário da última mensagem ENVIADA PELO USUÁRIO
     const [user] = await sql`
         SELECT first_name, last_name 
         FROM telegram_chats 
-        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
         ORDER BY created_at DESC LIMIT 1`;
 
     if (user) {
@@ -2736,6 +2762,23 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     if (!currentNodeId) {
         if (isStartCommand) {
             console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+
+            // CORREÇÃO: Cancela a tarefa de timeout pendente ANTES de reiniciar o fluxo.
+            const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (stateToCancel && stateToCancel.scheduled_message_id) {
+                try {
+                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada com sucesso antes de reiniciar.`);
+                } catch (e) {
+                    const errorMessage = e.response?.data?.error || e.message || '';
+                    if (errorMessage.includes('invalid message id')) {
+                        console.warn(`[Flow Engine] QStash retornou 'invalid message id' para ${stateToCancel.scheduled_message_id} durante o reinício. Ignorando.`);
+                    } else {
+                        console.error(`[Flow Engine] Erro CRÍTICO ao tentar cancelar a tarefa de timeout ${stateToCancel.scheduled_message_id}:`, e.response?.data || e.message || e);
+                    }
+                }
+            }
+
             await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             const startNode = nodes.find(node => node.type === 'trigger');
             if (startNode) {
@@ -2799,38 +2842,42 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
                 // ==========================================================
                 const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
                 
                 if (currentNode.data.waitForReply) {
-                    await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
-                    
                     if (noReplyNodeId) {
                         const timeoutMinutes = currentNode.data.replyTimeout || 5;
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-
-                        try {
-                            JSON.stringify(variables);
-                            const response = await qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
-                                delay: `${timeoutMinutes}m`,
-                                contentBasedDeduplication: true,
-                                method: "POST"
-                            });
-                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                        } catch (error) {
-                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
-                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
-                            console.error("Conteúdo do objeto problemático:", variables);
-                            console.error("Erro original:", error.message);
-                            console.error("--- FIM DO ERRO ---");
+                        
+                        // CANCELAMENTO PREVENTIVO: Antes de agendar, cancela qualquer tarefa pendente.
+                        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        if (existingState && existingState.scheduled_message_id) {
+                            try {
+                                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                console.log(`${logPrefix} [Flow Engine] Tarefa de timeout antiga (${existingState.scheduled_message_id}) cancelada.`);
+                            } catch (e) { /* Ignora se já foi executada */ }
                         }
+
+                        // Agenda a nova tarefa de timeout.
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                            delay: `${timeoutMinutes}m`,
+                            method: "POST"
+                        });
+
+                        // Atualiza o estado do usuário com o NOVO messageId e o status de 'aguardando'.
+                        await sql`
+                            UPDATE user_flow_states 
+                            SET waiting_for_input = TRUE, scheduled_message_id = ${response.messageId}
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId};
+                        `;
                     }
-                    currentNodeId = null;
+                    currentNodeId = null; // Para o fluxo aqui, esperando a resposta ou o timeout.
                 } else {
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
@@ -2978,59 +3025,88 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             return;
         }
         const chatId = message.chat.id;
-    
-        // 1. Busque o estado do usuário
-        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        
-        // --- BLOCO CORRIGIDO ---
-        // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
-        if (userState && userState.scheduled_message_id) {
-            const messageIdToCancel = userState.scheduled_message_id;
-            console.log(`[Webhook] Usuário respondeu. Tentando cancelar Message ID: "${messageIdToCancel}"`);
-    
-            try {
-                await qstashClient.messages.delete({ id: messageIdToCancel });
-                console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
-            } catch (error) {
-                // Se o erro for 404 (Not Found), ignore. É a race condition que previmos.
-                if (error.status === 404) {
-                    console.warn(`[Webhook] QStash retornou 404 para o ID ${messageIdToCancel}. A mensagem provavelmente já foi executada ou nunca foi totalmente registrada. Ignorando e continuando.`);
-                } else {
-                    // Se for qualquer outro erro, registre como crítico.
-                    console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
-                }
-            }
-        }
-        // --- FIM DO BLOCO CORRIGIDO ---
-        
-        // 3. Continue com o processamento normal da mensagem (esta parte não muda)
+        const text = message.text || '';
+        const isStartCommand = text.startsWith('/start');
+
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
             console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
             return;
         }
-        
         const { seller_id: sellerId, bot_token: botToken } = bot;
-        const text = message.text || '';
-        const isStartCommand = text.startsWith('/start ');
-        const clickIdValue = isStartCommand ? text : null;
-    
-        await sql`
-            INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
-            VALUES (${sellerId}, ${botId}, ${chatId}, ${message.message_id}, ${message.from.id}, ${message.from.first_name}, ${message.from.last_name || null}, ${message.from.username || null}, ${clickIdValue}, ${text}, 'user')
-            ON CONFLICT (chat_id, message_id) DO NOTHING;
-        `;
-        
-        let initialVars = {};
+
+        // Salva a mensagem do usuário (seja /start ou resposta)
+        await saveMessageToDb(sellerId, botId, message, 'user');
+
+        // PRIORIDADE 1: Comando /start reinicia tudo.
         if (isStartCommand) {
-            initialVars.click_id = clickIdValue;
+            console.log(`[Webhook] Comando /start recebido. Reiniciando fluxo para o chat ${chatId}.`);
+            
+            // Cancela qualquer tarefa pendente e deleta o estado antigo.
+            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (existingState && existingState.scheduled_message_id) {
+                try {
+                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
+            }
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
+            // Lógica para criar click_id (orgânico ou de campanha)
+            let clickIdValue = null;
+            const parts = text.split(' ');
+            if (parts.length > 1 && parts[1].trim() !== '') {
+                clickIdValue = text;
+                console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
+            } else {
+                console.log(`[Webhook] Tráfego orgânico do bot detectado. Gerando novo click_id.`);
+                const [newClick] = await sql`INSERT INTO clicks (seller_id, bot_id, is_organic) VALUES (${sellerId}, ${botId}, TRUE) RETURNING id`;
+                clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
+                await sql`UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}`;
+                console.log(`[Webhook] Novo click_id orgânico gerado: ${clickIdValue}`);
+            }
+            
+            // Inicia o fluxo do zero.
+            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
+            return; // Finaliza a execução.
         }
+
+        // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
+        const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
-        await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
+        if (userState && userState.waiting_for_input) {
+            // Cancela o timeout, pois o usuário respondeu.
+            if (userState.scheduled_message_id) {
+                 try {
+                    await qstashClient.messages.delete(userState.scheduled_message_id);
+                    console.log(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                } catch (e) { /* Ignora erros */ }
+            }
+
+            // Continua o fluxo a partir do próximo nó.
+            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId}`;
+            if (flow && flow.nodes) {
+                const nodes = flow.nodes.nodes || [];
+                const edges = flow.nodes.edges || [];
+                const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
+
+                if (nextNodeId) {
+                    await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
+                } else {
+                    console.log(`[Webhook] Fim do fluxo após resposta do usuário.`);
+                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                }
+            } else {
+                 console.error(`[Webhook] Fluxo para o bot ${botId} não encontrado ao tentar continuar.`);
+            }
+        } else {
+            console.log(`[Webhook] Mensagem de ${chatId} ignorada (não é /start e não há fluxo esperando resposta).`);
+        }
     
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
+// ... (restante do código permanece igual a partir daqui)
     }
 });
 
@@ -3648,9 +3724,20 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
-    const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
+    const { botId, chatId, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
-        if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
+        // Busca o click_id mais recente para este usuário no backend
+        const [chat] = await sqlWithRetry(`
+            SELECT click_id FROM telegram_chats 
+            WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL 
+            ORDER BY created_at DESC LIMIT 1
+        `, [chatId, botId]);
+
+        const click_id = chat?.click_id;
+
+        if (!click_id) {
+            return res.status(400).json({ message: "Não foi possível encontrar um Click ID associado a este usuário para gerar o PIX." });
+        }
 
         const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
         if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
@@ -3768,22 +3855,50 @@ app.get('/api/chats/check-pix/:botId/:chatId', authenticateJwt, async (req, res)
 // Endpoint 9: Iniciar fluxo manualmente
 app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const { botId, chatId, flowId } = req.body;
+    const sellerId = req.user.id;
+
     try {
-        const [bot] = await sqlWithRetry('SELECT seller_id, bot_token FROM telegram_bots WHERE id = $1', [botId]);
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado' });
-        
-        const [flow] = await sqlWithRetry('SELECT nodes FROM flows WHERE id = $1 AND bot_id = $2', [flowId, botId]);
-        if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado' });
-        
-        const flowData = flow.nodes;
-        const startNode = flowData.nodes.find(node => node.type === 'trigger');
-        const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
+        const [bot] = await sql`SELECT bot_token FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`;
+        if (!bot) return res.status(404).json({ message: 'Bot não encontrado ou não pertence a você.' });
 
-        processFlow(chatId, botId, bot.bot_token, bot.seller_id, firstNodeId, {}, flowData);
+        const [flow] = await sql`SELECT nodes FROM flows WHERE id = ${flowId} AND bot_id = ${botId}`;
+        if (!flow || !flow.nodes) return res.status(404).json({ message: 'Fluxo não encontrado ou não pertence a este bot.' });
 
-        res.status(200).json({ message: 'Fluxo iniciado para o usuário.' });
+        // --- LÓGICA DE LIMPEZA ---
+        console.log(`[Manual Flow Start] Iniciando limpeza para o chat ${chatId} antes de iniciar o fluxo ${flowId}.`);
+        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        if (existingState && existingState.scheduled_message_id) {
+            try {
+                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                console.log(`[Manual Flow Start] Tarefa de timeout antiga cancelada.`);
+            } catch (e) { /* Ignora erro se a tarefa já foi executada */ }
+        }
+        await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        console.log(`[Manual Flow Start] Estado de fluxo antigo deletado.`);
+        // --- FIM DA LÓGICA DE LIMPEZA ---
+
+        // Encontra o ponto de partida do fluxo
+        const startNode = flow.nodes.nodes?.find(node => node.type === 'trigger');
+        const firstNodeId = findNextNode(startNode.id, null, flow.nodes.edges);
+
+        if (!firstNodeId) {
+            return res.status(400).json({ message: 'O fluxo selecionado não tem um nó inicial configurado após o gatilho.' });
+        }
+
+        // Busca o click_id mais recente para preservar o contexto
+        const [chatContext] = await sql`SELECT click_id FROM telegram_chats WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`;
+        let initialVars = {};
+        if (chatContext?.click_id) {
+            initialVars.click_id = chatContext.click_id;
+        }
+
+        // Inicia o fluxo para o usuário
+        await processFlow(chatId, botId, bot.bot_token, sellerId, firstNodeId, initialVars);
+
+        res.status(200).json({ message: 'Fluxo iniciado para o usuário com sucesso!' });
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao iniciar fluxo.' });
+        console.error("Erro ao iniciar fluxo manualmente:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
 
@@ -4359,22 +4474,52 @@ app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {
 // ROTA PÁGINA DE OFERTA
 app.get('/api/oferta/:checkoutId', async (req, res) => {
     const { checkoutId } = req.params;
+    const { click_id, cid } = req.query; // Captura IDs de clique da URL
 
     try {
-        // Fetch the configuration JSON for the given checkout ID
+        // 1. Busca a configuração do checkout e o ID do vendedor
         const [checkout] = await sql`
-            SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}
+            SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
         `;
 
         if (!checkout) {
             return res.status(404).json({ message: 'Checkout não encontrado.' });
         }
 
-        // Return the configuration object
-        res.status(200).json(checkout); // Returns { config: { ... } }
+        let finalClickId = click_id || cid || null;
+
+        // 2. Lógica para tráfego orgânico (nenhum ID de clique na URL)
+        if (!finalClickId) {
+            console.log(`[Organic Traffic] Nenhum click_id encontrado para checkout ${checkoutId}. Gerando um novo.`);
+            
+            const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+            const user_agent = req.headers['user-agent'];
+
+            // Insere um novo clique para a visita orgânica
+            const [newClick] = await sql`
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
+                VALUES (${checkout.seller_id}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
+                RETURNING id;
+            `;
+
+            // Gera um click_id único e amigável
+            finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
+
+            // Atualiza o registro com o novo click_id gerado
+            await sql`
+                UPDATE clicks SET click_id = ${finalClickId} WHERE id = ${newClick.id}
+            `;
+             console.log(`[Organic Traffic] Novo click_id gerado e associado: ${finalClickId}`);
+        }
+
+        // 3. Retorna a configuração e o click_id final para o frontend
+        res.status(200).json({
+            config: checkout.config,
+            click_id: finalClickId // Envia o ID existente ou o novo ID orgânico
+        });
 
     } catch (error) {
-        console.error("Erro ao buscar dados do checkout hospedado:", error);
+        console.error("Erro ao buscar dados do checkout ou processar tráfego orgânico:", error);
         res.status(500).json({ message: 'Erro interno no servidor.' });
     }
 });

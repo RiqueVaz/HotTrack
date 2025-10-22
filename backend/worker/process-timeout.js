@@ -197,7 +197,7 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) {
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
     if (!text || text.trim() === '') return;
     try {
         if (showTyping) {
@@ -208,7 +208,12 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            await sql`INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type) VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot') ON CONFLICT (chat_id, message_id) DO NOTHING;`;
+            // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
+            await sql`
+                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
+                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
+                ON CONFLICT (chat_id, message_id) DO NOTHING;
+            `;
         }
     } catch (error) {
         console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
@@ -225,11 +230,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    // Pega os dados do usuário do Telegram (nome, sobrenome)
+    // Pega os dados do usuário da última mensagem ENVIADA PELO USUÁRIO
     const [user] = await sql`
         SELECT first_name, last_name 
         FROM telegram_chats 
-        WHERE chat_id = ${chatId} AND bot_id = ${botId} 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
         ORDER BY created_at DESC LIMIT 1`;
 
     if (user) {
@@ -329,7 +334,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
                 // ==========================================================
                 const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
@@ -343,6 +348,17 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
 
                         try {
+                            // Cancela qualquer tarefa antiga antes de agendar uma nova.
+                            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            if (existingState && existingState.scheduled_message_id) {
+                                try {
+                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                    console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada antes de agendar a nova.`);
+                                } catch (e) {
+                                    console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id} (pode já ter sido executada):`, e.message);
+                                }
+                            }
+
                             JSON.stringify(variables);
                             const response = await qstashClient.publishJSON({
                                 url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
@@ -496,34 +512,54 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 
 // ==========================================================
-//                      LÓGICA DO WORKER
 // ==========================================================
 
 async function handler(req, res) {
     try {
+        // 1. Extrai os dados do corpo da requisição E o ID da mensagem do header do QStash
         const { chat_id, bot_id, target_node_id, variables } = req.body;
-        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}`);
+        const messageId = req.headers['upstash-message-id'];
+        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}, msg: ${messageId}`);
 
-        const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+        // 2. Verifica se o usuário ainda está no estado de "aguardando input"
+        const [userState] = await sql`
+            SELECT waiting_for_input, scheduled_message_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
+        `;
 
-        if (userState && userState.waiting_for_input) {
-            console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
-            
-            const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
-
-            if (bot) {
-                await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
-                await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
-            } else {
-                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado.`);
-            }
-        } else {
-            console.log(`[WORKER] Tarefa para ${chat_id} ignorada, pois o usuário já respondeu.`);
+        // 3. Se o estado não existe ou o usuário já respondeu, o trabalho do worker termina.
+        if (!userState || !userState.waiting_for_input) {
+            console.log(`[WORKER] Job para chat ${chat_id} ignorado. O usuário já respondeu ou o fluxo foi resetado.`);
+            return res.status(200).json({ message: 'Ignorado: Estado não encontrado ou não está aguardando.' });
         }
-        res.status(200).send('Worker finished successfully.');
+
+        // 4. VERIFICAÇÃO CRÍTICA: O ID da tarefa no banco é o mesmo desta execução?
+        if (userState.scheduled_message_id !== messageId) {
+            console.log(`[WORKER] Job (Msg ID: ${messageId}) obsoleto. Uma nova tarefa (${userState.scheduled_message_id}) já está agendada. Abortando.`);
+            return res.status(200).json({ message: 'Ignorado: Tarefa obsoleta.' });
+        }
+        
+        // 5. Se a tarefa é válida, continua o fluxo de timeout
+        console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
+        
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
+        if (!bot) {
+            console.error(`[WORKER] Bot ${bot_id} não encontrado. Abortando.`);
+            return res.status(500).json({ message: 'Bot não encontrado.' });
+        }
+
+        // Garante que as variáveis existam antes de chamar o processFlow
+        const finalVariables = variables || {};
+
+        // Chama o motor de fluxo para executar o nó de timeout
+        await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, finalVariables);
+        
+        res.status(200).json({ message: 'Timeout processado com sucesso.' });
+
     } catch (error) {
-        console.error('[WORKER] Erro crítico ao processar timeout:', error);
-        res.status(500).send('Erro interno no worker.');
+        console.error('[WORKER] Erro fatal ao processar timeout:', error);
+        res.status(500).json({ message: 'Erro interno no worker.' });
     }
 }
 
