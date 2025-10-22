@@ -3862,34 +3862,50 @@ app.get('/api/chats/check-pix/:botId/:chatId', authenticateJwt, async (req, res)
 // Endpoint 9: Iniciar fluxo manualmente
 app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const { botId, chatId, flowId } = req.body;
+    const sellerId = req.user.id;
+
     try {
-        const [bot] = await sqlWithRetry('SELECT seller_id, bot_token FROM telegram_bots WHERE id = $1', [botId]);
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado' });
-        
-        const [flow] = await sqlWithRetry('SELECT nodes FROM flows WHERE id = $1 AND bot_id = $2', [flowId, botId]);
-        if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado' });
-        
-        const flowData = flow.nodes;
-        const startNode = flowData.nodes.find(node => node.type === 'trigger');
-        const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
+        const [bot] = await sql`SELECT bot_token FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`;
+        if (!bot) return res.status(404).json({ message: 'Bot não encontrado ou não pertence a você.' });
 
-        // Busca o click_id mais recente para preservar o contexto de rastreamento
-        const [chat] = await sqlWithRetry(`
-            SELECT click_id FROM telegram_chats 
-            WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL 
-            ORDER BY created_at DESC LIMIT 1
-        `, [chatId, botId]);
+        const [flow] = await sql`SELECT nodes FROM flows WHERE id = ${flowId} AND bot_id = ${botId}`;
+        if (!flow || !flow.nodes) return res.status(404).json({ message: 'Fluxo não encontrado ou não pertence a este bot.' });
 
-        let initialVars = {};
-        if (chat?.click_id) {
-            initialVars.click_id = chat.click_id;
+        // --- LÓGICA DE LIMPEZA ---
+        console.log(`[Manual Flow Start] Iniciando limpeza para o chat ${chatId} antes de iniciar o fluxo ${flowId}.`);
+        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        if (existingState && existingState.scheduled_message_id) {
+            try {
+                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                console.log(`[Manual Flow Start] Tarefa de timeout antiga cancelada.`);
+            } catch (e) { /* Ignora erro se a tarefa já foi executada */ }
+        }
+        await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        console.log(`[Manual Flow Start] Estado de fluxo antigo deletado.`);
+        // --- FIM DA LÓGICA DE LIMPEZA ---
+
+        // Encontra o ponto de partida do fluxo
+        const startNode = flow.nodes.nodes?.find(node => node.type === 'trigger');
+        const firstNodeId = findNextNode(startNode.id, null, flow.nodes.edges);
+
+        if (!firstNodeId) {
+            return res.status(400).json({ message: 'O fluxo selecionado não tem um nó inicial configurado após o gatilho.' });
         }
 
-        processFlow(chatId, botId, bot.bot_token, bot.seller_id, firstNodeId, initialVars, flowData);
+        // Busca o click_id mais recente para preservar o contexto
+        const [chatContext] = await sql`SELECT click_id FROM telegram_chats WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`;
+        let initialVars = {};
+        if (chatContext?.click_id) {
+            initialVars.click_id = chatContext.click_id;
+        }
 
-        res.status(200).json({ message: 'Fluxo iniciado para o usuário.' });
+        // Inicia o fluxo para o usuário
+        await processFlow(chatId, botId, bot.bot_token, sellerId, firstNodeId, initialVars);
+
+        res.status(200).json({ message: 'Fluxo iniciado para o usuário com sucesso!' });
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao iniciar fluxo.' });
+        console.error("Erro ao iniciar fluxo manualmente:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
 
