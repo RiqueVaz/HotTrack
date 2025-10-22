@@ -763,6 +763,34 @@ app.get('/api/config', (req, res) => {
     });
 });
 
+app.get('/api/pix-status/:transaction_id', async (req, res) => {
+    const { transaction_id } = req.params;
+
+    if (!transaction_id) {
+        return res.status(400).json({ error: 'ID da transação não fornecido.' });
+    }
+
+    try {
+        const result = await sql`
+            SELECT status, pix_value FROM pix_transactions WHERE provider_transaction_id = ${transaction_id}
+        `;
+
+        if (result.length === 0) {
+            return res.status(404).json({ error: 'Transação não encontrada.' });
+        }
+
+        const transaction = result[0];
+        res.status(200).json({ 
+            status: transaction.status, 
+            pix_value: transaction.pix_value 
+        });
+
+    } catch (error) {
+        console.error('Erro ao consultar status do PIX:', error);
+        res.status(500).json({ error: 'Erro interno ao verificar o status do PIX.' });
+    }
+});
+
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
@@ -2385,7 +2413,7 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
             paid_revenue: parseFloat(paidRevenue),
             bots_performance: botsPerformance.map(b => ({ ...b, total_clicks: parseInt(b.total_clicks), total_pix_paid: parseInt(b.total_pix_paid), paid_revenue: parseFloat(b.paid_revenue) })),
             clicks_by_state: clicksByState.map(s => ({ ...s, total_clicks: parseInt(s.total_clicks) })),
-            daily_revenue: dailyRevenue.map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
+            daily_revenue: dailyRevenue.filter(d => d.date).map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
         });
     } catch (error) {
         console.error("Erro ao buscar métricas do dashboard:", error);
@@ -3012,8 +3040,30 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         
         const { seller_id: sellerId, bot_token: botToken } = bot;
         const text = message.text || '';
-        const isStartCommand = text.startsWith('/start ');
-        const clickIdValue = isStartCommand ? text : null;
+        let clickIdValue = null;
+        const isStartCommand = text.startsWith('/start');
+
+        if (isStartCommand) {
+            const parts = text.split(' ');
+            if (parts.length > 1 && parts[1].trim() !== '') {
+                // Caso 1: /start com parâmetro (tráfego de campanha)
+                clickIdValue = text; // Mantém o formato '/start ABCDE'
+                console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
+            } else {
+                // Caso 2: /start sem parâmetro (tráfego orgânico do bot)
+                console.log(`[Webhook] Tráfego orgânico do bot detectado para chat ${chatId}. Gerando novo click_id.`);
+                const [newClick] = await sql`
+                    INSERT INTO clicks (seller_id, bot_id, is_organic)
+                    VALUES (${sellerId}, ${botId}, TRUE)
+                    RETURNING id;
+                `;
+                clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
+                await sql`
+                    UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}
+                `;
+                console.log(`[Webhook] Novo click_id orgânico gerado e associado: ${clickIdValue}`);
+            }
+        }
     
         await sql`
             INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, click_id, message_text, sender_type)
@@ -4359,22 +4409,52 @@ app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {
 // ROTA PÁGINA DE OFERTA
 app.get('/api/oferta/:checkoutId', async (req, res) => {
     const { checkoutId } = req.params;
+    const { click_id, cid } = req.query; // Captura IDs de clique da URL
 
     try {
-        // Fetch the configuration JSON for the given checkout ID
+        // 1. Busca a configuração do checkout e o ID do vendedor
         const [checkout] = await sql`
-            SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}
+            SELECT seller_id, config FROM hosted_checkouts WHERE id = ${checkoutId}
         `;
 
         if (!checkout) {
             return res.status(404).json({ message: 'Checkout não encontrado.' });
         }
 
-        // Return the configuration object
-        res.status(200).json(checkout); // Returns { config: { ... } }
+        let finalClickId = click_id || cid || null;
+
+        // 2. Lógica para tráfego orgânico (nenhum ID de clique na URL)
+        if (!finalClickId) {
+            console.log(`[Organic Traffic] Nenhum click_id encontrado para checkout ${checkoutId}. Gerando um novo.`);
+            
+            const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+            const user_agent = req.headers['user-agent'];
+
+            // Insere um novo clique para a visita orgânica
+            const [newClick] = await sql`
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
+                VALUES (${checkout.seller_id}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
+                RETURNING id;
+            `;
+
+            // Gera um click_id único e amigável
+            finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
+
+            // Atualiza o registro com o novo click_id gerado
+            await sql`
+                UPDATE clicks SET click_id = ${finalClickId} WHERE id = ${newClick.id}
+            `;
+             console.log(`[Organic Traffic] Novo click_id gerado e associado: ${finalClickId}`);
+        }
+
+        // 3. Retorna a configuração e o click_id final para o frontend
+        res.status(200).json({
+            config: checkout.config,
+            click_id: finalClickId // Envia o ID existente ou o novo ID orgânico
+        });
 
     } catch (error) {
-        console.error("Erro ao buscar dados do checkout hospedado:", error);
+        console.error("Erro ao buscar dados do checkout ou processar tráfego orgânico:", error);
         res.status(500).json({ message: 'Erro interno no servidor.' });
     }
 });
