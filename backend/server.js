@@ -3071,9 +3071,16 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             ON CONFLICT (chat_id, message_id) DO NOTHING;
         `;
         
+        // Busca o click_id mais recente, seja ele de campanha ou orgânico recém-criado
+        const [chat] = await sql`
+            SELECT click_id FROM telegram_chats 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+            ORDER BY created_at DESC LIMIT 1
+        `;
+
         let initialVars = {};
-        if (isStartCommand) {
-            initialVars.click_id = clickIdValue;
+        if (chat?.click_id) {
+            initialVars.click_id = chat.click_id;
         }
         
         await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
@@ -3698,9 +3705,20 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
-    const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
+    const { botId, chatId, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
-        if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
+        // Busca o click_id mais recente para este usuário no backend
+        const [chat] = await sqlWithRetry(`
+            SELECT click_id FROM telegram_chats 
+            WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL 
+            ORDER BY created_at DESC LIMIT 1
+        `, [chatId, botId]);
+
+        const click_id = chat?.click_id;
+
+        if (!click_id) {
+            return res.status(400).json({ message: "Não foi possível encontrar um Click ID associado a este usuário para gerar o PIX." });
+        }
 
         const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
         if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
@@ -3829,7 +3847,19 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         const startNode = flowData.nodes.find(node => node.type === 'trigger');
         const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
 
-        processFlow(chatId, botId, bot.bot_token, bot.seller_id, firstNodeId, {}, flowData);
+        // Busca o click_id mais recente para preservar o contexto de rastreamento
+        const [chat] = await sqlWithRetry(`
+            SELECT click_id FROM telegram_chats 
+            WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL 
+            ORDER BY created_at DESC LIMIT 1
+        `, [chatId, botId]);
+
+        let initialVars = {};
+        if (chat?.click_id) {
+            initialVars.click_id = chat.click_id;
+        }
+
+        processFlow(chatId, botId, bot.bot_token, bot.seller_id, firstNodeId, initialVars, flowData);
 
         res.status(200).json({ message: 'Fluxo iniciado para o usuário.' });
     } catch (error) {
