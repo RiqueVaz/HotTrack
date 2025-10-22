@@ -1759,6 +1759,16 @@
                                     </select>
                                 </div>
                                 
+                                <div>
+                                    <label class="text-sm font-medium text-gray-400 mb-1 block">Tipo de Tráfego Aceito</label>
+                                    <select name="traffic_type" class="form-select w-full p-2" required>
+                                        <option value="mobile">Apenas Mobile</option>
+                                        <option value="desktop">Apenas Desktop</option> 
+                                        <option value="both">Desktop e Mobile</option>
+                                    </select>
+                                    <p class="text-xs text-gray-500 mt-1">Selecione quais tipos de dispositivos podem acessar a pressel</p>
+                                </div>
+                                
                                 <div class="card p-3"><p class="font-semibold mb-2">Selecione os Pixels:</p><div class="space-y-1">${pixelCheckboxes.length ? pixelCheckboxes : '<p class="text-gray-500 text-sm">Cadastre um pixel primeiro.</p>'}</div></div>
                                 <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">Salvar e Gerar Código</button>
                             </form>
@@ -2760,6 +2770,29 @@
             const selectedPixels = pixels.filter(p => presselPixelIds.includes(p.id));
             const pixelsToTrackJSON = JSON.stringify(selectedPixels.map(p => ({ id: p.pixel_id })), null, 4);
             const noscriptPixelId = selectedPixels.length > 0 ? selectedPixels[0].pixel_id : '';
+            
+            // Lógica de detecção de dispositivo baseada no traffic_type
+            const trafficType = pressel.traffic_type || 'both';
+            let deviceDetectionCode = '';
+            
+            if (trafficType === 'mobile') {
+                deviceDetectionCode = `
+            // Verificar se é mobile
+            const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent);
+            if (!isMobile) {
+                window.location.href = CONFIG.WHITE_PAGE_URL;
+                return;
+            }`;
+            } else if (trafficType === 'desktop') {
+                deviceDetectionCode = `
+            // Verificar se é desktop
+            const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent);
+            if (isMobile) {
+                window.location.href = CONFIG.WHITE_PAGE_URL;
+                return;
+            }`;
+            }
+            
             const htmlContent = `
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -2806,6 +2839,7 @@
                 return { fbp, fbc };
             }
             try {
+                ${deviceDetectionCode}
                 const { fbp, fbc } = getFacebookCookies();
                 const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
                     method: 'POST',
