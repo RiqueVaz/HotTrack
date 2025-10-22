@@ -72,7 +72,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     }
 }
 
-async function saveMessageToDb(sellerId, botId, message, senderType) {
+async function saveMessageToDb(sellerId, botId, message, senderType, variables = {}) {
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -90,13 +90,22 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
         mediaFileId = voice.file_id;
         messageText = '[Mensagem de Voz]';
     }
-    const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Disparo)' } : {};
+    
     const fromUser = from || chat;
+
+    // CORREÇÃO: A query agora inclui o click_id e não sobrescreve os dados do usuário.
     await sqlWithRetry(`
-        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (chat_id, message_id) DO NOTHING;
-    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId]);
+    `, [
+        sellerId, botId, chat.id, message_id, fromUser.id, 
+        senderType === 'user' ? fromUser.first_name : null, 
+        senderType === 'user' ? fromUser.last_name : null, 
+        senderType === 'user' ? fromUser.username : null, 
+        messageText, senderType, mediaType, mediaFileId, 
+        variables.click_id || null
+    ]);
 }
 
 
@@ -309,7 +318,7 @@ async function handler(req, res) {
                 
                 if (response && response.ok) {
                     if (step.type !== 'delay' && step.type !== 'check_pix') {
-                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot');
+                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
                     }
                 } else if(response && !response.ok) {
                     throw new Error(response.description || 'Falha no Telegram');
