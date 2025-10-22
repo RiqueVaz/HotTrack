@@ -2770,8 +2770,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     await qstashClient.messages.delete({ id: stateToCancel.scheduled_message_id });
                     console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada com sucesso antes de reiniciar.`);
                 } catch (e) {
-                    // Ignora o erro se a mensagem já foi processada ou não existe mais.
-                    console.warn(`[Flow Engine] Não foi possível cancelar a tarefa de timeout ${stateToCancel.scheduled_message_id} (pode já ter sido executada):`, e.message);
+                    const errorMessage = e.response?.data?.error || e.message || '';
+                    if (errorMessage.includes('invalid message id')) {
+                        console.warn(`[Flow Engine] QStash retornou 'invalid message id' para ${stateToCancel.scheduled_message_id} durante o reinício. Ignorando.`);
+                    } else {
+                        console.error(`[Flow Engine] Erro CRÍTICO ao tentar cancelar a tarefa de timeout ${stateToCancel.scheduled_message_id}:`, e.response?.data || e.message || e);
+                    }
                 }
             }
 
@@ -3031,11 +3035,10 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                 await qstashClient.messages.delete({ id: messageIdToCancel });
                 console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
             } catch (error) {
-                // Se o erro for 404 (Not Found), ignore. É a race condition que previmos.
-                if (error.status === 404) {
-                    console.warn(`[Webhook] QStash retornou 404 para o ID ${messageIdToCancel}. A mensagem provavelmente já foi executada ou nunca foi totalmente registrada. Ignorando e continuando.`);
+                const errorMessage = error.response?.data?.error || error.message || '';
+                if (errorMessage.includes('invalid message id')) {
+                    console.warn(`[Webhook] QStash retornou 'invalid message id' para ${messageIdToCancel}. A mensagem pode já ter sido executada ou ainda não está pronta para cancelamento. Ignorando.`);
                 } else {
-                    // Se for qualquer outro erro, registre como crítico.
                     console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
                 }
             }
