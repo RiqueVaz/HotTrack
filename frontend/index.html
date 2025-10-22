@@ -909,23 +909,21 @@
 
                 appContainer.innerHTML = checkoutHTML;
 
-                // ***** NOVO: Listener DELEGADO para fechar o modal *****
+                // Listener DELEGADO para fechar o modal PIX e parar o polling
                 appContainer.addEventListener('click', (e) => {
-                    const closeModalButton = e.target.closest('#closeModalBtn');
+                    const closeModalButton = e.target.closest('.modal-close-btn');
                     const modalContainer = document.getElementById('modal-container');
 
-                    if (closeModalButton && modalContainer && modalContainer.contains(closeModalButton)) {
-                        console.log("Close button inside modal container clicked on /oferta/"); // Log para debug
-
+                    if (closeModalButton && modalContainer.querySelector('#pix-status')) {
                         if (App.state.pixPollingIntervalId) {
                             clearInterval(App.state.pixPollingIntervalId);
                             App.state.pixPollingIntervalId = null;
-                            console.log("Polling PIX interrompido pelo fechamento manual do modal (Botão X).");
+                            console.log("Polling PIX interrompido pelo fechamento manual do modal.");
                         }
-                        modalContainer.innerHTML = ''; // Limpa o container para fechar
+                        modalContainer.innerHTML = ''; // Fecha o modal
                     }
                 });
-                // ***** FIM DO NOVO LISTENER *****
+
 
 
                 if (config.pricing.type === 'fixed' && Array.isArray(config.pricing.packages) && config.pricing.packages.length > 0) {
@@ -1009,6 +1007,131 @@
             }
        },
 
+       // ******** FUNÇÃO showPixModal ATUALIZADA ********
+        async showPixModal(pixData) {
+            // Limpa qualquer polling anterior ao abrir um novo modal
+            if (this.state.pixPollingIntervalId) {
+                clearInterval(this.state.pixPollingIntervalId);
+                this.state.pixPollingIntervalId = null;
+            }
+
+            // Monta o HTML do QR Code (se base64 estiver disponível)
+            const qrCodeHTML = pixData.qr_code_base64
+                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
+                : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>'; // Fallback
+
+            const modalContent = `
+                <div class="text-center">
+                    <h3 id="pix-modal-title" class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
+                    <p class="text-sm text-gray-400 mt-2 mb-4">Escaneie o QR Code ou copie o código abaixo e pague no seu aplicativo do banco.</p>
+                    ${qrCodeHTML}
+                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="4" readonly>${pixData.qr_code_text || 'Erro ao obter código'}</textarea>
+                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
+                    <p id="pix-status-message" class="text-xs text-sky-400 mt-3 animate-pulse">Aguardando pagamento...</p>
+                </div>
+            `;
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
+
+
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            const copyBtn = document.getElementById('copy-pix-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async (e) => { // Tornar async
+                    const textarea = document.getElementById('pix-code-textarea');
+                    if (textarea && textarea.value !== 'Erro ao obter código') {
+                        try {
+                            // ============ CORREÇÃO ============
+                            await navigator.clipboard.writeText(textarea.value);
+                            // ==================================
+                            
+                            e.target.textContent = 'Copiado!';
+                            setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
+                        } catch (err) {
+                            console.error('Falha ao copiar:', err); 
+                            alert('Não foi possível copiar.');
+                        }
+                    } else { 
+                        alert('Sem código PIX para copiar.'); 
+                    }
+                });
+            }
+
+            // Inicia a verificação de status se tivermos um transaction_id
+            if (pixData.transaction_id) {
+                console.log("Iniciando polling para transaction_id:", pixData.transaction_id);
+                this.startPixStatusPolling(pixData.transaction_id);
+            } else {
+                 console.error("Não foi possível iniciar o polling: transaction_id ausente em pixData.");
+                 const statusMsg = document.getElementById('pix-status-message');
+                 if(statusMsg) statusMsg.textContent = "Erro: ID da transação não encontrado.";
+            }
+
+             // Adiciona listener para limpar o polling quando o modal for fechado (pelo botão X)
+             const closeModalBtn = document.getElementById('closeModalBtn');
+             if (closeModalBtn) {
+                 // Usamos uma função nomeada para poder remover depois se necessário
+                 const closeModalListener = () => {
+                     if (this.state.pixPollingIntervalId) {
+                         clearInterval(this.state.pixPollingIntervalId);
+                         this.state.pixPollingIntervalId = null;
+                         console.log("Polling interrompido pelo fechamento do modal (Botão X).");
+                     }
+                 };
+                 // Limpa listener antigo se existir antes de adicionar um novo
+                 if (closeModalBtn._listener) {
+                     closeModalBtn.removeEventListener('click', closeModalBtn._listener);
+                 }
+                 closeModalBtn.addEventListener('click', closeModalListener);
+                 closeModalBtn._listener = closeModalListener; // Guarda a referência
+             }
+        },
+
+        startPixStatusPolling(transactionId, successRedirectUrl) {
+            const startTime = Date.now();
+            const pollDuration = 5 * 60 * 1000; // 5 minutos em milissegundos
+
+            this.state.pixPollingIntervalId = setInterval(async () => {
+                if (Date.now() - startTime > pollDuration) {
+                    clearInterval(this.state.pixPollingIntervalId);
+                    this.state.pixPollingIntervalId = null;
+                    const statusEl = document.getElementById('pix-status');
+                    if (statusEl) statusEl.innerHTML = '<span class="text-red-500">Tempo esgotado. Gere um novo PIX.</span>';
+                    // Re-habilita o botão de fechar se o tempo esgotar
+                    const closeBtn = document.querySelector('#modal-container .modal-close-btn');
+                    if(closeBtn) closeBtn.disabled = false;
+                    return;
+                }
+
+                try {
+                    const { status } = await this.apiRequest(`/api/oferta/pix-status/${transactionId}`);
+                    const statusEl = document.getElementById('pix-status');
+
+                    if (status === 'paid') {
+                        clearInterval(this.state.pixPollingIntervalId);
+                        this.state.pixPollingIntervalId = null;
+                        if (statusEl) {
+                            statusEl.innerHTML = '<span class="text-green-400">Pagamento Aprovado! Redirecionando...</span>';
+                        }
+                        // Redireciona após um pequeno delay
+                        setTimeout(() => {
+                            if (successRedirectUrl) {
+                                window.location.href = successRedirectUrl;
+                            } else {
+                                // Fallback se não houver URL de sucesso
+                                document.getElementById('modal-container').innerHTML = '';
+                                this.showToast('Pagamento aprovado com sucesso!', 'success');
+                            }
+                        }, 2000);
+                    }
+                } catch (error) {
+                    console.error('Erro ao verificar status do PIX:', error);
+                    // Opcional: parar o polling em caso de erro de rede, etc.
+                }
+            }, 5000); // Verifica a cada 5 segundos
+        },
+
         async renderStandaloneThankYouPage(pageId, originUrl) {
             const appContainer = document.getElementById('app');
             appContainer.innerHTML = `<div id="app-loader" style="height: 100vh; display: flex; align-items: center; justify-content: center;"><svg class="animate-spin h-8 w-8 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-3">Carregando...</span></div>`;
@@ -1083,173 +1206,9 @@
             }
         },
 
-        async showPixModal(pixData) {
-            // 1. Limpa qualquer polling anterior (só por segurança)
-            if (this.state.pixPollingIntervalId) {
-                clearInterval(this.state.pixPollingIntervalId);
-                this.state.pixPollingIntervalId = null;
-            }
-
-            // 2. Define o HTML do modal
-            const qrCodeHTML = pixData.qr_code_base64
-                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
-                : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>';
-
-            // MODIFICADO: Removido o <p id="pix-status-message">...</p>
-            const modalContent = `
-                <div class="text-center">
-                    <h3 id="pix-modal-title" class="text-lg font-bold text-green-400">PIX Gerado com Sucesso!</h3>
-                    <p class="text-sm text-gray-400 mt-2 mb-4">Escaneie o QR Code ou copie o código abaixo e pague no seu aplicativo do banco.</p>
-                    ${qrCodeHTML}
-                    <textarea id="pix-code-textarea" class="form-input w-full p-2 font-mono text-xs bg-slate-900" rows="4" readonly>${pixData.qr_code_text || 'Erro ao obter código'}</textarea>
-                    <button id="copy-pix-btn" class="btn w-full mt-4 py-2">Copiar Código PIX</button>
-                </div>
-            `;
-
-            // 3. Renderiza o modal
-            const modalContainer = document.getElementById('modal-container');
-            modalContainer.innerHTML = this.templates.modal('Pagamento via PIX', modalContent);
-
-            // 4. Adiciona APENAS o listener de Copiar
-            const copyBtn = document.getElementById('copy-pix-btn');
-            if (copyBtn) {
-                copyBtn.addEventListener('click', async (e) => {
-                    const textarea = document.getElementById('pix-code-textarea');
-                    if (!textarea || !textarea.value || textarea.value === 'Erro ao obter código') {
-                        alert('Sem código PIX para copiar.');
-                        return;
-                    }
-                    try {
-                        await navigator.clipboard.writeText(textarea.value);
-                        e.target.textContent = 'Copiado!';
-                        setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
-                    } catch (err) {
-                        console.warn('Falha no navigator.clipboard, a tentar fallback...', err);
-                        try {
-                            textarea.select();
-                            document.execCommand('copy');
-                            window.getSelection().removeAllRanges();
-                            e.target.textContent = 'Copiado!';
-
-                            setTimeout(() => { e.target.textContent = 'Copiar Código PIX'; }, 2000);
-                        } catch (fallbackErr) {
-                            console.error('Falha no fallback de cópia:', fallbackErr);
-                            alert('Não foi possível copiar automaticamente.');
-                        }
-                    }
-                });
-            }
-
-            // 5. POLLING REMOVIDO
-            // Não há mais chamada para startPixStatusPolling
-            console.log("Modal do PIX exibido sem polling.");
-        },
-
-        // ******** FUNÇÃO startPixStatusPolling ATUALIZADA ********
-        startPixStatusPolling(transactionId) {
-            // Limpa qualquer intervalo anterior
-            if (this.state.pixPollingIntervalId) {
-                clearInterval(this.state.pixPollingIntervalId);
-            }
-
-            // Define o intervalo para verificar a cada 5 segundos
-            this.state.pixPollingIntervalId = setInterval(async () => {
-                console.log(`Verificando status PIX para ${transactionId}...`);
-                try {
-                    // Assume que a API Key está no settings (se necessário para a rota de status)
-                    const apiKey = this.state.data?.settings?.api_key;
-                    // Monta o header apenas se a apiKey existir
-                    const headers = apiKey ? { 'x-api-key': apiKey } : {};
-                    // Passa os headers para a requisição
-                    const response = await this.apiRequest(`/api/pix/status/${transactionId}`, 'GET', null, headers);
-
-                    const statusMsg = document.getElementById('pix-status-message');
-                    const modalTitle = document.getElementById('pix-modal-title');
-
-                    if (response.status === 'paid') {
-                        console.log("PIX Pago detectado!", response);
-                        clearInterval(this.state.pixPollingIntervalId); // Para o polling
-                        this.state.pixPollingIntervalId = null;
-
-                        if (statusMsg) {
-                            statusMsg.textContent = "Pagamento confirmado! Redirecionando...";
-                            statusMsg.classList.remove('animate-pulse', 'text-sky-400');
-                            statusMsg.classList.add('text-green-400', 'font-bold');
-                        }
-                         if (modalTitle) {
-                             modalTitle.textContent = "Pagamento Aprovado!";
-                             modalTitle.classList.remove('text-green-400');
-                             modalTitle.classList.add('text-green-500');
-                         }
 
 
-                        // Tenta redirecionar se a URL foi fornecida
-                        if (response.redirectUrl) {
-                             // Pega os parâmetros da URL ATUAL
-                             const currentParams = new URLSearchParams(window.location.search);
-                             // Pega o click_id retornado pelo backend (garante que é o correto associado à transação)
-                             const clickIdFromStatus = response.click_id?.replace('/start ', ''); // Remove /start
-                             if (clickIdFromStatus) {
-                                 currentParams.set('click_id', clickIdFromStatus); // Define ou atualiza o click_id
-                             } else {
-                                // Se o backend não retornar, tenta pegar da URL atual como fallback
-                                const clickIdCurrent = currentParams.get('click_id') || currentParams.get('cid');
-                                if (clickIdCurrent) {
-                                    currentParams.set('click_id', clickIdCurrent); // Garante que 'click_id' seja usado
-                                    currentParams.delete('cid'); // Remove 'cid' se existir
-                                }
-                             }
 
-                             // Remove parâmetros potencialmente sensíveis ou desnecessários antes de anexar
-                             currentParams.delete('name');
-                             currentParams.delete('email');
-                             currentParams.delete('phone');
-
-                             // Constrói a URL final
-                             const finalRedirectUrl = `${response.redirectUrl}${currentParams.toString() ? '?' + currentParams.toString() : ''}`;
-
-                             console.log("Redirecionando para:", finalRedirectUrl);
-                             setTimeout(() => {
-                                 window.location.href = finalRedirectUrl;
-                             }, 1500); // Pequeno delay para o usuário ver a mensagem
-                        } else {
-                            console.log("Pagamento confirmado, mas nenhuma URL de redirecionamento configurada no checkout.");
-                            if (statusMsg) statusMsg.textContent = "Pagamento confirmado com sucesso!";
-                        }
-
-                    } else if (response.status === 'pending') {
-                        // Continua aguardando
-                        if (statusMsg) statusMsg.textContent = "Aguardando pagamento...";
-                    } else if (response.status === 'not_found') {
-                         console.warn("Transação não encontrada durante o polling. Interrompendo.");
-                         clearInterval(this.state.pixPollingIntervalId);
-                         this.state.pixPollingIntervalId = null;
-                         if (statusMsg) statusMsg.textContent = "Erro: Transação não encontrada.";
-                    } else {
-                         // Outros status (ex: 'expired', 'failed')
-                         console.warn("Status inesperado recebido:", response.status);
-                         clearInterval(this.state.pixPollingIntervalId);
-                         this.state.pixPollingIntervalId = null;
-                         if (statusMsg) {
-                             statusMsg.textContent = `Status: ${response.status}`;
-                             statusMsg.classList.remove('animate-pulse', 'text-sky-400');
-                             statusMsg.classList.add('text-red-400');
-                         }
-                    }
-
-                } catch (error) {
-                    console.error("Erro durante o polling do status PIX:", error);
-                    // Considera parar o polling em caso de erro grave (ex: API Key inválida)
-                    if (error.message.includes('API Key inválida')) {
-                         clearInterval(this.state.pixPollingIntervalId);
-                         this.state.pixPollingIntervalId = null;
-                         console.error("Polling interrompido devido a erro de API Key.");
-                    }
-                    const statusMsg = document.getElementById('pix-status-message');
-                     if (statusMsg) statusMsg.textContent = "Erro ao verificar status.";
-                }
-            }, 5000); // Verifica a cada 5 segundos
-        },
         // ******** FIM DAS FUNÇÕES ATUALIZADAS ********
 
         renderLogin(page = 'login') { document.getElementById('app').innerHTML = this.templates.auth(page); },
