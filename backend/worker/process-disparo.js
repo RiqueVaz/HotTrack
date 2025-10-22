@@ -238,8 +238,18 @@ async function handler(req, res) {
             if (!seller) {
                 throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
             }
-                
-        let response;
+
+            // Busca o click_id mais recente para garantir que está atualizado
+            const [chat] = await sqlWithRetry(sql`
+                SELECT click_id FROM telegram_chats 
+                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
+                ORDER BY created_at DESC LIMIT 1
+            `);
+            if (chat?.click_id) {
+                userVariables.click_id = chat.click_id;
+            }
+    
+                let response;
             const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
     
         try {

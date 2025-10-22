@@ -513,6 +513,16 @@ async function handler(req, res) {
 
             if (bot) {
                 await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+                // Busca o click_id mais recente para garantir que o contexto não se perca após o timeout
+                const [chat] = await sql`
+                    SELECT click_id FROM telegram_chats 
+                    WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
+                    ORDER BY created_at DESC LIMIT 1
+                `;
+                if (chat?.click_id) {
+                    variables.click_id = chat.click_id;
+                }
+
                 await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
             } else {
                 console.error(`[WORKER] Bot com ID ${bot_id} não encontrado.`);
