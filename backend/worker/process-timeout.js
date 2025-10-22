@@ -516,9 +516,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 async function handler(req, res) {
     try {
-        // 1. Extrai os dados do corpo da requisição
-        const { chat_id, bot_id, target_node_id, variables, message_id } = req.body;
-        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}, msg: ${message_id}`);
+        // 1. Extrai os dados do corpo da requisição E o ID da mensagem do header do QStash
+        const { chat_id, bot_id, target_node_id, variables } = req.body;
+        const messageId = req.headers['upstash-message-id'];
+        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}, msg: ${messageId}`);
 
         // 2. Verifica se o usuário ainda está no estado de "aguardando input"
         const [userState] = await sql`
@@ -534,8 +535,8 @@ async function handler(req, res) {
         }
 
         // 4. VERIFICAÇÃO CRÍTICA: O ID da tarefa no banco é o mesmo desta execução?
-        if (userState.scheduled_message_id !== message_id) {
-            console.log(`[WORKER] Job (Msg ID: ${message_id}) obsoleto. Uma nova tarefa (${userState.scheduled_message_id}) já está agendada. Abortando.`);
+        if (userState.scheduled_message_id !== messageId) {
+            console.log(`[WORKER] Job (Msg ID: ${messageId}) obsoleto. Uma nova tarefa (${userState.scheduled_message_id}) já está agendada. Abortando.`);
             return res.status(200).json({ message: 'Ignorado: Tarefa obsoleta.' });
         }
         
