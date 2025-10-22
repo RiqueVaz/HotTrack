@@ -197,7 +197,7 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) {
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
     if (!text || text.trim() === '') return;
     try {
         if (showTyping) {
@@ -208,7 +208,11 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping) 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            await sql`INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, message_text, sender_type) VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, 'Bot', '(Fluxo)', ${text}, 'bot') ON CONFLICT (chat_id, message_id) DO NOTHING;`;
+            await sql`
+                INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
+                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, ${sentMessage.from.first_name}, ${sentMessage.from.last_name}, ${sentMessage.from.username}, ${text}, 'bot', ${variables.click_id || null})
+                ON CONFLICT (chat_id, message_id) DO NOTHING;
+            `;
         }
     } catch (error) {
         console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
@@ -329,7 +333,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
                 // ==========================================================
                 const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
