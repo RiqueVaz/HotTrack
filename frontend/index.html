@@ -974,7 +974,7 @@
                                 value_cents: totalValueCents,
                                 click_id: clickIdFromUrl
                             });
-                            this.showPixModal(pixData); // Mostra o modal e inicia polling
+                            this.showPixModal(pixData, config.redirects?.success_url); // Mostra o modal e inicia polling
                         } catch (error) {
                             alert('Erro ao gerar PIX. Tente novamente.');
                         } finally {
@@ -1008,7 +1008,7 @@
        },
 
        // ******** FUNÇÃO showPixModal ATUALIZADA ********
-        async showPixModal(pixData) {
+        async showPixModal(pixData, successRedirectUrl) {
             // Limpa qualquer polling anterior ao abrir um novo modal
             if (this.state.pixPollingIntervalId) {
                 clearInterval(this.state.pixPollingIntervalId);
@@ -1061,7 +1061,7 @@
             // Inicia a verificação de status se tivermos um transaction_id
             if (pixData.transaction_id) {
                 console.log("Iniciando polling para transaction_id:", pixData.transaction_id);
-                this.startPixStatusPolling(pixData.transaction_id);
+                this.startPixStatusPolling(pixData.transaction_id, successRedirectUrl);
             } else {
                  console.error("Não foi possível iniciar o polling: transaction_id ausente em pixData.");
                  const statusMsg = document.getElementById('pix-status-message');
