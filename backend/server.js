@@ -110,23 +110,141 @@ app.post(
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// CORS configurado para múltiplos frontends
-const allowedOrigins = [
+// ==========================================================
+//          CONFIGURAÇÃO CORS SEGURA E SELETIVA
+// ==========================================================
+
+// Origens permitidas para rotas administrativas (restritivas)
+const adminAllowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.ADMIN_FRONTEND_URL,
-  /^https:\/\/.*\.up\.railway\.app$/,  // Aceita qualquer subdomínio do Railway
   'http://localhost:3000',
   'http://localhost:3001',  
   'http://localhost:3000/admin',
   'http://localhost:3001/admin'
 ].filter(Boolean);
 
-app.use(cors({
-  origin: allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
-  credentials: true
-}));
+// Cache para domínios permitidos por pressel (performance)
+const allowedDomainsCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+// Rate limiting simples para registerClick
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutos
+const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests por 15 minutos por IP
+
+// Middleware de rate limiting
+function rateLimitMiddleware(req, res, next) {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+    const now = Date.now();
+    
+    if (!rateLimitMap.has(ip)) {
+        rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+        return next();
+    }
+    
+    const rateLimitData = rateLimitMap.get(ip);
+    
+    // Reset se a janela expirou
+    if (now > rateLimitData.resetTime) {
+        rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+        return next();
+    }
+    
+    // Verificar se excedeu o limite
+    if (rateLimitData.count >= RATE_LIMIT_MAX_REQUESTS) {
+        return res.status(429).json({ 
+            message: 'Muitas tentativas. Tente novamente em alguns minutos.',
+            retryAfter: Math.ceil((rateLimitData.resetTime - now) / 1000)
+        });
+    }
+    
+    // Incrementar contador
+    rateLimitData.count++;
+    next();
+}
+
+// Função para verificar se um domínio é permitido para uma pressel
+async function isDomainAllowedForPressel(presselId, origin) {
+  try {
+    // Verificar cache primeiro
+    const cacheKey = `${presselId}-${origin}`;
+    const cached = allowedDomainsCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.allowed;
+    }
+
+    // Buscar no banco de dados
+    const result = await sql`
+      SELECT COUNT(*) as count 
+      FROM pressel_allowed_domains 
+      WHERE pressel_id = ${presselId} 
+      AND (domain = ${origin} OR domain = ${origin.replace(/^https?:\/\//, '')})
+    `;
+
+    const isAllowed = result[0]?.count > 0;
+    
+    // Atualizar cache
+    allowedDomainsCache.set(cacheKey, {
+      allowed: isAllowed,
+      timestamp: Date.now()
+    });
+
+    return isAllowed;
+  } catch (error) {
+    console.error('Erro ao verificar domínio permitido:', error);
+    return false;
+  }
+}
+
+// Middleware CORS seletivo baseado na rota
+const corsOptions = async (req, callback) => {
+  const origin = req.header('Origin');
+  const isPresselRoute = req.path === '/api/registerClick';
+  
+  if (isPresselRoute) {
+    // Para rotas de pressel, verificar domínio no banco
+    const presselId = req.body?.presselId;
+    
+    if (presselId && origin) {
+      const isAllowed = await isDomainAllowedForPressel(presselId, origin);
+      
+      callback(null, { 
+        origin: isAllowed ? origin : false,
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: ['Content-Type'],
+        credentials: false
+      });
+    } else {
+      // Se não tem presselId ou origin, permitir (fallback para compatibilidade)
+      callback(null, { 
+        origin: origin,
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: ['Content-Type'],
+        credentials: false
+      });
+    }
+  } else {
+    // Para outras rotas (admin), usar lista restritiva
+    const isAllowed = adminAllowedOrigins.some(allowedOrigin => {
+      if (typeof allowedOrigin === 'string') {
+        return allowedOrigin === origin;
+      } else if (allowedOrigin instanceof RegExp) {
+        return allowedOrigin.test(origin);
+      }
+      return false;
+    });
+    
+    callback(null, { 
+      origin: isAllowed ? origin : false,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
+      credentials: true
+    });
+  }
+};
+
+app.use(cors(corsOptions));
 
 
 // Agentes HTTP/HTTPS para reutilização de conexão (melhora a performance)
@@ -1385,6 +1503,571 @@ app.delete('/api/pressels/:id', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao excluir a pressel.' });
     }
 });
+
+// ==========================================================
+//          ROTAS PARA GERENCIAR DOMÍNIOS PERMITIDOS
+// ==========================================================
+
+// Buscar domínios permitidos para uma pressel
+app.get('/api/pressels/:id/domains', authenticateJwt, async (req, res) => {
+    try {
+        const presselId = req.params.id;
+        
+        // Verificar se a pressel pertence ao seller
+        const [pressel] = await sql`
+            SELECT id FROM pressels 
+            WHERE id = ${presselId} AND seller_id = ${req.user.id}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        const domains = await sql`
+            SELECT id, domain, created_at 
+            FROM pressel_allowed_domains 
+            WHERE pressel_id = ${presselId} 
+            ORDER BY created_at DESC
+        `;
+        
+        res.json(domains);
+    } catch (error) {
+        console.error("Erro ao buscar domínios permitidos:", error);
+        res.status(500).json({ message: 'Erro ao buscar domínios.' });
+    }
+});
+
+// Adicionar domínio permitido para uma pressel
+app.post('/api/pressels/:id/domains', authenticateJwt, async (req, res) => {
+    try {
+        const presselId = req.params.id;
+        const { domain } = req.body;
+        
+        if (!domain || typeof domain !== 'string' || domain.trim().length === 0) {
+            return res.status(400).json({ message: 'Domínio é obrigatório.' });
+        }
+        
+        // Verificar se a pressel pertence ao seller
+        const [pressel] = await sql`
+            SELECT id FROM pressels 
+            WHERE id = ${presselId} AND seller_id = ${req.user.id}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        // Normalizar domínio (remover protocolo se presente)
+        const normalizedDomain = domain.trim().replace(/^https?:\/\//, '');
+        
+        // Verificar se já existe
+        const [existing] = await sql`
+            SELECT id FROM pressel_allowed_domains 
+            WHERE pressel_id = ${presselId} AND domain = ${normalizedDomain}
+        `;
+        
+        if (existing) {
+            return res.status(400).json({ message: 'Domínio já está cadastrado para esta pressel.' });
+        }
+        
+        // Inserir domínio
+        const [newDomain] = await sql`
+            INSERT INTO pressel_allowed_domains (pressel_id, domain) 
+            VALUES (${presselId}, ${normalizedDomain}) 
+            RETURNING id, domain, created_at
+        `;
+        
+        // Limpar cache
+        allowedDomainsCache.clear();
+        
+        res.status(201).json(newDomain);
+    } catch (error) {
+        console.error("Erro ao adicionar domínio:", error);
+        res.status(500).json({ message: 'Erro ao adicionar domínio.' });
+    }
+});
+
+// Remover domínio permitido
+app.delete('/api/pressels/:presselId/domains/:domainId', authenticateJwt, async (req, res) => {
+    try {
+        const { presselId, domainId } = req.params;
+        
+        // Verificar se a pressel pertence ao seller
+        const [pressel] = await sql`
+            SELECT id FROM pressels 
+            WHERE id = ${presselId} AND seller_id = ${req.user.id}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        // Verificar se o domínio pertence à pressel
+        const [domain] = await sql`
+            SELECT id FROM pressel_allowed_domains 
+            WHERE id = ${domainId} AND pressel_id = ${presselId}
+        `;
+        
+        if (!domain) {
+            return res.status(404).json({ message: 'Domínio não encontrado.' });
+        }
+        
+        // Remover domínio
+        await sql`DELETE FROM pressel_allowed_domains WHERE id = ${domainId}`;
+        
+        // Limpar cache
+        allowedDomainsCache.clear();
+        
+        res.status(204).send();
+    } catch (error) {
+        console.error("Erro ao remover domínio:", error);
+        res.status(500).json({ message: 'Erro ao remover domínio.' });
+    }
+});
+
+// Micro painel público para publishers registrarem domínios
+app.get('/api/pressel-domains/:presselId', async (req, res) => {
+    try {
+        const presselId = req.params.presselId;
+        
+        // Verificar se a pressel existe
+        const [pressel] = await sql`
+            SELECT id, name FROM pressels WHERE id = ${presselId}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        const domains = await sql`
+            SELECT domain, created_at 
+            FROM pressel_allowed_domains 
+            WHERE pressel_id = ${presselId} 
+            ORDER BY created_at DESC
+        `;
+        
+        res.json({
+            pressel: { id: pressel.id, name: pressel.name },
+            domains
+        });
+    } catch (error) {
+        console.error("Erro ao buscar domínios da pressel:", error);
+        res.status(500).json({ message: 'Erro ao buscar domínios.' });
+    }
+});
+
+// Registrar domínio via micro painel (sem autenticação)
+app.post('/api/pressel-domains/:presselId/register', async (req, res) => {
+    try {
+        const presselId = req.params.presselId;
+        const { domain, verification_code } = req.body;
+        
+        if (!domain || typeof domain !== 'string' || domain.trim().length === 0) {
+            return res.status(400).json({ message: 'Domínio é obrigatório.' });
+        }
+        
+        // Verificar se a pressel existe
+        const [pressel] = await sql`
+            SELECT id, name FROM pressels WHERE id = ${presselId}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        // Normalizar domínio
+        const normalizedDomain = domain.trim().replace(/^https?:\/\//, '');
+        
+        // Verificar se já existe
+        const [existing] = await sql`
+            SELECT id FROM pressel_allowed_domains 
+            WHERE pressel_id = ${presselId} AND domain = ${normalizedDomain}
+        `;
+        
+        if (existing) {
+            return res.status(400).json({ message: 'Domínio já está cadastrado para esta pressel.' });
+        }
+        
+        // TODO: Implementar verificação de domínio (DNS, arquivo de verificação, etc.)
+        // Por enquanto, aceitar automaticamente
+        
+        // Inserir domínio
+        const [newDomain] = await sql`
+            INSERT INTO pressel_allowed_domains (pressel_id, domain) 
+            VALUES (${presselId}, ${normalizedDomain}) 
+            RETURNING id, domain, created_at
+        `;
+        
+        // Limpar cache
+        allowedDomainsCache.clear();
+        
+        res.status(201).json({
+            message: 'Domínio registrado com sucesso!',
+            domain: newDomain
+        });
+    } catch (error) {
+        console.error("Erro ao registrar domínio:", error);
+        res.status(500).json({ message: 'Erro ao registrar domínio.' });
+    }
+});
+
+// Micro painel público para publishers registrarem domínios
+app.get('/pressel-domains/:presselId', async (req, res) => {
+    try {
+        const presselId = req.params.presselId;
+        
+        // Verificar se a pressel existe
+        const [pressel] = await sql`
+            SELECT id, name FROM pressels WHERE id = ${presselId}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).send(`
+                <!DOCTYPE html>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Pressel não encontrada</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f2f5; }
+                        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                        h1 { color: #e74c3c; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>❌ Pressel não encontrada</h1>
+                        <p>Esta pressel não existe ou foi removida.</p>
+                    </div>
+                </body>
+                </html>
+            `);
+        }
+        
+        const domains = await sql`
+            SELECT domain, created_at 
+            FROM pressel_allowed_domains 
+            WHERE pressel_id = ${presselId} 
+            ORDER BY created_at DESC
+        `;
+        
+        const html = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Domínios - ${pressel.name}</title>
+    <style>
+        body { 
+            margin: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif; 
+            background-color: #f0f2f5; 
+            color: #1c1e21; 
+            padding: 20px;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 8px; 
+            padding: 30px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e1e5e9;
+        }
+        .header h1 {
+            color: #1877f2;
+            margin: 0 0 10px 0;
+        }
+        .header p {
+            color: #606770;
+            margin: 0;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #1c1e21;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #dadde1;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #1877f2;
+            box-shadow: 0 0 0 2px rgba(24, 119, 242, 0.2);
+        }
+        .btn {
+            background: #1877f2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .btn:hover {
+            background: #166fe5;
+        }
+        .btn:disabled {
+            background: #dadde1;
+            cursor: not-allowed;
+        }
+        .domains-list {
+            margin-top: 30px;
+        }
+        .domains-list h3 {
+            margin-bottom: 15px;
+            color: #1c1e21;
+        }
+        .domain-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+        .domain-name {
+            font-family: monospace;
+            color: #1877f2;
+            font-weight: 600;
+        }
+        .domain-date {
+            color: #606770;
+            font-size: 14px;
+        }
+        .alert {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #1877f2;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 Gerenciador de Domínios</h1>
+            <p>Registre os domínios que podem usar a pressel: <strong>${pressel.name}</strong></p>
+        </div>
+
+        <div id="alert-container"></div>
+
+        <form id="domain-form">
+            <div class="form-group">
+                <label for="domain">Domínio:</label>
+                <input 
+                    type="text" 
+                    id="domain" 
+                    name="domain" 
+                    placeholder="exemplo.com ou https://exemplo.com"
+                    required
+                />
+            </div>
+            <button type="submit" class="btn" id="submit-btn">
+                Adicionar Domínio
+            </button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Carregando domínios...</p>
+        </div>
+
+        <div class="domains-list" id="domains-list" style="display: none;">
+            <h3>Domínios Registrados:</h3>
+            <div id="domains-container"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = '${process.env.API_BASE_URL || 'https://hottrack-production.up.railway.app'}';
+        const PRESSEL_ID = ${presselId};
+
+        // Função para mostrar alertas
+        function showAlert(message, type = 'success') {
+            const alertContainer = document.getElementById('alert-container');
+            alertContainer.innerHTML = \`
+                <div class="alert alert-\${type}">
+                    \${message}
+                </div>
+            \`;
+            
+            // Remover alerta após 5 segundos
+            setTimeout(() => {
+                alertContainer.innerHTML = '';
+            }, 5000);
+        }
+
+        // Função para carregar domínios
+        async function loadDomains() {
+            try {
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('domains-list').style.display = 'none';
+                
+                const response = await fetch(\`\${API_BASE_URL}/api/pressel-domains/\${PRESSEL_ID}\`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayDomains(data.domains);
+                    document.getElementById('domains-list').style.display = 'block';
+                } else {
+                    showAlert('Erro ao carregar domínios: ' + data.message, 'error');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar domínios:', error);
+                showAlert('Erro ao carregar domínios. Tente novamente.', 'error');
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        // Função para exibir domínios
+        function displayDomains(domains) {
+            const container = document.getElementById('domains-container');
+            
+            if (domains.length === 0) {
+                container.innerHTML = '<p style="color: #606770; text-align: center; padding: 20px;">Nenhum domínio registrado ainda.</p>';
+                return;
+            }
+            
+            container.innerHTML = domains.map(domain => \`
+                <div class="domain-item">
+                    <div>
+                        <div class="domain-name">\${domain.domain}</div>
+                        <div class="domain-date">Registrado em: \${new Date(domain.created_at).toLocaleString('pt-BR')}</div>
+                    </div>
+                </div>
+            \`).join('');
+        }
+
+        // Função para adicionar domínio
+        async function addDomain(domain) {
+            try {
+                const response = await fetch(\`\${API_BASE_URL}/api/pressel-domains/\${PRESSEL_ID}/register\`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ domain })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showAlert('Domínio registrado com sucesso!', 'success');
+                    document.getElementById('domain').value = '';
+                    loadDomains(); // Recarregar lista
+                } else {
+                    showAlert('Erro: ' + data.message, 'error');
+                }
+            } catch (error) {
+                console.error('Erro ao adicionar domínio:', error);
+                showAlert('Erro ao adicionar domínio. Tente novamente.', 'error');
+            }
+        }
+
+        // Event listeners
+        document.getElementById('domain-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const domainInput = document.getElementById('domain');
+            const submitBtn = document.getElementById('submit-btn');
+            const domain = domainInput.value.trim();
+            
+            if (!domain) {
+                showAlert('Por favor, insira um domínio válido.', 'error');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Adicionando...';
+            
+            try {
+                await addDomain(domain);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Adicionar Domínio';
+            }
+        });
+
+        // Carregar domínios ao inicializar
+        loadDomains();
+    </script>
+</body>
+</html>
+        `;
+        
+        res.send(html);
+    } catch (error) {
+        console.error("Erro ao servir micro painel:", error);
+        res.status(500).send(`
+            <!DOCTYPE html>
+            <html lang="pt-BR">
+            <head>
+                <meta charset="UTF-8">
+                <title>Erro</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f2f5; }
+                    .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    h1 { color: #e74c3c; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>❌ Erro interno</h1>
+                    <p>Ocorreu um erro ao carregar o painel. Tente novamente mais tarde.</p>
+                </div>
+            </body>
+            </html>
+        `);
+    }
+});
 app.post('/api/checkouts', authenticateJwt, async (req, res) => {
     const { name, product_name, redirect_url, value_type, fixed_value_cents, pixel_ids } = req.body;
 
@@ -1526,7 +2209,7 @@ app.delete('/api/integrations/utmify/:id', authenticateJwt, async (req, res) => 
         res.status(500).json({ message: 'Erro ao excluir integração.' });
     }
 });
-app.post('/api/registerClick', logApiRequest, async (req, res) => {
+app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, res) => {
     const { sellerApiKey, presselId, checkoutId, referer, fbclid, fbp, fbc, user_agent, utm_source, utm_campaign, utm_medium, utm_content, utm_term } = req.body;
 
     if (!sellerApiKey || (!presselId && !checkoutId)) {
@@ -1534,6 +2217,21 @@ app.post('/api/registerClick', logApiRequest, async (req, res) => {
     }
 
     const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+    
+    // Validação adicional de domínio para pressels
+    if (presselId) {
+        const origin = req.headers.origin;
+        if (origin) {
+            const isDomainAllowed = await isDomainAllowedForPressel(presselId, origin);
+            if (!isDomainAllowed) {
+                console.log(`[SECURITY] Tentativa de acesso de domínio não autorizado: ${origin} para pressel ${presselId}`);
+                return res.status(403).json({ 
+                    message: 'Domínio não autorizado para esta pressel.',
+                    hint: 'Registre seu domínio em: /api/pressel-domains/' + presselId
+                });
+            }
+        }
+    }
 
     try {
         const result = await sql`INSERT INTO clicks (
