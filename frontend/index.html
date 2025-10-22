@@ -1078,6 +1078,7 @@
                          this.state.pixPollingIntervalId = null;
                          console.log("Polling interrompido pelo fechamento do modal (Botão X).");
                      }
+                     document.getElementById('modal-container').innerHTML = ''; // Limpa o modal
                  };
                  // Limpa listener antigo se existir antes de adicionar um novo
                  if (closeModalBtn._listener) {
