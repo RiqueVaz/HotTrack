@@ -3068,15 +3068,16 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         if (userState && userState.waiting_for_input) {
             console.log(`[Webhook] Resposta recebida. Reativando fluxo a partir do nó seguinte.`);
 
-            // Busca a definição do fluxo (nós e arestas) para encontrar o próximo passo.
-            const [flow] = await sql`SELECT nodes, edges FROM flows WHERE bot_id = ${botId} AND is_active = true`;
-            if (!flow) {
-                console.error(`[Webhook] Fluxo ativo para o bot ${botId} não encontrado.`);
+            // Busca a definição do fluxo (que está toda na coluna 'nodes')
+            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = true`;
+            if (!flow || !flow.nodes) {
+                console.error(`[Webhook] Fluxo ativo ou dados do fluxo para o bot ${botId} não encontrados.`);
                 return;
             }
 
-            const nodes = flow.nodes || [];
-            const edges = flow.edges || [];
+            // Extrai os nós e arestas de dentro do objeto JSON 'nodes'
+            const nodes = flow.nodes.nodes || [];
+            const edges = flow.nodes.edges || [];
 
             // Encontra o próximo nó no caminho de "sucesso" (saída 'a')
             const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
