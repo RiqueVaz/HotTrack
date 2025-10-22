@@ -2873,8 +2873,7 @@
     <script>
         (async function() {
             const CONFIG = {
-                SELLER_API_KEY: "${settings.api_key || 'SUA_API_KEY'}",
-                PRESSEL_ID: ${pressel.id},
+                                PRESSEL_ID: ${pressel.id},
                 WHITE_PAGE_URL: "${pressel.white_page_url}",
                 BOT_USERNAME: "${pressel.bot_name.replace('@', '')}",
                 API_BASE_URL: "${this.state.API_BASE_URL}"
@@ -2900,8 +2899,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        sellerApiKey: CONFIG.SELLER_API_KEY,
-                        presselId: CONFIG.PRESSEL_ID,
+                                                presselId: CONFIG.PRESSEL_ID,
                         referer: document.referrer || null,
                         fbclid: getQueryParam('fbclid'),
                         fbp: fbp,
