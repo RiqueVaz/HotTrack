@@ -815,7 +815,7 @@
                                ${testimonials.map(t => `
                                    <div style="background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; color: #1f2937;">
                                        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
-                                           ${t.photo_url ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">` : ''}
+                                           ${(t.photo_url && t.photo_url !== 'null') ? `<img src="${t.photo_url}" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">` : ''}
                                            <p style="font-weight: 600; color: #111827;">${t.name}</p>
                                        </div>
                                        <p style="font-size: 0.9rem; color: #4b5563; font-style: italic;">"${t.text}"</p>
@@ -3464,11 +3464,13 @@
             function populateCreatorForm(config) {
                 const get = (selector) => contentEl.querySelector(selector);
                 get('#main_title').value = config.content?.main_title || ''; get('#subtitle').value = config.content?.subtitle || ''; get('#media_url').value = config.content?.media_url || '';
-                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; packagesContainer.innerHTML=''; if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { config.pricing.packages.forEach(pkg => addPackage(pkg.title, pkg.description, (pkg.value_cents / 100).toFixed(2))); } else { addPackage(); }
-                get('#enable_order_bump').checked = config.order_bump?.enabled; get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); get('#order_bump_product_name').value = config.order_bump?.product_name || ''; get('#order_bump_description').value = config.order_bump?.description || ''; get('#order_bump_value').value = (config.order_bump?.value_cents / 100).toFixed(2) || '0.00';
+                get('#pricing-type-select').value = config.pricing?.type || 'fixed'; packagesContainer.innerHTML=''; if (config.pricing?.type === 'fixed' && config.pricing.packages?.length > 0) { config.pricing.packages.forEach(pkg => addPackage(pkg.title || '', pkg.description || '', ((pkg.value_cents || 0) / 100).toFixed(2))); } else { addPackage(); }
+                get('#enable_order_bump').checked = config.order_bump?.enabled; get('#order-bump-fields').classList.toggle('hidden', !config.order_bump?.enabled); get('#order_bump_product_name').value = config.order_bump?.product_name || '';
+                get('#order_bump_description').value = config.order_bump?.description || '';
+                get('#order_bump_value').value = ((config.order_bump?.value_cents || 0) / 100).toFixed(2);
                 get('#enable_countdown').checked = config.conversion_elements?.countdown?.enabled; get('#countdown-fields').classList.toggle('hidden', !config.conversion_elements?.countdown?.enabled); get('#countdown_minutes').value = config.conversion_elements?.countdown?.minutes || 15;
                 get('#guarantee_text').value = config.conversion_elements?.guarantee?.text || ''; get('#guarantee_seal_url').value = config.conversion_elements?.guarantee?.seal_url || '';
-                testimonialsContainer.innerHTML=''; if (config.testimonials?.length > 0) { config.testimonials.forEach(t => addTestimonial(t.name, t.photo_url, t.text)); }
+                testimonialsContainer.innerHTML=''; if (config.testimonials?.length > 0) { config.testimonials.forEach(t => addTestimonial(t.name || '', t.photo_url || '', t.text || '')); }
                 get('#pixel_id').value = config.tracking?.pixel_id || ''; get('#utmify_integration_id').value = config.tracking?.utmify_integration_id || ''; get('#background_color').value = config.style?.background_color || '#0f172a'; get('#accent_color').value = config.style?.accent_color || '#38bdf8';
                 get('#success_redirect_url').value = config.redirects?.success_url || ''; // Popula o campo novo
             }

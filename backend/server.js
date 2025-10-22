@@ -2413,7 +2413,7 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
             paid_revenue: parseFloat(paidRevenue),
             bots_performance: botsPerformance.map(b => ({ ...b, total_clicks: parseInt(b.total_clicks), total_pix_paid: parseInt(b.total_pix_paid), paid_revenue: parseFloat(b.paid_revenue) })),
             clicks_by_state: clicksByState.map(s => ({ ...s, total_clicks: parseInt(s.total_clicks) })),
-            daily_revenue: dailyRevenue.map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
+            daily_revenue: dailyRevenue.filter(d => d.date).map(d => ({ date: d.date.toISOString().split('T')[0], revenue: parseFloat(d.revenue) }))
         });
     } catch (error) {
         console.error("Erro ao buscar métricas do dashboard:", error);
