@@ -2762,6 +2762,19 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     if (!currentNodeId) {
         if (isStartCommand) {
             console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+
+            // CORREÇÃO: Cancela a tarefa de timeout pendente ANTES de reiniciar o fluxo.
+            const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (stateToCancel && stateToCancel.scheduled_message_id) {
+                try {
+                    await qstashClient.messages.delete({ id: stateToCancel.scheduled_message_id });
+                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada com sucesso antes de reiniciar.`);
+                } catch (e) {
+                    // Ignora o erro se a mensagem já foi processada ou não existe mais.
+                    console.warn(`[Flow Engine] Não foi possível cancelar a tarefa de timeout ${stateToCancel.scheduled_message_id} (pode já ter sido executada):`, e.message);
+                }
+            }
+
             await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             const startNode = nodes.find(node => node.type === 'trigger');
             if (startNode) {
