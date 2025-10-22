@@ -1,5 +1,5 @@
 // /backend/worker/process-disparo.js
-// Este worker é responsável por processar UM ÚNICO PASSO de um disparo em massa.
+// Este worker não tem a função processFlow, a correção não é aplicável aqui. disparo em massa.
 
 if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ path: '../../.env' });
