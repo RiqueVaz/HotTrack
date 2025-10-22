@@ -352,7 +352,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                             if (existingState && existingState.scheduled_message_id) {
                                 try {
-                                    await qstashClient.messages.delete({ id: existingState.scheduled_message_id });
+                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
                                     console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada antes de agendar a nova.`);
                                 } catch (e) {
                                     console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id} (pode já ter sido executada):`, e.message);
