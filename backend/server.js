@@ -3001,7 +3001,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         const chatId = message.chat.id;
     
         // 1. Busque o estado do usuário
-        const [userState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        const [userState] = await sql`SELECT scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
         // --- BLOCO CORRIGIDO ---
         // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
@@ -3076,7 +3076,12 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             initialVars.click_id = chat.click_id;
         }
         
-        await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
+        // CORREÇÃO: Só processa o fluxo se for um comando /start ou se um fluxo já estiver ativo esperando resposta.
+        if (isStartCommand || userState?.waiting_for_input) {
+            await processFlow(chatId, botId, botToken, sellerId, null, initialVars);
+        } else {
+            console.log(`[Webhook] Mensagem de ${chatId} ignorada. Não é /start e não há fluxo ativo.`);
+        }
     
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
