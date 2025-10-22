@@ -93,7 +93,7 @@ async function saveMessageToDb(sellerId, botId, message, senderType, variables =
     
     const fromUser = from || chat;
 
-    // CORREÇÃO: A query agora inclui o click_id e não sobrescreve os dados do usuário.
+    // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
     await sqlWithRetry(`
         INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
