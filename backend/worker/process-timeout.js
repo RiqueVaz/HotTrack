@@ -512,44 +512,53 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 
 // ==========================================================
-//                      LÓGICA DO WORKER
 // ==========================================================
 
 async function handler(req, res) {
     try {
-        const { chat_id, bot_id, target_node_id, variables } = req.body;
-        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}`);
+        // 1. Extrai os dados do corpo da requisição
+        const { chat_id, bot_id, target_node_id, variables, message_id } = req.body;
+        console.log(`[WORKER] Recebido job de timeout para chat: ${chat_id}, bot: ${bot_id}, msg: ${message_id}`);
 
-        const [userState] = await sql`SELECT waiting_for_input FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+        // 2. Verifica se o usuário ainda está no estado de "aguardando input"
+        const [userState] = await sql`
+            SELECT waiting_for_input, scheduled_message_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
+        `;
 
-        if (userState && userState.waiting_for_input) {
-            console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
-            
-            const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
-
-            if (bot) {
-                await sql`UPDATE user_flow_states SET waiting_for_input = false, scheduled_message_id = NULL WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
-                // Busca o click_id mais recente para garantir que o contexto não se perca após o timeout
-                const [chat] = await sql`
-                    SELECT click_id FROM telegram_chats 
-                    WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
-                    ORDER BY created_at DESC LIMIT 1
-                `;
-                if (chat?.click_id) {
-                    variables.click_id = chat.click_id;
-                }
-
-                await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, variables);
-            } else {
-                console.error(`[WORKER] Bot com ID ${bot_id} não encontrado.`);
-            }
-        } else {
-            console.log(`[WORKER] Tarefa para ${chat_id} ignorada, pois o usuário já respondeu.`);
+        // 3. Se o estado não existe ou o usuário já respondeu, o trabalho do worker termina.
+        if (!userState || !userState.waiting_for_input) {
+            console.log(`[WORKER] Job para chat ${chat_id} ignorado. O usuário já respondeu ou o fluxo foi resetado.`);
+            return res.status(200).json({ message: 'Ignorado: Estado não encontrado ou não está aguardando.' });
         }
-        res.status(200).send('Worker finished successfully.');
+
+        // 4. VERIFICAÇÃO CRÍTICA: O ID da tarefa no banco é o mesmo desta execução?
+        if (userState.scheduled_message_id !== message_id) {
+            console.log(`[WORKER] Job (Msg ID: ${message_id}) obsoleto. Uma nova tarefa (${userState.scheduled_message_id}) já está agendada. Abortando.`);
+            return res.status(200).json({ message: 'Ignorado: Tarefa obsoleta.' });
+        }
+        
+        // 5. Se a tarefa é válida, continua o fluxo de timeout
+        console.log(`[WORKER] Timeout confirmado! Processando fluxo a partir do nó ${target_node_id}`);
+        
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
+        if (!bot) {
+            console.error(`[WORKER] Bot ${bot_id} não encontrado. Abortando.`);
+            return res.status(500).json({ message: 'Bot não encontrado.' });
+        }
+
+        // Garante que as variáveis existam antes de chamar o processFlow
+        const finalVariables = variables || {};
+
+        // Chama o motor de fluxo para executar o nó de timeout
+        await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, finalVariables);
+        
+        res.status(200).json({ message: 'Timeout processado com sucesso.' });
+
     } catch (error) {
-        console.error('[WORKER] Erro crítico ao processar timeout:', error);
-        res.status(500).send('Erro interno no worker.');
+        console.error('[WORKER] Erro fatal ao processar timeout:', error);
+        res.status(500).json({ message: 'Erro interno no worker.' });
     }
 }
 
