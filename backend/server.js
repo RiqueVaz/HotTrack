@@ -1130,12 +1130,17 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
         const users = await sqlWithRetry(`
-            SELECT * FROM (
-                SELECT DISTINCT ON (chat_id) * FROM telegram_chats 
-                WHERE bot_id = $1 AND seller_id = $2
-                ORDER BY chat_id, created_at DESC
-            ) AS latest_chats
-            ORDER BY created_at DESC;
+            SELECT 
+                t.chat_id,
+                (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
+                (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
+                (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
+                (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
+                MAX(t.created_at) as last_message_at
+            FROM telegram_chats t
+            WHERE t.bot_id = $1 AND t.seller_id = $2
+            GROUP BY t.chat_id
+            ORDER BY last_message_at DESC;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
@@ -2694,10 +2699,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            // CORREÇÃO: Inclui o click_id e usa os dados corretos do bot
+            // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
             await sql`
                 INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
-                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, ${sentMessage.from.first_name}, ${sentMessage.from.last_name}, ${sentMessage.from.username}, ${text}, 'bot', ${variables.click_id || null})
+                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
             `;
         }

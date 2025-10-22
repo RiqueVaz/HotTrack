@@ -208,9 +208,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
+            // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
             await sql`
                 INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
-                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, ${sentMessage.from.first_name}, ${sentMessage.from.last_name}, ${sentMessage.from.username}, ${text}, 'bot', ${variables.click_id || null})
+                VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
             `;
         }
