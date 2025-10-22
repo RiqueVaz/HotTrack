@@ -2817,6 +2817,44 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Carregando...</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #1a1a1a; /* Fundo escuro */
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .loader-container {
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            border-left-color: #ffffff;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        p {
+            font-size: 1.2em;
+            opacity: 0;
+            animation: fadeIn 1s forwards;
+            animation-delay: 0.5s;
+        }
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+    </style>
     <script>
         !function(f,b,e,v,n,t,s)
         {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -2892,7 +2930,10 @@
     <\/script>
 </head>
 <body>
-    <p>Carregando...</p>
+    <div class="loader-container">
+        <div class="spinner"></div>
+        <p>Aguarde, estamos redirecionando...</p>
+    </div>
 </body>
 </html>`;
 
