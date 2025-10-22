@@ -2893,6 +2893,14 @@
                 return { fbp, fbc };
             }
             try {
+                // Bloqueia bots conhecidos do Facebook para evitar poluir as métricas
+                const userAgent = navigator.userAgent;
+                if (/facebookexternalhit|Facebot/i.test(userAgent)) {
+                    console.log('Bot do Facebook detectado. Redirecionando...');
+                    window.location.href = CONFIG.WHITE_PAGE_URL;
+                    return; // Interrompe a execução
+                }
+
                 ${deviceDetectionCode}
                 const { fbp, fbc } = getFacebookCookies();
                 const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
