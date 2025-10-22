@@ -2437,13 +2437,17 @@ app.get('/api/transactions', authenticateJwt, async (req, res) => {
             SELECT
                 pt.status,
                 pt.pix_value,
-                COALESCE(tb.bot_name, hc.config->'content'->>'main_title', 'Checkout Desconhecido') as source_name,
+                COALESCE(tb_pressel.bot_name, tb_organic.bot_name, hc.config->'content'->>'main_title', 'Origem Desconhecida') as source_name,
                 pt.provider,
                 pt.created_at
             FROM pix_transactions pt
             JOIN clicks c ON pt.click_id_internal = c.id
+            -- Join para bots via Pressel
             LEFT JOIN pressels p ON c.pressel_id = p.id
-            LEFT JOIN telegram_bots tb ON p.bot_id = tb.id
+            LEFT JOIN telegram_bots tb_pressel ON p.bot_id = tb_pressel.id
+            -- Join para bots via Tráfego Orgânico (direto do clique)
+            LEFT JOIN telegram_bots tb_organic ON c.bot_id = tb_organic.id
+            -- Join para Checkouts Hospedados
             LEFT JOIN hosted_checkouts hc ON c.checkout_id = hc.id
             WHERE c.seller_id = $1
         `;
