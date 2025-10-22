@@ -3032,27 +3032,8 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             return;
         }
         const chatId = message.chat.id;
-    
-        // 1. Busque o estado COMPLETO do usuário (incluindo o nó atual e as variáveis)
-        const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-
-        // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
-        if (userState && userState.scheduled_message_id) {
-            const messageIdToCancel = userState.scheduled_message_id;
-            console.log(`[Webhook] Usuário respondeu. Tentando cancelar Message ID: "${messageIdToCancel}"`);
-    
-            try {
-                await qstashClient.messages.delete(messageIdToCancel);
-                console.log(`[Webhook] Mensagem ${messageIdToCancel} cancelada com sucesso no QStash.`);
-            } catch (error) {
-                const errorMessage = error.response?.data?.error || error.message || '';
-                if (errorMessage.includes('invalid message id') || (error.response && error.response.status === 404)) {
-                    console.warn(`[Webhook] QStash retornou 'not found' para ${messageIdToCancel}. A mensagem pode já ter sido executada ou cancelada. Ignorando.`);
-                } else {
-                    console.error(`[Webhook] Erro CRÍTICO ao tentar cancelar a mensagem no QStash:`, error.response?.data || error.message || error);
-                }
-            }
-        }
+        const text = message.text || '';
+        const isStartCommand = text.startsWith('/start');
 
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
@@ -3061,63 +3042,72 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         }
         const { seller_id: sellerId, bot_token: botToken } = bot;
 
-        // Salva a mensagem do usuário no banco de dados.
+        // Salva a mensagem do usuário (seja /start ou resposta)
         await saveMessageToDb(sellerId, botId, message, 'user');
 
-        // Se o usuário estava aguardando uma resposta, o trabalho do webhook é REATIVAR o fluxo.
-        if (userState && userState.waiting_for_input) {
-            console.log(`[Webhook] Resposta recebida. Reativando fluxo a partir do nó seguinte.`);
-
-            // Busca a definição do fluxo (que está toda na coluna 'nodes')
-            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId}`;
-            if (!flow || !flow.nodes) {
-                console.error(`[Webhook] Fluxo ativo ou dados do fluxo para o bot ${botId} não encontrados.`);
-                return;
-            }
-
-            // Extrai os nós e arestas de dentro do objeto JSON 'nodes'
-            const nodes = flow.nodes.nodes || [];
-            const edges = flow.nodes.edges || [];
-
-            // Encontra o próximo nó no caminho de "sucesso" (saída 'a')
-            const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
-
-            if (nextNodeId) {
-                // Chama o motor do fluxo para continuar a partir do próximo nó.
-                await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
-            } else {
-                console.log(`[Webhook] Fim do fluxo após resposta do usuário para o nó ${userState.current_node_id}.`);
-                // Limpa o estado, pois o fluxo terminou.
-                await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            }
-            return; // Finaliza a execução do webhook aqui.
-        }
-
-        // Se não estava esperando resposta, verifica se é um comando /start para iniciar um novo fluxo.
-        const text = message.text || '';
-        const isStartCommand = text.startsWith('/start');
-
+        // PRIORIDADE 1: Comando /start reinicia tudo.
         if (isStartCommand) {
+            console.log(`[Webhook] Comando /start recebido. Reiniciando fluxo para o chat ${chatId}.`);
+            
+            // Cancela qualquer tarefa pendente e deleta o estado antigo.
+            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            if (existingState && existingState.scheduled_message_id) {
+                try {
+                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
+            }
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
+            // Lógica para criar click_id (orgânico ou de campanha)
             let clickIdValue = null;
             const parts = text.split(' ');
             if (parts.length > 1 && parts[1].trim() !== '') {
                 clickIdValue = text;
                 console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
             } else {
-                console.log(`[Webhook] Tráfego orgânico do bot detectado para chat ${chatId}. Gerando novo click_id.`);
-                const [newClick] = await sql`
-                    INSERT INTO clicks (seller_id, bot_id, is_organic)
-                    VALUES (${sellerId}, ${botId}, TRUE)
-                    RETURNING id;
-                `;
+                console.log(`[Webhook] Tráfego orgânico do bot detectado. Gerando novo click_id.`);
+                const [newClick] = await sql`INSERT INTO clicks (seller_id, bot_id, is_organic) VALUES (${sellerId}, ${botId}, TRUE) RETURNING id`;
                 clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
                 await sql`UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}`;
-                console.log(`[Webhook] Novo click_id orgânico gerado e associado: ${clickIdValue}`);
+                console.log(`[Webhook] Novo click_id orgânico gerado: ${clickIdValue}`);
             }
-            // Inicia o fluxo APENAS para o comando /start.
+            
+            // Inicia o fluxo do zero.
             await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
+            return; // Finaliza a execução.
+        }
+
+        // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
+        const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        
+        if (userState && userState.waiting_for_input) {
+            // Cancela o timeout, pois o usuário respondeu.
+            if (userState.scheduled_message_id) {
+                 try {
+                    await qstashClient.messages.delete(userState.scheduled_message_id);
+                    console.log(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                } catch (e) { /* Ignora erros */ }
+            }
+
+            // Continua o fluxo a partir do próximo nó.
+            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId}`;
+            if (flow && flow.nodes) {
+                const nodes = flow.nodes.nodes || [];
+                const edges = flow.nodes.edges || [];
+                const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
+
+                if (nextNodeId) {
+                    await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
+                } else {
+                    console.log(`[Webhook] Fim do fluxo após resposta do usuário.`);
+                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                }
+            } else {
+                 console.error(`[Webhook] Fluxo para o bot ${botId} não encontrado ao tentar continuar.`);
+            }
         } else {
-            console.log(`[Webhook] Mensagem de ${chatId} ignorada. Não é /start e não há fluxo ativo esperando resposta.`);
+            console.log(`[Webhook] Mensagem de ${chatId} ignorada (não é /start e não há fluxo esperando resposta).`);
         }
     
     } catch (error) {
