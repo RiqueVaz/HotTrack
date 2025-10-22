@@ -48,11 +48,7 @@
             background-size: 20px 20px, 100% 100%, 100% 100%;
         }
 
-        html, body, #app, .md\:flex {
-            height: 100%;
-            overflow: hidden; /* Impede scroll no body */
-        }
-                main#content {
+        main#content {
             height: calc(100% - 72px); /* Altura padrão para mobile (considerando header) */
         }
         @media (min-width: 768px) { /* md */
@@ -2505,14 +2501,9 @@
 
     contentContainer.innerHTML = `<div class="flex items-center justify-center h-full"><svg class="animate-spin h-6 w-6 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></div>`;
 
-    // Lógica de ajuste de layout (do Arquivo 2)
-    if (page === 'pageCreator' || page === 'thankYouCreator') {
-        contentContainer.classList.remove('overflow-y-auto', 'p-4', 'md:p-8');
-        contentContainer.classList.add('overflow-hidden');
-    } else {
-        contentContainer.classList.add('overflow-y-auto', 'p-4', 'md:p-8');
-        contentContainer.classList.remove('overflow-hidden');
-    }
+    // O layout agora é consistente, controlado pelo CSS do <main>.
+    contentContainer.classList.add('overflow-y-auto', 'p-4', 'md:p-8');
+    contentContainer.classList.remove('overflow-hidden');
 
     // Lógica de limpeza do React/HotBot (do Arquivo 1)
     if (page !== 'hotbot' && window.hotBotRoot) {
@@ -2873,8 +2864,7 @@
     <script>
         (async function() {
             const CONFIG = {
-                SELLER_API_KEY: "${settings.api_key || 'SUA_API_KEY'}",
-                PRESSEL_ID: ${pressel.id},
+                                PRESSEL_ID: ${pressel.id},
                 WHITE_PAGE_URL: "${pressel.white_page_url}",
                 BOT_USERNAME: "${pressel.bot_name.replace('@', '')}",
                 API_BASE_URL: "${this.state.API_BASE_URL}"
@@ -2894,14 +2884,21 @@
                 return { fbp, fbc };
             }
             try {
+                // Bloqueia bots conhecidos do Facebook para evitar poluir as métricas
+                const userAgent = navigator.userAgent;
+                if (/facebookexternalhit|Facebot/i.test(userAgent)) {
+                    console.log('Bot do Facebook detectado. Redirecionando...');
+                    window.location.href = CONFIG.WHITE_PAGE_URL;
+                    return; // Interrompe a execução
+                }
+
                 ${deviceDetectionCode}
                 const { fbp, fbc } = getFacebookCookies();
                 const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        sellerApiKey: CONFIG.SELLER_API_KEY,
-                        presselId: CONFIG.PRESSEL_ID,
+                                                presselId: CONFIG.PRESSEL_ID,
                         referer: document.referrer || null,
                         fbclid: getQueryParam('fbclid'),
                         fbp: fbp,
