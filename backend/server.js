@@ -1458,7 +1458,7 @@ app.get('/api/bots/users', authenticateJwt, async (req, res) => {
     }
 });
 app.post('/api/pressels', authenticateJwt, async (req, res) => {
-    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id } = req.body;
+    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type } = req.body;
     if (!name || !bot_id || !white_page_url || !Array.isArray(pixel_ids) || pixel_ids.length === 0) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     
     try {
@@ -1474,8 +1474,8 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
         await sql`BEGIN`;
         try {
             const [newPressel] = await sql`
-                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id) 
-                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}) 
+                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type) 
+                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}) 
                 RETURNING *;
             `;
             
