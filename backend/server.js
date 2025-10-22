@@ -3033,8 +3033,8 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         }
         const chatId = message.chat.id;
     
-        // 1. Busque o estado do usuário
-        const [userState] = await sql`SELECT scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        // 1. Busque o estado COMPLETO do usuário (incluindo o nó atual e as variáveis)
+        const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
 
         // 2. Tente cancelar a tarefa PENDENTE, se houver uma.
         if (userState && userState.scheduled_message_id) {
@@ -3064,10 +3064,32 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
         // Salva a mensagem do usuário no banco de dados.
         await saveMessageToDb(sellerId, botId, message, 'user');
 
-        // Se o usuário estava aguardando uma resposta, o trabalho do webhook termina aqui.
+        // Se o usuário estava aguardando uma resposta, o trabalho do webhook é REATIVAR o fluxo.
         if (userState && userState.waiting_for_input) {
-            console.log(`[Webhook] Usuário respondeu. O fluxo continuará a partir da próxima etapa programada.`);
-            return; 
+            console.log(`[Webhook] Resposta recebida. Reativando fluxo a partir do nó seguinte.`);
+
+            // Busca a definição do fluxo (nós e arestas) para encontrar o próximo passo.
+            const [flow] = await sql`SELECT nodes, edges FROM flows WHERE bot_id = ${botId} AND is_active = true`;
+            if (!flow) {
+                console.error(`[Webhook] Fluxo ativo para o bot ${botId} não encontrado.`);
+                return;
+            }
+
+            const nodes = flow.nodes || [];
+            const edges = flow.edges || [];
+
+            // Encontra o próximo nó no caminho de "sucesso" (saída 'a')
+            const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
+
+            if (nextNodeId) {
+                // Chama o motor do fluxo para continuar a partir do próximo nó.
+                await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
+            } else {
+                console.log(`[Webhook] Fim do fluxo após resposta do usuário para o nó ${userState.current_node_id}.`);
+                // Limpa o estado, pois o fluxo terminou.
+                await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            }
+            return; // Finaliza a execução do webhook aqui.
         }
 
         // Se não estava esperando resposta, verifica se é um comando /start para iniciar um novo fluxo.
