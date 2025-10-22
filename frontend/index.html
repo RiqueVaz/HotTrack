@@ -1105,7 +1105,7 @@
                 }
 
                 try {
-                    const { status } = await this.apiRequest(`/api/oferta/pix-status/${transactionId}`);
+                    const { status } = await this.apiRequest(`/api/pix-status/${transactionId}`);
                     const statusEl = document.getElementById('pix-status');
 
                     if (status === 'paid') {

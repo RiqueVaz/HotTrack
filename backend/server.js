@@ -763,6 +763,34 @@ app.get('/api/config', (req, res) => {
     });
 });
 
+app.get('/api/pix-status/:transaction_id', async (req, res) => {
+    const { transaction_id } = req.params;
+
+    if (!transaction_id) {
+        return res.status(400).json({ error: 'ID da transação não fornecido.' });
+    }
+
+    try {
+        const result = await sql`
+            SELECT status, pix_value FROM pix_transactions WHERE provider_transaction_id = ${transaction_id}
+        `;
+
+        if (result.length === 0) {
+            return res.status(404).json({ error: 'Transação não encontrada.' });
+        }
+
+        const transaction = result[0];
+        res.status(200).json({ 
+            status: transaction.status, 
+            pix_value: transaction.pix_value 
+        });
+
+    } catch (error) {
+        console.error('Erro ao consultar status do PIX:', error);
+        res.status(500).json({ error: 'Erro interno ao verificar o status do PIX.' });
+    }
+});
+
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
