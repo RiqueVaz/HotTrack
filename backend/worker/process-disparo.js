@@ -61,6 +61,13 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 console.warn(`[WORKER-DISPARO] Bot bloqueado. ChatID: ${chatId}`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
+
+            // Tratamento específico para TOPIC_CLOSED
+            if (error.response && error.response.status === 400 && 
+                error.response.data?.description?.includes('TOPIC_CLOSED')) {
+                console.warn(`[WORKER-DISPARO] Chat de grupo fechado. ChatID: ${chatId}`);
+                return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_CLOSED' };
+            }
             const isRetryable = error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.message.includes('socket hang up');
             if (isRetryable && i < retries - 1) {
                 await new Promise(res => setTimeout(res, delay * (i + 1)));

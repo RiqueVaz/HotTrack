@@ -322,6 +322,13 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
+            // Tratamento específico para TOPIC_CLOSED
+            if (error.response && error.response.status === 400 && 
+                error.response.data?.description?.includes('TOPIC_CLOSED')) {
+                console.warn(`[TELEGRAM API WARN] Chat de grupo fechado. ChatID: ${chatId}`);
+                return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_CLOSED' };
+            }
+
             const isRetryable = error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.message.includes('socket hang up');
 
             if (isRetryable && i < retries - 1) {
@@ -2921,9 +2928,26 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                          // Adiciona verificação do seller
                         if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
     
-                        // Busca o click_id das variáveis do fluxo
-                        const click_id_from_vars = variables.click_id;
-                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+                        // Busca o click_id das variáveis do fluxo ou do banco de dados
+                        let click_id_from_vars = variables.click_id;
+                        
+                        // Se não encontrou nas variáveis, tenta buscar do banco de dados
+                        if (!click_id_from_vars) {
+                            const [recentClick] = await sql`
+                                SELECT click_id FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                                ORDER BY created_at DESC LIMIT 1
+                            `;
+                            if (recentClick?.click_id) {
+                                click_id_from_vars = recentClick.click_id;
+                                console.log(`[Flow Engine] Click ID recuperado do banco: ${click_id_from_vars}`);
+                            }
+                        }
+                        
+                        if (!click_id_from_vars) {
+                            console.error(`[Flow Engine] Click ID não encontrado para chat ${chatId}, bot ${botId}. Variáveis:`, variables);
+                            throw new Error("Click ID não encontrado nas variáveis do fluxo nem no histórico do chat.");
+                        }
     
                         const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
                         const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
@@ -3024,8 +3048,25 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     res.sendStatus(200);
 
     try {
-        if (!message || !message.chat || !message.chat.id) {
-            console.warn('[Webhook] Requisição ignorada: estrutura de mensagem inválida.');
+        // Validação mais robusta da estrutura da mensagem
+        if (!message) {
+            console.warn('[Webhook] Requisição ignorada: objeto message ausente.');
+            return;
+        }
+        
+        if (!message.chat) {
+            console.warn('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
+            return;
+        }
+        
+        if (!message.chat.id) {
+            console.warn('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
+            return;
+        }
+        
+        // Verifica se é uma mensagem válida (não callback_query, etc.)
+        if (message.message_id === undefined) {
+            console.warn('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
             return;
         }
         const chatId = message.chat.id;
