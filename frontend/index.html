@@ -1742,6 +1742,17 @@
                                 </div>
                                 
                                 <div class="card p-3"><p class="font-semibold mb-2">Selecione os Pixels:</p><div class="space-y-1">${pixelCheckboxes.length ? pixelCheckboxes : '<p class="text-gray-500 text-sm">Cadastre um pixel primeiro.</p>'}</div></div>
+                                
+                                <div class="card p-3">
+                                    <label class="flex items-center space-x-3 cursor-pointer">
+                                        <input type="checkbox" name="deploy_to_netlify" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500">
+                                        <div>
+                                            <span class="font-semibold text-white">Deploy Automático no Netlify</span>
+                                            <p class="text-xs text-gray-400 mt-1">Deploy a pressel automaticamente e receba uma URL pronta para usar</p>
+                                        </div>
+                                    </label>
+                                </div>
+                                
                                 <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">Salvar e Gerar Código</button>
                             </form>
                         </div>
@@ -1845,36 +1856,63 @@
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Chave Privada</label><input name="oasyfy_secret_key" type="password" value="${settings.oasyfy_secret_key || ''}" class="form-input w-full p-2">
                             </div>
                         </div>
+                        
                         <div class="mt-8"><button type="submit" class="btn w-full p-3 font-bold rounded-md">Salvar Configurações de PIX</button></div>
                     </form>
                 </div>`;
             },
             integrations() {
-                const { utmifyIntegrations } = App.state.data;
-                const utmifyListHTML = utmifyIntegrations.map(u => `
-                    <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
-                        <span class="font-medium text-sm">${u.account_name}</span>
-                        <button data-id="${u.id}" class="delete-utmify-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                    </div>
-                `).join('');
+            const { utmifyIntegrations, settings } = App.state.data;
+            const utmifyListHTML = utmifyIntegrations.map(u => `
+                <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
+                    <span class="font-medium text-sm">${u.account_name}</span>
+                    <button data-id="${u.id}" class="delete-utmify-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                </div>
+            `).join('');
 
-                return `
-                <div class="animate-fade-in">
-                    <div class="mb-6"><h1 class="text-3xl font-bold text-white">Integrações</h1><p class="text-slate-400">Conecte o HotTrack a outras ferramentas.</p></div>
-                    <div class="max-w-2xl">
-                        <div class="card p-6 rounded-lg">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold text-white">Contas Utmify</h2>
-                                <button id="add-utmify-btn" class="btn btn-secondary text-sm py-1 px-3">Adicionar Conta</button>
+            return `
+            <div class="animate-fade-in">
+                <div class="mb-6"><h1 class="text-3xl font-bold text-white">Integrações</h1><p class="text-slate-400">Conecte o HotTrack a outras ferramentas.</p></div>
+                
+                <div class="max-w-4xl">
+                    <!-- Seção Utmify -->
+                    <div class="card p-6 rounded-lg mb-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold text-white">Contas Utmify</h2>
+                            <button id="add-utmify-btn" class="btn btn-secondary text-sm py-1 px-3">Adicionar Conta</button>
+                        </div>
+                        <p class="text-sm text-gray-400 mt-1 mb-4">Adicione suas contas da Utmify. Depois, na criação de uma Pressel, você poderá escolher para qual conta os eventos de venda devem ser enviados.</p>
+                        <div id="utmify-list" class="space-y-3">
+                            ${utmifyListHTML.length ? utmifyListHTML : '<p class="text-gray-500 text-sm">Nenhuma conta Utmify cadastrada.</p>'}
+                        </div>
+                    </div>
+
+                    <!-- Nova Seção Netlify -->
+                    <div class="card p-6 rounded-lg">
+                        <h2 class="text-xl font-semibold mb-2 text-white">Configurações do Netlify</h2>
+                        <p class="text-sm text-gray-400 mb-6">Configure o deploy automático das suas pressels no Netlify. Receba URLs prontas para usar automaticamente.</p>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block mb-2 text-sm text-gray-400">Token de Acesso do Netlify</label>
+                                <input id="netlify-access-token-input" type="password" value="${settings.netlify_access_token || ''}" class="form-input w-full p-2" placeholder="Seu token de acesso pessoal do Netlify">
+                                <p class="text-xs text-gray-500 mt-1">Obtenha seu token em: <a href="https://app.netlify.com/user/applications#personal-access-tokens" target="_blank" class="text-sky-400 hover:text-sky-300">app.netlify.com/user/applications</a></p>
                             </div>
-                            <p class="text-sm text-gray-400 mt-1 mb-4">Adicione suas contas da Utmify. Depois, na criação de uma Pressel, você poderá escolher para qual conta os eventos de venda devem ser enviados.</p>
-                            <div id="utmify-list" class="space-y-3">
-                                ${utmifyListHTML.length ? utmifyListHTML : '<p class="text-gray-500 text-sm">Nenhuma conta Utmify cadastrada.</p>'}
+                            
+                            <div class="flex space-x-4">
+                                <button type="button" id="validate-netlify-token" class="btn btn-secondary flex-1">Validar Token</button>
+                            </div>
+                            
+                            <div id="netlify-status" class="hidden">
+                                <div class="p-3 rounded-md bg-slate-800">
+                                    <p class="text-sm text-gray-300" id="netlify-status-text"></p>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>`;
-            },
+                </div>
+            </div>`;
+        },
             documentation() {
                 return `
                 <div class="animate-fade-in">
@@ -2075,9 +2113,13 @@
                 // Generate Pressel Code
                 if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
 
-                // Test PIX Buttons
-                if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
-                if (e.target.id === 'testPriorityRouteBtn') { this.testPriorityRoute(e.target); }
+                // Test PIX Buttons
+                if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
+                if (e.target.id === 'testPriorityRouteBtn') { this.testPriorityRoute(e.target); }
+                
+                // Netlify Buttons
+                if (e.target.id === 'validate-netlify-token') { this.validateNetlifyToken(e.target); }
+                if (e.target.id === 'create-netlify-site') { this.createNetlifySite(e.target); }
 
                 // Tab Buttons (Lógica Corrigida e Isolada)
                 const tabButton = e.target.closest('.tab-button');
@@ -2168,16 +2210,28 @@
                     }
                     else if (form.id === 'presselForm') {
                         const pixel_ids = Array.from(form.querySelectorAll('input[name="pixel_ids"]:checked')).map(cb => cb.value);
+                        const deploy_to_netlify = form.querySelector('input[name="deploy_to_netlify"]').checked;
+                        
                         if (pixel_ids.length === 0) {
                              this.showToast('Selecione ao menos um pixel.', 'error');
                         } else {
-                            const payload = { ...data, pixel_ids };
+                            const payload = { ...data, pixel_ids, deploy_to_netlify };
                             console.log('Payload sendo enviado:', payload); // Debug
+                            
+                            if (deploy_to_netlify) {
+                                this.showToast('🚀 Fazendo deploy no Netlify...', 'success');
+                            }
+                            
                             const newPressel = await this.apiRequest('/api/pressels', 'POST', payload);
                             if (newPressel) {
                                 this.state.data.pressels.unshift(newPressel);
                                 this.navigateTo('pressels');
-                                this.generatePresselCode(newPressel);
+                                
+                                if (newPressel.netlify_url) {
+                                    this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
+                                } else {
+                                    this.generatePresselCode(newPressel);
+                                }
                             }
                         }
                     }
@@ -2294,70 +2348,82 @@
         },
 
         // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
-            try {
-                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
-                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+// Adicionada sobrecarga para aceitar headers customizados
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
+            try {
+                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
+                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
 
-                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
-                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
-                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
-                                       endpoint.includes('/api/thank-you-pages/create') ||
-                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                                       endpoint.includes('/api/thank-you-pages/create') ||
+                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
 
-                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
-                    headers['x-api-key'] = this.state.data.settings.api_key;
-                }
+                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+                    headers['x-api-key'] = this.state.data.settings.api_key;
+                }
 
-                const options = { method, headers };
-                if (body) { options.body = JSON.stringify(body); }
+                const options = { method, headers };
+                if (body) { options.body = JSON.stringify(body); }
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
 
-                if (response.status === 204) return null; // No Content
+                if (response.status === 204) return null; // No Content
 
-                const responseBody = await response.text(); // Lê como texto primeiro
-                let data;
-                try {
-                    data = JSON.parse(responseBody); // Tenta parsear como JSON
-                } catch (jsonError) {
-                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
-                    if (!response.ok) {
-                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
-                        throw new Error(responseBody || `Erro ${response.status}`);
-                    }
-                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
-                    data = responseBody;
-                }
+                const responseBody = await response.text(); // Lê como texto primeiro
+                let data;
+                try {
+                    data = JSON.parse(responseBody); // Tenta parsear como JSON
+                } catch (jsonError) {
+                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
+                    if (!response.ok) {
+                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
+                        // ****** MUDANÇA 1: ANEXA O STATUS AO ERRO ******
+                        const err = new Error(responseBody || `Erro ${response.status}`);
+                        err.status = response.status;
+                        throw err;
+                    }
+                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
+                    data = responseBody;
+                }
 
 
-                if (!response.ok) {
-                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
-                    let errorMsg = 'Erro desconhecido da API.';
-                    if (data && data.message) {
-                       errorMsg = data.message;
-                    } else if (typeof data === 'string') {
-                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
-                    }
-                    throw new Error(errorMsg);
-                }
-                return data;
-            } catch (error) {
-                 if (error instanceof Error) {
-                    this.showToast(error.message, 'error');
-                     // Verifica se o erro é de autenticação e desloga, exceto em rotas específicas
-                    const isAuthError = error.message.includes('inválido') || error.message.includes('expirado') || error.message.includes('API Key inválida');
-                    const shouldLogout = isAuthError && !endpoint.includes('/sellers/login') && !endpoint.startsWith('/oferta/') && !endpoint.startsWith('/obrigado/');
-                    if (shouldLogout) {
-                       this.logout();
-                    }
-                 } else {
-                    console.error(`Network Error on ${method} ${endpoint}:`, error);
-                    this.showToast('Falha na conexão com o servidor.', 'error');
-                 }
-                 throw error; // Re-throw para quem chamou poder tratar
-            }
-        },
+                if (!response.ok) {
+                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
+                    let errorMsg = 'Erro desconhecido da API.';
+                    if (data && data.message) {
+                       errorMsg = data.message;
+                    } else if (typeof data === 'string') {
+                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
+                    }
+                    // ****** MUDANÇA 1 (Cont.): ANEXA O STATUS AO ERRO ******
+                    const err = new Error(errorMsg);
+                    err.status = response.status;
+                    throw err;
+                }
+                return data;
+            } catch (error) {
+                 if (error instanceof Error) {
+                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+
+                    // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
+                    const statusCode = error.status; // Pega o status que anexamos
+                    const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
+                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+                    
+                    if (isAuthError && !isPublicRoute) {
+                        console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
+                       this.logout();
+                    }
+                    // Se for status 400 (Bad Request), ele não vai mais deslogar.
+                 } else {
+                    console.error(`Network Error on ${method} ${endpoint}:`, error);
+                    this.showToast('Falha na conexão com o servidor.', 'error');
+                 }
+                 throw error; // Re-throw para quem chamou poder tratar
+            }
+        },
         
         async login(email, password) {
             try {
@@ -3782,7 +3848,71 @@ function generatePreviewHTML(data) {
     
     
         
-    async testIndividualPixConnection(provider, button) {
+        async validateNetlifyToken(button) {
+    const tokenInput = document.getElementById('netlify-access-token-input');
+    const token = tokenInput.value.trim();
+
+    if (!token) {
+        this.showToast('Por favor, insira o token de acesso do Netlify.', 'error');
+        this.updateNetlifyStatus('Por favor, insira o token de acesso do Netlify.', 'error');
+        return;
+    }
+
+    const originalText = button.textContent;
+    button.textContent = 'Validando...';
+    button.disabled = true;
+    this.updateNetlifyStatus('Validando token do Netlify...', 'info');
+
+    try {
+        // Usa a função apiRequest, que já envia o Bearer Token no cabeçalho Authorization
+        const data = await this.apiRequest('/api/netlify/validate-token', 'POST', {
+            access_token: token
+            // REMOVIDO: Não precisa mais enviar 'X-User-ID': App.state.user.id
+        });
+
+        // A função apiRequest já trata erros de rede e status não-OK
+        if (data.success) {
+            this.showToast(data.message, 'success');
+            this.updateNetlifyStatus(`✅ ${data.message}`, 'success');
+
+            // Atualiza o estado local (garantindo que settings exista)
+            App.state.data.settings = App.state.data.settings || {};
+            App.state.data.settings.netlify_access_token = token;
+
+            if (data.user) {
+                this.updateNetlifyStatus(
+                    `✅ ${data.message}\n👤 Logado como: ${data.user.full_name || data.user.email}`,
+                    'success'
+                );
+            }
+        } else {
+            // Embora apiRequest lance erro, podemos manter isso para clareza
+            throw new Error(data.message || 'Erro na validação retornado pela API.');
+        }
+    } catch (error) { // O erro agora vem do apiRequest ou da lógica acima
+        const errorMessage = 'Erro ao validar token: ' + error.message;
+        this.showToast(errorMessage, 'error');
+        this.updateNetlifyStatus(`❌ ${errorMessage}`, 'error');
+    } finally {
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}, // Não esqueça a vírgula se houver mais funções depois
+
+        
+        
+        updateNetlifyStatus(message, type) {
+            const statusDiv = document.getElementById('netlify-status');
+            const statusText = document.getElementById('netlify-status-text');
+            
+            if (statusDiv && statusText) {
+                statusDiv.classList.remove('hidden');
+                statusText.textContent = message;
+                statusDiv.className = `p-3 rounded-md ${type === 'success' ? 'bg-green-800' : 'bg-red-800'}`;
+            }
+        },
+
+        async testIndividualPixConnection(provider, button) {
             const originalText = button.innerHTML;
             button.innerHTML = 'Testando...';
             button.disabled = true;
