@@ -2138,35 +2138,54 @@
                 }
 
                 // Delete Buttons (Atualizado)
-                const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
-                if (deleteBtn) {
-                     const id = deleteBtn.dataset.id;
-                    let type = '', endpoint = '', itemName = 'item', refreshFunction = () => this.navigateTo(this.state.currentPage); // Default refresh
+                const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
+                if (deleteBtn) {
+                    const id = deleteBtn.dataset.id;
+                    if (!id) return this.showToast('ID do item não encontrado.', 'error');
 
-                    if (deleteBtn.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; itemName = 'pixel'; }
-                    if (deleteBtn.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; itemName = 'bot'; }
-                    if (deleteBtn.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; itemName = 'pressel'; }
-                    if (deleteBtn.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; itemName = 'integração Utmify'; }
-                    if (deleteBtn.classList.contains('delete-checkout-btn')) { /* type = 'checkouts' - não precisa atualizar state direto */ endpoint = 'checkouts'; itemName = 'checkout'; refreshFunction = this.fetchAndRenderCheckouts; } // Refresh específico
-                    if (deleteBtn.classList.contains('delete-thankyou-btn')) { /* type = 'thankYouPages' */; endpoint = 'thank-you-pages'; itemName = 'página de obrigado'; refreshFunction = this.fetchAndRenderThankYouPages; } // Refresh específico
+                    let type = '', endpoint = '', itemName = 'item';
+                    let isGenericRefresh = true;
+                    // default refresh: navega para a página atual (re-fetch padrão)
+                    let refreshFunction = () => this.navigateTo(this.state.currentPage);
 
-                    if (confirm(`Tem certeza que deseja excluir est${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'e'} ${itemName}?`)) {
-                        deleteBtn.textContent = 'Excluindo...'; deleteBtn.disabled = true; // Feedback visual
-                        try {
-                            await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
-                            // Remove do state apenas se não tiver refreshFunction específica
-                            if(type && Array.isArray(this.state.data[type]) && refreshFunction === this.navigateTo) {
-                                this.state.data[type] = this.state.data[type].filter(item => item.id != id);
-                            }
-                            await refreshFunction.call(this); // Chama a função de refresh (seja a genérica ou específica)
-                            this.showToast(`${itemName.charAt(0).toUpperCase() + itemName.slice(1)} excluíd${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'o'} com sucesso!`, 'success');
-                        } catch(err) {
-                             this.showToast(`Erro ao excluir ${itemName === 'integração Utmify' || itemName === 'página de obrigado' ? 'a' : 'o'} ${itemName}. Detalhes: ${err.message}`, 'error');
-                             // Restaura o botão em caso de erro
-                             deleteBtn.textContent = 'Excluir'; deleteBtn.disabled = false;
-                        }
-                    }
-                }
+                    if (deleteBtn.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; itemName = 'pixel'; }
+                    if (deleteBtn.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; itemName = 'bot'; }
+                    if (deleteBtn.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; itemName = 'pressel'; }
+                    if (deleteBtn.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; itemName = 'integração Utmify'; }
+                    if (deleteBtn.classList.contains('delete-checkout-btn')) { endpoint = 'checkouts'; itemName = 'checkout'; isGenericRefresh = false; refreshFunction = this.fetchAndRenderCheckouts; }
+                    if (deleteBtn.classList.contains('delete-thankyou-btn')) { endpoint = 'thank-you-pages'; itemName = 'página de obrigado'; isGenericRefresh = false; refreshFunction = this.fetchAndRenderThankYouPages; }
+
+                    if (!confirm(`Tem certeza que deseja excluir est${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'e'} ${itemName}?`)) return;
+
+                    const originalText = deleteBtn.textContent;
+                    deleteBtn.textContent = 'Excluindo...';
+                    deleteBtn.disabled = true;
+
+                    try {
+                        await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
+
+                        // Se há um tipo e a lista existe no state, atualiza localmente só quando usamos o refresh genérico.
+                        // Observação: isGenericRefresh indica que não foi atribuída uma refresh específica.
+                        if (type && Array.isArray(this.state.data[type]) && isGenericRefresh) {
+                            this.state.data[type] = this.state.data[type].filter(item => String(item.id) !== String(id));
+                            // se você renderiza a partir do state, forçar re-render pode ser necessário dependendo do framework
+                            // ex: this.setState({ data: this.state.data }) ou this.renderList();
+                        }
+
+                        // Chama a função de refresh (genérica ou específica). 
+                        // use call(this) caso as funções dependam do contexto.
+                        await refreshFunction.call(this);
+
+                        this.showToast(`${itemName.charAt(0).toUpperCase() + itemName.slice(1)} excluíd${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'o'} com sucesso!`, 'success');
+                    } catch (err) {
+                        this.showToast(`Erro ao excluir ${itemName === 'integração Utmify' || itemName === 'página de obrigado' ? 'a' : 'o'} ${itemName}. Detalhes: ${err.message}`, 'error');
+                        // Você pode reverter alterações no state aqui se fez remoção otimista
+                    } finally {
+                        // Restaura o botão
+                        deleteBtn.textContent = originalText;
+                        deleteBtn.disabled = false;
+                    }
+                }
 
                 // Date Filters
                 const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
