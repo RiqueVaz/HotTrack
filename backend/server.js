@@ -300,6 +300,427 @@ const syncPayTokenCache = new Map();
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
 // ==========================================================
+
+// ==========================================================
+//          FUNÇÕES DE INTEGRAÇÃO NETLIFY
+// ==========================================================
+
+
+async function createNetlifySite(accessToken, siteName) {
+    try {
+        const response = await axios.post('https://api.netlify.com/api/v1/sites', {
+            name: siteName,
+            custom_domain: null
+        }, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        console.log('[Netlify] Resposta da API ao criar site:', JSON.stringify(response.data, null, 2));
+        
+        const siteUrl = `https://${response.data.subdomain || response.data.name}.netlify.app`;
+        console.log('[Netlify] URL gerada:', siteUrl);
+        
+        return {
+            success: true,
+            site: response.data,
+            url: siteUrl
+        };
+    } catch (error) {
+        console.error('[Netlify] Erro ao criar site:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.message || error.message
+        };
+    }
+}
+
+async function deployToNetlify(accessToken, siteId, htmlContent, fileName = 'index.html') {
+    try {
+        // 1. Calcular hash SHA1 do conteúdo
+        const contentHash = crypto.createHash('sha1').update(htmlContent).digest('hex');
+        
+        // 2. Criar deploy
+        const deployResponse = await axios.post(`https://api.netlify.com/api/v1/sites/${siteId}/deploys`, {
+            files: {
+                [fileName]: contentHash
+            }
+        }, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const deployId = deployResponse.data.id;
+        
+        // 3. Upload do arquivo
+        await axios.put(`https://api.netlify.com/api/v1/deploys/${deployId}/files/${fileName}`, htmlContent, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'text/html'
+            }
+        });
+        
+        return {
+            success: true,
+            deployId: deployId,
+            url: `https://${deployResponse.data.subdomain || deployResponse.data.name}.netlify.app`
+        };
+    } catch (error) {
+        console.error('[Netlify] Erro ao fazer deploy:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.message || error.message
+        };
+    }
+}
+
+app.post('/api/netlify/validate-token', authenticateJwt, async (req, res) => {
+    const { access_token } = req.body;
+    const userId = req.user?.id; // Pega o ID do usuário autenticado
+
+    if (!access_token) {
+        return res.status(400).json({ message: 'Token de acesso é obrigatório.' });
+    }
+    if (!userId) {
+         console.error("[Netlify Validate Backend] Erro: userId não encontrado em req.user após authenticateJwt.");
+         return res.status(401).json({ message: 'Usuário não autenticado ou ID não encontrado.' });
+    }
+
+    try {
+        // --- INÍCIO DA LÓGICA DE VALIDAÇÃO (Substitui a chamada inexistente) ---
+        let validationResult = { success: false, error: null, user: null };
+        try {
+            // Faz a chamada para a API do Netlify para obter informações do usuário atual
+            // Uma chamada bem-sucedida indica que o token é válido.
+            const netlifyApiResponse = await axios.get('https://api.netlify.com/api/v1/user', {
+                headers: {
+                    'Authorization': `Bearer ${access_token}`
+                },
+                httpsAgent: httpsAgent // Reutiliza o agente HTTPS
+            });
+
+            // Se a chamada foi bem-sucedida (status 2xx)
+            validationResult = {
+                success: true,
+                error: null,
+                user: netlifyApiResponse.data // Guarda os dados do usuário do Netlify
+            };
+            console.log(`[Netlify Validate] Token validado com sucesso para usuário: ${netlifyApiResponse.data.email}`);
+
+        } catch (netlifyError) {
+            // Se a chamada falhar (ex: 401 Unauthorized), o token é inválido
+            console.error('[Netlify Validate] Erro ao chamar API Netlify:', netlifyError.response?.data || netlifyError.message);
+            validationResult = {
+                success: false,
+                error: netlifyError.response?.data?.message || netlifyError.message || 'Falha na comunicação com a API Netlify.',
+                user: null
+            };
+        }
+        // --- FIM DA LÓGICA DE VALIDAÇÃO ---
+
+        if (validationResult.success) {
+            // Salva o token no banco de dados se for válido
+            await sql`UPDATE sellers SET netlify_access_token = ${access_token} WHERE id = ${userId}`;
+
+            res.json({
+                success: true,
+                message: 'Token válido! Configuração salva.',
+                user: validationResult.user // Retorna os dados do usuário Netlify para o frontend
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                message: 'Token inválido: ' + validationResult.error
+            });
+        }
+    } catch (error) { // Este catch pega erros do SQL ou outros erros inesperados
+        console.error("Erro GERAL ao validar/salvar token Netlify (backend):", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+async function getNetlifySites(accessToken) {
+    try {
+        const response = await axios.get('https://api.netlify.com/api/v1/sites', {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+        
+        return {
+            success: true,
+            sites: response.data
+        };
+    } catch (error) {
+        console.error('[Netlify] Erro ao listar sites:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.message || error.message
+        };
+    }
+}
+
+async function deleteNetlifySite(accessToken, siteId) {
+    try {
+        await axios.delete(`https://api.netlify.com/api/v1/sites/${siteId}`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+
+        return {
+            success: true,
+            message: 'Site excluído com sucesso'
+        };
+    } catch (error) {
+        // Se o site não existe (404), considerar como sucesso
+        if (error.response?.status === 404) {
+            console.log(`[Netlify] Site ${siteId} não encontrado (já excluído ou não existe)`);
+            return {
+                success: true,
+                message: 'Site não encontrado (já excluído)'
+            };
+        }
+        
+        console.error('[Netlify] Erro ao excluir site:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.message || error.message
+        };
+    }
+}
+
+/**
+ * Gera o código HTML completo para uma página de pressel, espelhando
+ * a lógica da função generatePresselCode do frontend.
+ * @param {object} pressel - O objeto da pressel do banco de dados.
+ * @param {Array<number>} pixelIds - Array de IDs numéricos das configurações de pixel associadas.
+ * @returns {Promise<string>} O código HTML completo como string.
+ */
+async function generatePresselHTML(pressel, pixelIds) {
+    try {
+        // 1. Buscar dados dos pixels associados
+        if (!Array.isArray(pixelIds) || pixelIds.length === 0) {
+            throw new Error('Pelo menos um ID de pixel é necessário.');
+        }
+        const pixels = await sql`
+            SELECT pc.pixel_id, pc.account_name
+            FROM pixel_configurations pc
+            WHERE pc.id = ANY(${pixelIds}) AND pc.seller_id = ${pressel.seller_id}
+        `;
+        if (pixels.length === 0) {
+            console.warn(`[generatePresselHTML] Nenhum pixel encontrado para os IDs fornecidos: ${pixelIds} para seller ${pressel.seller_id}`);
+            // Considerar lançar um erro ou retornar um HTML de erro, dependendo da regra de negócio
+            // throw new Error('Configurações de pixel não encontradas.');
+        }
+
+        // 2. Buscar nome do bot
+        const [bot] = await sql`
+            SELECT bot_name FROM telegram_bots
+            WHERE id = ${pressel.bot_id} AND seller_id = ${pressel.seller_id}
+        `;
+        if (!bot?.bot_name) {
+            throw new Error(`Bot com ID ${pressel.bot_id} não encontrado ou sem nome para a pressel ${pressel.id}.`);
+        }
+        const botUsername = bot.bot_name.replace('@', '');
+
+        // 3. Definir a URL base da API (do ambiente do backend)
+        // Exemplo de ajuste para desenvolvimento local (assumindo HTTP)
+        const isProduction = process.env.NODE_ENV === 'production';
+        const apiBaseUrl = isProduction
+            ? (process.env.HOTTRACK_API_URL || 'https://hottrack-production.up.railway.app')
+            : 'http://localhost:3001'; // Ajuste aqui se usar HTTPS localmente
+
+        // 4. Lógica de detecção de dispositivo
+        const trafficType = pressel.traffic_type || 'both';
+        let deviceDetectionCode = '';
+        if (trafficType === 'mobile') {
+            deviceDetectionCode = `
+            // Verificar se é mobile
+            const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent);
+            if (!isMobile) {
+                console.log('Dispositivo não móvel detectado. Redirecionando para a página branca.');
+                window.location.href = CONFIG.WHITE_PAGE_URL;
+                return; // Interrompe a execução
+            }`;
+        } else if (trafficType === 'desktop') {
+            deviceDetectionCode = `
+            // Verificar se é desktop
+            const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent);
+            if (isMobile) {
+                console.log('Dispositivo móvel detectado. Redirecionando para a página branca.');
+                window.location.href = CONFIG.WHITE_PAGE_URL;
+                return; // Interrompe a execução
+            }`;
+        }
+
+        // 5. Preparar scripts do Pixel Meta
+        const pixelInitScripts = pixels.map(p => `fbq('init', '${p.pixel_id}');`).join('\n        ');
+        const noscriptPixelTag = pixels.length > 0
+            ? `<noscript><img height="1" width="1" style="display:none"
+               src="https://www.facebook.com/tr?id=${pixels[0].pixel_id}&ev=PageView&noscript=1"
+             /></noscript>`
+            : '';
+
+        // 6. Montar o HTML final usando template literals
+        const htmlContent = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${pressel.name || 'Carregando...'}</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #1a1a1a; /* Fundo escuro */
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        .loader-container {
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            border-left-color: #ffffff;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        p {
+            font-size: 1.2em;
+            opacity: 0;
+            animation: fadeIn 1s forwards;
+            animation-delay: 0.5s;
+        }
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+    </style>
+    <script>
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        ${pixelInitScripts}
+        fbq('track', 'PageView');
+    </script>
+    ${noscriptPixelTag}
+    <script>
+        (async function() {
+            const CONFIG = {
+                PRESSEL_ID: ${pressel.id},
+                WHITE_PAGE_URL: "${pressel.white_page_url}",
+                BOT_USERNAME: "${botUsername}",
+                API_BASE_URL: "${apiBaseUrl}" // <<< USA A URL DO BACKEND
+            };
+            function getQueryParam(param) {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get(param);
+            }
+            function getFacebookCookies() {
+                const cookies = document.cookie.split('; ');
+                let fbp = null, fbc = null;
+                for (const cookie of cookies) {
+                    const parts = cookie.split('=');
+                    if (parts[0] === '_fbp') fbp = parts[1];
+                    if (parts[0] === '_fbc') fbc = parts[1];
+                }
+                return { fbp, fbc };
+            }
+            try {
+                // Bloqueia bots conhecidos do Facebook
+                const userAgent = navigator.userAgent;
+                if (/facebookexternalhit|Facebot/i.test(userAgent)) {
+                    console.log('Bot do Facebook detectado. Redirecionando...');
+                    window.location.href = CONFIG.WHITE_PAGE_URL;
+                    return; // Interrompe a execução
+                }
+
+                ${deviceDetectionCode} // <<< INJETA O CÓDIGO DE DETECÇÃO
+
+                const { fbp, fbc } = getFacebookCookies();
+                // Construir payload para /api/registerClick
+                const clickPayload = {
+                    presselId: CONFIG.PRESSEL_ID,
+                    referer: document.referrer || null,
+                    fbclid: getQueryParam('fbclid'),
+                    fbp: fbp,
+                    fbc: fbc,
+                    user_agent: navigator.userAgent,
+                    utm_source: getQueryParam('utm_source'),
+                    utm_campaign: getQueryParam('utm_campaign'),
+                    utm_medium: getQueryParam('utm_medium'),
+                    utm_content: getQueryParam('utm_content'),
+                    utm_term: getQueryParam('utm_term')
+                };
+
+                const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(clickPayload)
+                });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || 'Falha ao registrar clique.');
+                }
+                const { click_id } = await response.json();
+
+                // Dispara ViewContent no Pixel da Meta com o eventID
+                if (typeof fbq !== 'undefined') {
+                    fbq('track', 'ViewContent', {}, { eventID: click_id });
+                    console.log('Evento ViewContent disparado com eventID:', click_id);
+                } else {
+                    console.warn('fbq não definido. Não foi possível disparar ViewContent.');
+                }
+
+                const botUrl = \`https://t.me/\${CONFIG.BOT_USERNAME}?start=\${click_id}\`;
+                window.location.href = botUrl;
+            } catch (error) {
+                console.error("Erro na lógica da pressel:", error);
+                window.location.href = CONFIG.WHITE_PAGE_URL; // Redireciona para página branca em caso de erro
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="loader-container">
+        <div class="spinner"></div>
+        <p>Aguarde, estamos redirecionando...</p>
+    </div>
+</body>
+</html>`;
+
+        return htmlContent;
+
+    } catch (error) {
+        console.error(`[generatePresselHTML] Erro ao gerar HTML para pressel ${pressel?.id}:`, error);
+        // Retornar um HTML de erro ou relançar a exceção
+        throw new Error(`Falha ao gerar o código HTML da pressel: ${error.message}`);
+    }
+}
+
+// ==========================================================
+//          FUNÇÕES DO HOTBOT INTEGRADAS
+// ==========================================================
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
@@ -1263,7 +1684,7 @@ app.post('/api/sellers/login', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sql`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sql`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -1512,8 +1933,8 @@ app.get('/api/bots/users', authenticateJwt, async (req, res) => {
     }
 });
 app.post('/api/pressels', authenticateJwt, async (req, res) => {
-    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type } = req.body;
-    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type }); // Debug
+    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify } = req.body;
+    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify }); // Debug
     if (!name || !bot_id || !white_page_url || !Array.isArray(pixel_ids) || pixel_ids.length === 0) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     
     try {
@@ -1537,9 +1958,103 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
             for (const pixelId of numeric_pixel_ids) {
                 await sql`INSERT INTO pressel_pixels (pressel_id, pixel_config_id) VALUES (${newPressel.id}, ${pixelId})`;
             }
+            
+            let netlifyUrl = null;
+            
+            // Deploy opcional para Netlify
+            if (deploy_to_netlify) {
+                try {
+                    // Buscar configurações do Netlify
+                    const [seller] = await sql`SELECT netlify_access_token, netlify_site_id FROM sellers WHERE id = ${req.user.id}`;
+                    
+                    if (seller?.netlify_access_token) {
+                        // Gerar HTML da pressel
+                        const htmlContent = await generatePresselHTML(newPressel, numeric_pixel_ids);
+                        
+                        if (seller.netlify_site_id) {
+                            // Usar site existente
+                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, `pressel-${newPressel.id}.html`);
+                            
+                            if (deployResult.success) {
+                                netlifyUrl = deployResult.url;
+                                
+                                // Adicionar domínio automaticamente
+                                const domain = deployResult.url.replace('https://', '');
+                                await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
+                                
+                                console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso: ${netlifyUrl}`);
+                            } else {
+                                console.warn(`[Netlify] Site existente não encontrado, criando novo site. Erro:`, deployResult.error);
+                                
+                                // Limpar site_id inválido e criar novo site
+                                await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
+                                
+                                // Criar novo site
+                                const siteName = `pressel-${newPressel.id}-${Date.now()}`;
+                                const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
+                                
+                                if (siteResult.success) {
+                                    // Salvar novo site_id
+                                    await sql`UPDATE sellers SET netlify_site_id = ${siteResult.site.id} WHERE id = ${req.user.id}`;
+                                    
+                                    // Fazer deploy
+                                    const deployResult2 = await deployToNetlify(seller.netlify_access_token, siteResult.site.id, htmlContent, 'index.html');
+                                    
+                                    if (deployResult2.success) {
+                                        netlifyUrl = deployResult2.url;
+                                        
+                                        // Adicionar domínio automaticamente
+                                        const domain = deployResult2.url.replace('https://', '');
+                                        await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
+                                        
+                                        console.log(`[Netlify] Novo site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
+                                    }
+                                } else {
+                                    console.error(`[Netlify] Erro ao criar novo site para pressel ${newPressel.id}:`, siteResult.error);
+                                }
+                            }
+                        } else {
+                            // Criar novo site
+                            const siteName = `pressel-${newPressel.id}-${Date.now()}`;
+                            const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
+                            
+                            if (siteResult.success) {
+                                // Salvar site_id
+                                await sql`UPDATE sellers SET netlify_site_id = ${siteResult.site.id} WHERE id = ${req.user.id}`;
+                                
+                                // Fazer deploy
+                                const deployResult = await deployToNetlify(seller.netlify_access_token, siteResult.site.id, htmlContent, 'index.html');
+                                
+                                if (deployResult.success) {
+                                    netlifyUrl = deployResult.url;
+                                    
+                                    // Adicionar domínio automaticamente
+                                    const domain = deployResult.url.replace('https://', '');
+                                    await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
+                                    
+                                    console.log(`[Netlify] Site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
+                                }
+                            } else {
+                                console.error(`[Netlify] Erro ao criar site para pressel ${newPressel.id}:`, siteResult.error);
+                            }
+                        }
+                    } else {
+                        console.warn(`[Netlify] Token Netlify não configurado para vendedor ${req.user.id}`);
+                    }
+                } catch (netlifyError) {
+                    console.error(`[Netlify] Erro no deploy da pressel ${newPressel.id}:`, netlifyError);
+                    // Não falha a criação da pressel se o deploy falhar
+                }
+            }
+            
             await sql`COMMIT`;
             
-            res.status(201).json({ ...newPressel, pixel_ids: numeric_pixel_ids, bot_name });
+            res.status(201).json({ 
+                ...newPressel, 
+                pixel_ids: numeric_pixel_ids, 
+                bot_name,
+                netlify_url: netlifyUrl
+            });
         } catch (transactionError) {
             await sql`ROLLBACK`;
             throw transactionError;
@@ -1551,7 +2066,47 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
 });
 app.delete('/api/pressels/:id', authenticateJwt, async (req, res) => {
     try {
-        await sql`DELETE FROM pressels WHERE id = ${req.params.id} AND seller_id = ${req.user.id}`;
+        const presselId = req.params.id;
+        
+        // Buscar informações da pressel antes de excluir
+        const [pressel] = await sql`
+            SELECT id, seller_id FROM pressels 
+            WHERE id = ${presselId} AND seller_id = ${req.user.id}
+        `;
+        
+        if (!pressel) {
+            return res.status(404).json({ message: 'Pressel não encontrada.' });
+        }
+        
+        // Buscar configurações do Netlify do seller
+        const [seller] = await sql`
+            SELECT netlify_access_token, netlify_site_id 
+            FROM sellers 
+            WHERE id = ${req.user.id}
+        `;
+        
+        // Excluir site do Netlify se existir
+        if (seller?.netlify_access_token && seller?.netlify_site_id) {
+            try {
+                const deleteResult = await deleteNetlifySite(seller.netlify_access_token, seller.netlify_site_id);
+                if (deleteResult.success) {
+                    console.log(`[Netlify] Site ${seller.netlify_site_id} excluído com sucesso`);
+                } else {
+                    console.warn(`[Netlify] Site não encontrado ou já excluído:`, deleteResult.error);
+                }
+                
+                // Sempre limpar netlify_site_id do seller (mesmo se o site não existir)
+                await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
+            } catch (netlifyError) {
+                console.warn(`[Netlify] Erro ao excluir site da pressel ${presselId}:`, netlifyError);
+                // Limpar netlify_site_id mesmo se houver erro
+                await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
+            }
+        }
+        
+        // Excluir a pressel
+        await sql`DELETE FROM pressels WHERE id = ${presselId} AND seller_id = ${req.user.id}`;
+        
         res.status(204).send();
     } catch (error) {
         console.error("Erro ao excluir pressel:", error);
@@ -2220,6 +2775,99 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao salvar as configurações.' });
     }
 });
+
+// ==========================================================
+//          ROTAS DE INTEGRAÇÃO NETLIFY
+// ==========================================================
+
+app.post('/api/netlify/validate-token', authenticateJwt, async (req, res) => {
+    const { access_token } = req.body;
+    
+    if (!access_token) {
+        return res.status(400).json({ message: 'Token de acesso é obrigatório.' });
+    }
+    
+    try {
+        const result = await validateNetlifyToken(access_token);
+        
+        if (result.success) {
+            // Salva o token se for válido
+            await sql`UPDATE sellers SET netlify_access_token = ${access_token} WHERE id = ${req.user.id}`;
+            res.json({ 
+                success: true, 
+                message: 'Token válido! Configuração salva.',
+                user: result.user
+            });
+        } else {
+            res.status(400).json({ 
+                success: false, 
+                message: 'Token inválido: ' + result.error 
+            });
+        }
+    } catch (error) {
+        console.error("Erro ao validar token Netlify:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+app.get('/api/netlify/sites', authenticateJwt, async (req, res) => {
+    try {
+        const [seller] = await sql`SELECT netlify_access_token FROM sellers WHERE id = ${req.user.id}`;
+        
+        if (!seller?.netlify_access_token) {
+            return res.status(400).json({ message: 'Token Netlify não configurado.' });
+        }
+        
+        const result = await getNetlifySites(seller.netlify_access_token);
+        
+        if (result.success) {
+            res.json({ sites: result.sites });
+        } else {
+            res.status(400).json({ message: 'Erro ao buscar sites: ' + result.error });
+        }
+    } catch (error) {
+        console.error("Erro ao buscar sites Netlify:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+app.post('/api/netlify/create-site', authenticateJwt, async (req, res) => {
+    const { site_name } = req.body;
+    
+    if (!site_name) {
+        return res.status(400).json({ message: 'Nome do site é obrigatório.' });
+    }
+    
+    try {
+        const [seller] = await sql`SELECT netlify_access_token FROM sellers WHERE id = ${req.user.id}`;
+        
+        if (!seller?.netlify_access_token) {
+            return res.status(400).json({ message: 'Token Netlify não configurado.' });
+        }
+        
+        const result = await createNetlifySite(seller.netlify_access_token, site_name);
+        
+        if (result.success) {
+            // Salva o site_id no banco
+            await sql`UPDATE sellers SET netlify_site_id = ${result.site.id} WHERE id = ${req.user.id}`;
+            
+            res.json({ 
+                success: true, 
+                site: result.site,
+                url: result.url,
+                message: 'Site criado com sucesso!'
+            });
+        } else {
+            res.status(400).json({ 
+                success: false, 
+                message: 'Erro ao criar site: ' + result.error 
+            });
+        }
+    } catch (error) {
+        console.error("Erro ao criar site Netlify:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
 app.get('/api/integrations/utmify', authenticateJwt, async (req, res) => {
     try {
         const integrations = await sql`
@@ -2264,69 +2912,120 @@ app.delete('/api/integrations/utmify/:id', authenticateJwt, async (req, res) => 
         res.status(500).json({ message: 'Erro ao excluir integração.' });
     }
 });
-app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, res) => {
-    const { sellerApiKey, presselId, checkoutId, referer, fbclid, fbp, fbc, user_agent, utm_source, utm_campaign, utm_medium, utm_content, utm_term } = req.body;
+// ROTA /api/registerClick CORRIGIDA PARA BUSCAR SELLER_ID PELO PRESSSEL_ID OU CHECKOUT_ID
 
-    if (!sellerApiKey || (!presselId && !checkoutId)) {
-        return res.status(400).json({ message: 'Dados insuficientes.' });
+app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, res) => {
+    // REMOVIDO: sellerApiKey
+    const { presselId, checkoutId, referer, fbclid, fbp, fbc, user_agent, utm_source, utm_campaign, utm_medium, utm_content, utm_term } = req.body;
+
+    // MODIFICADO: Validação inicial
+    if (!presselId && !checkoutId) {
+        // Agora verifica apenas se pelo menos um ID está presente
+        return res.status(400).json({ message: 'É necessário fornecer presselId ou checkoutId.' });
     }
 
     const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
-    
-    // Validação adicional de domínio para pressels
+
+    // Validação de domínio para pressels (mantida)
     if (presselId) {
         const origin = req.headers.origin;
         if (origin) {
             const isDomainAllowed = await isDomainAllowedForPressel(presselId, origin);
             if (!isDomainAllowed) {
                 console.log(`[SECURITY] Tentativa de acesso de domínio não autorizado: ${origin} para pressel ${presselId}`);
-                return res.status(403).json({ 
+                return res.status(403).json({
                     message: 'Domínio não autorizado para esta pressel.',
-                    hint: 'Registre seu domínio em: /api/pressel-domains/' + presselId
+                    hint: `Verifique o painel de domínios ou registre seu domínio.` // Mensagem genérica
                 });
             }
+        } else {
+             console.warn(`[SECURITY] Não foi possível verificar a origem (cabeçalho Origin ausente) para pressel ${presselId}. Permitindo acesso.`);
+             // Considerar se deve bloquear ou permitir requisições sem Origin. Permitir pode ser necessário para alguns cenários, mas menos seguro.
         }
     }
 
     try {
+        let sellerId = null;
+
+        // --- INÍCIO DA LÓGICA PARA ENCONTRAR seller_id ---
+        if (presselId) {
+            const [pressel] = await sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`;
+            if (!pressel) {
+                return res.status(404).json({ message: 'Pressel não encontrada.' });
+            }
+            sellerId = pressel.seller_id;
+        } else if (checkoutId) {
+            const [checkout] = await sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`;
+            if (!checkout) {
+                return res.status(404).json({ message: 'Checkout não encontrado.' });
+            }
+            sellerId = checkout.seller_id;
+        }
+
+        // Se, por algum motivo, não encontramos o sellerId
+        if (!sellerId) {
+             console.error(`[registerClick] ERRO CRÍTICO: Não foi possível determinar o seller_id para presselId=${presselId} ou checkoutId=${checkoutId}`);
+             return res.status(500).json({ message: 'Erro ao identificar o vendedor associado.' });
+        }
+        // --- FIM DA LÓGICA PARA ENCONTRAR seller_id ---
+
+        // MODIFICADO: Query INSERT usa o sellerId encontrado
         const result = await sql`INSERT INTO clicks (
             seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
             utm_source, utm_campaign, utm_medium, utm_content, utm_term
-        ) 
-        SELECT
-            s.id, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
+        ) VALUES (
+            ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
             ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
-        FROM sellers s WHERE s.api_key = ${sellerApiKey} RETURNING *;`;
+        ) RETURNING *;`; // Não precisamos mais do JOIN com sellers aqui
 
-        if (result.length === 0) {
-            return res.status(404).json({ message: 'API Key inválida.' });
-        }
-
+        // O resto da lógica permanece o mesmo...
         const newClick = result[0];
         const click_record_id = newClick.id;
+        // Gera um click_id único e amigável, mesmo que já exista um no banco (para consistência)
         const clean_click_id = `lead${click_record_id.toString().padStart(6, '0')}`;
         const db_click_id = `/start ${clean_click_id}`;
-        
+
         await sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`;
 
+        // Retorna o click_id limpo para o frontend/JS da pressel
         res.status(200).json({ status: 'success', click_id: clean_click_id });
 
+        // Tarefas assíncronas (Geolocalização e Evento Meta)
         (async () => {
             try {
                 let city = 'Desconhecida', state = 'Desconhecido';
-                if (ip_address && ip_address !== '::1' && !ip_address.startsWith('192.168.')) {
-                    const geo = await axios.get(`http://ip-api.com/json/${ip_address}?fields=city,regionName`);
-                    city = geo.data.city || city;
-                    state = geo.data.regionName || state;
+                // Adiciona verificação para IPs locais comuns
+                const isLocalIp = ip_address === '::1' || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.') || ip_address.startsWith('10.');
+                if (ip_address && !isLocalIp) {
+                    try {
+                        const geo = await axios.get(`http://ip-api.com/json/${ip_address}?fields=status,city,regionName`);
+                        if (geo.data.status === 'success') {
+                            city = geo.data.city || city;
+                            state = geo.data.regionName || state;
+                        } else {
+                             console.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
+                        }
+                    } catch (geoError) {
+                         console.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                    }
+                } else if (isLocalIp) {
+                     console.log(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
+                     city = 'Local'; // Ou mantenha Desconhecida
+                     state = 'Local';
                 }
                 await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
-                console.log(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id}.`);
+                console.log(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
+                // Envia InitiateCheckout apenas se originado de um checkout hosted
                 if (checkoutId) {
-                    const [checkoutDetails] = await sql`SELECT fixed_value_cents FROM checkouts WHERE id = ${checkoutId}`;
-                    const eventValue = checkoutDetails ? (checkoutDetails.fixed_value_cents / 100) : 0;
-                    await sendMetaEvent('InitiateCheckout', { ...newClick, click_id: clean_click_id }, { pix_value: eventValue, id: click_record_id });
-                    console.log(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
+                     const [checkoutDetails] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`;
+                     // Tenta pegar um valor representativo, pode ser o primeiro pacote ou um valor fixo
+                     const representativeValueCents = checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents || checkoutDetails?.config?.pricing?.fixed_value_cents || 0;
+                     const eventValue = representativeValueCents > 0 ? (representativeValueCents / 100) : 0.01; // Envia 0.01 se não encontrar valor
+
+                     // Passa o click_id LIMPO para o evento Meta
+                     await sendMetaEvent('InitiateCheckout', { ...newClick, click_id: clean_click_id }, { pix_value: eventValue, id: click_record_id });
+                     console.log(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
                 }
             } catch (backgroundError) {
                 console.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
