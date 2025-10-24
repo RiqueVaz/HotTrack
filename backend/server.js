@@ -1976,9 +1976,10 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
 
         await sql`BEGIN`;
         try {
+            
             const [newPressel] = await sql`
-                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type) 
-                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}) 
+                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type, netlify_url) 
+                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}, NULL) 
                 RETURNING *;
             `;
             
@@ -2004,6 +2005,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                             
                             if (deployResult.success) {
                                 netlifyUrl = deployResult.url;
+                                
+                                // Atualizar campo netlify_url na tabela pressels
+                                await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
                                 
                                 // Adicionar domínio automaticamente
                                 const domain = deployResult.url.replace('https://', '');
@@ -2032,6 +2036,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     if (deployResult2.success) {
                                         netlifyUrl = deployResult2.url;
                                         
+                                        // Atualizar campo netlify_url na tabela pressels
+                                        await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
+                                        
                                         // Adicionar domínio automaticamente
                                         const domain = deployResult2.url.replace('https://', '');
                                         await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
@@ -2058,6 +2065,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 
                                 if (deployResult.success) {
                                     netlifyUrl = deployResult.url;
+                                    
+                                    // Atualizar campo netlify_url na tabela pressels
+                                    await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
                                     
                                     // Adicionar domínio automaticamente
                                     const domain = deployResult.url.replace('https://', '');
