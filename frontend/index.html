@@ -1710,7 +1710,23 @@
                 const botOptions = bots.map(b => `<option value="${b.id}">${b.bot_name}</option>`).join('');
                 const utmifyOptions = utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
                 const pixelCheckboxes = pixels.map(p => `<label class="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer p-2 rounded-md hover:bg-slate-700/50"><input type="checkbox" name="pixel_ids" value="${p.id}" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500"><span>${p.account_name}</span></label>`).join('');
-                const presselList = pressels.map(pr => `<div class="p-3 card flex justify-between items-center text-sm"><div><p class="font-semibold">${pr.name}</p><p class="text-xs text-gray-400">Bot: ${pr.bot_name}</p></div><div class="space-x-2"><button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button><button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button></div></div>`).join('');
+                const presselList = pressels.map(pr => {
+                    const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
+                    const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
+                    return `<div class="p-3 card flex justify-between items-center text-sm">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
+                                <p class="text-xs text-gray-400">Bot: ${pr.bot_name}</p>
+                            </div>
+                        </div>
+                        <div class="space-x-2">
+                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
+                            ${copyLinkButton}
+                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                        </div>
+                    </div>`;
+                }).join('');
                 
                 return `
                 <div class="animate-fade-in">
@@ -1745,12 +1761,30 @@
                                 
                                 <div class="card p-3">
                                     <label class="flex items-center space-x-3 cursor-pointer">
-                                        <input type="checkbox" name="deploy_to_netlify" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500">
+                                        <input type="checkbox" name="deploy_to_netlify" id="deploy_to_netlify" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500">
                                         <div>
                                             <span class="font-semibold text-white">Deploy Automático no Netlify</span>
                                             <p class="text-xs text-gray-400 mt-1">Deploy a pressel automaticamente e receba uma URL pronta para usar</p>
                                         </div>
                                     </label>
+                                    
+                                    <!-- Input para nome do site Netlify (inicialmente oculto) -->
+                                    <div id="netlify-site-name-container" class="mt-3 hidden">
+                                        <label for="netlify_site_name" class="block text-sm font-medium text-gray-300 mb-2">Nome do Site Netlify</label>
+                                        <input 
+                                            type="text" 
+                                            name="netlify_site_name" 
+                                            id="netlify_site_name"
+                                            placeholder="meu-site-pressel"
+                                            maxlength="37"
+                                            class="w-full px-3 py-2 bg-slate-700 border border-slate-500 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                                        >
+                                        <p class="text-xs text-gray-400 mt-1">
+                                            Apenas letras, números e hífens. Máximo 37 caracteres. 
+                                            <span id="netlify-char-count" class="text-sky-400">0/37</span>
+                                        </p>
+                                        <div id="netlify-validation-error" class="text-red-400 text-xs mt-1 hidden"></div>
+                                    </div>
                                 </div>
                                 
                                 <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">Salvar e Gerar Código</button>
@@ -2110,8 +2144,27 @@
                     const targetSelector = toggleBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const isPassword=targetInput.type==='password'; targetInput.type=isPassword?'text':'password'; toggleBtn.innerHTML=isPassword ? `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781z" clip-rule="evenodd" /><path d="M12.454 16.697L9.75 13.992a2.5 2.5 0 01-3.482-3.482l-2.455-2.455a10.048 10.048 0 00-3.263 5.218C1.732 14.057 5.522 17 10 17a9.95 9.95 0 005.023-1.303l-2.57-2.57z" /></svg>` : `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>`; }
                 }
 
-                // Generate Pressel Code
-                if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
+                // Generate Pressel Code
+                if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
+
+                // Copy Netlify Link
+                if (e.target.classList.contains('copy-netlify-link-btn')) {
+                    const url = e.target.dataset.url;
+                    if (url) {
+                        navigator.clipboard.writeText(url).then(() => {
+                            this.showToast('Link copiado para a área de transferência!', 'success');
+                        }).catch(() => {
+                            // Fallback para navegadores mais antigos
+                            const textArea = document.createElement('textarea');
+                            textArea.value = url;
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            this.showToast('Link copiado para a área de transferência!', 'success');
+                        });
+                    }
+                }
 
                 // Test PIX Buttons
                 if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
@@ -2228,13 +2281,47 @@
                         if (newBot) { this.state.data.bots.unshift(newBot); this.navigateTo('bots'); }
                     }
                     else if (form.id === 'presselForm') {
+                        console.log('Processando formulário presselForm...');
                         const pixel_ids = Array.from(form.querySelectorAll('input[name="pixel_ids"]:checked')).map(cb => cb.value);
                         const deploy_to_netlify = form.querySelector('input[name="deploy_to_netlify"]').checked;
+                        const netlify_site_name = form.querySelector('input[name="netlify_site_name"]')?.value || '';
+                        
+                        console.log('Dados do formulário:', {
+                            pixel_ids,
+                            deploy_to_netlify,
+                            netlify_site_name,
+                            data
+                        });
                         
                         if (pixel_ids.length === 0) {
-                             this.showToast('Selecione ao menos um pixel.', 'error');
+                            console.log('Erro: Nenhum pixel selecionado');
+                            this.showToast('Selecione ao menos um pixel.', 'error');
+                        } else if (deploy_to_netlify && !netlify_site_name.trim()) {
+                            console.log('Erro: Nome do site Netlify não fornecido');
+                            this.showToast('Digite o nome do site para o deploy no Netlify.', 'error');
                         } else {
-                            const payload = { ...data, pixel_ids, deploy_to_netlify };
+                            console.log('Passou nas validações, processando...');
+                            // Validação adicional do nome do site Netlify (se fornecido)
+                            if (deploy_to_netlify && netlify_site_name.trim()) {
+                                const siteName = netlify_site_name.trim();
+                                const validNameRegex = /^[a-zA-Z0-9-]+$/;
+                                
+                                if (!validNameRegex.test(siteName)) {
+                                    this.showToast('Nome do site deve conter apenas letras, números e hífens.', 'error');
+                                    return;
+                                }
+                                
+                                if (siteName.length > 37) {
+                                    this.showToast('Nome do site deve ter no máximo 37 caracteres.', 'error');
+                                    return;
+                                }
+                                
+                                if (siteName.startsWith('-') || siteName.endsWith('-')) {
+                                    this.showToast('Nome do site não pode começar ou terminar com hífen.', 'error');
+                                    return;
+                                }
+                            }
+                            const payload = { ...data, pixel_ids, deploy_to_netlify, netlify_site_name };
                             console.log('Payload sendo enviado:', payload); // Debug
                             
                             if (deploy_to_netlify) {
@@ -2331,6 +2418,24 @@
             listenerTarget.addEventListener('submit', listenerTarget._submitListener); // <<<====== PUT IT RIGHT HERE
             
             document.addEventListener('change', e => {
+                // Controle do input Netlify
+                if (e.target.id === 'deploy_to_netlify') {
+                    const netlifyContainer = document.getElementById('netlify-site-name-container');
+                    if (netlifyContainer) {
+                        if (e.target.checked) {
+                            netlifyContainer.classList.remove('hidden');
+                        } else {
+                            netlifyContainer.classList.add('hidden');
+                            // Limpar validação quando esconder
+                            const validationError = document.getElementById('netlify-validation-error');
+                            if (validationError) {
+                                validationError.classList.add('hidden');
+                                validationError.textContent = '';
+                            }
+                        }
+                    }
+                }
+
                 if (e.target.id === 'value-type-selector') {
                     const container = document.getElementById('fixed-value-container');
                     if (container) {
@@ -2361,6 +2466,48 @@
                                 <input id="mass-message-external-url" type="url" class="form-input w-full p-2" placeholder="https://seu-link.com">
                             </div>
                         `;
+                    }
+                }
+            });
+
+            // Event listener para input do Netlify
+            document.addEventListener('input', e => {
+                if (e.target.id === 'netlify_site_name') {
+                    const charCount = document.getElementById('netlify-char-count');
+                    const validationError = document.getElementById('netlify-validation-error');
+                    const value = e.target.value;
+                    const charCountValue = value.length;
+                    
+                    // Atualizar contador de caracteres
+                    if (charCount) {
+                        charCount.textContent = `${charCountValue}/37`;
+                    }
+                    
+                    // Validação em tempo real
+                    const validNameRegex = /^[a-zA-Z0-9-]*$/;
+                    let errorMessage = '';
+                    
+                    if (value.length > 0) {
+                        if (!validNameRegex.test(value)) {
+                            errorMessage = 'Apenas letras, números e hífens são permitidos.';
+                        } else if (value.startsWith('-') || value.endsWith('-')) {
+                            errorMessage = 'Nome não pode começar ou terminar com hífen.';
+                        } else if (value.length > 37) {
+                            errorMessage = 'Máximo 37 caracteres permitidos.';
+                        }
+                    }
+                    
+                    if (validationError) {
+                        if (errorMessage) {
+                            validationError.textContent = errorMessage;
+                            validationError.classList.remove('hidden');
+                            e.target.classList.add('border-red-500');
+                            e.target.classList.remove('border-slate-500');
+                        } else {
+                            validationError.classList.add('hidden');
+                            e.target.classList.remove('border-red-500');
+                            e.target.classList.add('border-slate-500');
+                        }
                     }
                 }
             });

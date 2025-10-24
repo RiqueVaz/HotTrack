@@ -1933,9 +1933,36 @@ app.get('/api/bots/users', authenticateJwt, async (req, res) => {
     }
 });
 app.post('/api/pressels', authenticateJwt, async (req, res) => {
-    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify } = req.body;
-    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify }); // Debug
+    const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify, netlify_site_name } = req.body;
+    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify, netlify_site_name }); // Debug
     if (!name || !bot_id || !white_page_url || !Array.isArray(pixel_ids) || pixel_ids.length === 0) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
+    
+    // Validação do nome do site Netlify
+    if (deploy_to_netlify && netlify_site_name) {
+        const siteName = netlify_site_name.trim();
+        
+        // Verificar se tem caracteres válidos (apenas alfanuméricos e hífens)
+        const validNameRegex = /^[a-zA-Z0-9-]+$/;
+        if (!validNameRegex.test(siteName)) {
+            return res.status(400).json({ 
+                message: 'Nome do site Netlify deve conter apenas letras, números e hífens.' 
+            });
+        }
+        
+        // Verificar limite de 37 caracteres
+        if (siteName.length > 37) {
+            return res.status(400).json({ 
+                message: 'Nome do site Netlify deve ter no máximo 37 caracteres.' 
+            });
+        }
+        
+        // Verificar se não começa ou termina com hífen
+        if (siteName.startsWith('-') || siteName.endsWith('-')) {
+            return res.status(400).json({ 
+                message: 'Nome do site Netlify não pode começar ou terminar com hífen.' 
+            });
+        }
+    }
     
     try {
         const numeric_bot_id = parseInt(bot_id, 10);
@@ -1949,9 +1976,10 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
 
         await sql`BEGIN`;
         try {
+            
             const [newPressel] = await sql`
-                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type) 
-                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}) 
+                INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type, netlify_url) 
+                VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}, NULL) 
                 RETURNING *;
             `;
             
@@ -1978,6 +2006,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                             if (deployResult.success) {
                                 netlifyUrl = deployResult.url;
                                 
+                                // Atualizar campo netlify_url na tabela pressels
+                                await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
+                                
                                 // Adicionar domínio automaticamente
                                 const domain = deployResult.url.replace('https://', '');
                                 await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
@@ -1990,7 +2021,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
                                 
                                 // Criar novo site
-                                const siteName = `pressel-${newPressel.id}-${Date.now()}`;
+                                const siteName = netlify_site_name && netlify_site_name.trim() 
+                                    ? netlify_site_name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
+                                    : `pressel-${newPressel.id}-${Date.now()}`;
                                 const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
                                 
                                 if (siteResult.success) {
@@ -2002,6 +2035,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     
                                     if (deployResult2.success) {
                                         netlifyUrl = deployResult2.url;
+                                        
+                                        // Atualizar campo netlify_url na tabela pressels
+                                        await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
                                         
                                         // Adicionar domínio automaticamente
                                         const domain = deployResult2.url.replace('https://', '');
@@ -2015,7 +2051,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                             }
                         } else {
                             // Criar novo site
-                            const siteName = `pressel-${newPressel.id}-${Date.now()}`;
+                            const siteName = netlify_site_name && netlify_site_name.trim() 
+                                ? netlify_site_name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
+                                : `pressel-${newPressel.id}-${Date.now()}`;
                             const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
                             
                             if (siteResult.success) {
@@ -2027,6 +2065,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 
                                 if (deployResult.success) {
                                     netlifyUrl = deployResult.url;
+                                    
+                                    // Atualizar campo netlify_url na tabela pressels
+                                    await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
                                     
                                     // Adicionar domínio automaticamente
                                     const domain = deployResult.url.replace('https://', '');
