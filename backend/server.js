@@ -18,8 +18,22 @@ const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
+const { OAuth2Client } = require('google-auth-library');
 const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
+const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+
+// Configuração do Google OAuth
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/google-callback.html'
+);
+
+// Configuração do MailerSend
+const mailerSend = new MailerSend({
+    apiKey: process.env.MAILERSEND_API_KEY,
+});
 
 const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
@@ -201,8 +215,17 @@ async function isDomainAllowedForPressel(presselId, origin) {
 const corsOptions = async (req, callback) => {
   const origin = req.header('Origin');
   const isPresselRoute = req.path === '/api/registerClick';
+  const isVerifyEmailRoute = req.path === '/api/sellers/verify-email';
   
-  if (isPresselRoute) {
+  if (isVerifyEmailRoute) {
+    // Para verificação de email, permitir qualquer origem
+    callback(null, { 
+      origin: true,
+      methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: ['Content-Type'],
+      credentials: false
+    });
+  } else if (isPresselRoute) {
     // Para rotas de pressel, verificar domínio no banco
     const presselId = req.body?.presselId;
     
@@ -1637,14 +1660,231 @@ app.post('/api/sellers/register', async (req, res) => {
         if (existingSeller.length > 0) {
             return res.status(409).json({ message: 'Este email já está em uso.' });
         }
+
+        // Adicionar campos de verificação se não existirem
+        try {
+            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`;
+            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_code TEXT`;
+            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_expires TIMESTAMP`;
+        } catch (error) {
+            console.log('Campos de verificação já existem ou erro:', error.message);
+        }
+
         const hashedPassword = await bcrypt.hash(password, 10);
         const apiKey = uuidv4();
+        const verificationCode = crypto.randomBytes(32).toString('hex');
+        const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
         
-        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, TRUE)`;
+        // Criar usuário como não verificado
+        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires})`;
         
-        res.status(201).json({ message: 'Vendedor cadastrado com sucesso!' });
+        // Enviar email de verificação
+        try {
+            if (!process.env.MAILERSEND_FROM_EMAIL) {
+                throw new Error('MAILERSEND_FROM_EMAIL não configurado');
+            }
+            
+            const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?code=${verificationCode}&email=${encodeURIComponent(normalizedEmail)}`;
+            
+            const sentFrom = new Sender(process.env.MAILERSEND_FROM_EMAIL, 'HotTrack');
+            const recipients = [new Recipient(normalizedEmail, name)];
+            
+            const emailParams = new EmailParams()
+                .setFrom(sentFrom)
+                .setTo(recipients)
+                .setReplyTo(sentFrom)
+                .setSubject('Verifique seu email - HotTrack')
+                .setHtml(`
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2 style="color: #0ea5e9;">Bem-vindo ao HotTrack!</h2>
+                        <p>Olá ${name},</p>
+                        <p>Obrigado por se cadastrar no HotTrack. Para ativar sua conta, clique no botão abaixo:</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="${verificationUrl}" style="background-color: #0ea5e9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Verificar Email</a>
+                        </div>
+                        <p>Ou copie e cole este link no seu navegador:</p>
+                        <p style="word-break: break-all; color: #666;">${verificationUrl}</p>
+                        <p>Este link expira em 24 horas.</p>
+                        <p>Se você não criou uma conta no HotTrack, ignore este email.</p>
+                        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+                        <p style="color: #666; font-size: 12px;">Este é um email automático, não responda.</p>
+                    </div>
+                `)
+                .setText(`
+                    Bem-vindo ao HotTrack!
+                    
+                    Olá ${name},
+                    
+                    Obrigado por se cadastrar no HotTrack. Para ativar sua conta, acesse o link abaixo:
+                    ${verificationUrl}
+                    
+                    Este link expira em 24 horas.
+                    
+                    Se você não criou uma conta no HotTrack, ignore este email.
+                `);
+
+            await mailerSend.email.send(emailParams);
+            
+            res.status(201).json({ 
+                message: 'Cadastro realizado! Verifique seu email para ativar a conta.',
+                requiresVerification: true
+            });
+        } catch (emailError) {
+            console.error('Erro ao enviar email de verificação:', emailError);
+            // Mesmo com erro no email, o usuário foi criado
+            res.status(201).json({ 
+                message: 'Cadastro realizado! Verifique seu email para ativar a conta.',
+                requiresVerification: true,
+                warning: 'Erro ao enviar email. Entre em contato com o suporte.'
+            });
+        }
+        
     } catch (error) {
         console.error("Erro no registro:", error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para verificar email
+app.post('/api/sellers/verify-email', async (req, res) => {
+    const { code, email } = req.body;
+    
+    console.log('=== VERIFICAÇÃO DE EMAIL ===');
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    console.log('Code:', code);
+    console.log('Email:', email);
+    
+    if (!code || !email) {
+        console.log('Erro: Código ou email não fornecidos');
+        return res.status(400).json({ message: 'Código e email são obrigatórios.' });
+    }
+    
+    try {
+        const normalizedEmail = email.trim().toLowerCase();
+        
+        // Buscar usuário com código válido
+        const sellerResult = await sql`
+            SELECT id, verification_code, verification_expires, email_verified 
+            FROM sellers 
+            WHERE email = ${normalizedEmail} AND verification_code = ${code}
+        `;
+        
+        if (sellerResult.length === 0) {
+            return res.status(400).json({ message: 'Código de verificação inválido.' });
+        }
+        
+        const seller = sellerResult[0];
+        
+        // Verificar se já foi verificado
+        if (seller.email_verified) {
+            return res.status(400).json({ message: 'Email já foi verificado.' });
+        }
+        
+        // Verificar se o código não expirou
+        if (new Date() > new Date(seller.verification_expires)) {
+            return res.status(400).json({ message: 'Código de verificação expirado.' });
+        }
+        
+        // Ativar conta
+        await sql`
+            UPDATE sellers 
+            SET email_verified = TRUE, is_active = TRUE, verification_code = NULL, verification_expires = NULL 
+            WHERE id = ${seller.id}
+        `;
+        
+        res.json({ message: 'Email verificado com sucesso! Sua conta foi ativada.' });
+        
+    } catch (error) {
+        console.error('Erro na verificação de email:', error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para reenviar email de verificação
+app.post('/api/sellers/resend-verification', async (req, res) => {
+    const { email } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ message: 'Email é obrigatório.' });
+    }
+    
+    try {
+        const normalizedEmail = email.trim().toLowerCase();
+        
+        // Buscar usuário não verificado
+        const sellerResult = await sql`
+            SELECT id, name, email_verified 
+            FROM sellers 
+            WHERE email = ${normalizedEmail}
+        `;
+        
+        if (sellerResult.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado.' });
+        }
+        
+        const seller = sellerResult[0];
+        
+        if (seller.email_verified) {
+            return res.status(400).json({ message: 'Email já foi verificado.' });
+        }
+        
+        // Gerar novo código
+        const verificationCode = crypto.randomBytes(32).toString('hex');
+        const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        
+        // Atualizar código no banco
+        await sql`
+            UPDATE sellers 
+            SET verification_code = ${verificationCode}, verification_expires = ${verificationExpires}
+            WHERE id = ${seller.id}
+        `;
+        
+        // Enviar novo email
+        if (!process.env.MAILERSEND_FROM_EMAIL) {
+            return res.status(500).json({ message: 'MAILERSEND_FROM_EMAIL não configurado' });
+        }
+        
+        const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?code=${verificationCode}&email=${encodeURIComponent(normalizedEmail)}`;
+        
+        const sentFrom = new Sender(process.env.MAILERSEND_FROM_EMAIL, 'HotTrack');
+        const recipients = [new Recipient(normalizedEmail, seller.name)];
+        
+        const emailParams = new EmailParams()
+            .setFrom(sentFrom)
+            .setTo(recipients)
+            .setReplyTo(sentFrom)
+            .setSubject('Verifique seu email - HotTrack')
+            .setHtml(`
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #0ea5e9;">Verificação de Email - HotTrack</h2>
+                    <p>Olá ${seller.name},</p>
+                    <p>Você solicitou um novo código de verificação. Clique no botão abaixo para ativar sua conta:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${verificationUrl}" style="background-color: #0ea5e9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Verificar Email</a>
+                    </div>
+                    <p>Ou copie e cole este link no seu navegador:</p>
+                    <p style="word-break: break-all; color: #666;">${verificationUrl}</p>
+                    <p>Este link expira em 24 horas.</p>
+                </div>
+            `)
+            .setText(`
+                Verificação de Email - HotTrack
+                
+                Olá ${seller.name},
+                
+                Você solicitou um novo código de verificação. Para ativar sua conta, acesse o link abaixo:
+                ${verificationUrl}
+                
+                Este link expira em 24 horas.
+            `);
+
+        await mailerSend.email.send(emailParams);
+        
+        res.json({ message: 'Email de verificação reenviado com sucesso!' });
+        
+    } catch (error) {
+        console.error('Erro ao reenviar verificação:', error);
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
@@ -1662,6 +1902,15 @@ app.post('/api/sellers/login', async (req, res) => {
         
         const seller = sellerResult[0];
         
+        // Verificar se email foi verificado
+        if (!seller.email_verified) {
+            return res.status(403).json({ 
+                message: 'Email não verificado. Verifique sua caixa de entrada.',
+                requiresVerification: true,
+                email: seller.email
+            });
+        }
+        
         if (!seller.is_active) {
             return res.status(403).json({ message: 'Este usuário está bloqueado.' });
         }
@@ -1677,6 +1926,100 @@ app.post('/api/sellers/login', async (req, res) => {
 
     } catch (error) {
         console.error("ERRO DETALHADO NO LOGIN:", error); 
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para obter URL de autorização do Google
+app.get('/api/auth/google/url', (req, res) => {
+    try {
+        const authUrl = googleClient.generateAuthUrl({
+            access_type: 'offline',
+            scope: ['profile', 'email']
+        });
+        
+        res.json({ authUrl });
+    } catch (error) {
+        console.error('Erro ao gerar URL do Google:', error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para callback do Google OAuth
+app.post('/api/auth/google/callback', async (req, res) => {
+    try {
+        const { code } = req.body;
+        
+        if (!code) {
+            return res.status(400).json({ message: 'Código de autorização é obrigatório.' });
+        }
+
+        // Trocar código por token
+        const { tokens } = await googleClient.getToken(code);
+        googleClient.setCredentials(tokens);
+
+        // Obter informações do usuário
+        const ticket = await googleClient.verifyIdToken({
+            idToken: tokens.id_token,
+            audience: process.env.GOOGLE_CLIENT_ID
+        });
+
+        const payload = ticket.getPayload();
+        const { sub: googleId, email, name, picture } = payload;
+
+        if (!email) {
+            return res.status(400).json({ message: 'Email não fornecido pelo Google.' });
+        }
+
+        const normalizedEmail = email.toLowerCase();
+
+        // Verificar se usuário já existe
+        let sellerResult = await sql`SELECT * FROM sellers WHERE email = ${normalizedEmail}`;
+        
+        if (sellerResult.length === 0) {
+            // Adicionar campos OAuth se não existirem
+            
+            // Criar novo usuário
+            const apiKey = uuidv4();
+            
+            await sql`INSERT INTO sellers (
+                name, email, api_key, is_active, 
+                google_id, google_email, google_name, google_picture
+            ) VALUES (
+                ${name}, ${normalizedEmail}, ${apiKey}, TRUE,
+                ${googleId}, ${email}, ${name}, ${picture}
+            )`;
+            
+            sellerResult = await sql`SELECT * FROM sellers WHERE email = ${normalizedEmail}`;
+        } else {
+            // Atualizar dados do Google se necessário
+            await sql`UPDATE sellers SET 
+                google_id = ${googleId},
+                google_email = ${email},
+                google_name = ${name},
+                google_picture = ${picture}
+                WHERE email = ${normalizedEmail}`;
+        }
+
+        const seller = sellerResult[0];
+        
+        if (!seller.is_active) {
+            return res.status(403).json({ message: 'Este usuário está bloqueado.' });
+        }
+
+        // Gerar JWT
+        const tokenPayload = { id: seller.id, email: seller.email };
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        
+        const { password_hash, ...sellerData } = seller;
+        res.status(200).json({ 
+            message: 'Login com Google bem-sucedido!', 
+            token, 
+            seller: sellerData 
+        });
+
+    } catch (error) {
+        console.error('Erro no callback do Google:', error);
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
@@ -5685,6 +6028,12 @@ const isProduction = process.env.NODE_ENV === 'production';
 // Define os caminhos baseados no ambiente
 const frontendPath = isProduction ? 'frontend' : '../frontend';
 const adminFrontendPath = isProduction ? 'admin-frontend' : '../admin-frontend';
+
+// Rota específica para verificação de email - DEVE VIR ANTES DO EXPRESS.STATIC
+app.get('/verify-email', (req, res) => {
+    console.log('Servindo página de verificação de email');
+    res.sendFile(path.join(__dirname, frontendPath, 'verify-email.html'));
+});
 
 // Servir frontend estático
 app.use(express.static(path.join(__dirname, frontendPath)));

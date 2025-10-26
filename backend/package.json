@@ -17,7 +17,9 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
+    "google-auth-library": "^9.4.1",
     "jsonwebtoken": "^9.0.2",
+    "mailersend": "^2.0.0",
     "twilio": "^4.20.0",
     "uuid": "^10.0.0",
     "web-push": "^3.6.7"

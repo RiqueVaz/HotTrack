@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autenticação Google - HotTrack</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+        }
+        .spinner {
+            border: 3px solid #334155;
+            border-top: 3px solid #0ea5e9;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <h2>Processando autenticação...</h2>
+        <p>Aguarde enquanto processamos seu login com Google.</p>
+    </div>
+
+    <script>
+        // Extrair código de autorização da URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const error = urlParams.get('error');
+
+        async function processAuth() {
+            if (error) {
+                // Redirecionar de volta com erro
+                window.location.href = `/?error=google_auth_error&message=${encodeURIComponent(error)}`;
+                return;
+            }
+
+            if (code) {
+                try {
+                    // Enviar código para o backend
+                    const response = await fetch('/api/auth/google/callback', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ code })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        // Salvar token e redirecionar
+                        localStorage.setItem('hottrack_token', data.token);
+                        window.location.href = '/?success=google_login';
+                    } else {
+                        // Redirecionar com erro
+                        window.location.href = `/?error=google_auth_error&message=${encodeURIComponent(data.message || 'Erro na autenticação')}`;
+                    }
+                } catch (err) {
+                    console.error('Erro no callback:', err);
+                    window.location.href = `/?error=google_auth_error&message=${encodeURIComponent('Erro de conexão')}`;
+                }
+            } else {
+                // Nenhum código nem erro - algo deu errado
+                window.location.href = `/?error=google_auth_error&message=${encodeURIComponent('Nenhum código de autorização recebido')}`;
+            }
+        }
+
+        // Processar autenticação quando a página carregar
+        processAuth();
+    </script>
+</body>
+</html>
