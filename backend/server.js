@@ -18,8 +18,16 @@ const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
+const { OAuth2Client } = require('google-auth-library');
 const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
+
+// Configuração do Google OAuth
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/google-callback.html'
+);
 
 const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
@@ -1677,6 +1685,100 @@ app.post('/api/sellers/login', async (req, res) => {
 
     } catch (error) {
         console.error("ERRO DETALHADO NO LOGIN:", error); 
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para obter URL de autorização do Google
+app.get('/api/auth/google/url', (req, res) => {
+    try {
+        const authUrl = googleClient.generateAuthUrl({
+            access_type: 'offline',
+            scope: ['profile', 'email']
+        });
+        
+        res.json({ authUrl });
+    } catch (error) {
+        console.error('Erro ao gerar URL do Google:', error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+// Endpoint para callback do Google OAuth
+app.post('/api/auth/google/callback', async (req, res) => {
+    try {
+        const { code } = req.body;
+        
+        if (!code) {
+            return res.status(400).json({ message: 'Código de autorização é obrigatório.' });
+        }
+
+        // Trocar código por token
+        const { tokens } = await googleClient.getToken(code);
+        googleClient.setCredentials(tokens);
+
+        // Obter informações do usuário
+        const ticket = await googleClient.verifyIdToken({
+            idToken: tokens.id_token,
+            audience: process.env.GOOGLE_CLIENT_ID
+        });
+
+        const payload = ticket.getPayload();
+        const { sub: googleId, email, name, picture } = payload;
+
+        if (!email) {
+            return res.status(400).json({ message: 'Email não fornecido pelo Google.' });
+        }
+
+        const normalizedEmail = email.toLowerCase();
+
+        // Verificar se usuário já existe
+        let sellerResult = await sql`SELECT * FROM sellers WHERE email = ${normalizedEmail}`;
+        
+        if (sellerResult.length === 0) {
+            // Adicionar campos OAuth se não existirem
+            
+            // Criar novo usuário
+            const apiKey = uuidv4();
+            
+            await sql`INSERT INTO sellers (
+                name, email, api_key, is_active, 
+                google_id, google_email, google_name, google_picture
+            ) VALUES (
+                ${name}, ${normalizedEmail}, ${apiKey}, TRUE,
+                ${googleId}, ${email}, ${name}, ${picture}
+            )`;
+            
+            sellerResult = await sql`SELECT * FROM sellers WHERE email = ${normalizedEmail}`;
+        } else {
+            // Atualizar dados do Google se necessário
+            await sql`UPDATE sellers SET 
+                google_id = ${googleId},
+                google_email = ${email},
+                google_name = ${name},
+                google_picture = ${picture}
+                WHERE email = ${normalizedEmail}`;
+        }
+
+        const seller = sellerResult[0];
+        
+        if (!seller.is_active) {
+            return res.status(403).json({ message: 'Este usuário está bloqueado.' });
+        }
+
+        // Gerar JWT
+        const tokenPayload = { id: seller.id, email: seller.email };
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        
+        const { password_hash, ...sellerData } = seller;
+        res.status(200).json({ 
+            message: 'Login com Google bem-sucedido!', 
+            token, 
+            seller: sellerData 
+        });
+
+    } catch (error) {
+        console.error('Erro no callback do Google:', error);
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
