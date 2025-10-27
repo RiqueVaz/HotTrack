@@ -676,25 +676,56 @@
         .hotbot-scope .node-header { 
             display: flex; 
             align-items: center; 
-            justify-content: space-between;
-            gap: 0.75rem; 
+            justify-content: center;
+            gap: 0.5rem; 
             font-weight: 600; 
-            padding: 0.75rem 1rem; 
+            padding: 1rem 1rem 0.75rem; 
             border-bottom: 1px solid var(--border-color); 
             color: var(--text-primary);
             position: relative;
+            margin-top: 8px;
         }
         .hotbot-scope .node-actions {
             position: absolute;
-            right: 8px;
-            top: 50%;
-            transform: translateY(-50%);
+            top: -4rem;
+            left: 50%;
+            transform: translateX(-50%);
             display: flex;
-            gap: 4px;
-            background: white;
-            border-radius: 4px;
-            padding: 2px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            gap: 6px;
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 0.5rem 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 10;
+        }
+        
+        .hotbot-scope .node-action-btn {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 20%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #475569;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0;
+            transition: all 0.2s ease;
+        }
+        
+        .hotbot-scope .node-action-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .hotbot-scope .node-action-btn.delete {
+            border-color: #fecaca;
+            color: #ef4444;
+        }
+        
+        .hotbot-scope .node-action-btn.delete:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         .hotbot-scope .node-content { padding: 1rem; font-size: 0.9rem; }
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
@@ -5762,19 +5793,6 @@ function generatePreviewHTML(data) {
                                 }}
                                 className="node-action-btn"
                                 title="Copiar nó"
-                                style={{
-                                    background: 'white',
-                                    border: '1px solid #ddd',
-                                    borderRadius: '4px',
-                                    width: '20px',
-                                    height: '20px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    cursor: 'pointer',
-                                    fontSize: '12px',
-                                    padding: 0
-                                }}
                             >
                                 ⎘
                             </button>
@@ -5786,24 +5804,9 @@ function generatePreviewHTML(data) {
                                         window.dispatchEvent(event);
                                     }
                                 }}
-                                className="node-action-btn"
-                                title="Excluir nó"
+                                className={`node-action-btn delete ${id === 'start' ? 'disabled' : ''}`}
+                                title={id === 'start' ? 'Não é possível excluir o nó inicial' : 'Excluir nó'}
                                 disabled={id === 'start'}
-                                style={{
-                                    background: 'white',
-                                    border: '1px solid #ff6b6b',
-                                    borderRadius: '4px',
-                                    color: id === 'start' ? '#ccc' : '#ff6b6b',
-                                    width: '20px',
-                                    height: '20px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    cursor: id === 'start' ? 'not-allowed' : 'pointer',
-                                    fontSize: '12px',
-                                    padding: 0,
-                                    opacity: id === 'start' ? 0.5 : 1
-                                }}
                             >
                                 ×
                             </button>
