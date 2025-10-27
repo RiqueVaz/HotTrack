@@ -1571,10 +1571,26 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
 
 app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
     try {
+
+        
+        // Primeiro verificar se o flow existe e pertence ao usuário
+        const [existingFlow] = await sqlWithRetry('SELECT id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+
+        
+        if (!existingFlow) {
+            console.log('Flow não encontrado ou não pertence ao usuário');
+            return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        }
+        
+        // Se existe, deletar
         const result = await sqlWithRetry('DELETE FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
-        if (result.count > 0) res.status(204).send();
-        else res.status(404).json({ message: 'Fluxo não encontrado.' });
-    } catch (error) { res.status(500).json({ message: 'Erro ao deletar o fluxo.' }); }
+
+        res.status(204).send();
+        
+    } catch (error) { 
+        console.error('Erro ao deletar flow:', error);
+        res.status(500).json({ message: 'Erro ao deletar o fluxo.' }); 
+    }
 });
 
 // --- ROTAS DE CHATS ---
