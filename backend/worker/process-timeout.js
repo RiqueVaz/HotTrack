@@ -418,7 +418,23 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     
                         // Busca o click_id das variáveis do fluxo
                         const click_id_from_vars = variables.click_id;
-                        if (!click_id_from_vars) throw new Error("Click ID não encontrado nas variáveis do fluxo.");
+                        // Se não encontrou nas variáveis, tenta buscar do banco de dados
+                        if (!click_id_from_vars) {
+                            const [recentClick] = await sql`
+                                SELECT click_id FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                                ORDER BY created_at DESC LIMIT 1
+                            `;
+                            if (recentClick?.click_id) {
+                                click_id_from_vars = recentClick.click_id;
+                                console.log(`[WORKER] Click ID recuperado do banco: ${click_id_from_vars}`);
+                            }
+                        }
+                        
+                        if (!click_id_from_vars) {
+                            console.error(`[WORKER] Click ID não encontrado para chat ${chatId}, bot ${botId}. Variáveis:`, variables);
+                            throw new Error("Click ID não encontrado nas variáveis do fluxo nem no histórico do chat.");
+                        }
     
                         const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
                         const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;

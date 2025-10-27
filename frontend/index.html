@@ -548,7 +548,17 @@
         .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: auto; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
         .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
-        .hotbot-scope .conversations-list { overflow-y: auto; flex: 1; }
+        .hotbot-scope .conversations-list { 
+            overflow-y: auto; 
+            flex: 1; 
+            max-height: calc(100vh - 12rem);
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        .hotbot-scope .conversations-list::-webkit-scrollbar { width: 6px; }
+        .hotbot-scope .conversations-list::-webkit-scrollbar-track { background: transparent; }
+        .hotbot-scope .conversations-list::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
+        .hotbot-scope .conversations-list::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
         .hotbot-scope .conversation-item { padding: 1rem; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background-color 0.2s; }
         .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
         .hotbot-scope .conversation-item.active { background-color: rgba(56, 189, 248, 0.1); border-left: 3px solid var(--accent-primary); }
@@ -558,7 +568,21 @@
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
         .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
         .hotbot-scope .chat-header h3 { font-size: 1.1rem; font-weight: 700; margin:0; }
-        .hotbot-scope .message-list { flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+        .hotbot-scope .message-list { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 1.5rem; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 1rem;
+            max-height: calc(100vh - 16rem);
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        .hotbot-scope .message-list::-webkit-scrollbar { width: 6px; }
+        .hotbot-scope .message-list::-webkit-scrollbar-track { background: transparent; }
+        .hotbot-scope .message-list::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
+        .hotbot-scope .message-list::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
         .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
@@ -575,11 +599,36 @@
         .hotbot-scope .centered-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); text-align: center; }
         .hotbot-scope .centered-placeholder svg { width: 48px; height: 48px; margin-bottom: 1rem; }
         
-        .hotbot-scope .contact-panel { padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
+        .hotbot-scope .contact-panel { 
+            padding: 1.5rem; 
+            border-left: 1px solid var(--border-color); 
+            overflow-y: auto;
+            max-height: calc(100vh - 8.5rem);
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        .hotbot-scope .contact-panel::-webkit-scrollbar { width: 6px; }
+        .hotbot-scope .contact-panel::-webkit-scrollbar-track { background: transparent; }
+        .hotbot-scope .contact-panel::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
+        .hotbot-scope .contact-panel::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
         .hotbot-scope .contact-panel h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1.5rem; }
         .hotbot-scope .contact-detail { margin-bottom: 1rem; }
         .hotbot-scope .contact-detail label { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
         .hotbot-scope .contact-detail p { color: var(--text-primary); font-weight: 500; word-break: break-all; }
+        
+        .hotbot-scope .actions-panel { 
+            margin-top: 2rem; 
+            padding-top: 2rem; 
+            border-top: 1px solid var(--border-color);
+            max-height: calc(50vh - 4rem);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        .hotbot-scope .actions-panel::-webkit-scrollbar { width: 6px; }
+        .hotbot-scope .actions-panel::-webkit-scrollbar-track { background: transparent; }
+        .hotbot-scope .actions-panel::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
+        .hotbot-scope .actions-panel::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
         
         /* Outros estilos do HotBot */
         .hotbot-scope .bot-card-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
@@ -1078,6 +1127,7 @@
                          this.state.pixPollingIntervalId = null;
                          console.log("Polling interrompido pelo fechamento do modal (Botão X).");
                      }
+                     document.getElementById('modal-container').innerHTML = ''; // Limpa o modal
                  };
                  // Limpa listener antigo se existir antes de adicionar um novo
                  if (closeModalBtn._listener) {
@@ -1245,6 +1295,26 @@
                         <div><label class="text-sm font-medium text-gray-400 mb-1 block">Senha</label><input name="password" type="password" required class="form-input w-full p-3"></div>
                         <button type="submit" class="btn w-full font-semibold py-3 rounded-md">Entrar na Plataforma</button>
                     </form>
+                    
+                    <div class="relative my-6">
+                        <div class="absolute inset-0 flex items-center">
+                            <div class="w-full border-t border-slate-600"></div>
+                        </div>
+                        <div class="relative flex justify-center text-sm">
+                            <span class="px-2 bg-slate-800 text-slate-400">ou</span>
+                        </div>
+                    </div>
+                    
+                    <button id="googleLoginBtn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-semibold py-3 px-4 rounded-md hover:bg-gray-100 transition-colors">
+                        <svg class="w-5 h-5" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        Entrar com Google
+                    </button>
+                    
                     <div class="text-center mt-6"><a href="#" id="showRegister" class="text-sm text-sky-400 hover:text-sky-300 hover:underline">Não tem uma conta? Cadastre-se agora</a></div>
                 </div>`;
             },
@@ -1709,7 +1779,23 @@
                 const botOptions = bots.map(b => `<option value="${b.id}">${b.bot_name}</option>`).join('');
                 const utmifyOptions = utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
                 const pixelCheckboxes = pixels.map(p => `<label class="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer p-2 rounded-md hover:bg-slate-700/50"><input type="checkbox" name="pixel_ids" value="${p.id}" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500"><span>${p.account_name}</span></label>`).join('');
-                const presselList = pressels.map(pr => `<div class="p-3 card flex justify-between items-center text-sm"><div><p class="font-semibold">${pr.name}</p><p class="text-xs text-gray-400">Bot: ${pr.bot_name}</p></div><div class="space-x-2"><button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button><button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button></div></div>`).join('');
+                const presselList = pressels.map(pr => {
+                    const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
+                    const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
+                    return `<div class="p-3 card flex justify-between items-center text-sm">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
+                                <p class="text-xs text-gray-400">Bot: ${pr.bot_name}</p>
+                            </div>
+                        </div>
+                        <div class="space-x-2">
+                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
+                            ${copyLinkButton}
+                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                        </div>
+                    </div>`;
+                }).join('');
                 
                 return `
                 <div class="animate-fade-in">
@@ -1741,6 +1827,36 @@
                                 </div>
                                 
                                 <div class="card p-3"><p class="font-semibold mb-2">Selecione os Pixels:</p><div class="space-y-1">${pixelCheckboxes.length ? pixelCheckboxes : '<p class="text-gray-500 text-sm">Cadastre um pixel primeiro.</p>'}</div></div>
+                                
+                                <div class="card p-3">
+                                    <label class="flex items-center space-x-3 cursor-pointer">
+                                        <input type="checkbox" name="deploy_to_netlify" id="deploy_to_netlify" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500">
+                                        <div>
+                                            <span class="font-semibold text-white">Deploy Automático no Netlify</span>
+                                            <p class="text-xs text-gray-400 mt-1">Deploy a pressel automaticamente e receba uma URL pronta para usar</p>
+                                            <p class="text-xs text-blue-400 mt-1">Configure a API Key do Netlify clicando <a href="#" onclick="App.navigateTo('integrations')" class="text-blue-400 hover:text-blue-300 underline cursor-pointer">aqui</a></p>
+                                            </div>
+                                    </label>
+                                    
+                                    <!-- Input para nome do site Netlify (inicialmente oculto) -->
+                                    <div id="netlify-site-name-container" class="mt-3 hidden">
+                                        <label for="netlify_site_name" class="block text-sm font-medium text-gray-300 mb-2">Nome do Site Netlify</label>
+                                        <input 
+                                            type="text" 
+                                            name="netlify_site_name" 
+                                            id="netlify_site_name"
+                                            placeholder="meu-site-pressel"
+                                            maxlength="37"
+                                            class="w-full px-3 py-2 bg-slate-700 border border-slate-500 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                                        >
+                                        <p class="text-xs text-gray-400 mt-1">
+                                            Apenas letras, números e hífens. Máximo 37 caracteres. 
+                                            <span id="netlify-char-count" class="text-sky-400">0/37</span>
+                                        </p>
+                                        <div id="netlify-validation-error" class="text-red-400 text-xs mt-1 hidden"></div>
+                                    </div>
+                                </div>
+                                
                                 <button type="submit" class="btn w-full p-3 rounded-md text-base font-bold">Salvar e Gerar Código</button>
                             </form>
                         </div>
@@ -1844,36 +1960,63 @@
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Chave Privada</label><input name="oasyfy_secret_key" type="password" value="${settings.oasyfy_secret_key || ''}" class="form-input w-full p-2">
                             </div>
                         </div>
+                        
                         <div class="mt-8"><button type="submit" class="btn w-full p-3 font-bold rounded-md">Salvar Configurações de PIX</button></div>
                     </form>
                 </div>`;
             },
             integrations() {
-                const { utmifyIntegrations } = App.state.data;
-                const utmifyListHTML = utmifyIntegrations.map(u => `
-                    <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
-                        <span class="font-medium text-sm">${u.account_name}</span>
-                        <button data-id="${u.id}" class="delete-utmify-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                    </div>
-                `).join('');
+            const { utmifyIntegrations, settings } = App.state.data;
+            const utmifyListHTML = utmifyIntegrations.map(u => `
+                <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
+                    <span class="font-medium text-sm">${u.account_name}</span>
+                    <button data-id="${u.id}" class="delete-utmify-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                </div>
+            `).join('');
 
-                return `
-                <div class="animate-fade-in">
-                    <div class="mb-6"><h1 class="text-3xl font-bold text-white">Integrações</h1><p class="text-slate-400">Conecte o HotTrack a outras ferramentas.</p></div>
-                    <div class="max-w-2xl">
-                        <div class="card p-6 rounded-lg">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold text-white">Contas Utmify</h2>
-                                <button id="add-utmify-btn" class="btn btn-secondary text-sm py-1 px-3">Adicionar Conta</button>
+            return `
+            <div class="animate-fade-in">
+                <div class="mb-6"><h1 class="text-3xl font-bold text-white">Integrações</h1><p class="text-slate-400">Conecte o HotTrack a outras ferramentas.</p></div>
+                
+                <div class="max-w-4xl">
+                    <!-- Seção Utmify -->
+                    <div class="card p-6 rounded-lg mb-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold text-white">Contas Utmify</h2>
+                            <button id="add-utmify-btn" class="btn btn-secondary text-sm py-1 px-3">Adicionar Conta</button>
+                        </div>
+                        <p class="text-sm text-gray-400 mt-1 mb-4">Adicione suas contas da Utmify. Depois, na criação de uma Pressel, você poderá escolher para qual conta os eventos de venda devem ser enviados.</p>
+                        <div id="utmify-list" class="space-y-3">
+                            ${utmifyListHTML.length ? utmifyListHTML : '<p class="text-gray-500 text-sm">Nenhuma conta Utmify cadastrada.</p>'}
+                        </div>
+                    </div>
+
+                    <!-- Nova Seção Netlify -->
+                    <div class="card p-6 rounded-lg">
+                        <h2 class="text-xl font-semibold mb-2 text-white">Configurações do Netlify</h2>
+                        <p class="text-sm text-gray-400 mb-6">Configure o deploy automático das suas pressels no Netlify. Receba URLs prontas para usar automaticamente.</p>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block mb-2 text-sm text-gray-400">Token de Acesso do Netlify</label>
+                                <input id="netlify-access-token-input" type="password" value="${settings.netlify_access_token || ''}" class="form-input w-full p-2" placeholder="Seu token de acesso pessoal do Netlify">
+                                <p class="text-xs text-gray-500 mt-1">Obtenha seu token em: <a href="https://app.netlify.com/user/applications#personal-access-tokens" target="_blank" class="text-sky-400 hover:text-sky-300">app.netlify.com/user/applications</a></p>
                             </div>
-                            <p class="text-sm text-gray-400 mt-1 mb-4">Adicione suas contas da Utmify. Depois, na criação de uma Pressel, você poderá escolher para qual conta os eventos de venda devem ser enviados.</p>
-                            <div id="utmify-list" class="space-y-3">
-                                ${utmifyListHTML.length ? utmifyListHTML : '<p class="text-gray-500 text-sm">Nenhuma conta Utmify cadastrada.</p>'}
+                            
+                            <div class="flex space-x-4">
+                                <button type="button" id="validate-netlify-token" class="btn btn-secondary flex-1">Validar Token</button>
+                            </div>
+                            
+                            <div id="netlify-status" class="hidden">
+                                <div class="p-3 rounded-md bg-slate-800">
+                                    <p class="text-sm text-gray-300" id="netlify-status-text"></p>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>`;
-            },
+                </div>
+            </div>`;
+        },
             documentation() {
                 return `
                 <div class="animate-fade-in">
@@ -1910,6 +2053,7 @@
             container.addEventListener('click', async (e) => {
                 if (e.target.id === 'showRegister') { e.preventDefault(); this.renderLogin('register'); }
                 if (e.target.id === 'showLogin') { e.preventDefault(); this.renderLogin('login'); }
+                if (e.target.id === 'googleLoginBtn') { e.preventDefault(); await this.loginWithGoogle(); }
             });
             container.addEventListener('submit', async (e) => {
                 const form = e.target;
@@ -2074,9 +2218,32 @@
                 // Generate Pressel Code
                 if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
 
-                // Test PIX Buttons
-                if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
-                if (e.target.id === 'testPriorityRouteBtn') { this.testPriorityRoute(e.target); }
+                // Copy Netlify Link
+                if (e.target.classList.contains('copy-netlify-link-btn')) {
+                    const url = e.target.dataset.url;
+                    if (url) {
+                        navigator.clipboard.writeText(url).then(() => {
+                            this.showToast('Link copiado para a área de transferência!', 'success');
+                        }).catch(() => {
+                            // Fallback para navegadores mais antigos
+                            const textArea = document.createElement('textarea');
+                            textArea.value = url;
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            this.showToast('Link copiado para a área de transferência!', 'success');
+                        });
+                    }
+                }
+
+                // Test PIX Buttons
+                if (e.target.classList.contains('test-pix-btn')) { this.testIndividualPixConnection(e.target.dataset.provider, e.target); }
+                if (e.target.id === 'testPriorityRouteBtn') { this.testPriorityRoute(e.target); }
+                
+                // Netlify Buttons
+                if (e.target.id === 'validate-netlify-token') { this.validateNetlifyToken(e.target); }
+                if (e.target.id === 'create-netlify-site') { this.createNetlifySite(e.target); }
 
                 // Tab Buttons (Lógica Corrigida e Isolada)
                 const tabButton = e.target.closest('.tab-button');
@@ -2095,35 +2262,54 @@
                 }
 
                 // Delete Buttons (Atualizado)
-                const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
-                if (deleteBtn) {
-                     const id = deleteBtn.dataset.id;
-                    let type = '', endpoint = '', itemName = 'item', refreshFunction = () => this.navigateTo(this.state.currentPage); // Default refresh
+                const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
+                if (deleteBtn) {
+                    const id = deleteBtn.dataset.id;
+                    if (!id) return this.showToast('ID do item não encontrado.', 'error');
 
-                    if (deleteBtn.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; itemName = 'pixel'; }
-                    if (deleteBtn.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; itemName = 'bot'; }
-                    if (deleteBtn.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; itemName = 'pressel'; }
-                    if (deleteBtn.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; itemName = 'integração Utmify'; }
-                    if (deleteBtn.classList.contains('delete-checkout-btn')) { /* type = 'checkouts' - não precisa atualizar state direto */ endpoint = 'checkouts'; itemName = 'checkout'; refreshFunction = this.fetchAndRenderCheckouts; } // Refresh específico
-                    if (deleteBtn.classList.contains('delete-thankyou-btn')) { /* type = 'thankYouPages' */; endpoint = 'thank-you-pages'; itemName = 'página de obrigado'; refreshFunction = this.fetchAndRenderThankYouPages; } // Refresh específico
+                    let type = '', endpoint = '', itemName = 'item';
+                    let isGenericRefresh = true;
+                    // default refresh: navega para a página atual (re-fetch padrão)
+                    let refreshFunction = () => this.navigateTo(this.state.currentPage);
 
-                    if (confirm(`Tem certeza que deseja excluir est${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'e'} ${itemName}?`)) {
-                        deleteBtn.textContent = 'Excluindo...'; deleteBtn.disabled = true; // Feedback visual
-                        try {
-                            await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
-                            // Remove do state apenas se não tiver refreshFunction específica
-                            if(type && Array.isArray(this.state.data[type]) && refreshFunction === this.navigateTo) {
-                                this.state.data[type] = this.state.data[type].filter(item => item.id != id);
-                            }
-                            await refreshFunction.call(this); // Chama a função de refresh (seja a genérica ou específica)
-                            this.showToast(`${itemName.charAt(0).toUpperCase() + itemName.slice(1)} excluíd${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'o'} com sucesso!`, 'success');
-                        } catch(err) {
-                             this.showToast(`Erro ao excluir ${itemName === 'integração Utmify' || itemName === 'página de obrigado' ? 'a' : 'o'} ${itemName}. Detalhes: ${err.message}`, 'error');
-                             // Restaura o botão em caso de erro
-                             deleteBtn.textContent = 'Excluir'; deleteBtn.disabled = false;
-                        }
-                    }
-                }
+                    if (deleteBtn.classList.contains('delete-pixel-btn')) { type = 'pixels'; endpoint = 'pixels'; itemName = 'pixel'; }
+                    if (deleteBtn.classList.contains('delete-bot-btn')) { type = 'bots'; endpoint = 'bots'; itemName = 'bot'; }
+                    if (deleteBtn.classList.contains('delete-pressel-btn')) { type = 'pressels'; endpoint = 'pressels'; itemName = 'pressel'; }
+                    if (deleteBtn.classList.contains('delete-utmify-btn')) { type = 'utmifyIntegrations'; endpoint = 'integrations/utmify'; itemName = 'integração Utmify'; }
+                    if (deleteBtn.classList.contains('delete-checkout-btn')) { endpoint = 'checkouts'; itemName = 'checkout'; isGenericRefresh = false; refreshFunction = this.fetchAndRenderCheckouts; }
+                    if (deleteBtn.classList.contains('delete-thankyou-btn')) { endpoint = 'thank-you-pages'; itemName = 'página de obrigado'; isGenericRefresh = false; refreshFunction = this.fetchAndRenderThankYouPages; }
+
+                    if (!confirm(`Tem certeza que deseja excluir est${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'e'} ${itemName}?`)) return;
+
+                    const originalText = deleteBtn.textContent;
+                    deleteBtn.textContent = 'Excluindo...';
+                    deleteBtn.disabled = true;
+
+                    try {
+                        await this.apiRequest(`/api/${endpoint}/${id}`, 'DELETE');
+
+                        // Se há um tipo e a lista existe no state, atualiza localmente só quando usamos o refresh genérico.
+                        // Observação: isGenericRefresh indica que não foi atribuída uma refresh específica.
+                        if (type && Array.isArray(this.state.data[type]) && isGenericRefresh) {
+                            this.state.data[type] = this.state.data[type].filter(item => String(item.id) !== String(id));
+                            // se você renderiza a partir do state, forçar re-render pode ser necessário dependendo do framework
+                            // ex: this.setState({ data: this.state.data }) ou this.renderList();
+                        }
+
+                        // Chama a função de refresh (genérica ou específica). 
+                        // use call(this) caso as funções dependam do contexto.
+                        await refreshFunction.call(this);
+
+                        this.showToast(`${itemName.charAt(0).toUpperCase() + itemName.slice(1)} excluíd${itemName.includes('integração') || itemName.includes('página') ? 'a' : 'o'} com sucesso!`, 'success');
+                    } catch (err) {
+                        this.showToast(`Erro ao excluir ${itemName === 'integração Utmify' || itemName === 'página de obrigado' ? 'a' : 'o'} ${itemName}. Detalhes: ${err.message}`, 'error');
+                        // Você pode reverter alterações no state aqui se fez remoção otimista
+                    } finally {
+                        // Restaura o botão
+                        deleteBtn.textContent = originalText;
+                        deleteBtn.disabled = false;
+                    }
+                }
 
                 // Date Filters
                 const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
@@ -2166,17 +2352,63 @@
                         if (newBot) { this.state.data.bots.unshift(newBot); this.navigateTo('bots'); }
                     }
                     else if (form.id === 'presselForm') {
+                        console.log('Processando formulário presselForm...');
                         const pixel_ids = Array.from(form.querySelectorAll('input[name="pixel_ids"]:checked')).map(cb => cb.value);
+                        const deploy_to_netlify = form.querySelector('input[name="deploy_to_netlify"]').checked;
+                        const netlify_site_name = form.querySelector('input[name="netlify_site_name"]')?.value || '';
+                        
+                        console.log('Dados do formulário:', {
+                            pixel_ids,
+                            deploy_to_netlify,
+                            netlify_site_name,
+                            data
+                        });
+                        
                         if (pixel_ids.length === 0) {
+                            console.log('Erro: Nenhum pixel selecionado');
                              this.showToast('Selecione ao menos um pixel.', 'error');
+                        } else if (deploy_to_netlify && !netlify_site_name.trim()) {
+                            console.log('Erro: Nome do site Netlify não fornecido');
+                            this.showToast('Digite o nome do site para o deploy no Netlify.', 'error');
                         } else {
-                            const payload = { ...data, pixel_ids };
+                            console.log('Passou nas validações, processando...');
+                            // Validação adicional do nome do site Netlify (se fornecido)
+                            if (deploy_to_netlify && netlify_site_name.trim()) {
+                                const siteName = netlify_site_name.trim();
+                                const validNameRegex = /^[a-zA-Z0-9-]+$/;
+                                
+                                if (!validNameRegex.test(siteName)) {
+                                    this.showToast('Nome do site deve conter apenas letras, números e hífens.', 'error');
+                                    return;
+                                }
+                                
+                                if (siteName.length > 37) {
+                                    this.showToast('Nome do site deve ter no máximo 37 caracteres.', 'error');
+                                    return;
+                                }
+                                
+                                if (siteName.startsWith('-') || siteName.endsWith('-')) {
+                                    this.showToast('Nome do site não pode começar ou terminar com hífen.', 'error');
+                                    return;
+                                }
+                            }
+                            const payload = { ...data, pixel_ids, deploy_to_netlify, netlify_site_name };
                             console.log('Payload sendo enviado:', payload); // Debug
+                            
+                            if (deploy_to_netlify) {
+                                this.showToast('🚀 Fazendo deploy no Netlify...', 'success');
+                            }
+                            
                             const newPressel = await this.apiRequest('/api/pressels', 'POST', payload);
                             if (newPressel) {
                                 this.state.data.pressels.unshift(newPressel);
                                 this.navigateTo('pressels');
-                                this.generatePresselCode(newPressel);
+                                
+                                if (newPressel.netlify_url) {
+                                    this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
+                                } else {
+                                    this.generatePresselCode(newPressel);
+                                }
                             }
                         }
                     }
@@ -2257,6 +2489,24 @@
             listenerTarget.addEventListener('submit', listenerTarget._submitListener); // <<<====== PUT IT RIGHT HERE
             
             document.addEventListener('change', e => {
+                // Controle do input Netlify
+                if (e.target.id === 'deploy_to_netlify') {
+                    const netlifyContainer = document.getElementById('netlify-site-name-container');
+                    if (netlifyContainer) {
+                        if (e.target.checked) {
+                            netlifyContainer.classList.remove('hidden');
+                        } else {
+                            netlifyContainer.classList.add('hidden');
+                            // Limpar validação quando esconder
+                            const validationError = document.getElementById('netlify-validation-error');
+                            if (validationError) {
+                                validationError.classList.add('hidden');
+                                validationError.textContent = '';
+                            }
+                        }
+                    }
+                }
+
                 if (e.target.id === 'value-type-selector') {
                     const container = document.getElementById('fixed-value-container');
                     if (container) {
@@ -2290,73 +2540,127 @@
                     }
                 }
             });
+
+            // Event listener para input do Netlify
+            document.addEventListener('input', e => {
+                if (e.target.id === 'netlify_site_name') {
+                    const charCount = document.getElementById('netlify-char-count');
+                    const validationError = document.getElementById('netlify-validation-error');
+                    const value = e.target.value;
+                    const charCountValue = value.length;
+                    
+                    // Atualizar contador de caracteres
+                    if (charCount) {
+                        charCount.textContent = `${charCountValue}/37`;
+                    }
+                    
+                    // Validação em tempo real
+                    const validNameRegex = /^[a-zA-Z0-9-]*$/;
+                    let errorMessage = '';
+                    
+                    if (value.length > 0) {
+                        if (!validNameRegex.test(value)) {
+                            errorMessage = 'Apenas letras, números e hífens são permitidos.';
+                        } else if (value.startsWith('-') || value.endsWith('-')) {
+                            errorMessage = 'Nome não pode começar ou terminar com hífen.';
+                        } else if (value.length > 37) {
+                            errorMessage = 'Máximo 37 caracteres permitidos.';
+                        }
+                    }
+                    
+                    if (validationError) {
+                        if (errorMessage) {
+                            validationError.textContent = errorMessage;
+                            validationError.classList.remove('hidden');
+                            e.target.classList.add('border-red-500');
+                            e.target.classList.remove('border-slate-500');
+                        } else {
+                            validationError.classList.add('hidden');
+                            e.target.classList.remove('border-red-500');
+                            e.target.classList.add('border-slate-500');
+                        }
+                    }
+                }
+            });
         },
 
         // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
-            try {
-                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
-                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+// Adicionada sobrecarga para aceitar headers customizados
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
+            try {
+                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
+                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
 
-                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
-                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
-                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
-                                       endpoint.includes('/api/thank-you-pages/create') ||
-                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                                       endpoint.includes('/api/thank-you-pages/create') ||
+                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
 
-                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
-                    headers['x-api-key'] = this.state.data.settings.api_key;
-                }
+                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+                    headers['x-api-key'] = this.state.data.settings.api_key;
+                }
 
-                const options = { method, headers };
-                if (body) { options.body = JSON.stringify(body); }
+                const options = { method, headers };
+                if (body) { options.body = JSON.stringify(body); }
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
 
-                if (response.status === 204) return null; // No Content
+                if (response.status === 204) return null; // No Content
 
-                const responseBody = await response.text(); // Lê como texto primeiro
-                let data;
-                try {
-                    data = JSON.parse(responseBody); // Tenta parsear como JSON
-                } catch (jsonError) {
-                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
-                    if (!response.ok) {
-                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
-                        throw new Error(responseBody || `Erro ${response.status}`);
-                    }
-                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
-                    data = responseBody;
-                }
+                const responseBody = await response.text(); // Lê como texto primeiro
+                let data;
+                try {
+                    data = JSON.parse(responseBody); // Tenta parsear como JSON
+                } catch (jsonError) {
+                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
+                    if (!response.ok) {
+                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
+                        // ****** MUDANÇA 1: ANEXA O STATUS AO ERRO ******
+                        const err = new Error(responseBody || `Erro ${response.status}`);
+                        err.status = response.status;
+                        throw err;
+                    }
+                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
+                    data = responseBody;
+                }
 
 
-                if (!response.ok) {
-                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
-                    let errorMsg = 'Erro desconhecido da API.';
-                    if (data && data.message) {
-                       errorMsg = data.message;
-                    } else if (typeof data === 'string') {
-                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
-                    }
-                    throw new Error(errorMsg);
-                }
-                return data;
-            } catch (error) {
-                 if (error instanceof Error) {
-                    this.showToast(error.message, 'error');
-                     // Verifica se o erro é de autenticação e desloga, exceto em rotas específicas
-                    const isAuthError = error.message.includes('inválido') || error.message.includes('expirado') || error.message.includes('API Key inválida');
-                    const shouldLogout = isAuthError && !endpoint.includes('/sellers/login') && !endpoint.startsWith('/oferta/') && !endpoint.startsWith('/obrigado/');
-                    if (shouldLogout) {
-                       this.logout();
-                    }
-                 } else {
-                    console.error(`Network Error on ${method} ${endpoint}:`, error);
-                    this.showToast('Falha na conexão com o servidor.', 'error');
-                 }
-                 throw error; // Re-throw para quem chamou poder tratar
-            }
-        },
+                if (!response.ok) {
+                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
+                    let errorMsg = 'Erro desconhecido da API.';
+                    if (data && data.message) {
+                       errorMsg = data.message;
+                    } else if (typeof data === 'string') {
+                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
+                    }
+                    // ****** MUDANÇA 1 (Cont.): ANEXA O STATUS AO ERRO ******
+                    const err = new Error(errorMsg);
+                    err.status = response.status;
+                    throw err;
+                }
+                return data;
+            } catch (error) {
+                 if (error instanceof Error) {
+                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+
+                    // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
+                    const statusCode = error.status; // Pega o status que anexamos
+                    const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
+                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+                    
+                    if (isAuthError && !isPublicRoute) {
+                        console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
+                       this.logout();
+                    }
+                    // Se for status 400 (Bad Request), ele não vai mais deslogar.
+                 } else {
+                    console.error(`Network Error on ${method} ${endpoint}:`, error);
+                    this.showToast('Falha na conexão com o servidor.', 'error');
+                 }
+                 throw error; // Re-throw para quem chamou poder tratar
+            }
+        },
         
         async login(email, password) {
             try {
@@ -2365,22 +2669,101 @@
                 localStorage.setItem('hottrack_token', data.token);
                 window.location.href = window.location.pathname; 
             } catch (e) {
+                if (e.response && e.response.status === 403 && e.response.data && e.response.data.requiresVerification) {
+                    this.showToast('Email não verificado. Verifique sua caixa de entrada.', 'error');
+                    this.showVerificationScreen(email);
+                } else {
+                    console.error('Erro no login:', e);
+                }
             }
         },
+
+        async loginWithGoogle() {
+            try {
+                // Obter URL de autorização do Google
+                const response = await fetch('/api/auth/google/url');
+                const { authUrl } = await response.json();
+                
+                // Usar redirecionamento em vez de popup para evitar problemas de CORS
+                window.location.href = authUrl;
+                
+            } catch (error) {
+                console.error('Erro no login com Google:', error);
+                this.showToast('Erro ao iniciar login com Google', 'error');
+            }
+        },
+
         
         async register(name, email, password) {
             try {
                 const data = await this.apiRequest('/api/sellers/register', 'POST', { name, email, password });
-                this.showToast('Cadastro realizado! Redirecionando para aprovação...', 'success');
                 
-                const message = `Olá, gostaria de solicitar a aprovação do meu cadastro. Email: ${email}`;
-                const whatsappUrl = `https://wa.me/5541995211148?text=${encodeURIComponent(message)}`;
-                
-                setTimeout(() => {
-                    window.location.href = whatsappUrl;
-                }, 1000);
+                if (data.requiresVerification) {
+                    this.showToast('Cadastro realizado! Verifique seu email para ativar a conta.', 'success');
+                    // Mostrar tela de verificação
+                    this.showVerificationScreen(email);
+                } else {
+                    this.showToast('Cadastro realizado com sucesso!', 'success');
+                }
 
             } catch (e) {
+                console.error('Erro no registro:', e);
+            }
+        },
+
+        showVerificationScreen(email) {
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="flex items-center justify-center min-h-screen p-4">
+                    <div class="card p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
+                        <div class="text-center mb-8">
+                            <div class="flex items-center justify-center gap-2 mb-4">
+                                <svg class="h-10 w-10 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                                </svg>
+                                <h1 class="text-4xl font-bold text-white">HotTrack</h1>
+                            </div>
+                            <h2 class="text-2xl font-bold text-white mb-2">Verifique seu Email</h2>
+                            <p class="text-slate-400">Enviamos um link de verificação para:</p>
+                            <p class="text-sky-400 font-semibold">${email}</p>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="bg-slate-800 p-4 rounded-lg">
+                                <h3 class="font-semibold text-white mb-2">Próximos passos:</h3>
+                                <ol class="text-sm text-gray-300 space-y-1">
+                                    <li>1. Verifique sua caixa de entrada</li>
+                                    <li>2. Clique no link de verificação</li>
+                                    <li>3. Volte aqui e faça login</li>
+                                </ol>
+                            </div>
+                            
+                            <div class="text-center">
+                                <button id="resend-verification" class="btn text-sm py-2 px-4 mr-2">Reenviar Email</button>
+                                <button id="back-to-login" class="btn btn-secondary text-sm py-2 px-4">Voltar ao Login</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Event listeners
+            document.getElementById('resend-verification').addEventListener('click', () => {
+                this.resendVerification(email);
+            });
+            
+            document.getElementById('back-to-login').addEventListener('click', () => {
+                this.renderLogin('login');
+            });
+        },
+
+        async resendVerification(email) {
+            try {
+                const data = await this.apiRequest('/api/sellers/resend-verification', 'POST', { email });
+                this.showToast('Email de verificação reenviado!', 'success');
+            } catch (error) {
+                console.error('Erro ao reenviar verificação:', error);
+                this.showToast('Erro ao reenviar email. Tente novamente.', 'error');
             }
         },
 
@@ -3148,8 +3531,9 @@
         async addModalDomain() {
             const presselId = document.getElementById('modal-pressel-selector').value;
             const domainInput = document.getElementById('modal-domain-input');
-            const domain = domainInput.value.trim();
-            
+            let domain = domainInput.value.trim();
+            domain = domain.replace(/^(https?:\/\/)?/, '').split('/')[0];
+           
             if (!presselId) {
                 this.showToast('Selecione uma pressel primeiro.', 'error');
                 return;
@@ -3780,7 +4164,71 @@ function generatePreviewHTML(data) {
     
     
         
-    async testIndividualPixConnection(provider, button) {
+        async validateNetlifyToken(button) {
+    const tokenInput = document.getElementById('netlify-access-token-input');
+    const token = tokenInput.value.trim();
+
+    if (!token) {
+        this.showToast('Por favor, insira o token de acesso do Netlify.', 'error');
+        this.updateNetlifyStatus('Por favor, insira o token de acesso do Netlify.', 'error');
+        return;
+    }
+
+    const originalText = button.textContent;
+    button.textContent = 'Validando...';
+    button.disabled = true;
+    this.updateNetlifyStatus('Validando token do Netlify...', 'info');
+
+    try {
+        // Usa a função apiRequest, que já envia o Bearer Token no cabeçalho Authorization
+        const data = await this.apiRequest('/api/netlify/validate-token', 'POST', {
+            access_token: token
+            // REMOVIDO: Não precisa mais enviar 'X-User-ID': App.state.user.id
+        });
+
+        // A função apiRequest já trata erros de rede e status não-OK
+        if (data.success) {
+            this.showToast(data.message, 'success');
+            this.updateNetlifyStatus(`✅ ${data.message}`, 'success');
+
+            // Atualiza o estado local (garantindo que settings exista)
+            App.state.data.settings = App.state.data.settings || {};
+            App.state.data.settings.netlify_access_token = token;
+
+            if (data.user) {
+                this.updateNetlifyStatus(
+                    `✅ ${data.message}\n👤 Logado como: ${data.user.full_name || data.user.email}`,
+                    'success'
+                );
+            }
+        } else {
+            // Embora apiRequest lance erro, podemos manter isso para clareza
+            throw new Error(data.message || 'Erro na validação retornado pela API.');
+        }
+    } catch (error) { // O erro agora vem do apiRequest ou da lógica acima
+        const errorMessage = 'Erro ao validar token: ' + error.message;
+        this.showToast(errorMessage, 'error');
+        this.updateNetlifyStatus(`❌ ${errorMessage}`, 'error');
+    } finally {
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}, // Não esqueça a vírgula se houver mais funções depois
+
+        
+        
+        updateNetlifyStatus(message, type) {
+            const statusDiv = document.getElementById('netlify-status');
+            const statusText = document.getElementById('netlify-status-text');
+            
+            if (statusDiv && statusText) {
+                statusDiv.classList.remove('hidden');
+                statusText.textContent = message;
+                statusDiv.className = `p-3 rounded-md ${type === 'success' ? 'bg-green-800' : 'bg-red-800'}`;
+            }
+        },
+
+        async testIndividualPixConnection(provider, button) {
             const originalText = button.innerHTML;
             button.innerHTML = 'Testando...';
             button.disabled = true;
@@ -3914,7 +4362,27 @@ function generatePreviewHTML(data) {
     };
 
     // Inicializa a aplicação principal do HotTrack
-    document.addEventListener('DOMContentLoaded', () => App.init());
+    document.addEventListener('DOMContentLoaded', () => {
+        App.init();
+        
+        // Verificar parâmetros de callback do Google OAuth
+        const urlParams = new URLSearchParams(window.location.search);
+        const success = urlParams.get('success');
+        const error = urlParams.get('error');
+        const message = urlParams.get('message');
+        
+        if (success === 'google_login') {
+            App.showToast('Login com Google realizado com sucesso!', 'success');
+            // Limpar parâmetros da URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+            // Recarregar para atualizar o estado da aplicação
+            window.location.reload();
+        } else if (error === 'google_auth_error') {
+            App.showToast(`Erro na autenticação: ${decodeURIComponent(message || 'Erro desconhecido')}`, 'error');
+            // Limpar parâmetros da URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+    });
     </script>
     
     <script type="text/babel">
@@ -5246,7 +5714,26 @@ function generatePreviewHTML(data) {
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => setSelectedNode(null), []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
-        const onDrop = useCallback((event) => { event.preventDefault(); const type = event.dataTransfer.getData('application/reactflow'); if (!type) return; const position = reactFlowInstance.project({ x: event.clientX, y: event.clientY }); const newNode = { id: `${type}-${Date.now()}`, type, position, data: {}, }; setNodes((nds) => nds.concat(newNode)); }, [reactFlowInstance] );
+        const onDrop = useCallback((event) => { 
+            event.preventDefault(); 
+            const type = event.dataTransfer.getData('application/reactflow'); 
+            if (!type) return; 
+            
+            // Obter a posição relativa ao container do ReactFlow
+            const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+            const position = reactFlowInstance.project({ 
+                x: event.clientX - reactFlowBounds.left, 
+                y: event.clientY - reactFlowBounds.top 
+            }); 
+            
+            const newNode = { 
+                id: `${type}-${Date.now()}`, 
+                type, 
+                position, 
+                data: {}, 
+            }; 
+            setNodes((nds) => nds.concat(newNode)); 
+        }, [reactFlowInstance] );
         const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
         const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
         
