@@ -5971,7 +5971,58 @@ function generatePreviewHTML(data) {
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
         const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
-        const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
+        const addNode = (nodeType, position = null) => {
+            if (!reactFlowInstance) return;
+            
+            // If position is not provided, center it in the viewport
+            let nodePosition = position;
+            if (!nodePosition) {
+                const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+                const viewportCenter = reactFlowInstance.screenToFlowPosition({
+                    x: reactFlowBounds.width / 2,
+                    y: reactFlowBounds.height / 2
+                });
+                nodePosition = viewportCenter;
+            }
+            
+            const newNode = { 
+                id: `${nodeType}-${Date.now()}`, 
+                type: nodeType, 
+                position: nodePosition, 
+                data: { 
+                    label: nodeType === 'message' ? 'Nova mensagem' : 
+                           nodeType === 'image' ? 'Nova imagem' :
+                           nodeType === 'video' ? 'Novo vídeo' :
+                           nodeType === 'audio' ? 'Novo áudio' :
+                           nodeType === 'delay' ? 'Atraso' :
+                           nodeType === 'typing_action' ? 'Digitando...' :
+                           nodeType === 'action_pix' ? 'Gerar PIX' :
+                           nodeType === 'action_check_pix' ? 'Consultar PIX' :
+                           nodeType === 'forward_flow' ? 'Encaminhar Fluxo' : 'Novo nó'
+                },
+            };
+            
+            setNodes((nds) => nds.concat(newNode));
+            
+            // Auto-scroll to the new node with a small delay
+            
+        };
+        
+        const onDragStart = (event, nodeType) => {
+            event.dataTransfer.setData('application/reactflow', nodeType);
+            // Prevent the click handler from firing after drag
+            event.currentTarget._dragging = true;
+            setTimeout(() => { event.currentTarget._dragging = false; }, 0);
+        };
+
+        const handleNodeButtonClick = (e, nodeType) => {
+            // Only proceed if this is a left click and not part of a drag operation
+            if (e.button === 0 && !e.currentTarget._dragging) {
+                e.preventDefault();
+                e.stopPropagation();
+                addNode(nodeType);
+            }
+        };
         
         const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
         const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); };
@@ -5983,16 +6034,72 @@ function generatePreviewHTML(data) {
                 <div className="flow-editor-container">
                     <div className="flow-sidebar">
                         <h3>Componentes</h3>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'message')} draggable>💬 Mensagem</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'image')} draggable>🖼️ Imagem</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'video')} draggable>🎬 Vídeo</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'audio')} draggable>🎵 Áudio</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'delay')} draggable>⏱️ Atraso</div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'message')}
+                            onDragStart={(e) => onDragStart(e, 'message')} 
+                            draggable>
+                            💬 Mensagem
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'image')}
+                            onDragStart={(e) => onDragStart(e, 'image')} 
+                            draggable>
+                            🖼️ Imagem
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'video')}
+                            onDragStart={(e) => onDragStart(e, 'video')} 
+                            draggable>
+                            🎬 Vídeo
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'audio')}
+                            onDragStart={(e) => onDragStart(e, 'audio')} 
+                            draggable>
+                            🎵 Áudio
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'delay')}
+                            onDragStart={(e) => onDragStart(e, 'delay')} 
+                            draggable>
+                            ⏱️ Atraso
+                        </div>
                         <h3>Ações</h3>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'typing_action')} draggable>✍️ Ação de Digitando</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_pix')} draggable>💳 Gerar PIX</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_check_pix')} draggable>🔍 Consultar PIX</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'forward_flow')} draggable>↪️ Encaminhar Fluxo</div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'typing_action')}
+                            onDragStart={(e) => onDragStart(e, 'typing_action')} 
+                            draggable>
+                            ✍️ Ação de Digitando
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onClick={(e) => handleNodeButtonClick(e, 'action_pix')}
+                            onDragStart={(e) => onDragStart(e, 'action_pix')} 
+                            draggable>
+                            💳 Gerar PIX
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onDragStart={(e) => onDragStart(e, 'action_check_pix')} 
+                            onClick={(e) => handleNodeButtonClick(e, 'action_check_pix')}
+                            onMouseDown={(e) => e.detail = 0}
+                            draggable>
+                            🔍 Consultar PIX
+                        </div>
+                        <div 
+                            className="node-button" 
+                            onDragStart={(e) => onDragStart(e, 'forward_flow')} 
+                            onClick={(e) => handleNodeButtonClick(e, 'forward_flow')}
+                            onMouseDown={(e) => e.detail = 0}
+                            draggable>
+                            ↪️ Encaminhar Fluxo
+                        </div>
                     </div>
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
