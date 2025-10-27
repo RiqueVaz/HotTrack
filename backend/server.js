@@ -555,7 +555,7 @@ async function generatePresselHTML(pressel, pixelIds) {
         // Exemplo de ajuste para desenvolvimento local (assumindo HTTP)
         const isProduction = process.env.NODE_ENV === 'production';
         const apiBaseUrl = isProduction
-            ? (process.env.HOTTRACK_API_URL || 'https://hottrack-production.up.railway.app')
+            ? (process.env.HOTTRACK_API_URL)
             : 'http://localhost:3001'; // Ajuste aqui se usar HTTPS localmente
 
         // 4. Lógica de detecção de dispositivo
@@ -1202,15 +1202,20 @@ function authenticateAdmin(req, res, next) {
 // Endpoint para validar chave de admin
 // Endpoint para fornecer configurações ao frontend
 app.get('/api/config', (req, res) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    // Em produção, use a variável de ambiente do Vercel/Render. Caso contrário, localhost.
-    // O cabeçalho 'host' da requisição é uma forma confiável de determinar a URL base.
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    const host = req.headers['host'];
-    const apiBaseUrl = isProduction ? `${protocol}://${host}` : 'http://localhost:3001';
+    // Usa variável de ambiente se definida, senão detecta automaticamente
+    const apiBaseUrl = process.env.API_BASE_URL || (() => {
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction) {
+            const protocol = req.headers['x-forwarded-proto'] || 'https';
+            const host = req.headers['host'];
+            return `${protocol}://${host}`;
+        }
+        return `http://localhost:${PORT}`;
+    })();
 
     res.json({
-        apiBaseUrl: apiBaseUrl
+        apiBaseUrl: apiBaseUrl,
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
@@ -2936,7 +2941,7 @@ app.get('/pressel-domains/:presselId', async (req, res) => {
     </div>
 
     <script>
-        const API_BASE_URL = '${process.env.API_BASE_URL || 'https://hottrack-production.up.railway.app'}';
+        const API_BASE_URL = '${process.env.API_BASE_URL}';
         const PRESSEL_ID = ${presselId};
 
         // Função para mostrar alertas
@@ -5519,13 +5524,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Config endpoint para frontend
-app.get('/api/config', (req, res) => {
-    res.status(200).json({
-        apiUrl: process.env.HOTTRACK_API_URL || `http://localhost:${PORT}`,
-        environment: process.env.NODE_ENV || 'development'
-    });
-});
 
 // ==========================================================
 // ROTAS CHECKOUTS HOSPEDADOS E PÁGINAS DE OBRIGADO
