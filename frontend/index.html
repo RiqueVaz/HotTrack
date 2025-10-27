@@ -5664,7 +5664,26 @@ function generatePreviewHTML(data) {
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => setSelectedNode(null), []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
-        const onDrop = useCallback((event) => { event.preventDefault(); const type = event.dataTransfer.getData('application/reactflow'); if (!type) return; const position = reactFlowInstance.project({ x: event.clientX, y: event.clientY }); const newNode = { id: `${type}-${Date.now()}`, type, position, data: {}, }; setNodes((nds) => nds.concat(newNode)); }, [reactFlowInstance] );
+        const onDrop = useCallback((event) => { 
+            event.preventDefault(); 
+            const type = event.dataTransfer.getData('application/reactflow'); 
+            if (!type) return; 
+            
+            // Obter a posição relativa ao container do ReactFlow
+            const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+            const position = reactFlowInstance.project({ 
+                x: event.clientX - reactFlowBounds.left, 
+                y: event.clientY - reactFlowBounds.top 
+            }); 
+            
+            const newNode = { 
+                id: `${type}-${Date.now()}`, 
+                type, 
+                position, 
+                data: {}, 
+            }; 
+            setNodes((nds) => nds.concat(newNode)); 
+        }, [reactFlowInstance] );
         const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
         const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
         
