@@ -743,9 +743,7 @@
 
         async init() {
             // Determina a URL base do backend para buscar a configuração
-            const backendHost = (window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1'))
-                ? 'http://localhost:3001'
-                : 'https://hottrack-production.up.railway.app'; // URL do backend em produção
+            const backendHost = window.location.origin; // Usa a mesma origem do frontend
 
             try {
                 // Busca a configuração do backend
