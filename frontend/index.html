@@ -273,6 +273,105 @@
             min-height: 0;
         }
         
+        /* Fullscreen flow editor styles */
+        .flow-editor-page {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-primary);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .flow-header {
+            padding: 1rem 2rem;
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        
+        .flow-header h3 {
+            margin: 0;
+            color: var(--text-primary);
+        }
+        
+        .flow-header .btn {
+            margin-left: 0.5rem;
+        }
+        
+        .flow-editor-container {
+            display: flex;
+            flex: 1;
+            height: calc(100% - 60px);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .flow-sidebar {
+            width: 280px;
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .flow-sidebar h3 {
+            color: var(--text-primary);
+            margin-top: 0;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 1.1rem;
+        }
+        
+        .node-button {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+            cursor: grab;
+            margin-bottom: 0.75rem;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+            background-color: var(--bg-card);
+        }
+        
+        .node-button:hover {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            background-color: rgba(56, 189, 248, 0.05);
+        }
+        
+        .reactflow-wrapper {
+            flex: 1;
+            background-color: var(--bg-primary);
+            position: relative;
+        }
+        
+        .editor-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            z-index: 10;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        
         /* Herda os estilos de formulário, mas com foco azul - ESTILOS APLICADOS */
         .hotbot-scope .form-input, 
         .hotbot-scope .form-select, 
@@ -5693,19 +5792,86 @@ function generatePreviewHTML(data) {
         const [availableFlows, setAvailableFlows] = useState([]);
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [isInitialized, setIsInitialized] = useState(false);
         
+        // Function to center the view on all nodes
+        const centerViewOnNodes = useCallback(() => {
+            if (reactFlowInstance && nodes.length > 0) {
+                // Calculate the bounding box of all nodes
+                const nodePositions = nodes.map(node => ({
+                    x: node.position.x,
+                    y: node.position.y,
+                    width: 200, // Default node width
+                    height: 50   // Default node height
+                }));
+                
+                // Find the boundaries
+                const minX = Math.min(...nodePositions.map(n => n.x));
+                const maxX = Math.max(...nodePositions.map(n => n.x + (n.width || 200)));
+                const minY = Math.min(...nodePositions.map(n => n.y));
+                const maxY = Math.max(...nodePositions.map(n => n.y + (n.height || 50)));
+                
+                // Calculate center and zoom
+                const centerX = (minX + maxX) / 2;
+                const centerY = (minY + maxY) / 2;
+                const width = maxX - minX;
+                const height = maxY - minY;
+                
+                // Get the viewport dimensions
+                const viewport = reactFlowWrapper.current.getBoundingClientRect();
+                const viewportRatio = viewport.width / viewport.height;
+                const nodesRatio = width / height;
+                
+                // Calculate zoom level to fit all nodes
+                let zoom = 1;
+                if (nodesRatio > viewportRatio) {
+                    zoom = viewport.width / (width + 100); // Add some padding
+                } else {
+                    zoom = viewport.height / (height + 100); // Add some padding
+                }
+                
+                // Limit zoom to reasonable values
+                zoom = Math.min(Math.max(0.3, zoom), 1.5);
+                
+                // Set the view
+                reactFlowInstance.setView({
+                    x: viewport.width / 2 - centerX * zoom,
+                    y: viewport.height / 2 - centerY * zoom,
+                    zoom: zoom
+                });
+            }
+        }, [reactFlowInstance, nodes]);
+        
+        // Initialize flow and center view
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 setNodes(flowContent.nodes || initialNodes);
                 setEdges(flowContent.edges || []);
+                
+                // Mark as not initialized to trigger centering after first render
+                setIsInitialized(false);
             }
+            
             if(flow?.bot_id) {
                 api.get('/api/flows')
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
             }
         }, [flow]);
+        
+        // Center view after first render and when nodes are loaded
+        useEffect(() => {
+            if (!isInitialized && nodes.length > 0 && reactFlowInstance) {
+                // Small delay to ensure the DOM is ready
+                const timer = setTimeout(() => {
+                    centerViewOnNodes();
+                    setIsInitialized(true);
+                }, 100);
+                
+                return () => clearTimeout(timer);
+            }
+        }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
         const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
         const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true }, eds)), [setEdges]);
