@@ -323,6 +323,30 @@
             overflow-y: auto;
         }
         
+        .flow-sidebar {
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        
+        /* Webkit browsers (Chrome, Safari, newer Edge) */
+        .flow-sidebar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-thumb {
+            background-color: var(--accent-primary);
+            border-radius: 3px;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-thumb:hover {
+            background-color: var(--accent-secondary);
+        }
+        
         .flow-sidebar h3 {
             color: var(--text-primary);
             margin-top: 0;
@@ -351,6 +375,30 @@
             border-color: var(--accent-primary);
             color: var(--accent-primary);
             background-color: rgba(56, 189, 248, 0.05);
+        }
+        
+        .reactflow-wrapper {
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        
+        /* Webkit browsers (Chrome, Safari, newer Edge) */
+        .reactflow-wrapper::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-thumb {
+            background-color: var(--accent-primary);
+            border-radius: 3px;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-thumb:hover {
+            background-color: var(--accent-secondary);
         }
         
         .reactflow-wrapper {
