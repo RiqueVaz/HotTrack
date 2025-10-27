@@ -673,7 +673,29 @@
         .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
         .hotbot-scope .react-flow__node.selected { border: 2px solid var(--accent-primary); box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
         
-        .hotbot-scope .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .hotbot-scope .node-header { 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between;
+            gap: 0.75rem; 
+            font-weight: 600; 
+            padding: 0.75rem 1rem; 
+            border-bottom: 1px solid var(--border-color); 
+            color: var(--text-primary);
+            position: relative;
+        }
+        .hotbot-scope .node-actions {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            gap: 4px;
+            background: white;
+            border-radius: 4px;
+            padding: 2px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
         .hotbot-scope .node-content { padding: 1rem; font-size: 0.9rem; }
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
         .hotbot-scope .react-flow__handle:hover { border-color: var(--accent-primary); }
@@ -5708,7 +5730,7 @@ function generatePreviewHTML(data) {
     
     const initialNodes = [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }];
     
-    const CustomNode = ({ id, type, data, isConnectable }) => {
+    const CustomNode = ({ id, type, data, isConnectable, selected }) => {
         const nodeInfo = {
             trigger: { icon: '🚀', name: 'Gatilho Inicial', content: 'Início do fluxo com click_id.' },
             message: { icon: '💬', name: 'Enviar Mensagem', content: data.text ? `"${data.text.substring(0, 50)}..."` : 'Configure o texto.' },
@@ -5726,7 +5748,68 @@ function generatePreviewHTML(data) {
         return (
             <>
                 {type !== 'trigger' && <Handle type="target" position={Position.Top} isConnectable={isConnectable} />}
-                <div className={`node-header react-flow__node-${type}`}>{info.icon} {info.name}</div>
+                <div className={`node-header react-flow__node-${type}`}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                        {info.icon} {info.name}
+                    </div>
+                    {selected && (
+                        <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                    window.dispatchEvent(event);
+                                }}
+                                className="node-action-btn"
+                                title="Copiar nó"
+                                style={{
+                                    background: 'white',
+                                    border: '1px solid #ddd',
+                                    borderRadius: '4px',
+                                    width: '20px',
+                                    height: '20px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: 'pointer',
+                                    fontSize: '12px',
+                                    padding: 0
+                                }}
+                            >
+                                ⎘
+                            </button>
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (id !== 'start') {
+                                        const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
+                                        window.dispatchEvent(event);
+                                    }
+                                }}
+                                className="node-action-btn"
+                                title="Excluir nó"
+                                disabled={id === 'start'}
+                                style={{
+                                    background: 'white',
+                                    border: '1px solid #ff6b6b',
+                                    borderRadius: '4px',
+                                    color: id === 'start' ? '#ccc' : '#ff6b6b',
+                                    width: '20px',
+                                    height: '20px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: id === 'start' ? 'not-allowed' : 'pointer',
+                                    fontSize: '12px',
+                                    padding: 0,
+                                    opacity: id === 'start' ? 0.5 : 1
+                                }}
+                            >
+                                ×
+                            </button>
+                        </div>
+                    )}
+                </div>
                 <div className="node-content">{info.content}</div>
                 
                 {type === 'trigger' && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
@@ -5837,6 +5920,62 @@ function generatePreviewHTML(data) {
         const [edges, setEdges, onEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
+        
+        // Handle node copy
+        useEffect(() => {
+            const handleNodeCopy = (e) => {
+                const { nodeId } = e.detail;
+                setNodes((nds) => {
+                    const nodeToCopy = nds.find(n => n.id === nodeId);
+                    if (!nodeToCopy) return nds;
+                    
+                    const newNode = {
+                        ...nodeToCopy,
+                        id: `node-${Date.now()}`,
+                        position: {
+                            x: nodeToCopy.position.x + 30,
+                            y: nodeToCopy.position.y + 30
+                        },
+                        selected: false,
+                        data: { ...nodeToCopy.data }
+                    };
+                    
+                    return [...nds, newNode];
+                });
+            };
+
+            // Handle node delete
+            const handleNodeDelete = (e) => {
+                const { nodeId } = e.detail;
+                if (nodeId === 'start') {
+                    alert('Não é possível excluir o nó de início do fluxo.');
+                    return;
+                }
+                
+                setNodes((nds) => nds.filter(node => node.id !== nodeId));
+                setEdges((eds) => {
+                    // Remove edges connected to the deleted node
+                    const edgesToRemove = new Set(
+                        eds
+                            .filter(edge => edge.source === nodeId || edge.target === nodeId)
+                            .map(edge => edge.id)
+                    );
+                    return eds.filter(edge => !edgesToRemove.has(edge.id));
+                });
+                
+                if (selectedNode?.id === nodeId) {
+                    setSelectedNode(null);
+                }
+            };
+
+            window.addEventListener('node-copy', handleNodeCopy);
+            window.addEventListener('node-delete', handleNodeDelete);
+
+            return () => {
+                window.removeEventListener('node-copy', handleNodeCopy);
+                window.removeEventListener('node-delete', handleNodeDelete);
+            };
+        }, [setNodes, setEdges, selectedNode]);
         const [availableFlows, setAvailableFlows] = useState([]);
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
