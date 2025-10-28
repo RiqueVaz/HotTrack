@@ -220,6 +220,102 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     }
 }
 
+async function processActions(actions, chatId, botId, botToken, sellerId, variables, edges) {
+    for (const action of actions) {
+        switch (action.type) {
+            case 'action_pix':
+                try {
+                    const valueInCents = action.data.valueInCents;
+                    if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
+
+                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
+
+                    const click_id_from_vars = variables.click_id;
+                    if (!click_id_from_vars) {
+                        const [recentClick] = await sql`
+                            SELECT click_id FROM telegram_chats 
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                            ORDER BY created_at DESC LIMIT 1
+                        `;
+                        if (recentClick?.click_id) {
+                            click_id_from_vars = recentClick.click_id;
+                            console.log(`[WORKER] Click ID recuperado do banco: ${click_id_from_vars}`);
+                        }
+                    }
+                    
+                    if (!click_id_from_vars) {
+                        console.error(`[WORKER] Click ID não encontrado para chat ${chatId}, bot ${botId}. Variáveis:`, variables);
+                        throw new Error("Click ID não encontrado nas variáveis do fluxo nem no histórico do chat.");
+                    }
+
+                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
+
+                    const ip_address = click.ip_address;
+
+                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                    const pixResult = await generatePixForProvider('brpix', seller, valueInCents, hostPlaceholder, seller.api_key, ip_address);
+
+                    variables.last_transaction_id = pixResult.transaction_id;
+                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
+                    const messageText = await replaceVariables(action.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                    const buttonText = await replaceVariables(action.data.pixButtonText || "📋 Copiar Código PIX", variables);
+                    const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                        chat_id: chatId,
+                        text: textToSend,
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                            ]
+                        }
+                    });
+
+                     if (sentMessage.ok) {
+                         // await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                     }
+
+                } catch (error) {
+                    console.error(`[Flow Engine] Erro no action_pix para chat ${chatId}:`, error);
+                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                    break;
+                }
+                break;
+
+            case 'action_check_pix':
+                try {
+                    const transactionId = variables.last_transaction_id;
+                    if (!transactionId) throw new Error("Nenhum ID de transação PIX encontrado para consultar.");
+                    
+                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    
+                    if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+
+                    if (transaction.status === 'paid') {
+                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                    } else {
+                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                    }
+                } catch (error) {
+                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
+                }
+                break;
+
+            // Add other action types here if needed
+
+            default:
+                console.warn(`[Flow Engine] Tipo de ação desconhecido: ${action.type}`);
+                break;
+        }
+    }
+}
+
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     
@@ -338,6 +434,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
+
+                // Execute nested actions if any
+                if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+                    await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges);
+                }
                 
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -445,7 +546,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+                        const pixResult = await generatePixForProvider('brpix', seller, valueInCents, hostPlaceholder, seller.api_key, ip_address); // Passa click.id
     
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
