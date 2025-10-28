@@ -66,6 +66,77 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     }
 }
 
+async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
+    const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+    if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
+
+    const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
+    if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
+
+    const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
+
+    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    if (caption) {
+        formData.append('caption', caption);
+    }
+
+    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
+
+    const method = methodMap[fileType];
+    const field = fieldMap[fileType];
+    const fileName = fileNameMap[fileType];
+    const timeout = fileType === 'video' ? 60000 : 30000;
+
+    if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+    formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
+
+    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
+}
+
+async function handleMediaNode(node, botToken, chatId, caption) {
+    const type = node.type;
+    const nodeData = node.data || {};
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
+    const fileIdentifier = nodeData[urlMap[type]];
+
+    if (!fileIdentifier) {
+        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        return null;
+    }
+
+    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
+    let response;
+    const timeout = type === 'video' ? 60000 : 30000;
+
+    if (isLibraryFile) {
+        if (type === 'audio') {
+            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+            if (duration > 0) {
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+            }
+        }
+        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+    } else {
+        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+        
+        const method = methodMap[type];
+        const field = fieldMap[type];
+        
+        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+    }
+    
+    return response;
+}
+
 async function getSyncPayAuthToken(seller) {
     const cachedToken = syncPayTokenCache.get(seller.id);
     if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
