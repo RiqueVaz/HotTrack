@@ -3827,6 +3827,7 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 }
 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
+    console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     for (const action of actions) {
         // CORREÇÃO: Usar 'action.data' e não 'currentNode.data'
         const actionData = action.data || {}; // Garante que actionData exista
@@ -3876,6 +3877,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             
             case 'action_pix':
                 try {
+                    console.log(`${logPrefix} Executando action_pix para chat ${chatId}`);
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
@@ -3919,6 +3921,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     if (sentMessage.ok) {
                         await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                        console.log(`${logPrefix} PIX gerado com sucesso para chat ${chatId}, transação ${pixResult.transaction_id}`);
                     }
     
                 } catch (error) {
@@ -4091,9 +4094,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
-
+                console.log(currentNode.data)
+                console.log(currentNode.data.actions)
                 // Execute nested actions if any
                 if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+                    console.log(`${logPrefix} [Flow Engine] Executando ${currentNode.data.actions.length} ações aninhadas no nó message`);
                     await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges);
                     // Persist updated variables after processing actions
                     await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
