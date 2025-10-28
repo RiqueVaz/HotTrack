@@ -4091,9 +4091,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
-                
+
+                // Execute nested actions if any
                 if (currentNode.data.actions && currentNode.data.actions.length > 0) {
                     await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges);
+                    // Persist updated variables after processing actions
+                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
 
                 if (currentNode.data.waitForReply) {
