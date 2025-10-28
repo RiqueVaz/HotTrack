@@ -693,7 +693,7 @@
         }
         
         .hotbot-scope .node-editor-modal-header {
-            padding: 1.5rem;
+            padding: 0.7rem;
             border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
@@ -735,7 +735,7 @@
         }
         
         .hotbot-scope .node-editor-modal-footer {
-            padding: 1.5rem;
+            padding: 0.5rem;
             border-top: 1px solid var(--border-color);
             display: flex;
             gap: 0.75rem;
@@ -865,6 +865,45 @@
         
         .hotbot-scope .node-selector-button-icon {
             font-size: 1.5rem;
+        }
+        
+        .hotbot-scope .action-drag-handle {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            cursor: grab;
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            user-select: none;
+            z-index: 1;
+            padding: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .hotbot-scope .action-drag-handle:active {
+            cursor: grabbing;
+        }
+        
+        .hotbot-scope .action-item {
+            position: relative;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            background-color: rgba(0,0,0,0.2);
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+        }
+        
+        .hotbot-scope .action-item.dragging {
+            opacity: 0.5;
+            transform: scale(0.95);
+        }
+        
+        .hotbot-scope .action-item.drag-over {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
         }
         
         /* Estilos dos Nós do ReactFlow */
@@ -6081,6 +6120,11 @@ function generatePreviewHTML(data) {
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
         const [nodeData, setNodeData] = useState(selectedNode.data || {});
         const textAreaRef = useRef(null);
+        const modalContentRef = useRef(null);
+        const scrollIntervalRef = useRef(null);
+        const autoScrollHandlerRef = useRef(null);
+        const [draggedIndex, setDraggedIndex] = useState(null);
+        const [dragOverIndex, setDragOverIndex] = useState(null);
         
         useEffect(() => { 
             const data = selectedNode.data || {};
@@ -6090,6 +6134,21 @@ function generatePreviewHTML(data) {
             }
             setNodeData(data);
         }, [selectedNode]);
+        
+        // Cria lista unificada de ações (ação principal + ações aninhadas)
+        const getAllActions = () => {
+            if (selectedNode.type === 'trigger') return [];
+            const actions = [...(nodeData.actions || [])];
+            // A ação principal é sempre a primeira, baseada no tipo do node
+            const mainAction = {
+                type: selectedNode.type,
+                data: { ...nodeData },
+                isMain: true
+            };
+            return [mainAction, ...actions];
+        };
+        
+        const actions = getAllActions();
 
         const handleChange = (e) => {
             const { name, value, type, checked } = e.target;
@@ -6105,11 +6164,11 @@ function generatePreviewHTML(data) {
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
         
-        // Funções para gerenciar ações aninhadas
-        const addNestedAction = (actionType) => {
+        // Funções para gerenciar ações (unificadas)
+        const addAction = (actionType) => {
             const actions = nodeData.actions || [];
             if (actions.length >= 5) {
-                alert('Você pode adicionar no máximo 5 ações aninhadas.');
+                alert('Você pode adicionar no máximo 5 ações.');
                 return;
             }
             const newAction = { type: actionType, data: {} };
@@ -6118,27 +6177,200 @@ function generatePreviewHTML(data) {
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
         
-        const removeNestedAction = (index) => {
-            const actions = (nodeData.actions || []).filter((_, i) => i !== index);
+        const removeAction = (index) => {
+            // Index 0 é sempre a ação principal, não pode ser removida
+            if (index === 0) return;
+            const actions = (nodeData.actions || []).filter((_, i) => i !== index - 1);
             const newData = { ...nodeData, actions };
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
         
-        const updateNestedAction = (index, field, value) => {
+        const updateAction = (index, field, value) => {
+            if (index === 0) {
+                // Atualizar ação principal
+                const newData = { ...nodeData, [field]: value };
+                setNodeData(newData);
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            } else {
+                // Atualizar ação aninhada
+                const actions = [...(nodeData.actions || [])];
+                const actionIndex = index - 1;
+                if (!actions[actionIndex]) return;
+                actions[actionIndex] = {
+                    ...actions[actionIndex],
+                    data: { ...actions[actionIndex].data, [field]: value }
+                };
+                const newData = { ...nodeData, actions };
+                setNodeData(newData);
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            }
+        };
+        
+        // Função de auto-scroll durante drag
+        const handleAutoScroll = useCallback((e) => {
+            if (!modalContentRef.current || draggedIndex === null) {
+                if (scrollIntervalRef.current) {
+                    clearInterval(scrollIntervalRef.current);
+                    scrollIntervalRef.current = null;
+                }
+                return;
+            }
+            
+            const container = modalContentRef.current;
+            if (!container) return;
+            
+            const rect = container.getBoundingClientRect();
+            const mouseY = e.clientY;
+            const scrollThreshold = 80; // Distância das bordas em pixels para ativar scroll
+            const scrollSpeed = 15; // Velocidade do scroll
+            
+            const distanceFromTop = mouseY - rect.top;
+            const distanceFromBottom = rect.bottom - mouseY;
+            
+            // Limpar intervalo anterior se existir
+            if (scrollIntervalRef.current) {
+                clearInterval(scrollIntervalRef.current);
+                scrollIntervalRef.current = null;
+            }
+            
+            // Scroll para cima
+            if (distanceFromTop < scrollThreshold && container.scrollTop > 0) {
+                scrollIntervalRef.current = setInterval(() => {
+                    if (!modalContentRef.current || draggedIndex === null) {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                        return;
+                    }
+                    const cont = modalContentRef.current;
+                    if (cont && cont.scrollTop > 0) {
+                        cont.scrollTop -= scrollSpeed;
+                    } else {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                    }
+                }, 16); // ~60fps
+            }
+            // Scroll para baixo
+            else if (distanceFromBottom < scrollThreshold && 
+                     container.scrollTop < container.scrollHeight - container.clientHeight) {
+                scrollIntervalRef.current = setInterval(() => {
+                    if (!modalContentRef.current || draggedIndex === null) {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                        return;
+                    }
+                    const cont = modalContentRef.current;
+                    if (cont && cont.scrollTop < cont.scrollHeight - cont.clientHeight) {
+                        cont.scrollTop += scrollSpeed;
+                    } else {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                    }
+                }, 16); // ~60fps
+            }
+        }, [draggedIndex]);
+        
+        // Atualizar ref quando função mudar
+        useEffect(() => {
+            autoScrollHandlerRef.current = handleAutoScroll;
+        }, [handleAutoScroll]);
+        
+        // Funções de drag and drop
+        const handleDragStart = (e, index) => {
+            // Ação principal (index 0) não pode ser arrastada
+            if (index === 0) {
+                e.preventDefault();
+                return;
+            }
+            setDraggedIndex(index);
+            e.dataTransfer.effectAllowed = 'move';
+            
+            // Adicionar listener para auto-scroll imediatamente
+            const handler = (ev) => handleAutoScroll(ev);
+            document.addEventListener('dragover', handler, false);
+            autoScrollHandlerRef.current = handler;
+        };
+        
+        const handleDragOver = (e, index) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (index === 0) return; // Não pode arrastar sobre a ação principal
+            if (draggedIndex !== null && draggedIndex !== index) {
+                setDragOverIndex(index);
+            }
+            // Auto-scroll durante drag over
+            handleAutoScroll(e);
+        };
+        
+        const handleDragLeave = () => {
+            setDragOverIndex(null);
+        };
+        
+        const handleDrop = (e, dropIndex) => {
+            e.preventDefault();
+            if (draggedIndex === null || draggedIndex === 0 || dropIndex === 0) return;
+            if (draggedIndex === dropIndex) {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+                return;
+            }
+            
             const actions = [...(nodeData.actions || [])];
-            if (!actions[index]) return;
-            actions[index] = {
-                ...actions[index],
-                data: { ...actions[index].data, [field]: value }
-            };
+            const draggedActionIndex = draggedIndex - 1; // -1 porque index 0 é ação principal
+            const dropActionIndex = dropIndex - 1;
+            
+            const draggedAction = actions[draggedActionIndex];
+            actions.splice(draggedActionIndex, 1);
+            actions.splice(dropActionIndex, 0, draggedAction);
+            
             const newData = { ...nodeData, actions };
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            
+            setDraggedIndex(null);
+            setDragOverIndex(null);
         };
         
-        const renderNestedActionEditor = (action, index) => {
-            const actionData = action.data || {};
+        const handleDragEnd = () => {
+            // Limpar auto-scroll
+            if (scrollIntervalRef.current) {
+                clearInterval(scrollIntervalRef.current);
+                scrollIntervalRef.current = null;
+            }
+            // Remover listener de auto-scroll
+            if (autoScrollHandlerRef.current) {
+                document.removeEventListener('dragover', autoScrollHandlerRef.current, false);
+                autoScrollHandlerRef.current = null;
+            }
+            
+            setDraggedIndex(null);
+            setDragOverIndex(null);
+        };
+        
+        // Cleanup ao desmontar
+        useEffect(() => {
+            return () => {
+                if (scrollIntervalRef.current) {
+                    clearInterval(scrollIntervalRef.current);
+                    scrollIntervalRef.current = null;
+                }
+                if (autoScrollHandlerRef.current) {
+                    document.removeEventListener('dragover', autoScrollHandlerRef.current, false);
+                }
+            };
+        }, []);
+        
+        const renderActionEditor = (action, index) => {
+            const actionData = action.isMain ? nodeData : (action.data || {});
             const actionTypeNames = {
                 message: '💬 Mensagem',
                 image: '🖼️ Imagem',
@@ -6151,37 +6383,119 @@ function generatePreviewHTML(data) {
                 forward_flow: '↪️ Encaminhar'
             };
             
+            const isDragging = draggedIndex === index;
+            const isDragOver = dragOverIndex === index;
+            const canDrag = index !== 0; // Ação principal não pode ser arrastada
+            
             return (
-                <div key={index} style={{border: '1px solid rgba(255,255,255,0.2)', borderRadius: '0.5rem', padding: '1rem', marginBottom: '0.75rem', backgroundColor: 'rgba(0,0,0,0.2)'}}>
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem'}}>
-                        <strong style={{color: 'var(--text-primary)'}}>{actionTypeNames[action.type] || action.type}</strong>
-                        <button 
-                            type="button"
-                            className="btn btn-red btn-sm" 
-                            onClick={() => removeNestedAction(index)}
-                            style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
-                        >
-                            ✕
-                        </button>
+                <div 
+                    key={index}
+                    className={`action-item ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+                    draggable={canDrag}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onDragEnd={handleDragEnd}
+                >
+                    {canDrag && (
+                        <div className="action-drag-handle" title="Arrastar para reordenar">
+                            ☰
+                        </div>
+                    )}
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', paddingLeft: canDrag ? '2rem' : '0'}}>
+                        <strong style={{color: 'var(--text-primary)'}}>
+                            {actionTypeNames[action.type] || action.type}
+                            {action.isMain && <span style={{fontSize: '0.7rem', marginLeft: '0.5rem', opacity: 0.7}}>(Principal)</span>}
+                        </strong>
+                        {!action.isMain && (
+                            <button 
+                                type="button"
+                                className="btn btn-red btn-sm" 
+                                onClick={() => removeAction(index)}
+                                style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
+                            >
+                                ✕
+                            </button>
+                        )}
                     </div>
                     
                     {action.type === 'message' && (
                         <>
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem'}}>Texto</label>
-                                <textarea 
-                                    className="form-textarea" 
-                                    rows="3" 
-                                    value={actionData.text || ''} 
-                                    onChange={e => updateNestedAction(index, 'text', e.target.value)} 
-                                />
+                                {action.isMain ? (
+                                    <>
+                                        <textarea 
+                                            ref={action.isMain ? textAreaRef : null}
+                                            className="form-textarea" 
+                                            rows="3" 
+                                            value={actionData.text || ''} 
+                                            onChange={e => updateAction(index, 'text', e.target.value)} 
+                                        />
+                                        <div style={{marginTop: '0.5rem'}}>
+                                            <label style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Inserir variável:</label>
+                                            <div style={{marginTop: '0.5rem', marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'primeiro_nome';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Nome</button>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'nome_completo';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Nome Completo</button>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'cidade';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Cidade</button>
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <textarea 
+                                        className="form-textarea" 
+                                        rows="3" 
+                                        value={actionData.text || ''} 
+                                        onChange={e => updateAction(index, 'text', e.target.value)} 
+                                    />
+                                )}
                             </div>
                             <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
                                 <input 
                                     type="text" 
                                     className="form-input" 
                                     value={actionData.buttonText || ''} 
-                                    onChange={e => updateNestedAction(index, 'buttonText', e.target.value)} 
+                                    onChange={e => updateAction(index, 'buttonText', e.target.value)} 
                                     placeholder="Texto do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
@@ -6189,11 +6503,59 @@ function generatePreviewHTML(data) {
                                     type="url" 
                                     className="form-input" 
                                     value={actionData.buttonUrl || ''} 
-                                    onChange={e => updateNestedAction(index, 'buttonUrl', e.target.value)} 
+                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)} 
                                     placeholder="URL do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
+                            {action.isMain && (
+                                <>
+                                    <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={!!actionData.addTypingAction} 
+                                                onChange={e => updateAction(index, 'addTypingAction', e.target.checked)}
+                                            /> Adicionar "Digitando" antes
+                                        </label>
+                                        {actionData.addTypingAction && (
+                                            <div className="form-group" style={{marginTop: '0.5rem'}}>
+                                                <label style={{fontSize: '0.85rem'}}>Duração do "Digitando..." (s)</label>
+                                                <input 
+                                                    type="number" 
+                                                    className="form-input" 
+                                                    value={actionData.typingDuration || 2} 
+                                                    onChange={e => updateAction(index, 'typingDuration', parseInt(e.target.value, 10))}
+                                                    style={{fontSize: '0.85rem'}}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                    <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={!!actionData.waitForReply} 
+                                                onChange={e => updateAction(index, 'waitForReply', e.target.checked)}
+                                            /> Aguardar Resposta
+                                        </label>
+                                        {actionData.waitForReply && (
+                                            <div className="form-group" style={{marginTop: '0.5rem'}}>
+                                                <label style={{fontSize: '0.85rem'}}>Tempo de espera (min)</label>
+                                                <input 
+                                                    type="number" 
+                                                    className="form-input" 
+                                                    value={actionData.replyTimeout || 5} 
+                                                    onChange={e => updateAction(index, 'replyTimeout', parseInt(e.target.value, 10))}
+                                                    style={{fontSize: '0.85rem'}}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
                         </>
                     )}
                     
@@ -6205,7 +6567,7 @@ function generatePreviewHTML(data) {
                                     type="text" 
                                     className="form-input" 
                                     value={actionData[action.type === 'image' ? 'imageUrl' : 'videoUrl'] || ''} 
-                                    onChange={e => updateNestedAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', e.target.value)}
+                                    onChange={e => updateAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
@@ -6213,7 +6575,7 @@ function generatePreviewHTML(data) {
                                 type="button"
                                 className="btn btn-secondary btn-sm" 
                                 onClick={() => openMediaLibrary(media => {
-                                    updateNestedAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', media.file_id);
+                                    updateAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', media.file_id);
                                 })}
                                 style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
                             >
@@ -6225,7 +6587,7 @@ function generatePreviewHTML(data) {
                                     className="form-textarea" 
                                     rows="2" 
                                     value={actionData.caption || ''} 
-                                    onChange={e => updateNestedAction(index, 'caption', e.target.value)}
+                                    onChange={e => updateAction(index, 'caption', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
@@ -6240,14 +6602,14 @@ function generatePreviewHTML(data) {
                                     type="text" 
                                     className="form-input" 
                                     value={actionData.audioUrl || ''} 
-                                    onChange={e => updateNestedAction(index, 'audioUrl', e.target.value)}
+                                    onChange={e => updateAction(index, 'audioUrl', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
                             <button 
                                 type="button"
                                 className="btn btn-secondary btn-sm" 
-                                onClick={() => openMediaLibrary(media => updateNestedAction(index, 'audioUrl', media.file_id))}
+                                onClick={() => openMediaLibrary(media => updateAction(index, 'audioUrl', media.file_id))}
                                 style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
                             >
                                 Selecionar da Biblioteca
@@ -6258,7 +6620,7 @@ function generatePreviewHTML(data) {
                                     type="number" 
                                     className="form-input" 
                                     value={actionData.durationInSeconds || 0} 
-                                    onChange={e => updateNestedAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                    onChange={e => updateAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
@@ -6272,7 +6634,7 @@ function generatePreviewHTML(data) {
                                 type="number" 
                                 className="form-input" 
                                 value={actionData.delayInSeconds || 1} 
-                                onChange={e => updateNestedAction(index, 'delayInSeconds', parseInt(e.target.value, 10))}
+                                onChange={e => updateAction(index, 'delayInSeconds', parseInt(e.target.value, 10))}
                                 style={{fontSize: '0.85rem'}}
                             />
                         </div>
@@ -6285,7 +6647,7 @@ function generatePreviewHTML(data) {
                                 type="number" 
                                 className="form-input" 
                                 value={actionData.durationInSeconds || 1} 
-                                onChange={e => updateNestedAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                onChange={e => updateAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
                                 style={{fontSize: '0.85rem'}}
                             />
                         </div>
@@ -6299,7 +6661,7 @@ function generatePreviewHTML(data) {
                                     type="number" 
                                     className="form-input" 
                                     value={actionData.valueInCents || 0} 
-                                    onChange={e => updateNestedAction(index, 'valueInCents', parseInt(e.target.value, 10))}
+                                    onChange={e => updateAction(index, 'valueInCents', parseInt(e.target.value, 10))}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
@@ -6309,7 +6671,7 @@ function generatePreviewHTML(data) {
                                     className="form-textarea" 
                                     rows="2" 
                                     value={actionData.pixMessageText || ''} 
-                                    onChange={e => updateNestedAction(index, 'pixMessageText', e.target.value)}
+                                    onChange={e => updateAction(index, 'pixMessageText', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
@@ -6324,8 +6686,8 @@ function generatePreviewHTML(data) {
                                 value={actionData.targetFlowId || ''} 
                                 onChange={e => {
                                     const selectedFlow = availableFlows.find(f => f.id == e.target.value);
-                                    updateNestedAction(index, 'targetFlowId', e.target.value);
-                                    updateNestedAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
+                                    updateAction(index, 'targetFlowId', e.target.value);
+                                    updateAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
                                 }}
                                 style={{fontSize: '0.85rem'}}
                             >
@@ -6344,7 +6706,7 @@ function generatePreviewHTML(data) {
                                 className="form-textarea" 
                                 rows="2" 
                                 value={actionData.deliveryText || ''} 
-                                onChange={e => updateNestedAction(index, 'deliveryText', e.target.value)}
+                                onChange={e => updateAction(index, 'deliveryText', e.target.value)}
                                 style={{fontSize: '0.85rem'}}
                             />
                         </div>
@@ -6398,7 +6760,6 @@ function generatePreviewHTML(data) {
             }
         };
 
-        const actions = nodeData.actions || [];
         const availableActionTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
@@ -6413,6 +6774,8 @@ function generatePreviewHTML(data) {
         };
 
         if (!selectedNode) return null;
+        
+        const nestedActionsCount = (nodeData.actions || []).length;
         
         return (
             <div className="node-editor-modal-overlay" onClick={(e) => {
@@ -6431,52 +6794,51 @@ function generatePreviewHTML(data) {
                             ✕
                         </button>
                     </div>
-                    <div className="node-editor-modal-content">
-                        {renderPanel()}
+                    <div 
+                        className="node-editor-modal-content" 
+                        ref={modalContentRef}
+                        onDragOver={(e) => {
+                            // Permitir que o drag aconteça no container
+                            e.preventDefault();
+                            // Ativar auto-scroll quando estiver arrastando
+                            if (draggedIndex !== null) {
+                                handleAutoScroll(e);
+                            }
+                        }}
+                    >
+                        {/* Lista unificada de ações */}
+                        {selectedNode.type !== 'trigger' && actions.length > 0 && (
+                            <div style={{marginBottom: '1.5rem'}}>
+                                {actions.map((action, index) => renderActionEditor(action, index))}
+                            </div>
+                        )}
                         
-                        {/* Seção de Ações Aninhadas */}
-                        {selectedNode.type !== 'trigger' && (
-                            <>
-                                <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1.5rem 0'}} />
-                                <div style={{marginBottom: '1rem'}}>
-                                    <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '1rem', marginBottom: '0.75rem'}}>
-                                        Ações Aninhadas ({actions.length}/5)
-                                    </label>
-                                    <p style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem'}}>
-                                        Adicione até 5 ações que serão executadas após esta ação principal.
-                                    </p>
-                                    
-                                    {/* Lista de ações aninhadas */}
-                                    {actions.length > 0 && (
-                                        <div style={{marginBottom: '1rem'}}>
-                                            {actions.map((action, index) => renderNestedActionEditor(action, index))}
-                                        </div>
-                                    )}
-                                    
-                                    {/* Botões para adicionar ações */}
-                                    {actions.length < 5 && (
-                                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem'}}>
-                                            {availableActionTypes.map(actionType => (
-                                                <button
-                                                    key={actionType}
-                                                    type="button"
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => addNestedAction(actionType)}
-                                                    style={{fontSize: '0.8rem', padding: '0.5rem'}}
-                                                >
-                                                    + {actionTypeLabels[actionType]}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                    
-                                    {actions.length >= 5 && (
-                                        <p style={{fontSize: '0.85rem', color: 'var(--warning)', fontStyle: 'italic'}}>
-                                            Limite de 5 ações aninhadas atingido. Remova uma ação para adicionar outra.
-                                        </p>
-                                    )}
+                        {/* Botões para adicionar ações */}
+                        {selectedNode.type !== 'trigger' && nestedActionsCount < 5 && (
+                            <div style={{marginTop: actions.length > 0 ? '1rem' : '0'}}>
+                                <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.5rem'}}>
+                                    Adicionar Ação ({nestedActionsCount}/5)
+                                </label>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem'}}>
+                                    {availableActionTypes.map(actionType => (
+                                        <button
+                                            key={actionType}
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => addAction(actionType)}
+                                            style={{fontSize: '0.8rem', padding: '0.5rem'}}
+                                        >
+                                            + {actionTypeLabels[actionType]}
+                                        </button>
+                                    ))}
                                 </div>
-                            </>
+                            </div>
+                        )}
+                        
+                        {selectedNode.type !== 'trigger' && nestedActionsCount >= 5 && (
+                            <p style={{fontSize: '0.85rem', color: 'var(--warning)', fontStyle: 'italic', marginTop: actions.length > 0 ? '1rem' : '0'}}>
+                                Limite de 5 ações atingido. Remova uma ação para adicionar outra.
+                            </p>
                         )}
                     </div>
                     <div className="node-editor-modal-footer">
