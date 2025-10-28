@@ -220,198 +220,157 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     }
 }
 
+// /backend/worker/process-timeout.js (Função processActions CORRIGIDA)
+
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, edges) {
+    // A variável 'logPrefix' não está definida aqui, mas pode ser adicionada se necessário para logs
+    // const logPrefix = '[WORKER]';
+
     for (const action of actions) {
+        // Assume que 'action' tem a estrutura { type: '...', data: { ... } }
+        const actionData = action.data || {}; // Garante que actionData exista
+
         switch (action.type) {
             case 'message':
-                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
+                if (actionData.typingDelay && actionData.typingDelay > 0) {
+                    await new Promise(resolve => setTimeout(resolve, actionData.typingDelay * 1000));
                 }
 
-                // ==========================================================
-                // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
-                // ==========================================================
-                const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
-                // ==========================================================
-                // FIM DO PASSO 2
-                // ==========================================================
-                
-                if (currentNode.data.actions && currentNode.data.actions.length > 0) {
-                    await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges);
+                const textToSend = await replaceVariables(actionData.text, variables);
+                // Passa actionData.showTyping
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, actionData.showTyping, variables);
+
+                // Processa recursivamente se ESTA ação tiver ações aninhadas
+                if (actionData.actions && actionData.actions.length > 0) {
+                    await processActions(actionData.actions, chatId, botId, botToken, sellerId, variables, edges);
                 }
 
-                if (currentNode.data.waitForReply) {
-                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
-                    if (noReplyNodeId) {
-                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-                        
-                        // CANCELAMENTO PREVENTIVO: Antes de agendar, cancela qualquer tarefa pendente.
-                        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                        if (existingState && existingState.scheduled_message_id) {
-                            try {
-                                await qstashClient.messages.delete(existingState.scheduled_message_id);
-                                console.log(`${logPrefix} [Flow Engine] Tarefa de timeout antiga (${existingState.scheduled_message_id}) cancelada.`);
-                            } catch (e) { /* Ignora se já foi executada */ }
-                        }
+                // Lógica 'waitForReply' NÃO pertence aqui, pois é uma característica do NÓ principal.
+                // O fluxo continua após processar TODAS as ações aninhadas.
+                break; // Fim do case 'message'
 
-                        // Agenda a nova tarefa de timeout.
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
-                            delay: `${timeoutMinutes}m`,
-                            method: "POST"
-                        });
-
-                        // Atualiza o estado do usuário com o NOVO messageId e o status de 'aguardando'.
-                        await sql`
-                            UPDATE user_flow_states 
-                            SET waiting_for_input = TRUE, scheduled_message_id = ${response.messageId}
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId};
-                        `;
-                    }
-                    currentNodeId = null; // Para o fluxo aqui, esperando a resposta ou o timeout.
-                } else {
-                    currentNodeId = findNextNode(currentNodeId, 'a', edges);
-                }
-                break;
-
-            // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
             case 'image':
             case 'video':
-            case 'audio': {
+            case 'audio': { // Usar {} para criar um escopo para 'caption' e 'response'
                 try {
-                    const caption = await replaceVariables(currentNode.data.caption, variables);
-                    const response = await handleMediaNode(currentNode, botToken, chatId, caption);
+                    const caption = await replaceVariables(actionData.caption, variables);
+                    // handleMediaNode precisa do objeto 'action' que contém 'type' e 'data'
+                    const response = await handleMediaNode(action, botToken, chatId, caption);
 
                     if (response && response.ok) {
+                        // Passa sellerId e botId corretamente
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
                     }
                 } catch (e) {
-                    console.error(`[Flow Media] Erro ao enviar mídia no nó ${currentNode.id} para o chat ${chatId}: ${e.message}`);
+                    // action.id não existe no objeto action padrão, use o contexto disponível
+                    console.error(`[WORKER - Flow Media] Erro ao enviar mídia (ação aninhada tipo ${action.type}) para o chat ${chatId}: ${e.message}`);
                 }
-                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                // Não determinar o próximo nó aqui
                 break;
-            }
-            // ===========================================
+            } // Fim do case 'image'/'video'/'audio'
 
             case 'delay':
-                const delaySeconds = currentNode.data.delayInSeconds || 1;
+                const delaySeconds = actionData.delayInSeconds || 1;
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-                currentNodeId = findNextNode(currentNodeId, null, edges);
+                // Não determinar o próximo nó aqui
                 break;
-            
-                case 'action_pix':
-                    try {
-                        const valueInCents = currentNode.data.valueInCents;
-                        if (!valueInCents) throw new Error("Valor do PIX não definido no nó do fluxo.");
-    
-                        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                         // Adiciona verificação do seller
-                        if (!seller) throw new Error(`Vendedor ${sellerId} não encontrado no processFlow.`);
-    
-                        // Busca o click_id das variáveis do fluxo ou do banco de dados
-                        let click_id_from_vars = variables.click_id;
-                        
-                        // Se não encontrou nas variáveis, tenta buscar do banco de dados
-                        if (!click_id_from_vars) {
-                            const [recentClick] = await sql`
-                                SELECT click_id FROM telegram_chats 
-                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
-                                ORDER BY created_at DESC LIMIT 1
-                            `;
-                            if (recentClick?.click_id) {
-                                click_id_from_vars = recentClick.click_id;
-                                console.log(`[Flow Engine] Click ID recuperado do banco: ${click_id_from_vars}`);
-                            }
+
+            case 'action_pix':
+                try {
+                    const valueInCents = actionData.valueInCents;
+                    if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
+
+                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    if (!seller) throw new Error(`[WORKER] Vendedor ${sellerId} não encontrado na ação PIX.`);
+
+                    // Busca click_id das variáveis ou do banco
+                    let click_id_from_vars = variables.click_id;
+                    if (!click_id_from_vars) {
+                        const [recentClick] = await sql`
+                            SELECT click_id FROM telegram_chats
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
+                            ORDER BY created_at DESC LIMIT 1`;
+                        if (recentClick?.click_id) {
+                            click_id_from_vars = recentClick.click_id;
                         }
-                        
-                        if (!click_id_from_vars) {
-                            console.error(`[Flow Engine] Click ID não encontrado para chat ${chatId}, bot ${botId}. Variáveis:`, variables);
-                            throw new Error("Click ID não encontrado nas variáveis do fluxo nem no histórico do chat.");
-                        }
-    
-                        const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                        const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                        if (!click) throw new Error("Dados do clique não encontrados ou não pertencem ao vendedor para gerar o PIX no fluxo.");
-    
-                        const ip_address = click.ip_address; // IP do clique original
-    
-                        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
-                        // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
-                        const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                        const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
-    
-                        // O INSERT já foi feito dentro de generatePixWithFallback
-    
-                        variables.last_transaction_id = pixResult.transaction_id;
-                        // Salva as variáveis atualizadas (com o last_transaction_id)
-                        await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-    
-                        // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
-                        const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
-                        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-    
-                        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                            chat_id: chatId,
-                            text: textToSend,
-                            parse_mode: 'HTML',
-                            reply_markup: {
-                                inline_keyboard: [
-                                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
-                                ]
-                            }
-                        });
-    
-                         if (sentMessage.ok) {
-                             await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot'); // Salva como 'bot'
-                         }
-    
-                    } catch (error) {
-                        console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
-                        // Informa o usuário sobre o erro
-                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
-                        // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
-                        // Por enquanto, vamos parar aqui para evitar loops
-                        currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
-                        break; // Sai do switch
                     }
-                    // Se chegou aqui, o PIX foi gerado e enviado com sucesso
-                    currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
-                    break; // Sai do switch
+
+                    if (!click_id_from_vars) {
+                        throw new Error("[WORKER] Click ID não encontrado para gerar PIX na ação aninhada.");
+                    }
+
+                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error("[WORKER] Dados do clique não encontrados para gerar PIX na ação aninhada.");
+
+                    const ip_address = click.ip_address;
+                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost'; // Usa a URL da env var
+                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+
+                    // Atualiza a variável 'last_transaction_id' nas variáveis do fluxo
+                    variables.last_transaction_id = pixResult.transaction_id;
+                     // IMPORTANTE: Persistir as variáveis atualizadas no estado do usuário, se necessário
+                     // Esta função 'processActions' não tem acesso direto para atualizar user_flow_states
+                     // O ideal seria que 'processFlow' atualizasse as variáveis após chamar processActions
+                     // await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
+
+                    // Envia o PIX para o usuário
+                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar Código PIX", variables);
+                    const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                        chat_id: chatId,
+                        text: textToSend,
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                            ]
+                        }
+                    });
+
+                    if (sentMessage.ok) {
+                        await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                    }
+
+                } catch (error) {
+                    console.error(`[WORKER - Flow Engine] Erro na ação action_pix para chat ${chatId}:`, error);
+                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento.", botToken, sellerId, botId, true);
+                    // Não determinar o próximo nó aqui ou parar o fluxo principal
+                }
+                break; // Fim do case 'action_pix'
 
             case 'action_check_pix':
                 try {
                     const transactionId = variables.last_transaction_id;
-                    if (!transactionId) throw new Error("Nenhum ID de transação PIX encontrado para consultar.");
-                    
-                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
-                    
-                    if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+                    if (!transactionId) throw new Error("[WORKER] Nenhum ID de transação PIX encontrado para consultar na ação aninhada.");
 
+                    const [transaction] = await sql`SELECT status FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    if (!transaction) throw new Error(`[WORKER] Transação ${transactionId} não encontrada na ação aninhada.`);
+
+                    // Apenas envia a mensagem de status, não muda o fluxo principal
                     if (transaction.status === 'paid') {
                         await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
-                        currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
                     } else {
-                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
-                        currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
+                        await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
                     }
                 } catch (error) {
-                    console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    console.error("[WORKER - Flow Engine] Erro ao consultar PIX na ação aninhada:", error);
                     await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
-                    currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
-                break;
+                break; // Fim do case 'action_check_pix'
 
-                default:
-                    console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
-                    currentNodeId = null;
-                    break;
-            }
+            default:
+                console.warn(`[WORKER - Flow Engine] Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
+                break;
         }
+        // Não adicionar lógica de 'findNextNode' ou 'currentNodeId = null' aqui.
+        // O loop 'for...of' continuará para a próxima ação aninhada.
     }
+    // A função termina após processar todas as 'actions' fornecidas.
+}
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
