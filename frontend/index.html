@@ -654,7 +654,7 @@
     
         /* --- ESTILOS DO EDITOR DE FLUXOS (TEMA ESCURO) --- */
         .hotbot-scope .flow-editor-page { display: flex; flex-direction: column; height: 100%; background-color: transparent; color: var(--text-primary); }
-        .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; }
+        .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; position: relative; }
         .hotbot-scope .reactflow-wrapper { flex-grow: 1; position: relative; background-color: var(--bg-primary); background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 2rem 2rem; }
         
         .hotbot-scope .flow-header { padding: 1rem 1.5rem; background-color: var(--bg-secondary); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
@@ -667,7 +667,205 @@
         .hotbot-scope .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: var(--text-secondary); }
         .hotbot-scope .node-button:hover { border-color: var(--accent-primary); color: var(--accent-primary); background-color: rgba(56, 189, 248, 0.05); }
     
-        .hotbot-scope .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background-color: var(--bg-secondary); z-index: 10; padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
+        .hotbot-scope .node-editor-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        
+        .hotbot-scope .node-editor-modal {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 700px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .hotbot-scope .node-editor-modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        
+        .hotbot-scope .node-editor-modal-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-editor-modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .hotbot-scope .node-editor-modal-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-editor-modal-content {
+            padding: 1.5rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .hotbot-scope .node-editor-modal-footer {
+            padding: 1.5rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            flex-shrink: 0;
+        }
+        
+        .hotbot-scope .add-node-fab {
+            position: fixed;
+            top: 6rem;
+            right: 2rem;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border: none;
+            color: white;
+            font-size: 2rem;
+            font-weight: 300;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: all 0.3s ease;
+        }
+        
+        .hotbot-scope .add-node-fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 30px rgba(56, 189, 248, 0.6);
+        }
+        
+        .hotbot-scope .add-node-fab:active {
+            transform: scale(0.95);
+        }
+        
+        .hotbot-scope .node-selector-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            z-index: 1500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        
+        .hotbot-scope .node-selector-modal {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .hotbot-scope .node-selector-modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .hotbot-scope .node-selector-modal-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-selector-modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .hotbot-scope .node-selector-modal-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-selector-modal-content {
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .hotbot-scope .node-selector-button {
+            padding: 1rem;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background-color: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.95rem;
+        }
+        
+        .hotbot-scope .node-selector-button:hover {
+            border-color: var(--accent-primary);
+            background-color: rgba(56, 189, 248, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.2);
+        }
+        
+        .hotbot-scope .node-selector-button-icon {
+            font-size: 1.5rem;
+        }
         
         /* Estilos dos Nós do ReactFlow */
         .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
@@ -697,6 +895,14 @@
             padding: 0.5rem 0.5rem;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
             z-index: 10;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+        }
+        
+        .hotbot-scope .react-flow__node:hover .node-actions {
+            opacity: 1;
+            visibility: visible;
         }
         
         .hotbot-scope .node-action-btn {
@@ -5734,7 +5940,7 @@ function generatePreviewHTML(data) {
         const [media, setMedia] = useState([]);
         useEffect(() => { api.get('/api/media').then(res => setMedia(res.data)); }, []);
         return (
-            <div className="login-overlay" style={{zIndex: 1000}}>
+            <div className="login-overlay" style={{zIndex: 2000}}>
                 <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
                         <h2>Selecionar Mídia</h2>
@@ -5775,6 +5981,23 @@ function generatePreviewHTML(data) {
             forward_flow: { icon: '↪️', name: 'Encaminhar Fluxo', content: data.targetFlowName || 'Selecione um fluxo.' },
         };
         const info = nodeInfo[type] || { icon: '❓', name: 'Nó' };
+        
+        // Verifica se há ações aninhadas (compatível com nodes antigos)
+        const actions = data.actions || [];
+        const getActionInfo = (actionType, actionData) => {
+            const actionInfoMap = {
+                message: { icon: '💬', name: 'Mensagem', content: actionData.text ? `"${actionData.text.substring(0, 30)}..."` : 'Configure.' },
+                image: { icon: '🖼️', name: 'Imagem', content: actionData.imageUrl ? 'Configurado.' : 'Configure.' },
+                video: { icon: '🎬', name: 'Vídeo', content: actionData.videoUrl ? 'Configurado.' : 'Configure.' },
+                audio: { icon: '🎵', name: 'Áudio', content: actionData.audioUrl ? 'Configurado.' : 'Configure.' },
+                delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar ${actionData.delayInSeconds || 1}s.` },
+                typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
+                action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
+                action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
+                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+            };
+            return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
+        };
 
         return (
             <>
@@ -5782,38 +6005,52 @@ function generatePreviewHTML(data) {
                 <div className={`node-header react-flow__node-${type}`}>
                     <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                         {info.icon} {info.name}
+                        {actions.length > 0 && <span style={{fontSize: '0.7rem', opacity: 0.8}}>({actions.length} ação{actions.length !== 1 ? 'ões' : ''})</span>}
                     </div>
-                    {selected && (
-                        <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                    <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                window.dispatchEvent(event);
+                            }}
+                            className="node-action-btn"
+                            title="Copiar nó"
+                        >
+                            📋
+                        </button>
+                        {id !== 'start' && (
                             <button 
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                    const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
                                     window.dispatchEvent(event);
                                 }}
-                                className="node-action-btn"
-                                title="Copiar nó"
-                            >
-                                📋
-                            </button>
-                            <button 
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (id !== 'start') {
-                                        const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
-                                        window.dispatchEvent(event);
-                                    }
-                                }}
-                                className={`node-action-btn delete ${id === 'start' ? 'disabled' : ''}`}
-                                title={id === 'start' ? 'Não é possível excluir o nó inicial' : 'Excluir nó'}
-                                disabled={id === 'start'}
+                                className="node-action-btn delete"
+                                title="Excluir nó"
                             >
                                 ❌
                             </button>
+                        )}
+                    </div>
+                </div>
+                <div className="node-content">
+                    {info.content}
+                    {actions.length > 0 && (
+                        <div style={{marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.1)'}}>
+                            {actions.map((action, idx) => {
+                                const actInfo = getActionInfo(action.type, action.data || {});
+                                return (
+                                    <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.3rem', opacity: 0.9}}>
+                                        <span>{actInfo.icon}</span>
+                                        <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
+                                        <span>{actInfo.content}</span>
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
                 </div>
-                <div className="node-content">{info.content}</div>
                 
                 {type === 'trigger' && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
                 
@@ -5845,7 +6082,14 @@ function generatePreviewHTML(data) {
         const [nodeData, setNodeData] = useState(selectedNode.data || {});
         const textAreaRef = useRef(null);
         
-        useEffect(() => { setNodeData(selectedNode.data || {}) }, [selectedNode]);
+        useEffect(() => { 
+            const data = selectedNode.data || {};
+            // Garantir que actions seja um array
+            if (!data.actions) {
+                data.actions = [];
+            }
+            setNodeData(data);
+        }, [selectedNode]);
 
         const handleChange = (e) => {
             const { name, value, type, checked } = e.target;
@@ -5859,6 +6103,254 @@ function generatePreviewHTML(data) {
 
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        // Funções para gerenciar ações aninhadas
+        const addNestedAction = (actionType) => {
+            const actions = nodeData.actions || [];
+            if (actions.length >= 5) {
+                alert('Você pode adicionar no máximo 5 ações aninhadas.');
+                return;
+            }
+            const newAction = { type: actionType, data: {} };
+            const newData = { ...nodeData, actions: [...actions, newAction] };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const removeNestedAction = (index) => {
+            const actions = (nodeData.actions || []).filter((_, i) => i !== index);
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const updateNestedAction = (index, field, value) => {
+            const actions = [...(nodeData.actions || [])];
+            if (!actions[index]) return;
+            actions[index] = {
+                ...actions[index],
+                data: { ...actions[index].data, [field]: value }
+            };
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const renderNestedActionEditor = (action, index) => {
+            const actionData = action.data || {};
+            const actionTypeNames = {
+                message: '💬 Mensagem',
+                image: '🖼️ Imagem',
+                video: '🎬 Vídeo',
+                audio: '🎵 Áudio',
+                delay: '⏱️ Atraso',
+                typing_action: '✍️ Digitando',
+                action_pix: '💳 PIX',
+                action_check_pix: '🔍 Verificar PIX',
+                forward_flow: '↪️ Encaminhar'
+            };
+            
+            return (
+                <div key={index} style={{border: '1px solid rgba(255,255,255,0.2)', borderRadius: '0.5rem', padding: '1rem', marginBottom: '0.75rem', backgroundColor: 'rgba(0,0,0,0.2)'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem'}}>
+                        <strong style={{color: 'var(--text-primary)'}}>{actionTypeNames[action.type] || action.type}</strong>
+                        <button 
+                            type="button"
+                            className="btn btn-red btn-sm" 
+                            onClick={() => removeNestedAction(index)}
+                            style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
+                        >
+                            ✕
+                        </button>
+                    </div>
+                    
+                    {action.type === 'message' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto</label>
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="3" 
+                                    value={actionData.text || ''} 
+                                    onChange={e => updateNestedAction(index, 'text', e.target.value)} 
+                                />
+                            </div>
+                            <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.buttonText || ''} 
+                                    onChange={e => updateNestedAction(index, 'buttonText', e.target.value)} 
+                                    placeholder="Texto do Botão"
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                                <input 
+                                    type="url" 
+                                    className="form-input" 
+                                    value={actionData.buttonUrl || ''} 
+                                    onChange={e => updateNestedAction(index, 'buttonUrl', e.target.value)} 
+                                    placeholder="URL do Botão"
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {(action.type === 'image' || action.type === 'video') && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>File ID ou URL</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData[action.type === 'image' ? 'imageUrl' : 'videoUrl'] || ''} 
+                                    onChange={e => updateNestedAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn btn-secondary btn-sm" 
+                                onClick={() => openMediaLibrary(media => {
+                                    updateNestedAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', media.file_id);
+                                })}
+                                style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
+                            >
+                                Selecionar da Biblioteca
+                            </button>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Legenda</label>
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="2" 
+                                    value={actionData.caption || ''} 
+                                    onChange={e => updateNestedAction(index, 'caption', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'audio' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>File ID ou URL</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.audioUrl || ''} 
+                                    onChange={e => updateNestedAction(index, 'audioUrl', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn btn-secondary btn-sm" 
+                                onClick={() => openMediaLibrary(media => updateNestedAction(index, 'audioUrl', media.file_id))}
+                                style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
+                            >
+                                Selecionar da Biblioteca
+                            </button>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Duração (segundos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.durationInSeconds || 0} 
+                                    onChange={e => updateNestedAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'delay' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Aguardar por (segundos)</label>
+                            <input 
+                                type="number" 
+                                className="form-input" 
+                                value={actionData.delayInSeconds || 1} 
+                                onChange={e => updateNestedAction(index, 'delayInSeconds', parseInt(e.target.value, 10))}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                    
+                    {action.type === 'typing_action' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Duração (segundos)</label>
+                            <input 
+                                type="number" 
+                                className="form-input" 
+                                value={actionData.durationInSeconds || 1} 
+                                onChange={e => updateNestedAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                    
+                    {action.type === 'action_pix' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Valor (centavos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.valueInCents || 0} 
+                                    onChange={e => updateNestedAction(index, 'valueInCents', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto da Mensagem do PIX</label>
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="2" 
+                                    value={actionData.pixMessageText || ''} 
+                                    onChange={e => updateNestedAction(index, 'pixMessageText', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'forward_flow' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Encaminhar para o fluxo</label>
+                            <select 
+                                className="form-select" 
+                                value={actionData.targetFlowId || ''} 
+                                onChange={e => {
+                                    const selectedFlow = availableFlows.find(f => f.id == e.target.value);
+                                    updateNestedAction(index, 'targetFlowId', e.target.value);
+                                    updateNestedAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
+                                }}
+                                style={{fontSize: '0.85rem'}}
+                            >
+                                <option value="">Selecione um fluxo...</option>
+                                {availableFlows.map(f => (
+                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+                    
+                    {action.type === 'action_check_pix' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Texto de Entrega (Pós-Pagamento)</label>
+                            <textarea 
+                                className="form-textarea" 
+                                rows="2" 
+                                value={actionData.deliveryText || ''} 
+                                onChange={e => updateNestedAction(index, 'deliveryText', e.target.value)}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                </div>
+            );
         };
         
         const onDelete = () => {
@@ -5906,12 +6398,93 @@ function generatePreviewHTML(data) {
             }
         };
 
+        const actions = nodeData.actions || [];
+        const availableActionTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+        const actionTypeLabels = {
+            message: '💬 Mensagem',
+            image: '🖼️ Imagem',
+            video: '🎬 Vídeo',
+            audio: '🎵 Áudio',
+            delay: '⏱️ Atraso',
+            typing_action: '✍️ Digitando',
+            action_pix: '💳 PIX',
+            action_check_pix: '🔍 Verificar PIX',
+            forward_flow: '↪️ Encaminhar'
+        };
+
+        if (!selectedNode) return null;
+        
         return (
-            <div className="editor-panel">
-                <h3 style={{marginBottom: '1.5rem'}}>Editar Nó</h3>
-                {renderPanel()}
-                <div style={{marginTop: 'auto'}}>
-                    {selectedNode.type !== 'trigger' && <button className="btn btn-danger" style={{width: '100%'}} onClick={onDelete}>Excluir Nó</button>}
+            <div className="node-editor-modal-overlay" onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                    setSelectedNode(null);
+                }
+            }}>
+                <div className="node-editor-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="node-editor-modal-header">
+                        <h3>Editar Nó</h3>
+                        <button 
+                            className="node-editor-modal-close"
+                            onClick={() => setSelectedNode(null)}
+                            title="Fechar"
+                        >
+                            ✕
+                        </button>
+                    </div>
+                    <div className="node-editor-modal-content">
+                        {renderPanel()}
+                        
+                        {/* Seção de Ações Aninhadas */}
+                        {selectedNode.type !== 'trigger' && (
+                            <>
+                                <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1.5rem 0'}} />
+                                <div style={{marginBottom: '1rem'}}>
+                                    <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '1rem', marginBottom: '0.75rem'}}>
+                                        Ações Aninhadas ({actions.length}/5)
+                                    </label>
+                                    <p style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem'}}>
+                                        Adicione até 5 ações que serão executadas após esta ação principal.
+                                    </p>
+                                    
+                                    {/* Lista de ações aninhadas */}
+                                    {actions.length > 0 && (
+                                        <div style={{marginBottom: '1rem'}}>
+                                            {actions.map((action, index) => renderNestedActionEditor(action, index))}
+                                        </div>
+                                    )}
+                                    
+                                    {/* Botões para adicionar ações */}
+                                    {actions.length < 5 && (
+                                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem'}}>
+                                            {availableActionTypes.map(actionType => (
+                                                <button
+                                                    key={actionType}
+                                                    type="button"
+                                                    className="btn btn-secondary btn-sm"
+                                                    onClick={() => addNestedAction(actionType)}
+                                                    style={{fontSize: '0.8rem', padding: '0.5rem'}}
+                                                >
+                                                    + {actionTypeLabels[actionType]}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    {actions.length >= 5 && (
+                                        <p style={{fontSize: '0.85rem', color: 'var(--warning)', fontStyle: 'italic'}}>
+                                            Limite de 5 ações aninhadas atingido. Remova uma ação para adicionar outra.
+                                        </p>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </div>
+                    <div className="node-editor-modal-footer">
+                        {selectedNode.type !== 'trigger' && (
+                            <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
+                        )}
+                        <button className="btn btn-secondary" onClick={() => setSelectedNode(null)}>Fechar</button>
+                    </div>
                 </div>
             </div>
         );
@@ -5940,7 +6513,10 @@ function generatePreviewHTML(data) {
                             y: nodeToCopy.position.y + 30
                         },
                         selected: false,
-                        data: { ...nodeToCopy.data }
+                        data: { 
+                            ...nodeToCopy.data,
+                            actions: nodeToCopy.data.actions ? [...nodeToCopy.data.actions] : []
+                        }
                     };
                     
                     return [...nds, newNode];
@@ -5983,6 +6559,7 @@ function generatePreviewHTML(data) {
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
+        const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
         
         // Function to center the view on all nodes
         const centerViewOnNodes = useCallback(() => {
@@ -6036,7 +6613,14 @@ function generatePreviewHTML(data) {
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                const nodesToSet = flowContent.nodes || initialNodes;
+                const nodesToSet = (flowContent.nodes || initialNodes).map(node => ({
+                    ...node,
+                    data: {
+                        ...node.data,
+                        // Garantir compatibilidade com nodes antigos - inicializar actions se não existir
+                        actions: node.data?.actions || []
+                    }
+                }));
                 setNodes(nodesToSet);
                 setEdges(flowContent.edges || []);
                 
@@ -6108,7 +6692,7 @@ function generatePreviewHTML(data) {
                 id: `${type}-${Date.now()}`, 
                 type, 
                 position, 
-                data: {}, 
+                data: { actions: [] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
@@ -6140,7 +6724,8 @@ function generatePreviewHTML(data) {
                            nodeType === 'typing_action' ? 'Digitando...' :
                            nodeType === 'action_pix' ? 'Gerar PIX' :
                            nodeType === 'action_check_pix' ? 'Consultar PIX' :
-                           nodeType === 'forward_flow' ? 'Encaminhar Fluxo' : 'Novo nó'
+                           nodeType === 'forward_flow' ? 'Encaminhar Fluxo' : 'Novo nó',
+                    actions: []
                 },
             };
             
@@ -6168,81 +6753,29 @@ function generatePreviewHTML(data) {
         
         const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
         const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); };
+        
+        const nodeTypesList = [
+            { type: 'message', icon: '💬', label: 'Mensagem', category: 'Componentes' },
+            { type: 'image', icon: '🖼️', label: 'Imagem', category: 'Componentes' },
+            { type: 'video', icon: '🎬', label: 'Vídeo', category: 'Componentes' },
+            { type: 'audio', icon: '🎵', label: 'Áudio', category: 'Componentes' },
+            { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
+            { type: 'typing_action', icon: '✍️', label: 'Ação de Digitando', category: 'Ações' },
+            { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
+            { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+        ];
+        
+        const handleNodeTypeSelect = (nodeType) => {
+            addNode(nodeType);
+            setIsNodeSelectorOpen(false);
+        };
 
         return (
             <div className="flow-editor-page">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
                 <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
                 <div className="flow-editor-container">
-                    <div className="flow-sidebar">
-                        <h3>Componentes</h3>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'message')}
-                            onDragStart={(e) => onDragStart(e, 'message')} 
-                            draggable>
-                            💬 Mensagem
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'image')}
-                            onDragStart={(e) => onDragStart(e, 'image')} 
-                            draggable>
-                            🖼️ Imagem
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'video')}
-                            onDragStart={(e) => onDragStart(e, 'video')} 
-                            draggable>
-                            🎬 Vídeo
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'audio')}
-                            onDragStart={(e) => onDragStart(e, 'audio')} 
-                            draggable>
-                            🎵 Áudio
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'delay')}
-                            onDragStart={(e) => onDragStart(e, 'delay')} 
-                            draggable>
-                            ⏱️ Atraso
-                        </div>
-                        <h3>Ações</h3>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'typing_action')}
-                            onDragStart={(e) => onDragStart(e, 'typing_action')} 
-                            draggable>
-                            ✍️ Ação de Digitando
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onClick={(e) => handleNodeButtonClick(e, 'action_pix')}
-                            onDragStart={(e) => onDragStart(e, 'action_pix')} 
-                            draggable>
-                            💳 Gerar PIX
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onDragStart={(e) => onDragStart(e, 'action_check_pix')} 
-                            onClick={(e) => handleNodeButtonClick(e, 'action_check_pix')}
-                            onMouseDown={(e) => e.detail = 0}
-                            draggable>
-                            🔍 Consultar PIX
-                        </div>
-                        <div 
-                            className="node-button" 
-                            onDragStart={(e) => onDragStart(e, 'forward_flow')} 
-                            onClick={(e) => handleNodeButtonClick(e, 'forward_flow')}
-                            onMouseDown={(e) => e.detail = 0}
-                            draggable>
-                            ↪️ Encaminhar Fluxo
-                        </div>
-                    </div>
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
                             <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} fitView>
@@ -6250,9 +6783,48 @@ function generatePreviewHTML(data) {
                                 <Controls />
                             </ReactFlow>
                         </ReactFlowProvider>
-                        {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
                     </div>
                 </div>
+                <button 
+                    className="add-node-fab" 
+                    onClick={() => setIsNodeSelectorOpen(true)}
+                    title="Adicionar Node"
+                >
+                    +
+                </button>
+                {isNodeSelectorOpen && (
+                    <div className="node-selector-modal-overlay" onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            setIsNodeSelectorOpen(false);
+                        }
+                    }}>
+                        <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="node-selector-modal-header">
+                                <h3>Adicionar Node</h3>
+                                <button 
+                                    className="node-selector-modal-close"
+                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    title="Fechar"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            <div className="node-selector-modal-content">
+                                {nodeTypesList.map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
             </div>
         );
     }
