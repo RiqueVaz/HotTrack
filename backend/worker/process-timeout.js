@@ -137,6 +137,58 @@ async function handleMediaNode(node, botToken, chatId, caption) {
     return response;
 }
 
+async function saveMessageToDb(sellerId, botId, message, senderType) {
+    const { message_id, chat, from, text, photo, video, voice } = message;
+    let mediaType = null;
+    let mediaFileId = null;
+    let messageText = text;
+    let newClickId = null;
+
+    if (text && text.startsWith('/start ')) {
+        newClickId = text.substring(7);
+    }
+
+    let finalClickId = newClickId;
+    if (!finalClickId) {
+        const result = await sqlWithRetry(
+            'SELECT click_id FROM telegram_chats WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+            [chat.id, botId]
+        );
+        if (result.length > 0) {
+            finalClickId = result[0].click_id;
+        }
+    }
+
+    if (photo) {
+        mediaType = 'photo';
+        mediaFileId = photo[photo.length - 1].file_id;
+        messageText = message.caption || '[Foto]';
+    } else if (video) {
+        mediaType = 'video';
+        mediaFileId = video.file_id;
+        messageText = message.caption || '[Vídeo]';
+    } else if (voice) {
+        mediaType = 'voice';
+        mediaFileId = voice.file_id;
+        messageText = '[Mensagem de Voz]';
+    }
+    const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
+    const fromUser = from || chat;
+
+    await sqlWithRetry(`
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ON CONFLICT (chat_id, message_id) DO NOTHING;
+    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId]);
+
+    if (newClickId) {
+        await sqlWithRetry(
+            'UPDATE telegram_chats SET click_id = $1 WHERE chat_id = $2 AND bot_id = $3',
+            [newClickId, chat.id, botId]
+        );
+    }
+}
+
 async function getSyncPayAuthToken(seller) {
     const cachedToken = syncPayTokenCache.get(seller.id);
     if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
