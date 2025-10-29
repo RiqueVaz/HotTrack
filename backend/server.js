@@ -2377,22 +2377,36 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                         const htmlContent = await generatePresselHTML(newPressel, numeric_pixel_ids);
                         
                         if (seller.netlify_site_id) {
-                            // Usar site existente
-                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, `pressel-${newPressel.id}.html`);
-                            
-                            if (deployResult.success) {
-                                netlifyUrl = deployResult.url;
-                                netlifyDeploy = { success: true, url: netlifyUrl };
-                                
-                                // Atualizar campo netlify_url na tabela pressels
-                                await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
-                                
-                                // Adicionar domínio automaticamente
-                                const domain = deployResult.url.replace('https://', '');
-                                await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
-                                
-                                console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso: ${netlifyUrl}`);
-                            } else {
+                            // Usar site existente
+                           const fileName = `pressel-${newPressel.id}.html`; // Nome do arquivo
+                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, fileName); // Passa o nome
+
+                            if (deployResult.success) {
+                               // ### CORREÇÃO AQUI ###
+                               // Constrói a URL completa incluindo o nome do arquivo
+                               if (deployResult.url) { // Verifica se a URL base foi retornada
+                                  netlifyUrl = `${deployResult.url}/${fileName}`; // Adiciona o nome do arquivo
+                               } else {
+                                  console.error(`[Netlify] Deploy bem-sucedido para site existente ${seller.netlify_site_id}, mas URL base não retornada.`);
+                                  // Tratar erro ou definir netlifyUrl como null
+                                  netlifyUrl = null;
+                                  netlifyDeploy = { success: false, message: 'Deploy bem-sucedido, mas URL não obtida.' }; // Atualiza status
+                               }
+                               // ### FIM DA CORREÇÃO ###
+
+                               if (netlifyUrl) { // Só atualiza se a URL foi construída
+                                  netlifyDeploy = { success: true, url: netlifyUrl };
+
+                                  // Atualizar campo netlify_url na tabela pressels
+                                  await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
+                                  
+                                  // Adicionar domínio automaticamente
+                                  const domain = new URL(deployResult.url).hostname; // Pega só o hostname
+                                  await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain}) ON CONFLICT DO NOTHING`; // Evita duplicados
+                                  
+                                  console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso no site existente: ${netlifyUrl}`);
+                               }
+                            } else {
                                 console.warn(`[Netlify] Site existente não encontrado, criando novo site. Erro:`, deployResult.error);
                                 netlifyDeploy = { success: false, message: deployResult.userMessage || 'Falha ao publicar no Netlify.' };
                                 
