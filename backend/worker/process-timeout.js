@@ -847,7 +847,13 @@ async function handler(req, res) {
         const finalVariables = variables || {};
 
         // Chama o motor de fluxo para executar o nó de timeout
-        await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, finalVariables);
+        if (target_node_id) {
+            // Chama o motor de fluxo para executar o nó de timeout
+            await processFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, target_node_id, finalVariables);
+        } else {
+            console.log(`[WORKER] Timeout para chat ${chat_id}. Encerrando fluxo.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+        }
         
         res.status(200).json({ message: 'Timeout processado com sucesso.' });
 
