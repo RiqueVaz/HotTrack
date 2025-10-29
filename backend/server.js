@@ -3862,17 +3862,6 @@ function findNextNode(currentNodeId, handleId, edges) {
     return edge ? edge.target : null;
 }
 
-
-async function showTypingForDuration(chatId, botToken, durationMs) {
-    const endTime = Date.now() + durationMs;
-    while (Date.now() < endTime) {
-        await sendTypingAction(chatId, botToken);
-        const remaining = endTime - Date.now();
-        const wait = Math.min(5000, remaining); // envia a cada 5s ou menos se acabar o tempo
-        await new Promise(resolve => setTimeout(resolve, wait));
-    }
-}
-
 async function sendTypingAction(chatId, botToken) {
     try {
         await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
@@ -3884,15 +3873,13 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, typingDelay = 0, variables = {}) {
-    if (!text || text.trim() === '') return;
-    try {
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
+    if (!text || text.trim() === '') return;
+    try {
         if (showTyping) {
-            // Use o delay definido no frontend (convertido para ms), ou um fallback se não for definido
-            let typingDurationMs = (typingDelay && typingDelay > 0) 
-                ? (typingDelay * 1000) 
-                : Math.max(500, Math.min(2000, text.length * 50));
-            await showTypingForDuration(chatId, botToken, typingDurationMs);
+            await sendTypingAction(chatId, botToken);
+            let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
+            await new Promise(resolve => setTimeout(resolve, typingDuration));
         }
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
@@ -3917,6 +3904,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
         switch (action.type) {
             case 'message':
+                if (actionData.typingDelay && actionData.typingDelay > 0) {
+                    await new Promise(resolve => setTimeout(resolve, actionData.typingDelay * 1000));
+                }
 
                 const textToSend = await replaceVariables(actionData.text, variables);
                 await sendMessage(chatId, textToSend, botToken, sellerId, botId, actionData.showTyping, variables);
@@ -3954,12 +3944,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
                 // REMOVIDO: findNextNode
                 break;
-
-            case 'typing_action':
-                if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
-                    await showTypingForDuration(chatId, botToken, actionData.durationInSeconds * 1000);
-                }
-                break;
             
             case 'action_pix':
                 try {
@@ -3996,7 +3980,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
-                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie:", variables);
+                    const messageText = await replaceVariables(actionData.pixMessage || "", variables);
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -4166,7 +4150,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         switch (currentNode.type) {
             case 'message':
-
+                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
+                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
+                }
 
                 // ==========================================================
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
@@ -5129,7 +5115,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
         
-        const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
+        const messageText = pixMessage || '';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
 

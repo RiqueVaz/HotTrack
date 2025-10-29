@@ -6512,58 +6512,54 @@ function generatePreviewHTML(data) {
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
-                            <>
-                                <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
-                                <div className="form-group">
-                                    <label style={{fontSize: '0.85rem'}}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={!!actionData.showTyping} 
-                                            onChange={e => updateAction(index, 'showTyping', e.target.checked)}
-                                        /> Adicionar "Digitando" antes
-                                    </label>
-                                    {actionData.showTyping && (
-                                        <div className="form-group" style={{marginTop: '0.5rem'}}>
-                                            <label style={{fontSize: '0.85rem'}}>Atraso (s) - (Duração do "Digitando")</label>
+                            {action.isMain && (
+                                <>
+                                    <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>
                                             <input 
-                                                type="number" 
-                                                className="form-input" 
-                                                value={actionData.typingDelay || 2} 
-                                                onChange={e => updateAction(index, 'typingDelay', parseInt(e.target.value, 10))}
-                                                style={{fontSize: '0.85rem'}}
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* O 'waitForReply' só faz sentido na Ação Principal */}
-                                {action.isMain && (
-                                    <>
-                                        <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
-                                        <div className="form-group">
-                                            <label style={{fontSize: '0.85rem'}}>
+                                                type="checkbox" 
+                                                checked={!!actionData.addTypingAction} 
+                                                onChange={e => updateAction(index, 'addTypingAction', e.target.checked)}
+                                            /> Adicionar "Digitando" antes
+                                        </label>
+                                        {actionData.addTypingAction && (
+                                            <div className="form-group" style={{marginTop: '0.5rem'}}>
+                                                <label style={{fontSize: '0.85rem'}}>Duração do "Digitando..." (s)</label>
                                                 <input 
-                                                    type="checkbox" 
-                                                    checked={!!actionData.waitForReply} 
-                                                    onChange={e => updateAction(index, 'waitForReply', e.target.checked)}
-                                                /> Aguardar Resposta
-                                            </label>
-                                            {actionData.waitForReply && (
-                                                <div className="form-group" style={{marginTop: '0.5rem'}}>
-                                                    <label style={{fontSize: '0.85rem'}}>Tempo de espera (min)</label>
-                                                    <input 
-                                                        type="number" 
-                                                        className="form-input" 
-                                                        value={actionData.replyTimeout || 5} 
-                                                        onChange={e => updateAction(index, 'replyTimeout', parseInt(e.target.value, 10))}
-                                                        style={{fontSize: '0.85rem'}}
-                                                    />
-                                                </div>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                            </>
+                                                    type="number" 
+                                                    className="form-input" 
+                                                    value={actionData.typingDuration || 2} 
+                                                    onChange={e => updateAction(index, 'typingDuration', parseInt(e.target.value, 10))}
+                                                    style={{fontSize: '0.85rem'}}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                    <hr style={{border: 'none', borderTop: '1px solid rgba(255,255,255,0.2)', margin: '1rem 0'}} />
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={!!actionData.waitForReply} 
+                                                onChange={e => updateAction(index, 'waitForReply', e.target.checked)}
+                                            /> Aguardar Resposta
+                                        </label>
+                                        {actionData.waitForReply && (
+                                            <div className="form-group" style={{marginTop: '0.5rem'}}>
+                                                <label style={{fontSize: '0.85rem'}}>Tempo de espera (min)</label>
+                                                <input 
+                                                    type="number" 
+                                                    className="form-input" 
+                                                    value={actionData.replyTimeout || 5} 
+                                                    onChange={e => updateAction(index, 'replyTimeout', parseInt(e.target.value, 10))}
+                                                    style={{fontSize: '0.85rem'}}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
                         </>
                     )}
                     
@@ -6751,8 +6747,9 @@ function generatePreviewHTML(data) {
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
                     <div className="form-group"><label>Botão (Opcional)</label><input name="buttonText" type="text" className="form-input" value={nodeData.buttonText || ''} onChange={handleChange} placeholder="Texto do Botão"/><input name="buttonUrl" type="url" className="form-input" value={nodeData.buttonUrl || ''} onChange={handleChange} placeholder="URL do Botão" style={{marginTop: '0.5rem'}}/></div>
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    <div className="form-group"><label><input name="showTyping" type="checkbox" checked={!!nodeData.showTyping} onChange={handleChange} /> Adicionar "Digitando" antes</label></div>
-                    {nodeData.showTyping && (<div className="form-group"><label>Atraso (s) - (Duração do "Digitando")</label><input name="typingDelay" type="number" className="form-input" value={nodeData.typingDelay || 2} onChange={handleChange} /></div>)}                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
+                    <div className="form-group"><label><input name="addTypingAction" type="checkbox" checked={!!nodeData.addTypingAction} onChange={handleChange} /> Adicionar "Digitando" antes</label></div>
+                    {nodeData.addTypingAction && (<div className="form-group"><label>Duração do "Digitando..." (s)</label><input name="typingDuration" type="number" className="form-input" value={nodeData.typingDuration || 2} onChange={handleChange} /></div>)}
+                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
                     <div className="form-group"><label><input name="waitForReply" type="checkbox" checked={!!nodeData.waitForReply} onChange={handleChange} /> Aguardar Resposta</label></div>
                     {nodeData.waitForReply && (<div className="form-group"><label>Tempo de espera (min)</label><input name="replyTimeout" type="number" className="form-input" value={nodeData.replyTimeout || 5} onChange={handleChange} /></div>)}
                 </>);
