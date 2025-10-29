@@ -4169,8 +4169,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             if (currentNode.data.waitForReply) {
                 await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                const target_node_id = noReplyNodeId || null;  // Se conectado, usa o nó; se solto, null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para encerrar o fluxo`);
+                console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min${noReplyNodeId ? ` para o nó ${noReplyNodeId}` : ' para encerrar o fluxo'}`);
                 try {
                     // cancel old
                     const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -4184,7 +4186,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     }
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { chat_id: chatId, bot_id: botId, target_node_id: null, variables: variables },
+                        body: { chat_id: chatId, bot_id: botId, target_node_id: target_node_id, variables: variables },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
                         method: "POST"
