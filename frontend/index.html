@@ -5506,7 +5506,7 @@ function generatePreviewHTML(data) {
         const [isSaving, setIsSaving] = useState(false);
         useEffect(() => {
             api.get('/api/dashboard/data')
-                .then(res => setApiKey(res.data.settings?.hottrack_api_key || ''))
+                .then(res => setApiKey(res.data.settings?.api_key || ''))
                 .catch(() => alert("Não foi possível carregar as suas configurações."))
                 .finally(() => setIsLoading(false));
         }, []);
@@ -5751,7 +5751,7 @@ function generatePreviewHTML(data) {
     
     function ChatActionsPanel({ botId, chat, flows, onAction }) {
         const [pixValue, setPixValue] = useState(100);
-        const [pixMessage, setPixMessage] = useState('🚨 Meu amor, o código expira em 6 minutos.');
+        const [pixMessage, setPixMessage] = useState('🚨 O PIX expira em 6 minutos.');
         const [pixButtonText, setPixButtonText] = useState('📋 Copiar Código PIX');
         const [selectedFlow, setSelectedFlow] = useState('');
 
