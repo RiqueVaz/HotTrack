@@ -3944,6 +3944,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
                 // REMOVIDO: findNextNode
                 break;
+
+                case 'typing_action':
+        if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
+            await new Promise(resolve => setTimeout(resolve, actionData.durationInSeconds * 1000));
+        }
             
             case 'action_pix':
                 try {
