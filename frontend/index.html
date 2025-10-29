@@ -6763,16 +6763,13 @@ function generatePreviewHTML(data) {
             }
         };
 
-        const availableActionTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+        const availableActionTypes = ['message', 'image', 'video', 'audio', 'typing_action', 'forward_flow'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
             image: '🖼️ Imagem',
             video: '🎬 Vídeo',
             audio: '🎵 Áudio',
-            delay: '⏱️ Atraso',
             typing_action: '✍️ Digitando',
-            action_pix: '💳 PIX',
-            action_check_pix: '🔍 Verificar PIX',
             forward_flow: '↪️ Encaminhar'
         };
 
@@ -7121,11 +7118,7 @@ function generatePreviewHTML(data) {
         
         const nodeTypesList = [
             { type: 'message', icon: '💬', label: 'Mensagem', category: 'Componentes' },
-            { type: 'image', icon: '🖼️', label: 'Imagem', category: 'Componentes' },
-            { type: 'video', icon: '🎬', label: 'Vídeo', category: 'Componentes' },
-            { type: 'audio', icon: '🎵', label: 'Áudio', category: 'Componentes' },
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
-            { type: 'typing_action', icon: '✍️', label: 'Ação de Digitando', category: 'Ações' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
             { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
