@@ -4228,6 +4228,16 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                         const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
+
+                        // Dispara eventos de InitiateCheckout (Meta) e waiting_payment (Utmify)
+                        try {
+                            await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
+                        } catch (e) { console.warn(`[Flow Engine] Falha ao enviar InitiateCheckout: ${e.message}`); }
+                        try {
+                            const customerDataForUtmify = { name: "Cliente Interessado", email: "cliente@email.com" };
+                            const productDataForUtmify = { id: "prod_1", name: "Produto Ofertado" };
+                            await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
+                        } catch (e) { console.warn(`[Flow Engine] Falha ao enviar waiting_payment para Utmify: ${e.message}`); }
     
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
@@ -4646,7 +4656,17 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
                 integrationId = pressel.utmify_integration_id;
             }
         } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
+            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Tentando resolver integração a partir do checkout.`);
+            try {
+                const [checkout] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${clickData.checkout_id}`;
+                const cfg = checkout?.config || {};
+                const utmifyId = cfg.utmify_integration_id || cfg.integration_id || null;
+                if (utmifyId) {
+                    integrationId = utmifyId;
+                }
+            } catch (e) {
+                console.warn(`[Utmify] Não foi possível obter integração do checkout ${clickData.checkout_id}: ${e.message}`);
+            }
         }
 
         if (!integrationId) {
