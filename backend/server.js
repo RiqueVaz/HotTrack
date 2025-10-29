@@ -3628,58 +3628,81 @@ app.post('/api/pix/generate', logApiRequest, async (req, res) => {
 
 app.get('/api/pix/status/:transaction_id', async (req, res) => {
     const apiKey = req.headers['x-api-key'];
-    const { transaction_id } = req.params;
+    const { transaction_id } = req.params; // Pode ser ID do provedor ou nosso pix_id
 
     if (!apiKey) return res.status(401).json({ message: 'API Key não fornecida.' });
     if (!transaction_id) return res.status(400).json({ message: 'ID da transação é obrigatório.' });
 
     try {
+        // Valida API Key e obtém o seller
         const [seller] = await sql`SELECT * FROM sellers WHERE api_key = ${apiKey}`;
         if (!seller) {
             return res.status(401).json({ message: 'API Key inválida.' });
         }
-        
+
+        // Busca a transação e dados do clique associado (inclui checkout_id e click_id originais)
         const [transaction] = await sql`
-            SELECT pt.* FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
-            WHERE (pt.provider_transaction_id = ${transaction_id} OR pt.pix_id = ${transaction_id}) AND c.seller_id = ${seller.id}`;
+            SELECT pt.*, c.checkout_id, c.click_id
+            FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
+            WHERE (pt.provider_transaction_id = ${transaction_id} OR pt.pix_id = ${transaction_id})
+              AND c.seller_id = ${seller.id}`;
 
         if (!transaction) {
             return res.status(404).json({ status: 'not_found', message: 'Transação não encontrada.' });
         }
-        
-        if (transaction.status === 'paid') {
-            return res.status(200).json({ status: 'paid' });
-        }
-        
-        if (transaction.provider === 'oasyfy' || transaction.provider === 'cnpay' || transaction.provider === 'brpix') {
-            return res.status(200).json({ status: 'pending', message: 'Aguardando confirmação via webhook.' });
-        }
 
-        let providerStatus, customerData = {};
-        try {
-            if (transaction.provider === 'syncpay') {
-                const syncPayToken = await getSyncPayAuthToken(seller);
-                const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                    headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                });
-                providerStatus = response.data.status;
-                customerData = response.data.payer;
-            } else if (transaction.provider === 'pushinpay') {
-                const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                providerStatus = response.data.status;
-                customerData = { name: response.data.payer_name, document: response.data.payer_document };
+        let currentStatus = transaction.status;
+        let customerData = {};
+
+        // Se ainda pendente e passível de consulta, tenta confirmar no provedor
+        if (currentStatus === 'pending' && transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
+            try {
+                let providerStatus;
+                if (transaction.provider === 'syncpay') {
+                    const syncPayToken = await getSyncPayAuthToken(seller);
+                    const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                        headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                    });
+                    providerStatus = response.data.status;
+                    customerData = response.data.payer;
+                } else if (transaction.provider === 'pushinpay') {
+                    const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                    providerStatus = response.data.status;
+                    customerData = { name: response.data.payer_name, document: response.data.payer_document };
+                }
+
+                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+                    await handleSuccessfulPayment(transaction.id, customerData);
+                    currentStatus = 'paid';
+                }
+            } catch (providerError) {
+                if (!providerError.response || providerError.response.status !== 404) {
+                    console.error(`Falha ao consultar o provedor (${transaction.provider}) para a transação ${transaction.id}:`, providerError.message);
+                }
+                // Continua retornando pending se não conseguiu confirmar
             }
-        } catch (providerError) {
-             console.error(`Falha ao consultar o provedor para a transação ${transaction.id}:`, providerError.message);
-             return res.status(200).json({ status: 'pending' });
         }
 
-        if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
-            await handleSuccessfulPayment(transaction.id, customerData);
-            return res.status(200).json({ status: 'paid' });
+        if (currentStatus === 'paid') {
+            let redirectUrl = null;
+            // Se veio de checkout hospedado, tenta buscar URL de sucesso no config
+            if (transaction.checkout_id && String(transaction.checkout_id).startsWith('cko_')) {
+                const [checkoutConfig] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${transaction.checkout_id}`;
+                // Ajuste o caminho conforme seu schema de config
+                redirectUrl = checkoutConfig?.config?.redirects?.success_url || null;
+                if (!redirectUrl) {
+                    console.warn(`[PIX Status] Checkout ${transaction.checkout_id} sem redirects.success_url configurado.`);
+                }
+            }
+
+            return res.status(200).json({
+                status: 'paid',
+                redirectUrl: redirectUrl,
+                click_id: transaction.click_id
+            });
         }
 
-        res.status(200).json({ status: 'pending' });
+        return res.status(200).json({ status: currentStatus });
 
     } catch (error) {
         console.error("Erro ao consultar status da transação:", error);
