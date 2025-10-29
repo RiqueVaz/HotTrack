@@ -311,7 +311,7 @@ async function handler(req, res) {
                 });
                 const { transaction_id, qr_code_text } = apiResp.data;
                 lastTransactionId = transaction_id;
-                const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
+                const messageText = await replaceVariables(step.pixMessage || "", userVariables);
                 const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
                 const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
                 response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
