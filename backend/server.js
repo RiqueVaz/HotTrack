@@ -1681,7 +1681,8 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
 
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, phone } = req.body;
+
 
     if (!name || !email || !password || password.length < 8) {
         return res.status(400).json({ message: 'Dados inválidos. Nome, email e senha (mínimo 8 caracteres) são obrigatórios.' });
@@ -1694,14 +1695,17 @@ app.post('/api/sellers/register', async (req, res) => {
             return res.status(409).json({ message: 'Este email já está em uso.' });
         }
 
-        // Adicionar campos de verificação se não existirem
+
+        // Adicionar campos de verificação e telefone se não existirem
         try {
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_code TEXT`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_expires TIMESTAMP`;
+            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS phone TEXT`;
         } catch (error) {
-            console.log('Campos de verificação já existem ou erro:', error.message);
+            console.log('Campos já existem ou erro:', error.message);
         }
+
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const apiKey = uuidv4();
@@ -1709,7 +1713,7 @@ app.post('/api/sellers/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
         
         // Criar usuário como não verificado
-        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires})`;
+        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires, phone) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires}, ${phone || null})`;
         
         // Enviar email de verificação
         try {
@@ -1755,6 +1759,7 @@ app.post('/api/sellers/register', async (req, res) => {
                     
                     Se você não criou uma conta no HotTrack, ignore este email.
                 `);
+
 
             await mailerSend.email.send(emailParams);
             
