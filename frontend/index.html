@@ -5506,7 +5506,7 @@ function generatePreviewHTML(data) {
         const [isSaving, setIsSaving] = useState(false);
         useEffect(() => {
             api.get('/api/dashboard/data')
-                .then(res => setApiKey(res.data.settings?.hottrack_api_key || ''))
+                .then(res => setApiKey(res.data.settings?.api_key || ''))
                 .catch(() => alert("Não foi possível carregar as suas configurações."))
                 .finally(() => setIsLoading(false));
         }, []);

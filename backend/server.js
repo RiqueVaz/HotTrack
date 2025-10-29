@@ -4874,7 +4874,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
     const { apiKey } = req.body;
     if (typeof apiKey === 'undefined') return res.status(400).json({ message: 'O campo apiKey é obrigatório.' });
     try {
-        await sqlWithRetry('UPDATE sellers SET hottrack_api_key = $1 WHERE id = $2', [apiKey, req.user.id]);
+        await sqlWithRetry('UPDATE sellers SET api_key = $1 WHERE id = $2', [apiKey, req.user.id]);
         res.status(200).json({ message: 'Chave de API do HotTrack salva com sucesso!' });
     } catch (error) {
         res.status(500).json({ message: 'Erro ao salvar a chave.' });
@@ -5015,50 +5015,24 @@ app.delete('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
-    const { botId, chatId, valueInCents, pixMessage, pixButtonText } = req.body;
+    const { botId, chatId, click_id, valueInCents, pixMessage, pixButtonText } = req.body;
     try {
-        // Busca o click_id mais recente para este usuário no backend
-        const [chat] = await sqlWithRetry(`
-            SELECT click_id FROM telegram_chats 
-            WHERE chat_id = $1 AND bot_id = $2 AND click_id IS NOT NULL 
-            ORDER BY created_at DESC LIMIT 1
-        `, [chatId, botId]);
+        if (!click_id) return res.status(400).json({ message: "Usuário não tem um Click ID para gerar PIX." });
+        
+        const [seller] = await sqlWithRetry('SELECT api_key FROM sellers WHERE id = $1', [req.user.id]);
+        if (!seller || !seller.api_key) return res.status(400).json({ message: "API Key não configurada." });
+        
+        const baseApiUrl = process.env.HOTTRACK_API_URL;
+        const pixResponse = await axios.post(`${baseApiUrl}/api/pix/generate`, { click_id, value_cents: valueInCents }, { headers: { 'x-api-key': seller.api_key } });
+        const { transaction_id, qr_code_text } = pixResponse.data;
 
-        const click_id = chat?.click_id;
+        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [transaction_id, botId, chatId]);
 
-        if (!click_id) {
-            return res.status(400).json({ message: "Não foi possível encontrar um Click ID associado a este usuário para gerar o PIX." });
-        }
-
-        const [seller] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [req.user.id]);
-        if (!seller) return res.status(400).json({ message: "Vendedor não encontrado." });
-
-        const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
-        const [click] = await sqlWithRetry('SELECT * FROM clicks WHERE click_id = $1 AND seller_id = $2', [db_click_id, seller.id]);
-        // Se o clique não existir no banco para ESTE vendedor, retorna erro
-        if (!click) return res.status(404).json({ message: "Click ID não encontrado para este vendedor." });
-
-        const ip_address = click.ip_address || req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress; // Garante IP
-
-        // *** SUBSTITUIÇÃO DA CHAMADA DIRETA PELA NOVA FUNÇÃO ***
-        const pixResult = await generatePixWithFallback(seller, valueInCents, req.headers.host, seller.api_key, ip_address, click.id); // Passa click.id
-
-        // O INSERT já foi feito dentro de generatePixWithFallback
-        // Apenas continue com a lógica do Telegram
-
-        // CORRECTION: Removed ORDER BY and LIMIT
-        await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
-         // ADICIONAR VERIFICAÇÃO DO BOT (Importante!)
-        if (!bot) {
-            console.error(`[Generate PIX Chat] Bot ID ${botId} não encontrado após gerar PIX.`);
-            // O PIX foi gerado, mas não podemos enviar. Logar isso é importante.
-            return res.status(500).json({ message: 'PIX gerado, mas falha ao buscar informações do bot para envio.' });
-        }
-
+        
         const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
-        const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+        const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
 
         const sentMessage = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
             chat_id: chatId,
@@ -5066,25 +5040,17 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
             parse_mode: 'HTML',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]
+                    [{ text: buttonText, copy_text: { text: qr_code_text } }]
                 ]
             }
         });
 
         if (sentMessage.ok) {
             await saveMessageToDb(req.user.id, botId, sentMessage.result, 'operator');
-        } else {
-             console.error(`[Generate PIX Chat] Falha ao enviar mensagem do PIX para ${chatId}. Resposta Telegram:`, sentMessage.description);
-             // Considerar se deve retornar erro aqui ou apenas logar
         }
-
         res.status(200).json({ message: 'PIX enviado ao usuário.' });
-
     } catch (error) {
-        // O catch agora pega o erro lançado por generatePixWithFallback ou outros erros
-        console.error('ERRO EM /api/chats/generate-pix:', error);
-        const message = error.message || 'Erro ao gerar ou enviar PIX via chat.'; // Usa a mensagem do erro lançado
-        res.status(500).json({ message });
+        res.status(500).json({ message: error.response?.data?.message || 'Erro ao gerar PIX.' });
     }
 });
 
