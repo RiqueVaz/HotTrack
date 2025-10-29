@@ -1681,7 +1681,8 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
 
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, phone } = req.body;
+
 
     if (!name || !email || !password || password.length < 8) {
         return res.status(400).json({ message: 'Dados inválidos. Nome, email e senha (mínimo 8 caracteres) são obrigatórios.' });
@@ -1694,14 +1695,17 @@ app.post('/api/sellers/register', async (req, res) => {
             return res.status(409).json({ message: 'Este email já está em uso.' });
         }
 
-        // Adicionar campos de verificação se não existirem
+
+        // Adicionar campos de verificação e telefone se não existirem
         try {
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_code TEXT`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_expires TIMESTAMP`;
+            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS phone TEXT`;
         } catch (error) {
-            console.log('Campos de verificação já existem ou erro:', error.message);
+            console.log('Campos já existem ou erro:', error.message);
         }
+
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const apiKey = uuidv4();
@@ -1709,7 +1713,7 @@ app.post('/api/sellers/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
         
         // Criar usuário como não verificado
-        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires})`;
+        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires, phone) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires}, ${phone || null})`;
         
         // Enviar email de verificação
         try {
@@ -1755,6 +1759,7 @@ app.post('/api/sellers/register', async (req, res) => {
                     
                     Se você não criou uma conta no HotTrack, ignore este email.
                 `);
+
 
             await mailerSend.email.send(emailParams);
             
@@ -3868,14 +3873,17 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
-    if (!text || text.trim() === '') return;
-    try {
-        if (showTyping) {
-            await sendTypingAction(chatId, botToken);
-            let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
-            await new Promise(resolve => setTimeout(resolve, typingDuration));
-        }
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, typingDelay = 0, variables = {}) {
+    if (!text || text.trim() === '') return;
+    try {
+        if (showTyping) {
+            await sendTypingAction(chatId, botToken);
+            // Use o delay definido no frontend (convertido para ms), ou um fallback se não for definido
+            let typingDurationMs = (typingDelay && typingDelay > 0) 
+                ? (typingDelay * 1000) 
+                : Math.max(500, Math.min(2000, text.length * 50));
+            await new Promise(resolve => setTimeout(resolve, typingDurationMs));
+        }
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
@@ -3899,9 +3907,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
         switch (action.type) {
             case 'message':
-                if (actionData.typingDelay && actionData.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, actionData.typingDelay * 1000));
-                }
 
                 const textToSend = await replaceVariables(actionData.text, variables);
                 await sendMessage(chatId, textToSend, botToken, sellerId, botId, actionData.showTyping, variables);
@@ -4145,9 +4150,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         switch (currentNode.type) {
             case 'message':
-                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
-                }
+
 
                 // ==========================================================
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
@@ -4284,7 +4287,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
     
                         // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "", variables);
                         const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
                         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     

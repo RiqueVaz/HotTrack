@@ -320,14 +320,17 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
-async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
-    if (!text || text.trim() === '') return;
-    try {
-        if (showTyping) {
-            await sendTypingAction(chatId, botToken);
-            let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
-            await new Promise(resolve => setTimeout(resolve, typingDuration));
-        }
+async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, typingDelay = 0, variables = {}) {
+    if (!text || text.trim() === '') return;
+    try {
+        if (showTyping) {
+            await sendTypingAction(chatId, botToken);
+            // Use o delay definido no frontend (convertido para ms), ou um fallback se não for definido
+            let typingDurationMs = (typingDelay && typingDelay > 0) 
+                ? (typingDelay * 1000) 
+                : Math.max(500, Math.min(2000, text.length * 50));
+            await new Promise(resolve => setTimeout(resolve, typingDurationMs));
+        }
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
@@ -355,9 +358,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
         switch (action.type) {
             case 'message':
-                if (actionData.typingDelay && actionData.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, actionData.typingDelay * 1000));
-                }
 
                 const textToSend = await replaceVariables(actionData.text, variables);
                 // Passa actionData.showTyping
@@ -439,7 +439,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
 
                     // Envia o PIX para o usuário
-                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                    const messageText = await replaceVariables(actionData.pixMessage || "", variables);
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar Código PIX", variables);
                     const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
 
@@ -600,9 +600,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         switch (currentNode.type) {
             case 'message':
-                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
-                }
 
                 // ==========================================================
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
@@ -733,7 +730,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
     
                         // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "", variables);
                         const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
                         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
