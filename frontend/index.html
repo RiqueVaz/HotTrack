@@ -5270,7 +5270,7 @@ function generatePreviewHTML(data) {
         switch (type) {
             case 'message': newStep.text = ''; newStep.buttonText = ''; newStep.buttonUrl = ''; break;
             case 'image': case 'video': case 'audio': newStep.fileUrl = ''; newStep.caption = ''; break;
-            case 'pix': newStep.valueInCents = 100; newStep.pixMessage = '✅ PIX Gerado! Copie o código abaixo:'; newStep.pixButtonText = '📋 Copiar Código'; break;
+            case 'pix': newStep.valueInCents = 100; newStep.pixMessage = ''; newStep.pixButtonText = '📋 Copiar Código'; break;
             case 'check_pix': newStep.deliveryText = '✅ Pagamento confirmado! Aqui está seu acesso:'; newStep.deliveryButtonText = 'Acessar Conteúdo'; newStep.deliveryButtonUrl = ''; break;
             default: break;
         }
