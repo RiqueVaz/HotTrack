@@ -312,6 +312,16 @@ function findNextNode(currentNodeId, handleId, edges) {
     return edge ? edge.target : null;
 }
 
+async function showTypingForDuration(chatId, botToken, durationMs) {
+    const endTime = Date.now() + durationMs;
+    while (Date.now() < endTime) {
+        await sendTypingAction(chatId, botToken);
+        const remaining = endTime - Date.now();
+        const wait = Math.min(5000, remaining); // envia a cada 5s ou menos se acabar o tempo
+        await new Promise(resolve => setTimeout(resolve, wait));
+    }
+}
+
 async function sendTypingAction(chatId, botToken) {
     try {
         await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, { chat_id: chatId, action: 'typing' });
@@ -323,14 +333,13 @@ async function sendTypingAction(chatId, botToken) {
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, typingDelay = 0, variables = {}) {
     if (!text || text.trim() === '') return;
     try {
-        if (showTyping) {
-            await sendTypingAction(chatId, botToken);
+        if (showTyping) {
             // Use o delay definido no frontend (convertido para ms), ou um fallback se não for definido
-            let typingDurationMs = (typingDelay && typingDelay > 0) 
+            let typingDurationMs = (typingDelay && typingDelay > 0) 
                 ? (typingDelay * 1000) 
                 : Math.max(500, Math.min(2000, text.length * 50));
-            await new Promise(resolve => setTimeout(resolve, typingDurationMs));
-        }
+            await showTypingForDuration(chatId, botToken, typingDurationMs);
+        }
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
@@ -400,8 +409,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'typing_action':
                 if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
-                    await sendTypingAction(chatId, botToken);
-                    await new Promise(resolve => setTimeout(resolve, actionData.durationInSeconds * 1000));
+                    await showTypingForDuration(chatId, botToken, actionData.durationInSeconds * 1000);
                 }
                 break;
 
