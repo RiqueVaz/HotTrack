@@ -400,6 +400,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'typing_action':
                 if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
+                    await sendTypingAction(chatId, botToken);
                     await new Promise(resolve => setTimeout(resolve, actionData.durationInSeconds * 1000));
                 }
                 break;
