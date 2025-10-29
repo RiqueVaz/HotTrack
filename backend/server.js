@@ -2364,6 +2364,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
             }
             
             let netlifyUrl = null;
+            let netlifyDeploy = null;
             
             // Deploy opcional para Netlify
             if (deploy_to_netlify) {
@@ -2381,6 +2382,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                             
                             if (deployResult.success) {
                                 netlifyUrl = deployResult.url;
+                                netlifyDeploy = { success: true, url: netlifyUrl };
                                 
                                 // Atualizar campo netlify_url na tabela pressels
                                 await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
@@ -2392,6 +2394,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso: ${netlifyUrl}`);
                             } else {
                                 console.warn(`[Netlify] Site existente não encontrado, criando novo site. Erro:`, deployResult.error);
+                                netlifyDeploy = { success: false, message: deployResult.userMessage || 'Falha ao publicar no Netlify.' };
                                 
                                 // Limpar site_id inválido e criar novo site
                                 await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
@@ -2411,6 +2414,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     
                                     if (deployResult2.success) {
                                         netlifyUrl = deployResult2.url;
+                                        netlifyDeploy = { success: true, url: netlifyUrl };
                                         
                                         // Atualizar campo netlify_url na tabela pressels
                                         await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
@@ -2420,9 +2424,12 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                         await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
                                         
                                         console.log(`[Netlify] Novo site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
+                                    } else {
+                                        netlifyDeploy = { success: false, message: deployResult2.userMessage || 'Falha ao publicar no Netlify.' };
                                     }
                                 } else {
                                     console.error(`[Netlify] Erro ao criar novo site para pressel ${newPressel.id}:`, siteResult.error);
+                                    netlifyDeploy = { success: false, message: siteResult.error || 'Falha ao criar site no Netlify.' };
                                 }
                             }
                         } else {
@@ -2441,6 +2448,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 
                                 if (deployResult.success) {
                                     netlifyUrl = deployResult.url;
+                                    netlifyDeploy = { success: true, url: netlifyUrl };
                                     
                                     // Atualizar campo netlify_url na tabela pressels
                                     await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
@@ -2450,17 +2458,24 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
                                     
                                     console.log(`[Netlify] Site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
+                                } else {
+                                    netlifyDeploy = { success: false, message: deployResult.userMessage || 'Falha ao publicar no Netlify.' };
                                 }
                             } else {
                                 console.error(`[Netlify] Erro ao criar site para pressel ${newPressel.id}:`, siteResult.error);
+                                netlifyDeploy = { success: false, message: siteResult.error || 'Falha ao criar site no Netlify.' };
                             }
                         }
                     } else {
                         console.warn(`[Netlify] Token Netlify não configurado para vendedor ${req.user.id}`);
+                        netlifyDeploy = { success: false, message: 'Token Netlify não configurado. Configure em Integrações > Netlify.' };
                     }
                 } catch (netlifyError) {
                     console.error(`[Netlify] Erro no deploy da pressel ${newPressel.id}:`, netlifyError);
                     // Não falha a criação da pressel se o deploy falhar
+                    if (!netlifyDeploy) {
+                        netlifyDeploy = { success: false, message: 'Falha inesperada no deploy Netlify. Tente novamente.' };
+                    }
                 }
             }
             
@@ -2470,7 +2485,8 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                 ...newPressel, 
                 pixel_ids: numeric_pixel_ids, 
                 bot_name,
-                netlify_url: netlifyUrl
+                netlify_url: netlifyUrl,
+                netlify_deploy: netlifyDeploy
             });
         } catch (transactionError) {
             await sql`ROLLBACK`;
