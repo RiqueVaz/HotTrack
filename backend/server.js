@@ -393,10 +393,22 @@ async function deployToNetlify(accessToken, siteId, htmlContent, fileName = 'ind
             url: `https://${deployResponse.data.subdomain || deployResponse.data.name}.netlify.app`
         };
     } catch (error) {
+        const status = error.response?.status;
+        const netlifyMsg = error.response?.data?.message || error.response?.data?.error || error.message;
+        let userMessage = 'Falha ao publicar no Netlify. Tente novamente em instantes.';
+        if (status === 401) {
+            userMessage = 'Token Netlify inválido ou expirado. Refaça a conexão com o Netlify nas configurações.';
+        } else if (status === 404) {
+            userMessage = 'Site do Netlify não encontrado. Verifique o site selecionado ou crie um novo.';
+        } else if (status === 422) {
+            userMessage = 'Dados inválidos para deploy no Netlify (422). Revise o conteúdo/arquivo e tente novamente.';
+        }
         console.error('[Netlify] Erro ao fazer deploy:', error.response?.data || error.message);
         return {
             success: false,
-            error: error.response?.data?.message || error.message
+            statusCode: status,
+            error: netlifyMsg,
+            userMessage
         };
     }
 }
