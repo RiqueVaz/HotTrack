@@ -4498,36 +4498,35 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
 
         // PRIORIDADE 1: Comando /start reinicia tudo.
         if (isStartCommand) {
-            console.log(`[Webhook] Comando /start recebido. Reiniciando fluxo para o chat ${chatId}.`);
+            
+                        const parts = text.split(' ');
+                        
+                        // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
+                        if (parts.length > 1 && parts[1].trim() !== '') {
+                            const clickIdValue = text;
+                            console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
             
-            // Cancela qualquer tarefa pendente e deleta o estado antigo.
-            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            if (existingState && existingState.scheduled_message_id) {
-                try {
-                    await qstashClient.messages.delete(existingState.scheduled_message_id);
-                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
-                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
-            }
-            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-
-            // Lógica para criar click_id (orgânico ou de campanha)
-            let clickIdValue = null;
-            const parts = text.split(' ');
-            if (parts.length > 1 && parts[1].trim() !== '') {
-                clickIdValue = text;
-                console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
-            } else {
-                console.log(`[Webhook] Tráfego orgânico do bot detectado. Gerando novo click_id.`);
-                const [newClick] = await sql`INSERT INTO clicks (seller_id, bot_id, is_organic) VALUES (${sellerId}, ${botId}, TRUE) RETURNING id`;
-                clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
-                await sql`UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}`;
-                console.log(`[Webhook] Novo click_id orgânico gerado: ${clickIdValue}`);
-            }
-            
-            // Inicia o fluxo do zero.
-            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
-            return; // Finaliza a execução.
-        }
+                            // Cancela qualquer tarefa pendente e deleta o estado antigo.
+                            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            if (existingState && existingState.scheduled_message_id) {
+                                try {
+                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
+                            }
+                            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            
+                            // Inicia o fluxo do zero.
+                            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
+                        
+                        } else {
+                            // É um /start orgânico (sozinho), que você quer ignorar.
+                            console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
+                            // Não faz nada e apenas termina a execução.
+                        }
+                        
+                        return; // Finaliza a execução (seja por iniciar o fluxo ou por ignorar)
+                    }
 
         // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
         const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
