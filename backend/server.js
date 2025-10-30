@@ -4686,20 +4686,61 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     });
 
 
-app.post('/api/webhook/pushinpay', async (req, res) => {
-    const { id, status, payer_name, payer_document } = req.body;
-    const normalized = String(status || '').toLowerCase();
-    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-    if (paidStatuses.has(normalized)) {
-        try {
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${id} AND provider = 'pushinpay'`;
-            if (tx && tx.status !== 'paid') {
-                await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_document });
-            }
-        } catch (error) { console.error("Erro no webhook da PushinPay:", error); }
-    }
-    res.sendStatus(200);
-});
+    app.post('/api/webhook/pushinpay', async (req, res) => {
+           // 1. O webhook envia um payload simples
+           const { id, status } = req.body; 
+           const normalized = String(status || '').toLowerCase();
+           const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+           
+           if (paidStatuses.has(normalized)) {
+               try {
+                   // 2. Buscamos a transação E o seller_id associado (via clique)
+                   const [tx] = await sql`
+                       SELECT pt.id, pt.status, c.seller_id 
+                       FROM pix_transactions pt 
+                       JOIN clicks c ON pt.click_id_internal = c.id 
+                       WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
+                   `;
+                       
+                   // 3. Se a transação existir e AINDA não estiver paga
+                   if (tx && tx.status !== 'paid') {
+                       console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) recebida como paga. Buscando dados do pagador...`);
+                       
+                       // 4. Buscar o token do vendedor para fazer a consulta GET
+                       const [seller] = await sql`SELECT pushinpay_token FROM sellers WHERE id = ${tx.seller_id}`;
+                       if (!seller || !seller.pushinpay_token) {
+                           console.error(`[Webhook PushinPay] Vendedor ${tx.seller_id} não encontrado ou sem token PushinPay.`);
+                           return res.sendStatus(200); // Responde OK, mas loga o erro
+                       }
+       
+                       // 5. FAZ A CONSULTA GET para obter os dados completos
+                       const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${id}`, { 
+                           headers: { 
+                               Authorization: `Bearer ${seller.pushinpay_token}`,
+                               Accept: 'application/json', 
+                               'Content-Type': 'application/json' 
+                           },
+                           httpsAgent: httpsAgent // Reutiliza sua conexão keep-alive
+                       });
+       
+                       // 6. Extrai os dados corretos da resposta do GET
+                       const payer_name = resp.data.payer_name;
+                       const payer_national_registration = resp.data.payer_national_registration; // Nome correto do campo
+       
+                       // 7. Chamar o handleSuccessfulPayment com os dados completos
+                       await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+                   
+                   } else if (tx) {
+                       console.log(`[Webhook PushinPay] Transação ${id} já estava como 'paid'. Ignorando webhook.`);
+                   } else {
+                       console.warn(`[Webhook PushinPay] Transação ${id} não encontrada no banco.`);
+                   }
+               } catch (error) { 
+                   console.error("Erro no webhook da PushinPay:", error.response?.data || error.message); 
+               }
+           }
+           res.sendStatus(200);
+       });
 app.post('/api/webhook/cnpay', async (req, res) => {
     // 1. Log para depuração (opcional, mas recomendado)
     console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
