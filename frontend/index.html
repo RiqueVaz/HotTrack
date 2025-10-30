@@ -6724,10 +6724,6 @@ function generatePreviewHTML(data) {
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
                     <div className="form-group"><label>Botão (Opcional)</label><input name="buttonText" type="text" className="form-input" value={nodeData.buttonText || ''} onChange={handleChange} placeholder="Texto do Botão"/><input name="buttonUrl" type="url" className="form-input" value={nodeData.buttonUrl || ''} onChange={handleChange} placeholder="URL do Botão" style={{marginTop: '0.5rem'}}/></div>
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    
-                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    <div className="form-group"><label><input name="waitForReply" type="checkbox" checked={!!nodeData.waitForReply} onChange={handleChange} /> Aguardar Resposta</label></div>
-                    {nodeData.waitForReply && (<div className="form-group"><label>Tempo de espera (min)</label><input name="replyTimeout" type="number" className="form-input" value={nodeData.replyTimeout || 5} onChange={handleChange} /></div>)}
                 </>);
                 case 'image': return (<><div className="form-group"><label>File ID ou URL da Imagem</label><input name="imageUrl" type="text" className="form-input" value={nodeData.imageUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'imageUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
                 case 'video': return (<><div className="form-group"><label>File ID ou URL do Vídeo</label><input name="videoUrl" type="text" className="form-input" value={nodeData.videoUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'videoUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
@@ -6819,6 +6815,33 @@ function generatePreviewHTML(data) {
                         )}
                     </div>
                     <div className="node-editor-modal-footer">
+                        {selectedNode.type === 'message' && (
+                            <div style={{marginRight: 'auto', display: 'flex', alignItems: 'center', gap: '1rem'}}>
+                                <label style={{fontSize: '0.85rem'}}>
+                                    <input 
+                                        name="waitForReply"
+                                        type="checkbox"
+                                        checked={!!nodeData.waitForReply}
+                                        onChange={handleChange}
+                                        style={{marginRight: '0.4rem'}}
+                                    />
+                                    Aguardar Resposta
+                                </label>
+                                {nodeData.waitForReply && (
+                                    <div className="form-group" style={{margin: 0}}>
+                                        <label style={{fontSize: '0.85rem', marginRight: '0.5rem'}}>Tempo (min)</label>
+                                        <input 
+                                            name="replyTimeout"
+                                            type="number"
+                                            className="form-input"
+                                            value={nodeData.replyTimeout || 5}
+                                            onChange={handleChange}
+                                            style={{width: '80px'}}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         {selectedNode.type !== 'trigger' && (
                             <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
                         )}
