@@ -1078,7 +1078,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         const payload = { 
             amount: value_cents / 100, 
             payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${preferredHost}/api/webhook/syncpay`
+            webhook_url: `https://${preferredHost}/api/webhook/syncpay`
         };
         const commission_percentage = commission_rate * 100;
         if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
@@ -4701,18 +4701,50 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
     res.sendStatus(200);
 });
 app.post('/api/webhook/cnpay', async (req, res) => {
-    const { transactionId, status, customer } = req.body;
-    const normalized = String(status || '').toLowerCase();
-    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-    if (paidStatuses.has(normalized)) {
-        try {
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
-            if (tx && tx.status !== 'paid') {
-                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.taxID?.taxID });
-            }
-        } catch (error) { console.error("Erro no webhook da CNPay:", error); }
-    }
-    res.sendStatus(200);
+    // 1. Log para depuração (opcional, mas recomendado)
+    console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
+
+    // 2. Extrair os dados da estrutura ANINHADA correta
+    const transactionData = req.body.transaction;
+    const customer = req.body.client;
+
+    if (!transactionData || !transactionData.status) {
+        console.log("[Webhook CNPay] Webhook ignorado: objeto 'transaction' ou 'status' ausente.");
+        return res.sendStatus(200);
+    }
+
+    // 3. Extrair dados de dentro dos objetos
+    const { id: transactionId, status } = transactionData;
+    
+    const normalized = String(status || '').toLowerCase();
+    
+    // 4. A documentação da CNPay diz que o status pago é 'COMPLETED'
+    //    O seu 'paidStatuses' já inclui 'completed', então está OK.
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    
+    if (paidStatuses.has(normalized)) {
+        try {
+            console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
+            
+            // 5. Buscar no banco usando 'provider' = 'cnpay'
+            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
+            
+            if (tx && tx.status !== 'paid') {
+                console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
+                
+                // 6. Usar os dados do 'client' para o handleSuccessfulPayment
+                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
+            
+            } else if (tx) {
+                console.log(`[Webhook CNPay] Transação ${tx.id} já estava como 'paga'.`);
+            } else {
+                console.warn(`[Webhook CNPay] AVISO: Transação ${transactionId} não foi encontrada.`);
+            }
+        } catch (error) { 
+            console.error("Erro no webhook da CNPay:", error); 
+        }
+    }
+    res.sendStatus(200);
 });
 app.post('/api/webhook/oasyfy', async (req, res) => {
     console.log('[Webhook Oasy.fy] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
