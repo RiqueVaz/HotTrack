@@ -6512,31 +6512,7 @@ function generatePreviewHTML(data) {
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
-                            {action.isMain && (
-                                <>
-                                    <div className="form-group">
-                                        <label style={{fontSize: '0.85rem'}}>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={!!actionData.waitForReply} 
-                                                onChange={e => updateAction(index, 'waitForReply', e.target.checked)}
-                                            /> Aguardar Resposta
-                                        </label>
-                                        {actionData.waitForReply && (
-                                            <div className="form-group" style={{marginTop: '0.5rem'}}>
-                                                <label style={{fontSize: '0.85rem'}}>Tempo de espera (min)</label>
-                                                <input 
-                                                    type="number" 
-                                                    className="form-input" 
-                                                    value={actionData.replyTimeout || 5} 
-                                                    onChange={e => updateAction(index, 'replyTimeout', parseInt(e.target.value, 10))}
-                                                    style={{fontSize: '0.85rem'}}
-                                                />
-                                            </div>
-                                        )}
-                                    </div>
-                                </>
-                            )}
+                            {action.isMain && (<></>)}
                         </>
                     )}
                     
