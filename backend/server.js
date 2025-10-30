@@ -393,22 +393,10 @@ async function deployToNetlify(accessToken, siteId, htmlContent, fileName = 'ind
             url: `https://${deployResponse.data.subdomain || deployResponse.data.name}.netlify.app`
         };
     } catch (error) {
-        const status = error.response?.status;
-        const netlifyMsg = error.response?.data?.message || error.response?.data?.error || error.message;
-        let userMessage = 'Falha ao publicar no Netlify. Tente novamente em instantes.';
-        if (status === 401) {
-            userMessage = 'Token Netlify inválido ou expirado. Refaça a conexão com o Netlify nas configurações.';
-        } else if (status === 404) {
-            userMessage = 'Site do Netlify não encontrado. Verifique o site selecionado ou crie um novo.';
-        } else if (status === 422) {
-            userMessage = 'Dados inválidos para deploy no Netlify (422). Revise o conteúdo/arquivo e tente novamente.';
-        }
         console.error('[Netlify] Erro ao fazer deploy:', error.response?.data || error.message);
         return {
             success: false,
-            statusCode: status,
-            error: netlifyMsg,
-            userMessage
+            error: error.response?.data?.message || error.message
         };
     }
 }
@@ -1681,8 +1669,7 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
 
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
-    const { name, email, password, phone } = req.body;
-
+    const { name, email, password } = req.body;
 
     if (!name || !email || !password || password.length < 8) {
         return res.status(400).json({ message: 'Dados inválidos. Nome, email e senha (mínimo 8 caracteres) são obrigatórios.' });
@@ -1695,17 +1682,14 @@ app.post('/api/sellers/register', async (req, res) => {
             return res.status(409).json({ message: 'Este email já está em uso.' });
         }
 
-
-        // Adicionar campos de verificação e telefone se não existirem
+        // Adicionar campos de verificação se não existirem
         try {
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_code TEXT`;
             await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS verification_expires TIMESTAMP`;
-            await sql`ALTER TABLE sellers ADD COLUMN IF NOT EXISTS phone TEXT`;
         } catch (error) {
-            console.log('Campos já existem ou erro:', error.message);
+            console.log('Campos de verificação já existem ou erro:', error.message);
         }
-
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const apiKey = uuidv4();
@@ -1713,7 +1697,7 @@ app.post('/api/sellers/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
         
         // Criar usuário como não verificado
-        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires, phone) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires}, ${phone || null})`;
+        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires})`;
         
         // Enviar email de verificação
         try {
@@ -1759,7 +1743,6 @@ app.post('/api/sellers/register', async (req, res) => {
                     
                     Se você não criou uma conta no HotTrack, ignore este email.
                 `);
-
 
             await mailerSend.email.send(emailParams);
             
@@ -2369,7 +2352,6 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
             }
             
             let netlifyUrl = null;
-            let netlifyDeploy = null;
             
             // Deploy opcional para Netlify
             if (deploy_to_netlify) {
@@ -2382,38 +2364,22 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                         const htmlContent = await generatePresselHTML(newPressel, numeric_pixel_ids);
                         
                         if (seller.netlify_site_id) {
-                            // Usar site existente
-                           const fileName = `pressel-${newPressel.id}.html`; // Nome do arquivo
-                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, fileName); // Passa o nome
-
-                            if (deployResult.success) {
-                               // ### CORREÇÃO AQUI ###
-                               // Constrói a URL completa incluindo o nome do arquivo
-                               if (deployResult.url) { // Verifica se a URL base foi retornada
-                                  netlifyUrl = `${deployResult.url}/${fileName}`; // Adiciona o nome do arquivo
-                               } else {
-                                  console.error(`[Netlify] Deploy bem-sucedido para site existente ${seller.netlify_site_id}, mas URL base não retornada.`);
-                                  // Tratar erro ou definir netlifyUrl como null
-                                  netlifyUrl = null;
-                                  netlifyDeploy = { success: false, message: 'Deploy bem-sucedido, mas URL não obtida.' }; // Atualiza status
-                               }
-                               // ### FIM DA CORREÇÃO ###
-
-                               if (netlifyUrl) { // Só atualiza se a URL foi construída
-                                  netlifyDeploy = { success: true, url: netlifyUrl };
-
-                                  // Atualizar campo netlify_url na tabela pressels
-                                  await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
-                                  
-                                  // Adicionar domínio automaticamente
-                                  const domain = new URL(deployResult.url).hostname; // Pega só o hostname
-                                  await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain}) ON CONFLICT DO NOTHING`; // Evita duplicados
-                                  
-                                  console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso no site existente: ${netlifyUrl}`);
-                               }
-                            } else {
+                            // Usar site existente
+                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, `pressel-${newPressel.id}.html`);
+                            
+                            if (deployResult.success) {
+                                netlifyUrl = deployResult.url;
+                                
+                                // Atualizar campo netlify_url na tabela pressels
+                                await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
+                                
+                                // Adicionar domínio automaticamente
+                                const domain = deployResult.url.replace('https://', '');
+                                await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
+                                
+                                console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso: ${netlifyUrl}`);
+                            } else {
                                 console.warn(`[Netlify] Site existente não encontrado, criando novo site. Erro:`, deployResult.error);
-                                netlifyDeploy = { success: false, message: deployResult.userMessage || 'Falha ao publicar no Netlify.' };
                                 
                                 // Limpar site_id inválido e criar novo site
                                 await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
@@ -2433,7 +2399,6 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     
                                     if (deployResult2.success) {
                                         netlifyUrl = deployResult2.url;
-                                        netlifyDeploy = { success: true, url: netlifyUrl };
                                         
                                         // Atualizar campo netlify_url na tabela pressels
                                         await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
@@ -2443,12 +2408,9 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                         await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
                                         
                                         console.log(`[Netlify] Novo site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
-                                    } else {
-                                        netlifyDeploy = { success: false, message: deployResult2.userMessage || 'Falha ao publicar no Netlify.' };
                                     }
                                 } else {
                                     console.error(`[Netlify] Erro ao criar novo site para pressel ${newPressel.id}:`, siteResult.error);
-                                    netlifyDeploy = { success: false, message: siteResult.error || 'Falha ao criar site no Netlify.' };
                                 }
                             }
                         } else {
@@ -2467,7 +2429,6 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                 
                                 if (deployResult.success) {
                                     netlifyUrl = deployResult.url;
-                                    netlifyDeploy = { success: true, url: netlifyUrl };
                                     
                                     // Atualizar campo netlify_url na tabela pressels
                                     await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
@@ -2477,24 +2438,17 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
                                     
                                     console.log(`[Netlify] Site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
-                                } else {
-                                    netlifyDeploy = { success: false, message: deployResult.userMessage || 'Falha ao publicar no Netlify.' };
                                 }
                             } else {
                                 console.error(`[Netlify] Erro ao criar site para pressel ${newPressel.id}:`, siteResult.error);
-                                netlifyDeploy = { success: false, message: siteResult.error || 'Falha ao criar site no Netlify.' };
                             }
                         }
                     } else {
                         console.warn(`[Netlify] Token Netlify não configurado para vendedor ${req.user.id}`);
-                        netlifyDeploy = { success: false, message: 'Token Netlify não configurado. Configure em Integrações > Netlify.' };
                     }
                 } catch (netlifyError) {
                     console.error(`[Netlify] Erro no deploy da pressel ${newPressel.id}:`, netlifyError);
                     // Não falha a criação da pressel se o deploy falhar
-                    if (!netlifyDeploy) {
-                        netlifyDeploy = { success: false, message: 'Falha inesperada no deploy Netlify. Tente novamente.' };
-                    }
                 }
             }
             
@@ -2504,8 +2458,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                 ...newPressel, 
                 pixel_ids: numeric_pixel_ids, 
                 bot_name,
-                netlify_url: netlifyUrl,
-                netlify_deploy: netlifyDeploy
+                netlify_url: netlifyUrl
             });
         } catch (transactionError) {
             await sql`ROLLBACK`;
@@ -3873,6 +3826,17 @@ async function sendTypingAction(chatId, botToken) {
     }
 }
 
+// Envia a ação de digitação continuamente durante um período
+async function showTypingForDuration(chatId, botToken, durationMs) {
+    const endTime = Date.now() + durationMs;
+    while (Date.now() < endTime) {
+        await sendTypingAction(chatId, botToken);
+        const remaining = endTime - Date.now();
+        const wait = Math.min(5000, remaining);
+        await new Promise(resolve => setTimeout(resolve, wait));
+    }
+}
+
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
     if (!text || text.trim() === '') return;
     try {
@@ -3945,6 +3909,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 // REMOVIDO: findNextNode
                 break;
             
+            case 'typing_action':
+                if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
+                    await showTypingForDuration(chatId, botToken, actionData.durationInSeconds * 1000);
+                }
+                break;
+            
             case 'action_pix':
                 try {
                     console.log(`${logPrefix} Executando action_pix para chat ${chatId}`);
@@ -3980,7 +3950,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
-                    const messageText = await replaceVariables(actionData.pixMessage || "", variables);
+                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie:", variables);
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -3996,6 +3966,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error);
+                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento.", botToken, sellerId, botId, true, variables);
                 }
                 // REMOVIDO: findNextNode
                 break;
@@ -4009,12 +3980,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
 
                     if (transaction.status === 'paid') {
-                        console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);
+                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);
                     } else {
-                        console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true, variables);
+                        await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true, variables);
                     }
                 } catch (error) {
                     console.error(`${logPrefix} Erro ao consultar PIX:`, error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true, variables);
                 }
                 // REMOVIDO: findNextNode
                 break;
@@ -4172,38 +4144,40 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
 
-            if (currentNode.data.waitForReply) {
-                await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
-                const target_node_id = noReplyNodeId || null;  // Se conectado, usa o nó; se solto, null
-                const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min${noReplyNodeId ? ` para o nó ${noReplyNodeId}` : ' para encerrar o fluxo'}`);
-                try {
-                    // cancel old
-                    const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    if (existingState && existingState.scheduled_message_id) {
-                        try {
-                            await qstashClient.messages.delete(existingState.scheduled_message_id);
-                            console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada.`);
-                        } catch (e) {
-                            console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id}:`, e.message);
+                if (currentNode.data.waitForReply) {
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    if (noReplyNodeId) {
+                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+                        
+                        // CANCELAMENTO PREVENTIVO: Antes de agendar, cancela qualquer tarefa pendente.
+                        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        if (existingState && existingState.scheduled_message_id) {
+                            try {
+                                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                console.log(`${logPrefix} [Flow Engine] Tarefa de timeout antiga (${existingState.scheduled_message_id}) cancelada.`);
+                            } catch (e) { /* Ignora se já foi executada */ }
                         }
+
+                        // Agenda a nova tarefa de timeout.
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
+                            delay: `${timeoutMinutes}m`,
+                            method: "POST"
+                        });
+
+                        // Atualiza o estado do usuário com o NOVO messageId e o status de 'aguardando'.
+                        await sql`
+                            UPDATE user_flow_states 
+                            SET waiting_for_input = TRUE, scheduled_message_id = ${response.messageId}
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId};
+                        `;
                     }
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { chat_id: chatId, bot_id: botId, target_node_id: target_node_id, variables: variables },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
-                        method: "POST"
-                    });
-                    await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                } catch (error) {
-                    console.error("Erro ao agendar timeout:", error);
+                    currentNodeId = null; // Para o fluxo aqui, esperando a resposta ou o timeout.
+                } else {
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
-                currentNodeId = null;
-            } else {
-                currentNodeId = findNextNode(currentNodeId, 'a', edges);
-            }
                 break;
 
             // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
@@ -4271,16 +4245,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                         const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
-
-                        // Dispara eventos de InitiateCheckout (Meta) e waiting_payment (Utmify)
-                        try {
-                            await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-                        } catch (e) { console.warn(`[Flow Engine] Falha ao enviar InitiateCheckout: ${e.message}`); }
-                        try {
-                            const customerDataForUtmify = { name: "Cliente Interessado", email: "cliente@email.com" };
-                            const productDataForUtmify = { id: "prod_1", name: "Produto Ofertado" };
-                            await sendEventToUtmify('waiting_payment', click, { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, seller, customerDataForUtmify, productDataForUtmify);
-                        } catch (e) { console.warn(`[Flow Engine] Falha ao enviar waiting_payment para Utmify: ${e.message}`); }
     
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
@@ -4289,7 +4253,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
     
                         // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "", variables);
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
                         const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
                         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -4311,7 +4275,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     } catch (error) {
                         console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
                         // Informa o usuário sobre o erro
-                        console.log(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
                         // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
                         // Por enquanto, vamos parar aqui para evitar loops
                         currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
@@ -4331,14 +4295,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
 
                     if (transaction.status === 'paid') {
-                        console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
                         currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
                     } else {
-                        console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
                         currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
                     }
                 } catch (error) {
                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
@@ -4698,17 +4663,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
                 integrationId = pressel.utmify_integration_id;
             }
         } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Tentando resolver integração a partir do checkout.`);
-            try {
-                const [checkout] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${clickData.checkout_id}`;
-                const cfg = checkout?.config || {};
-                const utmifyId = cfg.utmify_integration_id || cfg.integration_id || null;
-                if (utmifyId) {
-                    integrationId = utmifyId;
-                }
-            } catch (e) {
-                console.warn(`[Utmify] Não foi possível obter integração do checkout ${clickData.checkout_id}: ${e.message}`);
-            }
+            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
         }
 
         if (!integrationId) {
@@ -5115,7 +5070,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
         
-        const messageText = pixMessage || '';
+        const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
 
