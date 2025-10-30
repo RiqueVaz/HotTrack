@@ -1027,6 +1027,12 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
     let acquirer = 'Não identificado';
     const commission_rate = seller.commission_rate || 0.0299;
     
+    // Preferir domínio do HOTTRACK_API_URL para webhooks; alerta se ausente
+    const preferredHost = process.env.HOTTRACK_API_URL ? (() => { try { return new URL(process.env.HOTTRACK_API_URL).host; } catch { return host; } })() : host;
+    if (!process.env.HOTTRACK_API_URL) {
+        console.warn('[PIX] HOTTRACK_API_URL não definido. Usando host do request para callbackUrl:', host);
+    }
+
     const clientPayload = {
         document: { number: "21376710773", type: "CPF" },
         name: "Cliente Padrão",
@@ -1070,7 +1076,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         const payload = { 
             amount: value_cents / 100, 
             payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${host}/api/webhook/syncpay`
+            callbackUrl: `https://${preferredHost}/api/webhook/syncpay`
         };
         const commission_percentage = commission_rate * 100;
         if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
@@ -1102,7 +1108,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
             identifier: uuidv4(),
             amount: value_cents / 100,
             client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${host}/api/webhook/${provider}`
+            callbackUrl: `https://${preferredHost}/api/webhook/${provider}`
         };
         const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
         if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
@@ -1116,7 +1122,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
         const payload = {
             value: value_cents,
-            webhook_url: `https://${host}/api/webhook/pushinpay`,
+            webhook_url: `https://${preferredHost}/api/webhook/pushinpay`,
         };
         const commission_cents = Math.floor(value_cents * commission_rate);
         if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
@@ -4584,7 +4590,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
 
 app.post('/api/webhook/pushinpay', async (req, res) => {
     const { id, status, payer_name, payer_document } = req.body;
-    if (status === 'paid') {
+    const normalized = String(status || '').toLowerCase();
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    if (paidStatuses.has(normalized)) {
         try {
             const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${id} AND provider = 'pushinpay'`;
             if (tx && tx.status !== 'paid') {
@@ -4596,7 +4604,9 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
 });
 app.post('/api/webhook/cnpay', async (req, res) => {
     const { transactionId, status, customer } = req.body;
-    if (status === 'COMPLETED') {
+    const normalized = String(status || '').toLowerCase();
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    if (paidStatuses.has(normalized)) {
         try {
             const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
             if (tx && tx.status !== 'paid') {
@@ -4615,7 +4625,9 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
         return res.sendStatus(200);
     }
     const { id: transactionId, status } = transactionData;
-    if (status === 'COMPLETED') {
+    const normalized = String(status || '').toLowerCase();
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    if (paidStatuses.has(normalized)) {
         try {
             console.log(`[Webhook Oasy.fy] Processando pagamento para transactionId: ${transactionId}`);
             const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'oasyfy'`;
@@ -4635,7 +4647,7 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
             console.error("[Webhook Oasy.fy] ERRO DURANTE O PROCESSAMENTO:", error); 
         }
     } else {
-        console.log(`[Webhook Oasy.fy] Recebido webhook com status '${status}', que não é 'COMPLETED'. Ignorando.`);
+        console.log(`[Webhook Oasy.fy] Recebido webhook com status '${status}', não identificado como pago. Ignorando.`);
     }
     res.sendStatus(200);
 });
@@ -4840,7 +4852,9 @@ app.post('/api/webhook/syncpay', async (req, res) => {
             return res.sendStatus(200);
         }
 
-        if (String(status).toLowerCase() === 'completed') {
+        const normalized = String(status || '').toLowerCase();
+        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+        if (paidStatuses.has(normalized)) {
             
             console.log(`[Webhook SyncPay] Processando pagamento para transação: ${transactionId}`);
             
