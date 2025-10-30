@@ -273,6 +273,153 @@
             min-height: 0;
         }
         
+        /* Fullscreen flow editor styles */
+        .flow-editor-page {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-primary);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .flow-header {
+            padding: 1rem 2rem;
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        
+        .flow-header h3 {
+            margin: 0;
+            color: var(--text-primary);
+        }
+        
+        .flow-header .btn {
+            margin-left: 0.5rem;
+        }
+        
+        .flow-editor-container {
+            display: flex;
+            flex: 1;
+            height: calc(100% - 60px);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .flow-sidebar {
+            width: 280px;
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .flow-sidebar {
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        
+        /* Webkit browsers (Chrome, Safari, newer Edge) */
+        .flow-sidebar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-thumb {
+            background-color: var(--accent-primary);
+            border-radius: 3px;
+        }
+        
+        .flow-sidebar::-webkit-scrollbar-thumb:hover {
+            background-color: var(--accent-secondary);
+        }
+        
+        .flow-sidebar h3 {
+            color: var(--text-primary);
+            margin-top: 0;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 1.1rem;
+        }
+        
+        .node-button {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+            cursor: grab;
+            margin-bottom: 0.75rem;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+            background-color: var(--bg-card);
+        }
+        
+        .node-button:hover {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            background-color: rgba(56, 189, 248, 0.05);
+        }
+        
+        .reactflow-wrapper {
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        
+        /* Webkit browsers (Chrome, Safari, newer Edge) */
+        .reactflow-wrapper::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-thumb {
+            background-color: var(--accent-primary);
+            border-radius: 3px;
+        }
+        
+        .reactflow-wrapper::-webkit-scrollbar-thumb:hover {
+            background-color: var(--accent-secondary);
+        }
+        
+        .reactflow-wrapper {
+            flex: 1;
+            background-color: var(--bg-primary);
+            position: relative;
+        }
+        
+        .editor-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            z-index: 10;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        
         /* Herda os estilos de formulário, mas com foco azul - ESTILOS APLICADOS */
         .hotbot-scope .form-input, 
         .hotbot-scope .form-select, 
@@ -507,7 +654,7 @@
     
         /* --- ESTILOS DO EDITOR DE FLUXOS (TEMA ESCURO) --- */
         .hotbot-scope .flow-editor-page { display: flex; flex-direction: column; height: 100%; background-color: transparent; color: var(--text-primary); }
-        .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; }
+        .hotbot-scope .flow-editor-container { flex: 1; display: flex; overflow: hidden; border: 1px solid var(--border-color); border-radius: 0.75rem; position: relative; }
         .hotbot-scope .reactflow-wrapper { flex-grow: 1; position: relative; background-color: var(--bg-primary); background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 2rem 2rem; }
         
         .hotbot-scope .flow-header { padding: 1rem 1.5rem; background-color: var(--bg-secondary); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
@@ -520,13 +667,313 @@
         .hotbot-scope .node-button { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); text-align: left; cursor: grab; margin-bottom: 0.75rem; transition: all 0.2s; color: var(--text-secondary); }
         .hotbot-scope .node-button:hover { border-color: var(--accent-primary); color: var(--accent-primary); background-color: rgba(56, 189, 248, 0.05); }
     
-        .hotbot-scope .editor-panel { position: absolute; top: 0; right: 0; width: 350px; height: 100%; background-color: var(--bg-secondary); z-index: 10; padding: 1.5rem; border-left: 1px solid var(--border-color); overflow-y: auto; }
+        .hotbot-scope .node-editor-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        
+        .hotbot-scope .node-editor-modal {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 700px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .hotbot-scope .node-editor-modal-header {
+            padding: 0.7rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        
+        .hotbot-scope .node-editor-modal-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-editor-modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .hotbot-scope .node-editor-modal-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-editor-modal-content {
+            padding: 1.5rem;
+            overflow-y: auto;
+            flex: 1;
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-primary) transparent;
+        }
+        
+        .hotbot-scope .node-editor-modal-footer {
+            padding: 0.5rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            flex-shrink: 0;
+        }
+        
+        .hotbot-scope .add-node-fab {
+            position: fixed;
+            top: 6rem;
+            right: 2rem;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border: none;
+            color: white;
+            font-size: 2rem;
+            font-weight: 300;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: all 0.3s ease;
+        }
+        
+        .hotbot-scope .add-node-fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 30px rgba(56, 189, 248, 0.6);
+        }
+        
+        .hotbot-scope .add-node-fab:active {
+            transform: scale(0.95);
+        }
+        
+        .hotbot-scope .node-selector-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            z-index: 1500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        
+        .hotbot-scope .node-selector-modal {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .hotbot-scope .node-selector-modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .hotbot-scope .node-selector-modal-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-selector-modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .hotbot-scope .node-selector-modal-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .node-selector-modal-content {
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .hotbot-scope .node-selector-button {
+            padding: 1rem;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background-color: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.95rem;
+        }
+        
+        .hotbot-scope .node-selector-button:hover {
+            border-color: var(--accent-primary);
+            background-color: rgba(56, 189, 248, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.2);
+        }
+        
+        .hotbot-scope .node-selector-button-icon {
+            font-size: 1.5rem;
+        }
+        
+        .hotbot-scope .action-drag-handle {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            cursor: grab;
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            user-select: none;
+            z-index: 1;
+            padding: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .hotbot-scope .action-drag-handle:active {
+            cursor: grabbing;
+        }
+        
+        .hotbot-scope .action-item {
+            position: relative;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            background-color: rgba(0,0,0,0.2);
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+        }
+        
+        .hotbot-scope .action-item.dragging {
+            opacity: 0.5;
+            transform: scale(0.95);
+        }
+        
+        .hotbot-scope .action-item.drag-over {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        }
         
         /* Estilos dos Nós do ReactFlow */
         .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
         .hotbot-scope .react-flow__node.selected { border: 2px solid var(--accent-primary); box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
         
-        .hotbot-scope .node-header { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .hotbot-scope .node-header { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            gap: 0.5rem; 
+            font-weight: 600; 
+            padding: 1rem 1rem 0.75rem; 
+            border-bottom: 1px solid var(--border-color); 
+            color: var(--text-primary);
+            position: relative;
+            margin-top: 8px;
+        }
+        .hotbot-scope .node-actions {
+            position: absolute;
+            top: -4rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 6px;
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 0.5rem 0.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 10;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+        }
+        
+        .hotbot-scope .react-flow__node:hover .node-actions {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .hotbot-scope .node-action-btn {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 20%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #475569;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0;
+            transition: all 0.2s ease;
+        }
+        
+        .hotbot-scope .node-action-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .hotbot-scope .node-action-btn.delete {
+            border-color: #fecaca;
+            color: #ef4444;
+        }
+        
+        .hotbot-scope .node-action-btn.delete:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .hotbot-scope .node-content { padding: 1rem; font-size: 0.9rem; }
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
         .hotbot-scope .react-flow__handle:hover { border-color: var(--accent-primary); }
@@ -1339,6 +1786,7 @@
                     <form id="registerForm" class="space-y-4">
                         <div><label class="text-sm font-medium text-gray-400 mb-1 block">Nome</label><input name="name" type="text" required class="form-input w-full p-3"></div>
                         <div><label class="text-sm font-medium text-gray-400 mb-1 block">E-mail</label><input name="email" type="email" required class="form-input w-full p-3"></div>
+                        <div><label class="text-sm font-medium text-gray-400 mb-1 block">Telefone</label><input name="phone" type="tel" required class="form-input w-full p-3"></div>
                         <div><label class="text-sm font-medium text-gray-400 mb-1 block">Senha (mínimo 8 caracteres)</label><input name="password" type="password" required minlength="8" class="form-input w-full p-3"></div>
                         <button type="submit" class="btn w-full font-semibold py-3 rounded-md">Criar Minha Conta</button>
                     </form>
@@ -1869,6 +2317,7 @@
                                     🌐 Gerenciar Domínios
                                 </button>
                             </div>
+                             <p class="text-xs text-gray-400 mt-1">ATENÇÃO: Lembre-se de cadastrar o domínio da pressel senão ela não irá funcionar. Obs: Pressels configuradas com o deploy pelo Netlify já ficam com o domínio cadastrado.</p>
                             <div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div>
                         </div>
                     </div>
@@ -2066,8 +2515,8 @@
                     if (form.id === 'loginForm') {
                         await this.login(data.email, data.password);
                     } else if (form.id === 'registerForm') {
-                        const { name, email, password } = data;
-                        await this.register(name, email, password);
+                        const { name, email, password, phone } = data;
+                        await this.register(name, email, password, phone);
                     }
 
                     button.innerHTML = originalButtonText;
@@ -2692,9 +3141,9 @@
         },
 
         
-        async register(name, email, password) {
+        async register(name, email, password, phone) {
             try {
-                const data = await this.apiRequest('/api/sellers/register', 'POST', { name, email, password });
+                const data = await this.apiRequest('/api/sellers/register', 'POST', { name, email, password, phone });
                 
                 if (data.requiresVerification) {
                     this.showToast('Cadastro realizado! Verifique seu email para ativar a conta.', 'success');
@@ -4822,7 +5271,7 @@ function generatePreviewHTML(data) {
         switch (type) {
             case 'message': newStep.text = ''; newStep.buttonText = ''; newStep.buttonUrl = ''; break;
             case 'image': case 'video': case 'audio': newStep.fileUrl = ''; newStep.caption = ''; break;
-            case 'pix': newStep.valueInCents = 100; newStep.pixMessage = '✅ PIX Gerado! Copie o código abaixo:'; newStep.pixButtonText = '📋 Copiar Código'; break;
+            case 'pix': newStep.valueInCents = 100; newStep.pixMessage = ''; newStep.pixButtonText = '📋 Copiar Código'; break;
             case 'check_pix': newStep.deliveryText = '✅ Pagamento confirmado! Aqui está seu acesso:'; newStep.deliveryButtonText = 'Acessar Conteúdo'; newStep.deliveryButtonUrl = ''; break;
             default: break;
         }
@@ -5058,7 +5507,7 @@ function generatePreviewHTML(data) {
         const [isSaving, setIsSaving] = useState(false);
         useEffect(() => {
             api.get('/api/dashboard/data')
-                .then(res => setApiKey(res.data.settings?.hottrack_api_key || ''))
+                .then(res => setApiKey(res.data.settings?.api_key || ''))
                 .catch(() => alert("Não foi possível carregar as suas configurações."))
                 .finally(() => setIsLoading(false));
         }, []);
@@ -5303,7 +5752,7 @@ function generatePreviewHTML(data) {
     
     function ChatActionsPanel({ botId, chat, flows, onAction }) {
         const [pixValue, setPixValue] = useState(100);
-        const [pixMessage, setPixMessage] = useState('🚨 Meu amor, o código expira em 6 minutos.');
+        const [pixMessage, setPixMessage] = useState('🚨 O PIX expira em 6 minutos.');
         const [pixButtonText, setPixButtonText] = useState('📋 Copiar Código PIX');
         const [selectedFlow, setSelectedFlow] = useState('');
 
@@ -5534,7 +5983,7 @@ function generatePreviewHTML(data) {
         const [media, setMedia] = useState([]);
         useEffect(() => { api.get('/api/media').then(res => setMedia(res.data)); }, []);
         return (
-            <div className="login-overlay" style={{zIndex: 1000}}>
+            <div className="login-overlay" style={{zIndex: 2000}}>
                 <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
                         <h2>Selecionar Mídia</h2>
@@ -5561,7 +6010,7 @@ function generatePreviewHTML(data) {
     
     const initialNodes = [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }];
     
-    const CustomNode = ({ id, type, data, isConnectable }) => {
+    const CustomNode = ({ id, type, data, isConnectable, selected }) => {
         const nodeInfo = {
             trigger: { icon: '🚀', name: 'Gatilho Inicial', content: 'Início do fluxo com click_id.' },
             message: { icon: '💬', name: 'Enviar Mensagem', content: data.text ? `"${data.text.substring(0, 50)}..."` : 'Configure o texto.' },
@@ -5575,12 +6024,76 @@ function generatePreviewHTML(data) {
             forward_flow: { icon: '↪️', name: 'Encaminhar Fluxo', content: data.targetFlowName || 'Selecione um fluxo.' },
         };
         const info = nodeInfo[type] || { icon: '❓', name: 'Nó' };
+        
+        // Verifica se há ações aninhadas (compatível com nodes antigos)
+        const actions = data.actions || [];
+        const getActionInfo = (actionType, actionData) => {
+            const actionInfoMap = {
+                message: { icon: '💬', name: 'Mensagem', content: actionData.text ? `"${actionData.text.substring(0, 30)}..."` : 'Configure.' },
+                image: { icon: '🖼️', name: 'Imagem', content: actionData.imageUrl ? 'Configurado.' : 'Configure.' },
+                video: { icon: '🎬', name: 'Vídeo', content: actionData.videoUrl ? 'Configurado.' : 'Configure.' },
+                audio: { icon: '🎵', name: 'Áudio', content: actionData.audioUrl ? 'Configurado.' : 'Configure.' },
+                delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar ${actionData.delayInSeconds || 1}s.` },
+                typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
+                action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
+                action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
+                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+            };
+            return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
+        };
 
         return (
             <>
                 {type !== 'trigger' && <Handle type="target" position={Position.Top} isConnectable={isConnectable} />}
-                <div className={`node-header react-flow__node-${type}`}>{info.icon} {info.name}</div>
-                <div className="node-content">{info.content}</div>
+                <div className={`node-header react-flow__node-${type}`}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                        {info.icon} {info.name}
+                        {actions.length > 0 && <span style={{fontSize: '0.7rem', opacity: 0.8}}>({actions.length} ação{actions.length !== 1 ? 'ões' : ''})</span>}
+                    </div>
+                    <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                window.dispatchEvent(event);
+                            }}
+                            className="node-action-btn"
+                            title="Copiar nó"
+                        >
+                            📋
+                        </button>
+                        {id !== 'start' && (
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
+                                    window.dispatchEvent(event);
+                                }}
+                                className="node-action-btn delete"
+                                title="Excluir nó"
+                            >
+                                ❌
+                            </button>
+                        )}
+                    </div>
+                </div>
+                <div className="node-content">
+                    {info.content}
+                    {actions.length > 0 && (
+                        <div style={{marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.1)'}}>
+                            {actions.map((action, idx) => {
+                                const actInfo = getActionInfo(action.type, action.data || {});
+                                return (
+                                    <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.3rem', opacity: 0.9}}>
+                                        <span>{actInfo.icon}</span>
+                                        <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
+                                        <span>{actInfo.content}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
                 
                 {type === 'trigger' && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
                 
@@ -5611,8 +6124,35 @@ function generatePreviewHTML(data) {
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
         const [nodeData, setNodeData] = useState(selectedNode.data || {});
         const textAreaRef = useRef(null);
+        const modalContentRef = useRef(null);
+        const scrollIntervalRef = useRef(null);
+        const autoScrollHandlerRef = useRef(null);
+        const [draggedIndex, setDraggedIndex] = useState(null);
+        const [dragOverIndex, setDragOverIndex] = useState(null);
         
-        useEffect(() => { setNodeData(selectedNode.data || {}) }, [selectedNode]);
+        useEffect(() => { 
+            const data = selectedNode.data || {};
+            // Garantir que actions seja um array
+            if (!data.actions) {
+                data.actions = [];
+            }
+            setNodeData(data);
+        }, [selectedNode]);
+        
+        // Cria lista unificada de ações (ação principal + ações aninhadas)
+        const getAllActions = () => {
+            if (selectedNode.type === 'trigger') return [];
+            const actions = [...(nodeData.actions || [])];
+            // A ação principal é sempre a primeira, baseada no tipo do node
+            const mainAction = {
+                type: selectedNode.type,
+                data: { ...nodeData },
+                isMain: true
+            };
+            return [mainAction, ...actions];
+        };
+        
+        const actions = getAllActions();
 
         const handleChange = (e) => {
             const { name, value, type, checked } = e.target;
@@ -5626,6 +6166,510 @@ function generatePreviewHTML(data) {
 
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        // Funções para gerenciar ações (unificadas)
+        const addAction = (actionType) => {
+            const actions = nodeData.actions || [];
+            if (actions.length >= 5) {
+                alert('Você pode adicionar no máximo 5 ações.');
+                return;
+            }
+            const newAction = { type: actionType, data: {} };
+            const newData = { ...nodeData, actions: [...actions, newAction] };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const removeAction = (index) => {
+            // Index 0 é sempre a ação principal, não pode ser removida
+            if (index === 0) return;
+            const actions = (nodeData.actions || []).filter((_, i) => i !== index - 1);
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
+        
+        const updateAction = (index, field, value) => {
+            if (index === 0) {
+                // Atualizar ação principal
+                const newData = { ...nodeData, [field]: value };
+                setNodeData(newData);
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            } else {
+                // Atualizar ação aninhada
+                const actions = [...(nodeData.actions || [])];
+                const actionIndex = index - 1;
+                if (!actions[actionIndex]) return;
+                actions[actionIndex] = {
+                    ...actions[actionIndex],
+                    data: { ...actions[actionIndex].data, [field]: value }
+                };
+                const newData = { ...nodeData, actions };
+                setNodeData(newData);
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            }
+        };
+        
+        // Função de auto-scroll durante drag
+        const handleAutoScroll = useCallback((e) => {
+            if (!modalContentRef.current || draggedIndex === null) {
+                if (scrollIntervalRef.current) {
+                    clearInterval(scrollIntervalRef.current);
+                    scrollIntervalRef.current = null;
+                }
+                return;
+            }
+            
+            const container = modalContentRef.current;
+            if (!container) return;
+            
+            const rect = container.getBoundingClientRect();
+            const mouseY = e.clientY;
+            const scrollThreshold = 80; // Distância das bordas em pixels para ativar scroll
+            const scrollSpeed = 15; // Velocidade do scroll
+            
+            const distanceFromTop = mouseY - rect.top;
+            const distanceFromBottom = rect.bottom - mouseY;
+            
+            // Limpar intervalo anterior se existir
+            if (scrollIntervalRef.current) {
+                clearInterval(scrollIntervalRef.current);
+                scrollIntervalRef.current = null;
+            }
+            
+            // Scroll para cima
+            if (distanceFromTop < scrollThreshold && container.scrollTop > 0) {
+                scrollIntervalRef.current = setInterval(() => {
+                    if (!modalContentRef.current || draggedIndex === null) {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                        return;
+                    }
+                    const cont = modalContentRef.current;
+                    if (cont && cont.scrollTop > 0) {
+                        cont.scrollTop -= scrollSpeed;
+                    } else {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                    }
+                }, 16); // ~60fps
+            }
+            // Scroll para baixo
+            else if (distanceFromBottom < scrollThreshold && 
+                     container.scrollTop < container.scrollHeight - container.clientHeight) {
+                scrollIntervalRef.current = setInterval(() => {
+                    if (!modalContentRef.current || draggedIndex === null) {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                        return;
+                    }
+                    const cont = modalContentRef.current;
+                    if (cont && cont.scrollTop < cont.scrollHeight - cont.clientHeight) {
+                        cont.scrollTop += scrollSpeed;
+                    } else {
+                        if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                        }
+                    }
+                }, 16); // ~60fps
+            }
+        }, [draggedIndex]);
+        
+        // Atualizar ref quando função mudar
+        useEffect(() => {
+            autoScrollHandlerRef.current = handleAutoScroll;
+        }, [handleAutoScroll]);
+        
+        // Funções de drag and drop
+        const handleDragStart = (e, index) => {
+            // Ação principal (index 0) não pode ser arrastada
+            if (index === 0) {
+                e.preventDefault();
+                return;
+            }
+            setDraggedIndex(index);
+            e.dataTransfer.effectAllowed = 'move';
+            
+            // Adicionar listener para auto-scroll imediatamente
+            const handler = (ev) => handleAutoScroll(ev);
+            document.addEventListener('dragover', handler, false);
+            autoScrollHandlerRef.current = handler;
+        };
+        
+        const handleDragOver = (e, index) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (index === 0) return; // Não pode arrastar sobre a ação principal
+            if (draggedIndex !== null && draggedIndex !== index) {
+                setDragOverIndex(index);
+            }
+            // Auto-scroll durante drag over
+            handleAutoScroll(e);
+        };
+        
+        const handleDragLeave = () => {
+            setDragOverIndex(null);
+        };
+        
+        const handleDrop = (e, dropIndex) => {
+            e.preventDefault();
+            if (draggedIndex === null || draggedIndex === 0 || dropIndex === 0) return;
+            if (draggedIndex === dropIndex) {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+                return;
+            }
+            
+            const actions = [...(nodeData.actions || [])];
+            const draggedActionIndex = draggedIndex - 1; // -1 porque index 0 é ação principal
+            const dropActionIndex = dropIndex - 1;
+            
+            const draggedAction = actions[draggedActionIndex];
+            actions.splice(draggedActionIndex, 1);
+            actions.splice(dropActionIndex, 0, draggedAction);
+            
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            
+            setDraggedIndex(null);
+            setDragOverIndex(null);
+        };
+        
+        const handleDragEnd = () => {
+            // Limpar auto-scroll
+            if (scrollIntervalRef.current) {
+                clearInterval(scrollIntervalRef.current);
+                scrollIntervalRef.current = null;
+            }
+            // Remover listener de auto-scroll
+            if (autoScrollHandlerRef.current) {
+                document.removeEventListener('dragover', autoScrollHandlerRef.current, false);
+                autoScrollHandlerRef.current = null;
+            }
+            
+            setDraggedIndex(null);
+            setDragOverIndex(null);
+        };
+        
+        // Cleanup ao desmontar
+        useEffect(() => {
+            return () => {
+                if (scrollIntervalRef.current) {
+                    clearInterval(scrollIntervalRef.current);
+                    scrollIntervalRef.current = null;
+                }
+                if (autoScrollHandlerRef.current) {
+                    document.removeEventListener('dragover', autoScrollHandlerRef.current, false);
+                }
+            };
+        }, []);
+        
+        const renderActionEditor = (action, index) => {
+            const actionData = action.isMain ? nodeData : (action.data || {});
+            const actionTypeNames = {
+                message: '💬 Mensagem',
+                image: '🖼️ Imagem',
+                video: '🎬 Vídeo',
+                audio: '🎵 Áudio',
+                delay: '⏱️ Atraso',
+                typing_action: '✍️ Digitando',
+                action_pix: '💳 PIX',
+                action_check_pix: '🔍 Verificar PIX',
+                forward_flow: '↪️ Encaminhar'
+            };
+            
+            const isDragging = draggedIndex === index;
+            const isDragOver = dragOverIndex === index;
+            const canDrag = index !== 0; // Ação principal não pode ser arrastada
+            
+            return (
+                <div 
+                    key={index}
+                    className={`action-item ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+                    draggable={canDrag}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onDragEnd={handleDragEnd}
+                >
+                    {canDrag && (
+                        <div className="action-drag-handle" title="Arrastar para reordenar">
+                            ☰
+                        </div>
+                    )}
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', paddingLeft: canDrag ? '2rem' : '0'}}>
+                        <strong style={{color: 'var(--text-primary)'}}>
+                            {actionTypeNames[action.type] || action.type}
+                            {action.isMain && <span style={{fontSize: '0.7rem', marginLeft: '0.5rem', opacity: 0.7}}>(Principal)</span>}
+                        </strong>
+                        {!action.isMain && (
+                            <button 
+                                type="button"
+                                className="btn btn-red btn-sm" 
+                                onClick={() => removeAction(index)}
+                                style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
+                    
+                    {action.type === 'message' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto</label>
+                                {action.isMain ? (
+                                    <>
+                                        <textarea 
+                                            ref={action.isMain ? textAreaRef : null}
+                                            className="form-textarea" 
+                                            rows="3" 
+                                            value={actionData.text || ''} 
+                                            onChange={e => updateAction(index, 'text', e.target.value)} 
+                                        />
+                                        <div style={{marginTop: '0.5rem'}}>
+                                            <label style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Inserir variável:</label>
+                                            <div style={{marginTop: '0.5rem', marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'primeiro_nome';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Nome</button>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'nome_completo';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Nome Completo</button>
+                                                <button type="button" className="variable-btn" onClick={() => {
+                                                    const variable = 'cidade';
+                                                    const textarea = textAreaRef.current;
+                                                    if (!textarea) return;
+                                                    const start = textarea.selectionStart;
+                                                    const end = textarea.selectionEnd;
+                                                    const text = textarea.value;
+                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
+                                                    updateAction(index, 'text', newText);
+                                                    setTimeout(() => {
+                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
+                                                        textarea.focus();
+                                                    }, 0);
+                                                }}>Cidade</button>
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <textarea 
+                                        className="form-textarea" 
+                                        rows="3" 
+                                        value={actionData.text || ''} 
+                                        onChange={e => updateAction(index, 'text', e.target.value)} 
+                                    />
+                                )}
+                            </div>
+                            <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.buttonText || ''} 
+                                    onChange={e => updateAction(index, 'buttonText', e.target.value)} 
+                                    placeholder="Texto do Botão"
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                                <input 
+                                    type="url" 
+                                    className="form-input" 
+                                    value={actionData.buttonUrl || ''} 
+                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)} 
+                                    placeholder="URL do Botão"
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            {action.isMain && (<></>)}
+                        </>
+                    )}
+                    
+                    {(action.type === 'image' || action.type === 'video') && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>File ID ou URL</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData[action.type === 'image' ? 'imageUrl' : 'videoUrl'] || ''} 
+                                    onChange={e => updateAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn btn-secondary btn-sm" 
+                                onClick={() => openMediaLibrary(media => {
+                                    updateAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', media.file_id);
+                                })}
+                                style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
+                            >
+                                Selecionar da Biblioteca
+                            </button>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Legenda</label>
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="2" 
+                                    value={actionData.caption || ''} 
+                                    onChange={e => updateAction(index, 'caption', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'audio' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>File ID ou URL</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.audioUrl || ''} 
+                                    onChange={e => updateAction(index, 'audioUrl', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                className="btn btn-secondary btn-sm" 
+                                onClick={() => openMediaLibrary(media => updateAction(index, 'audioUrl', media.file_id))}
+                                style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
+                            >
+                                Selecionar da Biblioteca
+                            </button>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Duração (segundos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.durationInSeconds || 0} 
+                                    onChange={e => updateAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'delay' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Aguardar por (segundos)</label>
+                            <input 
+                                type="number" 
+                                className="form-input" 
+                                value={actionData.delayInSeconds || 1} 
+                                onChange={e => updateAction(index, 'delayInSeconds', parseInt(e.target.value, 10))}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                    
+                    {action.type === 'typing_action' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Duração (segundos)</label>
+                            <input 
+                                type="number" 
+                                className="form-input" 
+                                value={actionData.durationInSeconds || 1} 
+                                onChange={e => updateAction(index, 'durationInSeconds', parseInt(e.target.value, 10))}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                    
+                    {action.type === 'action_pix' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Valor (centavos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.valueInCents || 0} 
+                                    onChange={e => updateAction(index, 'valueInCents', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto da Mensagem do PIX</label>
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="2" 
+                                    value={actionData.pixMessageText || ''} 
+                                    onChange={e => updateAction(index, 'pixMessageText', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                />
+                            </div>
+                        </>
+                    )}
+                    
+                    {action.type === 'forward_flow' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Encaminhar para o fluxo</label>
+                            <select 
+                                className="form-select" 
+                                value={actionData.targetFlowId || ''} 
+                                onChange={e => {
+                                    const selectedFlow = availableFlows.find(f => f.id == e.target.value);
+                                    updateAction(index, 'targetFlowId', e.target.value);
+                                    updateAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
+                                }}
+                                style={{fontSize: '0.85rem'}}
+                            >
+                                <option value="">Selecione um fluxo...</option>
+                                {availableFlows.map(f => (
+                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+                    
+                    {action.type === 'action_check_pix' && (
+                        <div className="form-group">
+                            <label style={{fontSize: '0.85rem'}}>Texto de Entrega (Pós-Pagamento)</label>
+                            <textarea 
+                                className="form-textarea" 
+                                rows="2" 
+                                value={actionData.deliveryText || ''} 
+                                onChange={e => updateAction(index, 'deliveryText', e.target.value)}
+                                style={{fontSize: '0.85rem'}}
+                            />
+                        </div>
+                    )}
+                </div>
+            );
         };
         
         const onDelete = () => {
@@ -5656,11 +6700,6 @@ function generatePreviewHTML(data) {
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
                     <div className="form-group"><label>Botão (Opcional)</label><input name="buttonText" type="text" className="form-input" value={nodeData.buttonText || ''} onChange={handleChange} placeholder="Texto do Botão"/><input name="buttonUrl" type="url" className="form-input" value={nodeData.buttonUrl || ''} onChange={handleChange} placeholder="URL do Botão" style={{marginTop: '0.5rem'}}/></div>
                     <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    <div className="form-group"><label><input name="addTypingAction" type="checkbox" checked={!!nodeData.addTypingAction} onChange={handleChange} /> Adicionar "Digitando" antes</label></div>
-                    {nodeData.addTypingAction && (<div className="form-group"><label>Duração do "Digitando..." (s)</label><input name="typingDuration" type="number" className="form-input" value={nodeData.typingDuration || 2} onChange={handleChange} /></div>)}
-                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    <div className="form-group"><label><input name="waitForReply" type="checkbox" checked={!!nodeData.waitForReply} onChange={handleChange} /> Aguardar Resposta</label></div>
-                    {nodeData.waitForReply && (<div className="form-group"><label>Tempo de espera (min)</label><input name="replyTimeout" type="number" className="form-input" value={nodeData.replyTimeout || 5} onChange={handleChange} /></div>)}
                 </>);
                 case 'image': return (<><div className="form-group"><label>File ID ou URL da Imagem</label><input name="imageUrl" type="text" className="form-input" value={nodeData.imageUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'imageUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
                 case 'video': return (<><div className="form-group"><label>File ID ou URL do Vídeo</label><input name="videoUrl" type="text" className="form-input" value={nodeData.videoUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'videoUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
@@ -5673,12 +6712,117 @@ function generatePreviewHTML(data) {
             }
         };
 
+        const availableActionTypes = ['message', 'image', 'video', 'audio', 'typing_action', 'forward_flow'];
+        const actionTypeLabels = {
+            message: '💬 Mensagem',
+            image: '🖼️ Imagem',
+            video: '🎬 Vídeo',
+            audio: '🎵 Áudio',
+            typing_action: '✍️ Digitando',
+            forward_flow: '↪️ Encaminhar'
+        };
+
+        if (!selectedNode) return null;
+        
+        const nestedActionsCount = (nodeData.actions || []).length;
+        
         return (
-            <div className="editor-panel">
-                <h3 style={{marginBottom: '1.5rem'}}>Editar Nó</h3>
-                {renderPanel()}
-                <div style={{marginTop: 'auto'}}>
-                    {selectedNode.type !== 'trigger' && <button className="btn btn-danger" style={{width: '100%'}} onClick={onDelete}>Excluir Nó</button>}
+            <div className="node-editor-modal-overlay" onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                    setSelectedNode(null);
+                }
+            }}>
+                <div className="node-editor-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="node-editor-modal-header">
+                        <h3>Editar Nó</h3>
+                        <button 
+                            className="node-editor-modal-close"
+                            onClick={() => setSelectedNode(null)}
+                            title="Fechar"
+                        >
+                            ✕
+                        </button>
+                    </div>
+                    <div 
+                        className="node-editor-modal-content" 
+                        ref={modalContentRef}
+                        onDragOver={(e) => {
+                            // Permitir que o drag aconteça no container
+                            e.preventDefault();
+                            // Ativar auto-scroll quando estiver arrastando
+                            if (draggedIndex !== null) {
+                                handleAutoScroll(e);
+                            }
+                        }}
+                    >
+                        {/* Lista unificada de ações */}
+                        {selectedNode.type !== 'trigger' && actions.length > 0 && (
+                            <div style={{marginBottom: '1.5rem'}}>
+                                {actions.map((action, index) => renderActionEditor(action, index))}
+                            </div>
+                        )}
+                        
+                        {/* Botões para adicionar ações */}
+                        {selectedNode.type !== 'trigger' && nestedActionsCount < 5 && (
+                            <div style={{marginTop: actions.length > 0 ? '1rem' : '0'}}>
+                                <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.5rem'}}>
+                                    Adicionar Ação ({nestedActionsCount}/5)
+                                </label>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem'}}>
+                                    {availableActionTypes.map(actionType => (
+                                        <button
+                                            key={actionType}
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => addAction(actionType)}
+                                            style={{fontSize: '0.8rem', padding: '0.5rem'}}
+                                        >
+                                            + {actionTypeLabels[actionType]}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {selectedNode.type !== 'trigger' && nestedActionsCount >= 5 && (
+                            <p style={{fontSize: '0.85rem', color: 'var(--warning)', fontStyle: 'italic', marginTop: actions.length > 0 ? '1rem' : '0'}}>
+                                Limite de 5 ações atingido. Remova uma ação para adicionar outra.
+                            </p>
+                        )}
+                    </div>
+                    <div className="node-editor-modal-footer">
+                        {selectedNode.type === 'message' && (
+                            <div style={{marginRight: 'auto', display: 'flex', alignItems: 'center', gap: '1rem'}}>
+                                <label style={{fontSize: '0.85rem'}}>
+                                    <input 
+                                        name="waitForReply"
+                                        type="checkbox"
+                                        checked={!!nodeData.waitForReply}
+                                        onChange={handleChange}
+                                        style={{marginRight: '0.4rem'}}
+                                    />
+                                    Aguardar Resposta
+                                </label>
+                                {nodeData.waitForReply && (
+                                    <div className="form-group" style={{margin: 0}}>
+                                        <label style={{fontSize: '0.85rem', marginRight: '0.5rem'}}>Tempo (min)</label>
+                                        <input 
+                                            name="replyTimeout"
+                                            type="number"
+                                            className="form-input"
+                                            value={nodeData.replyTimeout || 5}
+                                            onChange={handleChange}
+                                            style={{width: '80px'}}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {selectedNode.type !== 'trigger' && (
+                            <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
+                        )}
+                        <button className="btn btn-secondary" onClick={() => setSelectedNode(null)}>Fechar</button>
+                    </div>
                 </div>
             </div>
         );
@@ -5690,22 +6834,180 @@ function generatePreviewHTML(data) {
         const [edges, setEdges, onEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
+        
+        // Handle node copy
+        useEffect(() => {
+            const handleNodeCopy = (e) => {
+                const { nodeId } = e.detail;
+                setNodes((nds) => {
+                    const nodeToCopy = nds.find(n => n.id === nodeId);
+                    if (!nodeToCopy) return nds;
+                    
+                    const newNode = {
+                        ...nodeToCopy,
+                        id: `node-${Date.now()}`,
+                        position: {
+                            x: nodeToCopy.position.x + 30,
+                            y: nodeToCopy.position.y + 30
+                        },
+                        selected: false,
+                        data: { 
+                            ...nodeToCopy.data,
+                            actions: nodeToCopy.data.actions ? [...nodeToCopy.data.actions] : []
+                        }
+                    };
+                    
+                    return [...nds, newNode];
+                });
+            };
+
+            // Handle node delete
+            const handleNodeDelete = (e) => {
+                const { nodeId } = e.detail;
+                if (nodeId === 'start') {
+                    alert('Não é possível excluir o nó de início do fluxo.');
+                    return;
+                }
+                
+                setNodes((nds) => nds.filter(node => node.id !== nodeId));
+                setEdges((eds) => {
+                    // Remove edges connected to the deleted node
+                    const edgesToRemove = new Set(
+                        eds
+                            .filter(edge => edge.source === nodeId || edge.target === nodeId)
+                            .map(edge => edge.id)
+                    );
+                    return eds.filter(edge => !edgesToRemove.has(edge.id));
+                });
+                
+                if (selectedNode?.id === nodeId) {
+                    setSelectedNode(null);
+                }
+            };
+
+            window.addEventListener('node-copy', handleNodeCopy);
+            window.addEventListener('node-delete', handleNodeDelete);
+
+            return () => {
+                window.removeEventListener('node-copy', handleNodeCopy);
+                window.removeEventListener('node-delete', handleNodeDelete);
+            };
+        }, [setNodes, setEdges, selectedNode]);
         const [availableFlows, setAvailableFlows] = useState([]);
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [isInitialized, setIsInitialized] = useState(false);
+        const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
         
+        // Function to center the view on all nodes
+        const centerViewOnNodes = useCallback(() => {
+            if (reactFlowInstance && nodes.length > 0) {
+                // Calculate the bounding box of all nodes
+                const nodePositions = nodes.map(node => ({
+                    x: node.position.x,
+                    y: node.position.y,
+                    width: 200, // Default node width
+                    height: 50   // Default node height
+                }));
+                
+                // Find the boundaries
+                const minX = Math.min(...nodePositions.map(n => n.x));
+                const maxX = Math.max(...nodePositions.map(n => n.x + (n.width || 200)));
+                const minY = Math.min(...nodePositions.map(n => n.y));
+                const maxY = Math.max(...nodePositions.map(n => n.y + (n.height || 50)));
+                
+                // Calculate center and zoom
+                const centerX = (minX + maxX) / 2;
+                const centerY = (minY + maxY) / 2;
+                const width = maxX - minX;
+                const height = maxY - minY;
+                
+                // Get the viewport dimensions
+                const viewport = reactFlowWrapper.current.getBoundingClientRect();
+                const viewportRatio = viewport.width / viewport.height;
+                const nodesRatio = width / height;
+                
+                // Calculate zoom level to fit all nodes
+                let zoom = 1;
+                if (nodesRatio > viewportRatio) {
+                    zoom = viewport.width / (width + 100); // Add some padding
+                } else {
+                    zoom = viewport.height / (height + 100); // Add some padding
+                }
+                
+                // Limit zoom to reasonable values
+                zoom = Math.min(Math.max(0.3, zoom), 1.5);
+                
+                // Set the view
+                reactFlowInstance.setView({
+                    x: viewport.width / 2 - centerX * zoom,
+                    y: viewport.height / 2 - centerY * zoom,
+                    zoom: zoom
+                });
+            }
+        }, [reactFlowInstance, nodes]);
+        
+        // Initialize flow and center view
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                setNodes(flowContent.nodes || initialNodes);
+                const nodesToSet = (flowContent.nodes || initialNodes).map(node => ({
+                    ...node,
+                    data: {
+                        ...node.data,
+                        // Garantir compatibilidade com nodes antigos - inicializar actions se não existir
+                        actions: node.data?.actions || []
+                    }
+                }));
+                setNodes(nodesToSet);
                 setEdges(flowContent.edges || []);
+                
+                // Find the initial node (trigger node)
+                const initialNode = nodesToSet.find(node => node.type === 'trigger');
+                
+                // If we have an initial node, center the view on it
+                if (initialNode && reactFlowInstance) {
+                    setTimeout(() => {
+                        reactFlowInstance.fitView({
+                            padding: 0.5,
+                            includeHiddenNodes: false,
+                            duration: 300,
+                            nodes: [initialNode]
+                        });
+                    }, 100);
+                } else if (nodesToSet.length > 0) {
+                    // If no trigger node but we have nodes, center on all nodes
+                    setTimeout(() => {
+                        reactFlowInstance?.fitView({
+                            padding: 0.5,
+                            duration: 300
+                        });
+                    }, 100);
+                }
+                
+                // Mark as not initialized to trigger centering after first render
+                setIsInitialized(false);
             }
+            
             if(flow?.bot_id) {
                 api.get('/api/flows')
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
             }
-        }, [flow]);
+        }, [flow, reactFlowInstance]);
+        
+        // Center view after first render and when nodes are loaded
+        useEffect(() => {
+            if (!isInitialized && nodes.length > 0 && reactFlowInstance) {
+                // Small delay to ensure the DOM is ready
+                const timer = setTimeout(() => {
+                    centerViewOnNodes();
+                    setIsInitialized(true);
+                }, 100);
+                
+                return () => clearTimeout(timer);
+            }
+        }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
         const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
         const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true }, eds)), [setEdges]);
@@ -5728,34 +7030,86 @@ function generatePreviewHTML(data) {
                 id: `${type}-${Date.now()}`, 
                 type, 
                 position, 
-                data: {}, 
+                data: { actions: [] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
         const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
-        const onDragStart = (event, nodeType) => event.dataTransfer.setData('application/reactflow', nodeType);
+        const addNode = (nodeType, position = null) => {
+            if (!reactFlowInstance) return;
+            
+            // If position is not provided, center it in the viewport
+            let nodePosition = position;
+            if (!nodePosition) {
+                const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+                const viewportCenter = reactFlowInstance.screenToFlowPosition({
+                    x: reactFlowBounds.width / 2,
+                    y: reactFlowBounds.height / 2
+                });
+                nodePosition = viewportCenter;
+            }
+            
+            const newNode = { 
+                id: `${nodeType}-${Date.now()}`, 
+                type: nodeType, 
+                position: nodePosition, 
+                data: { 
+                    label: nodeType === 'message' ? 'Nova mensagem' : 
+                           nodeType === 'image' ? 'Nova imagem' :
+                           nodeType === 'video' ? 'Novo vídeo' :
+                           nodeType === 'audio' ? 'Novo áudio' :
+                           nodeType === 'delay' ? 'Atraso' :
+                           nodeType === 'typing_action' ? 'Digitando...' :
+                           nodeType === 'action_pix' ? 'Gerar PIX' :
+                           nodeType === 'action_check_pix' ? 'Consultar PIX' :
+                           nodeType === 'forward_flow' ? 'Encaminhar Fluxo' : 'Novo nó',
+                    actions: []
+                },
+            };
+            
+            setNodes((nds) => nds.concat(newNode));
+            
+            // Auto-scroll to the new node with a small delay
+            
+        };
+        
+        const onDragStart = (event, nodeType) => {
+            event.dataTransfer.setData('application/reactflow', nodeType);
+            // Prevent the click handler from firing after drag
+            event.currentTarget._dragging = true;
+            setTimeout(() => { event.currentTarget._dragging = false; }, 0);
+        };
+
+        const handleNodeButtonClick = (e, nodeType) => {
+            // Only proceed if this is a left click and not part of a drag operation
+            if (e.button === 0 && !e.currentTarget._dragging) {
+                e.preventDefault();
+                e.stopPropagation();
+                addNode(nodeType);
+            }
+        };
         
         const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
         const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); };
+        
+        const nodeTypesList = [
+            { type: 'message', icon: '💬', label: 'Mensagem', category: 'Componentes' },
+            { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
+            { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
+            { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+        ];
+        
+        const handleNodeTypeSelect = (nodeType) => {
+            addNode(nodeType);
+            setIsNodeSelectorOpen(false);
+        };
 
         return (
             <div className="flow-editor-page">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
                 <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
                 <div className="flow-editor-container">
-                    <div className="flow-sidebar">
-                        <h3>Componentes</h3>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'message')} draggable>💬 Mensagem</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'image')} draggable>🖼️ Imagem</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'video')} draggable>🎬 Vídeo</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'audio')} draggable>🎵 Áudio</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'delay')} draggable>⏱️ Atraso</div>
-                        <h3>Ações</h3>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'typing_action')} draggable>✍️ Ação de Digitando</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_pix')} draggable>💳 Gerar PIX</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'action_check_pix')} draggable>🔍 Consultar PIX</div>
-                        <div className="node-button" onDragStart={(e) => onDragStart(e, 'forward_flow')} draggable>↪️ Encaminhar Fluxo</div>
-                    </div>
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
                             <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} fitView>
@@ -5763,9 +7117,48 @@ function generatePreviewHTML(data) {
                                 <Controls />
                             </ReactFlow>
                         </ReactFlowProvider>
-                        {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
                     </div>
                 </div>
+                <button 
+                    className="add-node-fab" 
+                    onClick={() => setIsNodeSelectorOpen(true)}
+                    title="Adicionar Node"
+                >
+                    +
+                </button>
+                {isNodeSelectorOpen && (
+                    <div className="node-selector-modal-overlay" onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            setIsNodeSelectorOpen(false);
+                        }
+                    }}>
+                        <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="node-selector-modal-header">
+                                <h3>Adicionar Node</h3>
+                                <button 
+                                    className="node-selector-modal-close"
+                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    title="Fechar"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                            <div className="node-selector-modal-content">
+                                {nodeTypesList.map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
             </div>
         );
     }

@@ -291,31 +291,33 @@ async function handler(req, res) {
                     const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
                     response = await sendTelegramRequest(bot.bot_token, method, payload);
                 }
-            } else if (step.type === 'pix') {
-                // (Lógica para enviar 'pix' ... igual a antes)
-                if (!userVariables.click_id) {
-                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
-                }
-                const db_click_id = userVariables.click_id.startsWith('/start ') ? userVariables.click_id : `/start ${userVariables.click_id}`;
-                const [click] = await sqlWithRetry(sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${seller.id}`);
-                if (!click) {
-                    throw new Error(`Click ID ${userVariables.click_id} não encontrado ou não pertence ao vendedor ${seller.id}.`);
-                }
-                const ip_address = click.ip_address;
-                try {
-                    const pixResult = await generatePixWithFallback(seller, step.valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    lastTransactionId = pixResult.transaction_id;
-                    const messageText = await replaceVariables(step.pixMessage || "✅ PIX Gerado! Copie:", userVariables);
-                    const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
-                    const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-                    response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                        chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
-                    });
-                } catch (error) {
-                    console.error(`[WORKER-DISPARO] Erro ao gerar PIX para chat ${chat_id}:`, error.message);
-                    throw error; 
-                }
+            } else if (step.type === 'pix') {
+                // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
+                if (!userVariables.click_id) {
+                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
+                }
+                const baseApiUrl = process.env.HOTTRACK_API_URL;
+                if (!baseApiUrl) {
+                    throw new Error('HOTTRACK_API_URL não configurada no worker.');
+                }
+                const cleanedClickId = userVariables.click_id.startsWith('/start ')
+                    ? userVariables.click_id.replace('/start ', '')
+                    : userVariables.click_id;
+                const apiResp = await axios.post(`${baseApiUrl}/api/pix/generate`, {
+                    click_id: cleanedClickId,
+                    value_cents: step.valueInCents
+                }, {
+                    headers: { 'x-api-key': seller.api_key }
+                });
+                const { transaction_id, qr_code_text } = apiResp.data;
+                lastTransactionId = transaction_id;
+                const messageText = await replaceVariables(step.pixMessage || "", userVariables);
+                const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
+                const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
+                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                    chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: qr_code_text } }]] }
+                });
             } else if (step.type === 'check_pix' || step.type === 'delay') {
                 // Ignora ativamente esses passos, eles não enviam nada
                 logStatus = 'SKIPPED';
