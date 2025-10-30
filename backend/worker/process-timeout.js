@@ -663,43 +663,55 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    // 1. Encontre o nó de saída 'b' (timeout). O resultado será um ID ou null.
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
                     
+                    const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                
+                    // 2. Log inteligente: informe se vai continuar ou encerrar
                     if (noReplyNodeId) {
-                        const timeoutMinutes = currentNode.data.replyTimeout || 5;
                         console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
-
-                        try {
-                            // Cancela qualquer tarefa antiga antes de agendar uma nova.
-                            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                            if (existingState && existingState.scheduled_message_id) {
-                                try {
-                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
-                                    console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada antes de agendar a nova.`);
-                                } catch (e) {
-                                    console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id} (pode já ter sido executada):`, e.message);
-                                }
-                            }
-
-                            JSON.stringify(variables);
-                            const response = await qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                                body: { chat_id: chatId, bot_id: botId, target_node_id: noReplyNodeId, variables: variables },
-                                delay: `${timeoutMinutes}m`,
-                                contentBasedDeduplication: true,
-                                method: "POST"
-                            });
-                            await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                        } catch (error) {
-                            console.error("--- ERRO FATAL DE SERIALIZAÇÃO ---");
-                            console.error(`O objeto 'variables' para o chat ${chatId} não pôde ser convertido para JSON.`);
-                            console.error("Conteúdo do objeto problemático:", variables);
-                            console.error("Erro original:", error.message);
-                            console.error("--- FIM DO ERRO ---");
-                        }
+                    } else {
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para ENCERRAR o fluxo (saída 'b' desconectada).`);
                     }
-                    currentNodeId = null;
+                
+                    try {
+                        // 3. Cancele qualquer tarefa antiga (lógica existente está correta)
+                        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        if (existingState && existingState.scheduled_message_id) {
+                            try {
+                                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada.`);
+                            } catch (e) {
+                                console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id}:`, e.message);
+                            }
+                        }
+                
+                        // 4. Agende a nova tarefa.
+                        //    O 'target_node_id' será o ID encontrado ou NULL.
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { 
+                                chat_id: chatId, 
+                                bot_id: botId, 
+                                target_node_id: noReplyNodeId, // <-- AQUI ESTÁ A MÁGICA
+                                variables: variables 
+                            },
+                            delay: `${timeoutMinutes}m`,
+                            contentBasedDeduplication: true,
+                            method: "POST"
+                        });
+                        
+                        await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    } catch (error) {
+                        console.error("Erro ao agendar timeout:", error);
+                    }
+                    
+                    currentNodeId = null; // Pare o fluxo para esperar a resposta ou o timeout
                 } else {
+                    // Se não espera resposta, continue para a saída 'a'
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
                 break;
