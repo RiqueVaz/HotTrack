@@ -369,8 +369,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'message':
 
                 const textToSend = await replaceVariables(actionData.text, variables);
-                // Passa actionData.showTyping
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, actionData.showTyping, variables);
+                // Removido: showTyping/typingDelay na mensagem. Digitação só via 'typing_action'.
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, 0, variables);
 
                 // Processa recursivamente se ESTA ação tiver ações aninhadas
                 if (actionData.actions && actionData.actions.length > 0) {
@@ -620,7 +620,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
                 // ==========================================================
                 const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, 0, variables);
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================

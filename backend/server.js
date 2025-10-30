@@ -3868,12 +3868,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
         switch (action.type) {
             case 'message':
-                if (actionData.typingDelay && actionData.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, actionData.typingDelay * 1000));
-                }
-
+                // Removido: typingDelay/showTyping da ação de mensagem (somente 'typing_action' controla digitação)
                 const textToSend = await replaceVariables(actionData.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, actionData.showTyping, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
                 
                 // Processamento recursivo (se esta ação tiver ações)
                 if (actionData.actions && actionData.actions.length > 0) {
@@ -4122,15 +4119,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         switch (currentNode.type) {
             case 'message':
-                if (currentNode.data.typingDelay && currentNode.data.typingDelay > 0) {
-                    await new Promise(resolve => setTimeout(resolve, currentNode.data.typingDelay * 1000));
-                }
-
+                // Removido: typingDelay/showTyping do nó principal (somente 'typing_action' controla digitação)
                 // ==========================================================
                 // PASSO 2: USAR A VARIÁVEL CORRETA AO ENVIAR A MENSAGEM
                 // ==========================================================
                 const textToSend = await replaceVariables(currentNode.data.text, variables);
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, currentNode.data.showTyping, variables);
+                await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
                 // ==========================================================
                 // FIM DO PASSO 2
                 // ==========================================================
