@@ -3947,7 +3947,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
-                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie:", variables);
+                    const messageText = await replaceVariables(actionData.pixMessage || "", variables);
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -3963,7 +3963,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error);
-                    await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento.", botToken, sellerId, botId, true, variables);
+                    console.log(chatId, "Desculpe, não consegui gerar o PIX neste momento.", botToken, sellerId, botId, true, variables);
                 }
                 // REMOVIDO: findNextNode
                 break;
@@ -3977,13 +3977,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
 
                     if (transaction.status === 'paid') {
-                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);
+                        console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);
                     } else {
-                        await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true, variables);
+                        console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true, variables);
                     }
                 } catch (error) {
                     console.error(`${logPrefix} Erro ao consultar PIX:`, error);
-                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true, variables);
                 }
                 // REMOVIDO: findNextNode
                 break;
@@ -4247,7 +4246,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
     
                         // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "", variables);
                         const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
                         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -4269,7 +4268,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     } catch (error) {
                         console.error(`[Flow Engine] Erro no nó action_pix para chat ${chatId}:`, error);
                         // Informa o usuário sobre o erro
-                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
+                        console.log(chatId, "Desculpe, não consegui gerar o PIX neste momento. Tente novamente mais tarde.", botToken, sellerId, botId, true);
                         // Decide se o fluxo deve parar ou seguir por um caminho de erro (se houver)
                         // Por enquanto, vamos parar aqui para evitar loops
                         currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
@@ -4289,15 +4288,14 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
 
                     if (transaction.status === 'paid') {
-                        await sendMessage(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                        console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
                         currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
                     } else {
-                         await sendMessage(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                         console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
                         currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
                     }
                 } catch (error) {
                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
-                    await sendMessage(chatId, "Não consegui consultar o status do PIX agora.", botToken, sellerId, botId, true);
                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
@@ -5064,7 +5062,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
         
-        const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
+        const messageText = pixMessage || '';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
 
