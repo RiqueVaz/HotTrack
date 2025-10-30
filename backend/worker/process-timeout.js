@@ -16,6 +16,8 @@ const { Client } = require("@upstash/qstash");
 const sql = neon(process.env.DATABASE_URL);
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+// Cache para respeitar rate limit da PushinPay (1/min por transação)
+const pushinpayLastCheckAt = new Map();
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
@@ -485,14 +487,43 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const transactionId = variables.last_transaction_id;
                     if (!transactionId) throw new Error("[WORKER] Nenhum ID de transação PIX encontrado para consultar na ação aninhada.");
 
-                    const [transaction] = await sql`SELECT status FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
                     if (!transaction) throw new Error(`[WORKER] Transação ${transactionId} não encontrada na ação aninhada.`);
 
-                    // Apenas envia a mensagem de status, não muda o fluxo principal
                     if (transaction.status === 'paid') {
                         console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
                     } else {
-                        console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                        // Consulta direta ao provedor para tentar atualizar status (não altera fluxo principal aqui)
+                        try {
+                            const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+                            let providerStatus = null;
+                            const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                            if (transaction.provider === 'pushinpay') {
+                                const last = pushinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                                const now = Date.now();
+                                if (now - last >= 60_000) {
+                                    const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
+                                        { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
+                                    providerStatus = String(resp.data.status || '').toLowerCase();
+                                    pushinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                                }
+                            } else if (transaction.provider === 'syncpay') {
+                                const syncPayToken = await getSyncPayAuthToken(seller);
+                                const resp = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
+                                    { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
+                                providerStatus = String(resp.data.status || '').toLowerCase();
+                            }
+
+                            if (providerStatus && paidStatuses.has(providerStatus)) {
+                                await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction.id} AND status != 'paid'`;
+                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                            } else {
+                                console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                            }
+                        } catch (provErr) {
+                            console.error("[WORKER - Flow Engine] Falha ao consultar provedor:", provErr.response?.data || provErr.message);
+                            console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                        }
                     }
                 } catch (error) {
                     console.error("[WORKER - Flow Engine] Erro ao consultar PIX na ação aninhada:", error);
@@ -790,8 +821,40 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
                         currentNodeId = findNextNode(currentNodeId, 'a', edges); // Caminho 'Pago'
                     } else {
-                        console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
-                        currentNodeId = findNextNode(currentNodeId, 'b', edges); // Caminho 'Pendente'
+                        // Consulta direta ao provedor quando não pago
+                        try {
+                            const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+                            let providerStatus = null;
+                            const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                            if (transaction.provider === 'pushinpay') {
+                                const last = pushinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                                const now = Date.now();
+                                if (now - last >= 60_000) {
+                                    const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
+                                        { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
+                                    providerStatus = String(resp.data.status || '').toLowerCase();
+                                    pushinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                                }
+                            } else if (transaction.provider === 'syncpay') {
+                                const syncPayToken = await getSyncPayAuthToken(seller);
+                                const resp = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
+                                    { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
+                                providerStatus = String(resp.data.status || '').toLowerCase();
+                            }
+
+                            if (providerStatus && paidStatuses.has(providerStatus)) {
+                                await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction.id} AND status != 'paid'`;
+                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
+                                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                            } else {
+                                console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                                currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                            }
+                        } catch (provErr) {
+                            console.error("[Flow Engine] Falha ao consultar provedor:", provErr.response?.data || provErr.message);
+                            console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
+                            currentNodeId = findNextNode(currentNodeId, 'b', edges);
+                        }
                     }
                 } catch (error) {
                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
