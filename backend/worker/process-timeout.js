@@ -252,6 +252,182 @@ async function getSyncPayAuthToken(seller) {
     return access_token;
 }
 
+async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
+    console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
+    try {
+        let integrationId = null;
+
+        if (clickData.pressel_id) {
+            console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
+            const [pressel] = await sql`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
+            if (pressel) {
+                integrationId = pressel.utmify_integration_id;
+            }
+        } else if (clickData.checkout_id) {
+            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
+        }
+
+        if (!integrationId) {
+            console.log(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
+            return;
+        }
+
+        console.log(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
+        const [integration] = await sql`
+            SELECT api_token FROM utmify_integrations 
+            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
+        `;
+
+        if (!integration || !integration.api_token) {
+            console.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
+            return;
+        }
+
+        const utmifyApiToken = integration.api_token;
+        console.log(`[Utmify] Token encontrado. Montando payload...`);
+        
+        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
+        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
+        const payload = {
+            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
+            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
+            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
+            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
+            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
+            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
+            isTest: false
+        };
+
+        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
+        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+
+    } catch (error) {
+        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+    }
+}
+async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
+    try {
+        let presselPixels = [];
+        if (clickData.pressel_id) {
+            presselPixels = await sql`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+        } else if (clickData.checkout_id) {
+            presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
+        }
+
+        if (presselPixels.length === 0) {
+            console.log(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
+            return;
+        }
+
+        const userData = {
+            fbp: clickData.fbp || undefined,
+            fbc: clickData.fbc || undefined,
+            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
+        };
+
+        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
+            userData.client_ip_address = clickData.ip_address;
+        }
+        if (clickData.user_agent && clickData.user_agent.length > 10) { 
+            userData.client_user_agent = clickData.user_agent;
+        }
+
+        if (customerData?.name) {
+            const nameParts = customerData.name.trim().split(' ');
+            const firstName = nameParts[0].toLowerCase();
+            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
+            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
+            if (lastName) {
+                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
+            }
+        }
+
+        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
+        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
+        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
+        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
+
+        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
+        
+        for (const { pixel_config_id } of presselPixels) {
+            const [pixelConfig] = await sql`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+            if (pixelConfig) {
+                const { pixel_id, meta_api_token } = pixelConfig;
+                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
+                
+                const payload = {
+                    data: [{
+                        event_name: eventName,
+                        event_time: Math.floor(Date.now() / 1000),
+                        event_id,
+                        user_data: userData,
+                        custom_data: {
+                            currency: 'BRL',
+                            value: transactionData.pix_value
+                        },
+                    }]
+                };
+                
+                if (eventName !== 'Purchase') {
+                    delete payload.data[0].custom_data.value;
+                }
+
+                console.log(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
+                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
+                console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
+
+                if (eventName === 'Purchase') {
+                     await sql`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
+    }
+}
+
+async function handleSuccessfulPayment(transaction_id, customerData) {
+    try {
+        const [transaction] = await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
+        if (!transaction) { 
+            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada ou não encontrada.`);
+            return; 
+        }
+
+        console.log(`[handleSuccessfulPayment] Processando pagamento para transação ${transaction_id}.`);
+
+        if (adminSubscription && webpush) {
+            const payload = JSON.stringify({
+                title: 'Nova Venda Paga!',
+                body: `Venda de R$ ${parseFloat(transaction.pix_value).toFixed(2)} foi confirmada.`,
+            });
+            webpush.sendNotification(adminSubscription, payload).catch(error => {
+                if (error.statusCode === 410) {
+                    console.log("Inscrição de notificação expirada. Removendo.");
+                    adminSubscription = null;
+                } else {
+                    console.warn("Falha ao enviar notificação push (não-crítico):", error.message);
+                }
+            });
+        }
+        
+        const [click] = await sql`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
+        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
+
+        if (click && seller) {
+            const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
+            const productData = { id: "prod_final", name: "Produto Vendido" };
+
+            await sendEventToUtmify('paid', click, transaction, seller, finalCustomerData, productData);
+            await sendMetaEvent('Purchase', click, transaction, finalCustomerData);
+        } else {
+            console.error(`[handleSuccessfulPayment] ERRO: Não foi possível encontrar dados do clique ou vendedor para a transação ${transaction_id}`);
+        }
+    } catch(error) {
+        console.error(`[handleSuccessfulPayment] ERRO CRÍTICO ao processar pagamento da transação ${transaction_id}:`, error);
+    }
+}
+
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
@@ -497,6 +673,22 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost'; // Usa a URL da env var
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
 
+                    const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                    await sendEventToUtmify(
+                        'waiting_payment', 
+                        click, 
+                        { 
+                            provider_transaction_id: pixResult.transaction_id, 
+                            pix_value: valueInCents / 100, 
+                            created_at: new Date() 
+                        }, 
+                        seller, 
+                        customerDataForUtmify, 
+                        productDataForUtmify
+                    );
+                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
                     // Atualiza a variável 'last_transaction_id' nas variáveis do fluxo
                     variables.last_transaction_id = pixResult.transaction_id;
                      // IMPORTANTE: Persistir as variáveis atualizadas no estado do usuário, se necessário
@@ -565,9 +757,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
 
                             if (providerStatus && paidStatuses.has(providerStatus)) {
-                                await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction.id} AND status != 'paid'`;
-                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
-                            } else {
+                                // Esta é a correção:
+                                await handleSuccessfulPayment(transaction.id, customerData);
+                            
+                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);                            } else {
                                 console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
                             }
                         } catch (provErr) {
@@ -830,7 +1023,24 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                         const pixResult = await generatePixForProvider('brpix', seller, valueInCents, hostPlaceholder, seller.api_key, ip_address); // Passa click.id
-    
+                        
+                        const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                        const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                        await sendEventToUtmify(
+                            'waiting_payment', 
+                            click, 
+                            { 
+                                provider_transaction_id: pixResult.transaction_id, 
+                                pix_value: valueInCents / 100, 
+                                created_at: new Date() 
+                            }, 
+                            seller, 
+                            customerDataForUtmify, 
+                            productDataForUtmify
+                        );
+                        console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
                         variables.last_transaction_id = pixResult.transaction_id;
@@ -905,9 +1115,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             }
 
                             if (providerStatus && paidStatuses.has(providerStatus)) {
-                                await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction.id} AND status != 'paid'`;
-                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true);
-                                currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                                // Esta é a correção:
+                                await handleSuccessfulPayment(transaction.id, customerData);
+                            
+                                console.log(chatId, "Pagamento confirmado! ✅", botToken, sellerId, botId, true, variables);                                currentNodeId = findNextNode(currentNodeId, 'a', edges);
                             } else {
                                 console.log(chatId, "Ainda estamos aguardando o pagamento.", botToken, sellerId, botId, true);
                                 currentNodeId = findNextNode(currentNodeId, 'b', edges);

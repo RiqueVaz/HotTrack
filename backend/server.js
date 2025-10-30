@@ -3951,7 +3951,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const ip_address = click.ip_address;
                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-    
+                    
+                    const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                    await sendEventToUtmify(
+                        'waiting_payment', 
+                        click, 
+                        { 
+                            provider_transaction_id: pixResult.transaction_id, 
+                            pix_value: valueInCents / 100, 
+                            created_at: new Date() 
+                        }, 
+                        seller, 
+                        customerDataForUtmify, 
+                        productDataForUtmify
+                    );
+                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
@@ -4302,7 +4319,24 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                         const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
-    
+                        
+                        const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                        const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                        await sendEventToUtmify(
+                            'waiting_payment', 
+                            click, 
+                            { 
+                                provider_transaction_id: pixResult.transaction_id, 
+                                pix_value: valueInCents / 100, 
+                                created_at: new Date() 
+                            }, 
+                            seller, 
+                            customerDataForUtmify, 
+                            productDataForUtmify
+                        );
+                        console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
                         variables.last_transaction_id = pixResult.transaction_id;
