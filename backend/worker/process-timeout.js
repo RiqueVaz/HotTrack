@@ -101,6 +101,56 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 }
 
+async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
+    const providerOrder = [
+        seller.pix_provider_primary,
+        seller.pix_provider_secondary,
+        seller.pix_provider_tertiary
+    ].filter(Boolean); // Remove nulos ou vazios
+
+    if (providerOrder.length === 0) {
+        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
+    }
+
+    let lastError = null;
+
+    for (const provider of providerOrder) {
+        try {
+            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
+            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
+            console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
+
+            // Salvar a transação no banco AQUI DENTRO da função de fallback
+            // Isso garante que a transação só é salva se a geração for bem-sucedida
+            const [transaction] = await sql`
+                INSERT INTO pix_transactions (
+                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
+                    provider, provider_transaction_id, pix_id
+                ) VALUES (
+                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
+                    ${pixResult.qr_code_base64}, ${pixResult.provider},
+                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
+                ) RETURNING id`;
+
+             // Adiciona o ID interno da transação salva ao resultado para uso posterior
+            pixResult.internal_transaction_id = transaction.id;
+
+            return pixResult; // Retorna o resultado SUCESSO
+
+        } catch (error) {
+            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
+            lastError = error; // Guarda o erro para o caso de todos falharem
+        }
+    }
+
+    // Se o loop terminar sem sucesso, lança o último erro ocorrido
+    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
+    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
+    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
+    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
+}
+
+
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
