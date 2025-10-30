@@ -1078,7 +1078,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         const payload = { 
             amount: value_cents / 100, 
             payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${preferredHost}/api/webhook/syncpay`
+            webhook_url: `https://${preferredHost}/api/webhook/syncpay`
         };
         const commission_percentage = commission_rate * 100;
         if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
@@ -4182,10 +4182,23 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                 if (currentNode.data.waitForReply) {
                     await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    // 1. Encontre o nó de saída 'b' (timeout). O resultado será um ID ou null.
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    
                     const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                    console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para encerrar o fluxo`);
+                
+                    // 2. Log inteligente: informe se vai continuar ou encerrar
+                    if (noReplyNodeId) {
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+                    } else {
+                        // <<-- ESTE É O LOG QUE VOCÊ QUER VER
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker em ${timeoutMinutes} min para ENCERRAR o fluxo (saída 'b' desconectada).`);
+                    }
+                
+                    // 3. O 'try...catch' fica FORA do 'if (noReplyNodeId)'
                     try {
-                        // cancel old
+                        // 4. Cancele qualquer tarefa antiga
                         const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                         if (existingState && existingState.scheduled_message_id) {
                             try {
@@ -4196,22 +4209,33 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             }
                         }
 
+                        // 5. Agende a nova tarefa.
+                        //    O 'target_node_id' será o ID encontrado ou NULL.
                         const response = await qstashClient.publishJSON({
                             url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { chat_id: chatId, bot_id: botId, target_node_id: null, variables: variables },
+                            body: { 
+                                chat_id: chatId, 
+                                bot_id: botId, 
+                                target_node_id: noReplyNodeId, // <<-- VAI ENVIAR 'null' SE DESCONECTADO
+                                variables: variables 
+                            },
                             delay: `${timeoutMinutes}m`,
                             contentBasedDeduplication: true,
                             method: "POST"
                         });
+                        
                         await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
                     } catch (error) {
                         console.error("Erro ao agendar timeout:", error);
                     }
-                    currentNodeId = null;
+                    
+                    currentNodeId = null; // Pare o fluxo para esperar a resposta ou o timeout
                 } else {
+                    // Se não espera resposta, continue para a saída 'a'
                     currentNodeId = findNextNode(currentNodeId, 'a', edges);
                 }
-                break;
+                break; // Fim do case 'message'
 
             // ===== IMPLEMENTAÇÃO DOS NÓS DE MÍDIA =====
             case 'image':
@@ -4662,33 +4686,106 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     });
 
 
-app.post('/api/webhook/pushinpay', async (req, res) => {
-    const { id, status, payer_name, payer_document } = req.body;
-    const normalized = String(status || '').toLowerCase();
-    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-    if (paidStatuses.has(normalized)) {
-        try {
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${id} AND provider = 'pushinpay'`;
-            if (tx && tx.status !== 'paid') {
-                await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_document });
-            }
-        } catch (error) { console.error("Erro no webhook da PushinPay:", error); }
-    }
-    res.sendStatus(200);
-});
+    app.post('/api/webhook/pushinpay', async (req, res) => {
+           // 1. O webhook envia um payload simples
+           const { id, status } = req.body; 
+           const normalized = String(status || '').toLowerCase();
+           const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+           
+           if (paidStatuses.has(normalized)) {
+               try {
+                   // 2. Buscamos a transação E o seller_id associado (via clique)
+                   const [tx] = await sql`
+                       SELECT pt.id, pt.status, c.seller_id 
+                       FROM pix_transactions pt 
+                       JOIN clicks c ON pt.click_id_internal = c.id 
+                       WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
+                   `;
+                       
+                   // 3. Se a transação existir e AINDA não estiver paga
+                   if (tx && tx.status !== 'paid') {
+                       console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) recebida como paga. Buscando dados do pagador...`);
+                       
+                       // 4. Buscar o token do vendedor para fazer a consulta GET
+                       const [seller] = await sql`SELECT pushinpay_token FROM sellers WHERE id = ${tx.seller_id}`;
+                       if (!seller || !seller.pushinpay_token) {
+                           console.error(`[Webhook PushinPay] Vendedor ${tx.seller_id} não encontrado ou sem token PushinPay.`);
+                           return res.sendStatus(200); // Responde OK, mas loga o erro
+                       }
+       
+                       // 5. FAZ A CONSULTA GET para obter os dados completos
+                       const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${id}`, { 
+                           headers: { 
+                               Authorization: `Bearer ${seller.pushinpay_token}`,
+                               Accept: 'application/json', 
+                               'Content-Type': 'application/json' 
+                           },
+                           httpsAgent: httpsAgent // Reutiliza sua conexão keep-alive
+                       });
+       
+                       // 6. Extrai os dados corretos da resposta do GET
+                       const payer_name = resp.data.payer_name;
+                       const payer_national_registration = resp.data.payer_national_registration; // Nome correto do campo
+       
+                       // 7. Chamar o handleSuccessfulPayment com os dados completos
+                       await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+                   
+                   } else if (tx) {
+                       console.log(`[Webhook PushinPay] Transação ${id} já estava como 'paid'. Ignorando webhook.`);
+                   } else {
+                       console.warn(`[Webhook PushinPay] Transação ${id} não encontrada no banco.`);
+                   }
+               } catch (error) { 
+                   console.error("Erro no webhook da PushinPay:", error.response?.data || error.message); 
+               }
+           }
+           res.sendStatus(200);
+       });
 app.post('/api/webhook/cnpay', async (req, res) => {
-    const { transactionId, status, customer } = req.body;
-    const normalized = String(status || '').toLowerCase();
-    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-    if (paidStatuses.has(normalized)) {
-        try {
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
-            if (tx && tx.status !== 'paid') {
-                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.taxID?.taxID });
-            }
-        } catch (error) { console.error("Erro no webhook da CNPay:", error); }
-    }
-    res.sendStatus(200);
+    // 1. Log para depuração (opcional, mas recomendado)
+    console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
+
+    // 2. Extrair os dados da estrutura ANINHADA correta
+    const transactionData = req.body.transaction;
+    const customer = req.body.client;
+
+    if (!transactionData || !transactionData.status) {
+        console.log("[Webhook CNPay] Webhook ignorado: objeto 'transaction' ou 'status' ausente.");
+        return res.sendStatus(200);
+    }
+
+    // 3. Extrair dados de dentro dos objetos
+    const { id: transactionId, status } = transactionData;
+    
+    const normalized = String(status || '').toLowerCase();
+    
+    // 4. A documentação da CNPay diz que o status pago é 'COMPLETED'
+    //    O seu 'paidStatuses' já inclui 'completed', então está OK.
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    
+    if (paidStatuses.has(normalized)) {
+        try {
+            console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
+            
+            // 5. Buscar no banco usando 'provider' = 'cnpay'
+            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
+            
+            if (tx && tx.status !== 'paid') {
+                console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
+                
+                // 6. Usar os dados do 'client' para o handleSuccessfulPayment
+                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
+            
+            } else if (tx) {
+                console.log(`[Webhook CNPay] Transação ${tx.id} já estava como 'paga'.`);
+            } else {
+                console.warn(`[Webhook CNPay] AVISO: Transação ${transactionId} não foi encontrada.`);
+            }
+        } catch (error) { 
+            console.error("Erro no webhook da CNPay:", error); 
+        }
+    }
+    res.sendStatus(200);
 });
 app.post('/api/webhook/oasyfy', async (req, res) => {
     console.log('[Webhook Oasy.fy] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
@@ -5258,31 +5355,42 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     }
 });
 
-// Endpoint 10: Preview de mídia
 app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
-    try {
-        const { bot_id, file_id } = req.params;
-        let token;
-        if (bot_id === 'storage') {
-            token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-        } else {
-            const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
-            token = bot?.bot_token;
-        }
-        if (!token) return res.status(404).send('Bot não encontrado.');
-        const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-        if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-            return res.status(404).send('Arquivo não encontrado no Telegram.');
-        }
-        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
-        const response = await axios.get(fileUrl, { responseType: 'stream' });
-        res.setHeader('Content-Type', response.headers['content-type']);
-        response.data.pipe(res);
-    } catch (error) {
-        console.error("Erro no preview:", error.message);
-        res.status(500).send('Erro ao buscar o arquivo.');
-    }
-});
+        try {
+            const { bot_id, file_id } = req.params;
+            let token;
+            if (bot_id === 'storage') {
+                token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+            } else {
+                const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
+                token = bot?.bot_token;
+            }
+    
+            if (!token) return res.status(404).send('Bot não encontrado.');
+    
+            const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
+            if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
+                return res.status(404).send('Arquivo não encontrado no Telegram.');
+            }
+    
+            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
+    
+            // ***** A CORREÇÃO ESTÁ AQUI *****
+            // Adiciona 'httpsAgent' para reutilizar a conexão
+            const response = await axios.get(fileUrl, { 
+                responseType: 'stream',
+                httpsAgent: httpsAgent // <<-- ADICIONE ESTA LINHA
+            });
+            // *********************************
+    
+            res.setHeader('Content-Type', response.headers['content-type']);
+            response.data.pipe(res);
+    
+        } catch (error) {
+            console.error("Erro no preview:", error.message);
+            res.status(500).send('Erro ao buscar o arquivo.');
+        }
+    });
 
 // Endpoint 11: Listar biblioteca de mídia
 app.get('/api/media', authenticateJwt, async (req, res) => {
