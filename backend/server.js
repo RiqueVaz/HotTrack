@@ -3947,7 +3947,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
-                    const messageText = await replaceVariables(actionData.pixMessage || "✅ PIX Gerado! Copie:", variables);
+                    const messageText = await replaceVariables(actionData.pixMessage || "", variables);
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -4246,7 +4246,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
     
                         // Envia o PIX para o usuário
-                        const messageText = await replaceVariables(currentNode.data.pixMessage || "✅ PIX Gerado! Copie o código abaixo:", variables);
+                        const messageText = await replaceVariables(currentNode.data.pixMessage || "", variables);
                         const buttonText = await replaceVariables(currentNode.data.pixButtonText || "📋 Copiar Código PIX", variables);
                         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -5062,7 +5062,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
         
-        const messageText = pixMessage || '✅ PIX Gerado! Copie o código abaixo para pagar:';
+        const messageText = pixMessage || '';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
 
