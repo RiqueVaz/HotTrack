@@ -1027,7 +1027,7 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0299;
+    const commission_rate = seller.commission_rate || 0.0500;
     
     // Preferir domínio do HOTTRACK_API_URL para webhooks; alerta se ausente
     const preferredHost = process.env.HOTTRACK_API_URL ? (() => { try { return new URL(process.env.HOTTRACK_API_URL).host; } catch { return host; } })() : host;
@@ -1419,7 +1419,7 @@ app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
         const total_sellers = parseInt(totalSellers[0].count);
         const total_paid_transactions = parseInt(paidTransactions[0].count);
         const total_revenue = parseFloat(paidTransactions[0].total_revenue || 0);
-        const saas_profit = total_revenue * 0.0299;
+        const saas_profit = total_revenue * 0.0500;
         res.json({
             total_sellers, total_paid_transactions,
             total_revenue: total_revenue.toFixed(2),
@@ -4865,7 +4865,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
             customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
             products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
             trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0299)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0299))) },
+            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
             isTest: false
         };
 
