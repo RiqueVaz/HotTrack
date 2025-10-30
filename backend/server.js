@@ -5282,31 +5282,42 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     }
 });
 
-// Endpoint 10: Preview de mídia
 app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
-    try {
-        const { bot_id, file_id } = req.params;
-        let token;
-        if (bot_id === 'storage') {
-            token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-        } else {
-            const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
-            token = bot?.bot_token;
-        }
-        if (!token) return res.status(404).send('Bot não encontrado.');
-        const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-        if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-            return res.status(404).send('Arquivo não encontrado no Telegram.');
-        }
-        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
-        const response = await axios.get(fileUrl, { responseType: 'stream' });
-        res.setHeader('Content-Type', response.headers['content-type']);
-        response.data.pipe(res);
-    } catch (error) {
-        console.error("Erro no preview:", error.message);
-        res.status(500).send('Erro ao buscar o arquivo.');
-    }
-});
+        try {
+            const { bot_id, file_id } = req.params;
+            let token;
+            if (bot_id === 'storage') {
+                token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+            } else {
+                const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
+                token = bot?.bot_token;
+            }
+    
+            if (!token) return res.status(404).send('Bot não encontrado.');
+    
+            const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
+            if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
+                return res.status(404).send('Arquivo não encontrado no Telegram.');
+            }
+    
+            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
+    
+            // ***** A CORREÇÃO ESTÁ AQUI *****
+            // Adiciona 'httpsAgent' para reutilizar a conexão
+            const response = await axios.get(fileUrl, { 
+                responseType: 'stream',
+                httpsAgent: httpsAgent // <<-- ADICIONE ESTA LINHA
+            });
+            // *********************************
+    
+            res.setHeader('Content-Type', response.headers['content-type']);
+            response.data.pipe(res);
+    
+        } catch (error) {
+            console.error("Erro no preview:", error.message);
+            res.status(500).send('Erro ao buscar o arquivo.');
+        }
+    });
 
 // Endpoint 11: Listar biblioteca de mídia
 app.get('/api/media', authenticateJwt, async (req, res) => {
