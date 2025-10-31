@@ -6885,7 +6885,36 @@ function generatePreviewHTML(data) {
         const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
-        
+        const [selectedEdge, setSelectedEdge] = useState(null);
+        const [isFading, setIsFading] = useState(false);
+
+        useEffect(() => {
+            if (!selectedEdge) {
+                setIsFading(false);
+                return;
+            }
+            
+            const handleClick = (e) => {
+                if (!e.target.closest('.node-action-btn')) {
+                    setIsFading(true);
+                    setTimeout(() => setSelectedEdge(null), 300);
+                }
+            };
+            
+            const timeout = setTimeout(() => {
+                setIsFading(true);
+                setTimeout(() => setSelectedEdge(null), 300);
+            }, 1000);
+            
+            document.addEventListener('mousedown', handleClick);
+            
+            return () => {
+                document.removeEventListener('mousedown', handleClick);
+                clearTimeout(timeout);
+            };
+        }, [selectedEdge]);
+
+
         // Function to center the view on all nodes
         const centerViewOnNodes = useCallback(() => {
             if (reactFlowInstance && nodes.length > 0) {
@@ -7014,9 +7043,9 @@ function generatePreviewHTML(data) {
         }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
         const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
-        const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true }, eds)), [setEdges]);
+        const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, eds)), [setEdges]);
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
-        const onPaneClick = useCallback(() => setSelectedNode(null), []);
+        const onPaneClick = useCallback(() => { setSelectedNode(null); setSelectedEdge(null); }, []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
         const onDrop = useCallback((event) => { 
             event.preventDefault(); 
@@ -7106,13 +7135,40 @@ function generatePreviewHTML(data) {
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} fitView>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView>
                                 <Background />
                                 <Controls />
-                            </ReactFlow>
-                        </ReactFlowProvider>
-                    </div>
+                </ReactFlow>
+                </ReactFlowProvider>
                 </div>
+                </div>
+                {selectedEdge && (
+                    <div style={{
+                        position: 'fixed',
+                        left: selectedEdge.x,
+                        top: selectedEdge.y,
+                        zIndex: 1000,
+                        background: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '4px',
+                        padding: '4px',
+                        animation: 'fadeIn 0.5s ease-out',
+                        opacity: isFading ? 0 : 1,
+                        transition: 'opacity 0.5s ease-out'
+                    }}>
+                    <button 
+                        className="node-action-btn delete"
+                        onClick={(e) => { 
+                            e.stopPropagation();
+                            setEdges(eds => eds.filter(e => e.id !== selectedEdge.edge.id)); 
+                            setSelectedEdge(null); 
+                        }}
+                        title="Excluir edge"
+                    >
+                        ❌
+                    </button>
+                    </div>
+                )}
                 <button 
                     className="add-node-fab" 
                     onClick={() => setIsNodeSelectorOpen(true)}
