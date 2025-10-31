@@ -6087,21 +6087,25 @@ function generatePreviewHTML(data) {
             const v = String(value).trim();
             return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
         };
-        const nodeInfo = {
-            trigger: { icon: '🚀', name: 'Gatilho Inicial', content: 'Início do fluxo com click_id.' },
-            message: { icon: '💬', name: 'Enviar Mensagem', content: data.text ? `"${data.text.substring(0, 50)}..."` : 'Configure o texto.' },
-            image: { icon: '🖼️', name: 'Enviar Imagem', content: data.imageUrl ? 'Configurado.' : 'Configure.' },
-            video: { icon: '🎬', name: 'Enviar Vídeo', content: data.videoUrl ? 'Configurado.' : 'Configure.' },
-            audio: { icon: '🎵', name: 'Enviar Áudio', content: data.audioUrl ? 'Configurado.' : 'Configure.' },
-            delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar por ${data.delayInSeconds || 1}s.` },
-            typing_action: { icon: '✍️', name: 'Ação de Digitando', content: `Simular por ${data.durationInSeconds || 1}s.` },
-            action_pix: { icon: '💳', name: 'Gerar PIX', content: `Valor: R$ ${((data.valueInCents || 0) / 100).toFixed(2)}.` },
-            action_check_pix: { icon: '🔍', name: 'Consultar PIX', content: 'Verifica se o PIX foi pago.' },
-            forward_flow: { icon: '↪️', name: 'Encaminhar Fluxo', content: data.targetFlowName || 'Selecione um fluxo.' },
-        };
-        const info = nodeInfo[type] || { icon: '❓', name: 'Nó' };
         
-        // Verifica se há ações aninhadas (compatível com nodes antigos)
+        // Trigger node mantém comportamento antigo
+        if (type === 'trigger') {
+            return (
+                <>
+                    <div className={`node-header react-flow__node-trigger`}>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                            🚀 Gatilho Inicial
+                        </div>
+                    </div>
+                    <div className="node-content">
+                        Início do fluxo com click_id.
+                    </div>
+                    <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />
+                </>
+            );
+        }
+        
+        // Nodes normais: mostrar apenas as ações
         const actions = data.actions || [];
         const getActionInfo = (actionType, actionData) => {
             const actionInfoMap = {
@@ -6117,14 +6121,15 @@ function generatePreviewHTML(data) {
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
-
+        
+        const hasConditionalExits = actions.some(a => a.type === 'message' && a.data?.waitForReply) || actions.some(a => a.type === 'action_check_pix');
+        
         return (
             <>
-                {type !== 'trigger' && <Handle type="target" position={Position.Top} isConnectable={isConnectable} />}
-                <div className={`node-header react-flow__node-${type}`}>
+                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                <div className={`node-header react-flow__node-action`}>
                     <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                        {info.icon} {info.name}
-                        {actions.length > 0 && <span style={{fontSize: '0.7rem', opacity: 0.8}}>({actions.length} ação{actions.length !== 1 ? 'ões' : ''})</span>}
+                        {actions.length > 0 ? `${actions.length} ação${actions.length !== 1 ? 'ões' : ''}` : 'Nó vazio'}
                     </div>
                     <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
                         <button 
@@ -6138,87 +6143,79 @@ function generatePreviewHTML(data) {
                         >
                             📋
                         </button>
-                        {id !== 'start' && (
-                            <button 
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
-                                    window.dispatchEvent(event);
-                                }}
-                                className="node-action-btn delete"
-                                title="Excluir nó"
-                            >
-                                ❌
-                            </button>
-                        )}
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
+                                window.dispatchEvent(event);
+                            }}
+                            className="node-action-btn delete"
+                            title="Excluir nó"
+                        >
+                            ❌
+                        </button>
                     </div>
                 </div>
                 <div className="node-content" style={{ position: 'relative' }}>
-                    {info.content}
-                    {(['image','video','audio'].includes(type)) && (
-                        (() => {
-                            const src = buildPreviewSrc(type === 'image' ? data.imageUrl : type === 'video' ? data.videoUrl : data.audioUrl);
-                            if (!src) return null;
+                    {actions.length === 0 ? (
+                        <div style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>Adicione ações neste nó</div>
+                    ) : (
+                        actions.map((action, idx) => {
+                            const actInfo = getActionInfo(action.type, action.data || {});
+                            const actSrc = action.type === 'image' ? buildPreviewSrc((action.data||{}).imageUrl) : action.type === 'video' ? buildPreviewSrc((action.data||{}).videoUrl) : null;
                             return (
-                                <div style={{ position: 'absolute', right: 8, top: 8, width: 56, height: 40, overflow: 'hidden', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)' }}>
-                                    {type === 'image' && <img src={src} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-                                    {type === 'video' && <video src={src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted autoPlay loop playsInline preload="metadata" />}
-                                    {type === 'audio' && <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', opacity: 0.8 }}>🎵</div>}
+                                <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: idx > 0 ? '0.3rem' : 0, opacity: 0.9}}>
+                                    <span>{actInfo.icon}</span>
+                                    <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
+                                    <span>{actInfo.content}</span>
+                                    {actSrc && (
+                                        <span style={{ marginLeft: 'auto' }}>
+                                            {action.type === 'image' ? (
+                                                <img src={actSrc} alt="preview" style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} />
+                                            ) : (
+                                                <video src={actSrc} style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} muted autoPlay loop playsInline preload="metadata" />
+                                            )}
+                                        </span>
+                                    )}
                                 </div>
                             );
-                        })()
-                    )}
-                    {actions.length > 0 && (
-                        <div style={{marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.1)'}}>
-                            {actions.map((action, idx) => {
-                                const actInfo = getActionInfo(action.type, action.data || {});
-                                const actSrc = action.type === 'image' ? buildPreviewSrc((action.data||{}).imageUrl) : action.type === 'video' ? buildPreviewSrc((action.data||{}).videoUrl) : null;
-                                return (
-                                    <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.3rem', opacity: 0.9}}>
-                                        <span>{actInfo.icon}</span>
-                                        <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
-                                        <span>{actInfo.content}</span>
-                                        {actSrc && (
-                                            <span style={{ marginLeft: 'auto' }}>
-                                                {action.type === 'image' ? (
-                                                    <img src={actSrc} alt="preview" style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} />
-                                                ) : (
-                                                    <video src={actSrc} style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} muted autoPlay loop playsInline preload="metadata" />
-                                                )}
-                                            </span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        })
                     )}
                 </div>
                 
-                {type === 'trigger' && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
-                
-                {type === 'message' && !data.waitForReply && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
-                {type === 'message' && data.waitForReply && (
-                    <>
-                        <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Com Resp.</div>
-                        <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
-                        <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Sem Resp.</div>
-                        <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
-                    </>
-                )}
-                {type === 'action_check_pix' && (
-                    <>
-                        <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Pago</div>
-                        <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
-                        <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Pendente</div>
-                        <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
-                    </>
-                )}
-                {['delay', 'typing_action', 'action_pix', 'image', 'video', 'audio', 'forward_flow'].includes(type) && <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />}
+                {(() => {
+                    // Verificar se há ações que precisam de handles condicionais
+                    const hasWaitForReply = actions.some(a => a.type === 'message' && a.data?.waitForReply);
+                    const hasCheckPix = actions.some(a => a.type === 'action_check_pix');
+                    
+                    if (hasWaitForReply) {
+                        return (
+                            <>
+                                <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Com Resp.</div>
+                                <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                                <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Sem Resp.</div>
+                                <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                            </>
+                        );
+                    }
+                    if (hasCheckPix) {
+                        return (
+                            <>
+                                <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Pago</div>
+                                <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                                <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Pendente</div>
+                                <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                            </>
+                        );
+                    }
+                    // Handle padrão para nodes normais
+                    return <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />;
+                })()}
             </>
         );
     };
 
-    const nodeTypes = { trigger: CustomNode, message: CustomNode, image: CustomNode, video: CustomNode, audio: CustomNode, delay: CustomNode, typing_action: CustomNode, action_pix: CustomNode, action_check_pix: CustomNode, forward_flow: CustomNode };
+    const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
         const API_BASE_URL = App.state.API_BASE_URL;
@@ -6244,36 +6241,11 @@ function generatePreviewHTML(data) {
             setNodeData(data);
         }, [selectedNode]);
         
-        // Cria lista unificada de ações (ação principal + ações aninhadas)
-        const getAllActions = () => {
-            if (selectedNode.type === 'trigger') return [];
-            const actions = [...(nodeData.actions || [])];
-            // A ação principal é sempre a primeira, baseada no tipo do node
-            const mainAction = {
-                type: selectedNode.type,
-                data: { ...nodeData },
-                isMain: true
-            };
-            return [mainAction, ...actions];
-        };
+        // Nodes agora só têm ações (sem ação principal)
+        const actions = nodeData.actions || [];
+
         
-        const actions = getAllActions();
-
-        const handleChange = (e) => {
-            const { name, value, type, checked } = e.target;
-            const finalValue = type === 'checkbox' ? checked : value;
-            const newData = { ...nodeData, [name]: finalValue };
-
-            if (name === "targetFlowId") {
-                const selectedFlow = availableFlows.find(f => f.id == finalValue);
-                newData.targetFlowName = selectedFlow ? selectedFlow.name : '';
-            }
-
-            setNodeData(newData);
-            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
-        };
-        
-        // Funções para gerenciar ações (unificadas)
+        // Funções para gerenciar ações
         const addAction = (actionType) => {
             const actions = nodeData.actions || [];
             if (actions.length >= 5) {
@@ -6287,33 +6259,22 @@ function generatePreviewHTML(data) {
         };
         
         const removeAction = (index) => {
-            // Index 0 é sempre a ação principal, não pode ser removida
-            if (index === 0) return;
-            const actions = (nodeData.actions || []).filter((_, i) => i !== index - 1);
+            const actions = (nodeData.actions || []).filter((_, i) => i !== index);
             const newData = { ...nodeData, actions };
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
         
         const updateAction = (index, field, value) => {
-            if (index === 0) {
-                // Atualizar ação principal
-                const newData = { ...nodeData, [field]: value };
-                setNodeData(newData);
-                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
-            } else {
-                // Atualizar ação aninhada
-                const actions = [...(nodeData.actions || [])];
-                const actionIndex = index - 1;
-                if (!actions[actionIndex]) return;
-                actions[actionIndex] = {
-                    ...actions[actionIndex],
-                    data: { ...actions[actionIndex].data, [field]: value }
-                };
-                const newData = { ...nodeData, actions };
-                setNodeData(newData);
-                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
-            }
+            const actions = [...(nodeData.actions || [])];
+            if (!actions[index]) return;
+            actions[index] = {
+                ...actions[index],
+                data: { ...actions[index].data, [field]: value }
+            };
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
         
         // Função de auto-scroll durante drag
@@ -6395,11 +6356,6 @@ function generatePreviewHTML(data) {
         
         // Funções de drag and drop
         const handleDragStart = (e, index) => {
-            // Ação principal (index 0) não pode ser arrastada
-            if (index === 0) {
-                e.preventDefault();
-                return;
-            }
             setDraggedIndex(index);
             e.dataTransfer.effectAllowed = 'move';
             
@@ -6412,7 +6368,6 @@ function generatePreviewHTML(data) {
         const handleDragOver = (e, index) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
-            if (index === 0) return; // Não pode arrastar sobre a ação principal
             if (draggedIndex !== null && draggedIndex !== index) {
                 setDragOverIndex(index);
             }
@@ -6426,7 +6381,7 @@ function generatePreviewHTML(data) {
         
         const handleDrop = (e, dropIndex) => {
             e.preventDefault();
-            if (draggedIndex === null || draggedIndex === 0 || dropIndex === 0) return;
+            if (draggedIndex === null) return;
             if (draggedIndex === dropIndex) {
                 setDraggedIndex(null);
                 setDragOverIndex(null);
@@ -6434,12 +6389,9 @@ function generatePreviewHTML(data) {
             }
             
             const actions = [...(nodeData.actions || [])];
-            const draggedActionIndex = draggedIndex - 1; // -1 porque index 0 é ação principal
-            const dropActionIndex = dropIndex - 1;
-            
-            const draggedAction = actions[draggedActionIndex];
-            actions.splice(draggedActionIndex, 1);
-            actions.splice(dropActionIndex, 0, draggedAction);
+            const draggedAction = actions[draggedIndex];
+            actions.splice(draggedIndex, 1);
+            actions.splice(dropIndex, 0, draggedAction);
             
             const newData = { ...nodeData, actions };
             setNodeData(newData);
@@ -6479,7 +6431,7 @@ function generatePreviewHTML(data) {
         }, []);
         
         const renderActionEditor = (action, index) => {
-            const actionData = action.isMain ? nodeData : (action.data || {});
+            const actionData = action.data || {};
             const actionTypeNames = {
                 message: '💬 Mensagem',
                 image: '🖼️ Imagem',
@@ -6494,110 +6446,46 @@ function generatePreviewHTML(data) {
             
             const isDragging = draggedIndex === index;
             const isDragOver = dragOverIndex === index;
-            const canDrag = index !== 0; // Ação principal não pode ser arrastada
             
             return (
                 <div 
                     key={index}
                     className={`action-item ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
-                    draggable={canDrag}
+                    draggable={true}
                     onDragStart={(e) => handleDragStart(e, index)}
                     onDragOver={(e) => handleDragOver(e, index)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, index)}
                     onDragEnd={handleDragEnd}
                 >
-                    {canDrag && (
-                        <div className="action-drag-handle" title="Arrastar para reordenar">
-                            ☰
-                        </div>
-                    )}
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', paddingLeft: canDrag ? '2rem' : '0'}}>
+                    <div className="action-drag-handle" title="Arrastar para reordenar">
+                        ☰
+                    </div>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', paddingLeft: '2rem'}}>
                         <strong style={{color: 'var(--text-primary)'}}>
                             {actionTypeNames[action.type] || action.type}
-                            {action.isMain && <span style={{fontSize: '0.7rem', marginLeft: '0.5rem', opacity: 0.7}}>(Principal)</span>}
                         </strong>
-                        {!action.isMain && (
-                            <button 
-                                type="button"
-                                className="btn btn-red btn-sm" 
-                                onClick={() => removeAction(index)}
-                                style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
-                            >
-                                ✕
-                            </button>
-                        )}
+                        <button 
+                            type="button"
+                            className="btn btn-red btn-sm" 
+                            onClick={() => removeAction(index)}
+                            style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
+                        >
+                            ✕
+                        </button>
                     </div>
                     
                     {action.type === 'message' && (
                         <>
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem'}}>Texto</label>
-                                {action.isMain ? (
-                                    <>
-                                        <textarea 
-                                            ref={action.isMain ? textAreaRef : null}
-                                            className="form-textarea" 
-                                            rows="3" 
-                                            value={actionData.text || ''} 
-                                            onChange={e => updateAction(index, 'text', e.target.value)} 
-                                        />
-                                        <div style={{marginTop: '0.5rem'}}>
-                                            <label style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Inserir variável:</label>
-                                            <div style={{marginTop: '0.5rem', marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-                                                <button type="button" className="variable-btn" onClick={() => {
-                                                    const variable = 'primeiro_nome';
-                                                    const textarea = textAreaRef.current;
-                                                    if (!textarea) return;
-                                                    const start = textarea.selectionStart;
-                                                    const end = textarea.selectionEnd;
-                                                    const text = textarea.value;
-                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
-                                                    updateAction(index, 'text', newText);
-                                                    setTimeout(() => {
-                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
-                                                        textarea.focus();
-                                                    }, 0);
-                                                }}>Nome</button>
-                                                <button type="button" className="variable-btn" onClick={() => {
-                                                    const variable = 'nome_completo';
-                                                    const textarea = textAreaRef.current;
-                                                    if (!textarea) return;
-                                                    const start = textarea.selectionStart;
-                                                    const end = textarea.selectionEnd;
-                                                    const text = textarea.value;
-                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
-                                                    updateAction(index, 'text', newText);
-                                                    setTimeout(() => {
-                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
-                                                        textarea.focus();
-                                                    }, 0);
-                                                }}>Nome Completo</button>
-                                                <button type="button" className="variable-btn" onClick={() => {
-                                                    const variable = 'cidade';
-                                                    const textarea = textAreaRef.current;
-                                                    if (!textarea) return;
-                                                    const start = textarea.selectionStart;
-                                                    const end = textarea.selectionEnd;
-                                                    const text = textarea.value;
-                                                    const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
-                                                    updateAction(index, 'text', newText);
-                                                    setTimeout(() => {
-                                                        textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
-                                                        textarea.focus();
-                                                    }, 0);
-                                                }}>Cidade</button>
-                                            </div>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <textarea 
-                                        className="form-textarea" 
-                                        rows="3" 
-                                        value={actionData.text || ''} 
-                                        onChange={e => updateAction(index, 'text', e.target.value)} 
-                                    />
-                                )}
+                                <textarea 
+                                    className="form-textarea" 
+                                    rows="3" 
+                                    value={actionData.text || ''} 
+                                    onChange={e => updateAction(index, 'text', e.target.value)} 
+                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}}"
+                                />
                             </div>
                             <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
                                 <input 
@@ -6617,7 +6505,28 @@ function generatePreviewHTML(data) {
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
-                            {action.isMain && (<></>)}
+                            <div className="form-group" style={{marginTop: '0.5rem'}}>
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.waitForReply}
+                                        onChange={e => updateAction(index, 'waitForReply', e.target.checked)}
+                                    />
+                                    Aguardar Resposta
+                                </label>
+                                {actionData.waitForReply && (
+                                    <div style={{marginTop: '0.5rem'}}>
+                                        <label style={{fontSize: '0.85rem', marginRight: '0.5rem'}}>Tempo (min)</label>
+                                        <input 
+                                            type="number"
+                                            className="form-input"
+                                            value={actionData.replyTimeout || 5}
+                                            onChange={e => updateAction(index, 'replyTimeout', parseInt(e.target.value, 10))}
+                                            style={{width: '100px', fontSize: '0.85rem'}}
+                                        />
+                                    </div>
+                                )}
+                            </div>
                         </>
                     )}
                     
@@ -6807,41 +6716,9 @@ function generatePreviewHTML(data) {
             setSelectedNode(null);
         };
 
-        const insertVariable = (variable) => {
-            const textarea = textAreaRef.current;
-            if (!textarea) return;
-            const start = textarea.selectionStart;
-            const end = textarea.selectionEnd;
-            const text = textarea.value;
-            const newText = text.substring(0, start) + `{{${variable}}}` + text.substring(end);
-            handleChange({ target: { name: 'text', value: newText }});
-            setTimeout(() => {
-                textarea.selectionStart = textarea.selectionEnd = start + variable.length + 4;
-                textarea.focus();
-            }, 0);
-        };
 
-        const renderPanel = () => {
-            switch (selectedNode.type) {
-                case 'message': return (<>
-                    <div className="form-group"><label>Texto</label><textarea ref={textAreaRef} name="text" className="form-textarea" rows="5" value={nodeData.text || ''} onChange={handleChange} /></div>
-                    <div><label style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Inserir variável:</label><div style={{marginTop: '0.5rem', marginBottom: '1rem'}}><button className="variable-btn" onClick={() => insertVariable('primeiro_nome')}>Nome</button><button className="variable-btn" onClick={() => insertVariable('nome_completo')}>Nome Completo</button><button className="variable-btn" onClick={() => insertVariable('cidade')}>Cidade</button></div></div>
-                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                    <div className="form-group"><label>Botão (Opcional)</label><input name="buttonText" type="text" className="form-input" value={nodeData.buttonText || ''} onChange={handleChange} placeholder="Texto do Botão"/><input name="buttonUrl" type="url" className="form-input" value={nodeData.buttonUrl || ''} onChange={handleChange} placeholder="URL do Botão" style={{marginTop: '0.5rem'}}/></div>
-                    <hr style={{border: 'none', borderTop: '1px solid #e9ecef', margin: '1rem 0'}} />
-                </>);
-                case 'image': return (<><div className="form-group"><label>File ID ou URL da Imagem</label><input name="imageUrl" type="text" className="form-input" value={nodeData.imageUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'imageUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
-                case 'video': return (<><div className="form-group"><label>File ID ou URL do Vídeo</label><input name="videoUrl" type="text" className="form-input" value={nodeData.videoUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'videoUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Legenda</label><textarea name="caption" className="form-textarea" rows="3" value={nodeData.caption || ''} onChange={handleChange} /></div></>);
-                case 'audio': return (<><div className="form-group"><label>File ID ou URL do Áudio</label><input name="audioUrl" type="text" className="form-input" value={nodeData.audioUrl || ''} onChange={handleChange} /></div><button className="btn btn-secondary btn-sm" onClick={() => openMediaLibrary(media => handleChange({target: { name: 'audioUrl', value: media.file_id}}))}>Selecionar da Biblioteca</button><div className="form-group" style={{marginTop: '1rem'}}><label>Duração do áudio (em segundos)</label><p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Define por quanto tempo a ação "gravando áudio" será exibida.</p><input name="durationInSeconds" type="number" className="form-input" value={nodeData.durationInSeconds || 0} onChange={handleChange} /></div></>);
-                case 'delay': return (<div className="form-group"><label>Aguardar por (segundos)</label><input name="delayInSeconds" type="number" className="form-input" value={nodeData.delayInSeconds || 1} onChange={handleChange} /></div>);
-                case 'typing_action': return (<div className="form-group"><label>Duração do "Digitando..." (em segundos)</label><input name="durationInSeconds" type="number" className="form-input" value={nodeData.durationInSeconds || 1} onChange={handleChange} /></div>);
-                case 'action_pix': return (<><div className="form-group"><label>Valor (centavos)</label><input name="valueInCents" type="number" className="form-input" value={nodeData.valueInCents || 0} onChange={handleChange} /></div><div className="form-group"><label>Texto da Mensagem do PIX</label><textarea name="pixMessageText" className="form-textarea" rows="4" value={nodeData.pixMessageText || ''} onChange={handleChange} placeholder="Ex: PIX Gerado! Copie o código abaixo..." /></div></>);
-                case 'forward_flow': return (<div className="form-group"><label>Encaminhar para o fluxo</label><select name="targetFlowId" className="form-select" value={nodeData.targetFlowId || ''} onChange={handleChange}><option value="">Selecione um fluxo...</option>{availableFlows.map(f => (<option key={f.id} value={f.id}>{f.name}</option>))}</select></div>);
-                default: return <p>Sem configurações para este nó.</p>;
-            }
-        };
 
-        const availableActionTypes = ['message', 'image', 'video', 'audio', 'typing_action', 'forward_flow'];
+        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action', 'forward_flow'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
             image: '🖼️ Imagem',
@@ -6852,8 +6729,6 @@ function generatePreviewHTML(data) {
         };
 
         if (!selectedNode) return null;
-        
-        const nestedActionsCount = (nodeData.actions || []).length;
         
         return (
             <div className="node-editor-modal-overlay" onClick={(e) => {
@@ -6876,26 +6751,24 @@ function generatePreviewHTML(data) {
                         className="node-editor-modal-content" 
                         ref={modalContentRef}
                         onDragOver={(e) => {
-                            // Permitir que o drag aconteça no container
                             e.preventDefault();
-                            // Ativar auto-scroll quando estiver arrastando
                             if (draggedIndex !== null) {
                                 handleAutoScroll(e);
                             }
                         }}
                     >
-                        {/* Lista unificada de ações */}
-                        {selectedNode.type !== 'trigger' && actions.length > 0 && (
+                        {/* Lista de ações */}
+                        {actions.length > 0 && (
                             <div style={{marginBottom: '1.5rem'}}>
                                 {actions.map((action, index) => renderActionEditor(action, index))}
                             </div>
                         )}
                         
                         {/* Botões para adicionar ações */}
-                        {selectedNode.type !== 'trigger' && nestedActionsCount < 5 && (
+                        {actions.length < 5 && (
                             <div style={{marginTop: actions.length > 0 ? '1rem' : '0'}}>
                                 <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.5rem'}}>
-                                    Adicionar Ação ({nestedActionsCount}/5)
+                                    Adicionar Ação ({actions.length}/5)
                                 </label>
                                 <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem'}}>
                                     {availableActionTypes.map(actionType => (
@@ -6913,43 +6786,14 @@ function generatePreviewHTML(data) {
                             </div>
                         )}
                         
-                        {selectedNode.type !== 'trigger' && nestedActionsCount >= 5 && (
+                        {actions.length >= 5 && (
                             <p style={{fontSize: '0.85rem', color: 'var(--warning)', fontStyle: 'italic', marginTop: actions.length > 0 ? '1rem' : '0'}}>
                                 Limite de 5 ações atingido. Remova uma ação para adicionar outra.
                             </p>
                         )}
                     </div>
                     <div className="node-editor-modal-footer">
-                        {selectedNode.type === 'message' && (
-                            <div style={{marginRight: 'auto', display: 'flex', alignItems: 'center', gap: '1rem'}}>
-                                <label style={{fontSize: '0.85rem'}}>
-                                    <input 
-                                        name="waitForReply"
-                                        type="checkbox"
-                                        checked={!!nodeData.waitForReply}
-                                        onChange={handleChange}
-                                        style={{marginRight: '0.4rem'}}
-                                    />
-                                    Aguardar Resposta
-                                </label>
-                                {nodeData.waitForReply && (
-                                    <div className="form-group" style={{margin: 0}}>
-                                        <label style={{fontSize: '0.85rem', marginRight: '0.5rem'}}>Tempo (min)</label>
-                                        <input 
-                                            name="replyTimeout"
-                                            type="number"
-                                            className="form-input"
-                                            value={nodeData.replyTimeout || 5}
-                                            onChange={handleChange}
-                                            style={{width: '80px'}}
-                                        />
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        {selectedNode.type !== 'trigger' && (
-                            <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
-                        )}
+                        <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
                         <button className="btn btn-secondary" onClick={() => setSelectedNode(null)}>Fechar</button>
                     </div>
                 </div>
@@ -7081,14 +6925,31 @@ function generatePreviewHTML(data) {
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                const nodesToSet = (flowContent.nodes || initialNodes).map(node => ({
-                    ...node,
-                    data: {
-                        ...node.data,
-                        // Garantir compatibilidade com nodes antigos - inicializar actions se não existir
-                        actions: node.data?.actions || []
+                const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
+                    // Migração: converter nodes antigos (com tipo específico) para nova estrutura (type: 'action')
+                    if (node.type !== 'trigger' && node.type !== 'action') {
+                        // Node antigo: criar estrutura nova com a ação principal no array de ações
+                        const mainAction = {
+                            type: node.type,
+                            data: { ...node.data }
+                        };
+                        return {
+                            ...node,
+                            type: 'action',
+                            data: {
+                                actions: [mainAction, ...(node.data?.actions || [])]
+                            }
+                        };
                     }
-                }));
+                    // Node já na nova estrutura ou trigger
+                    return {
+                        ...node,
+                        data: {
+                            ...node.data,
+                            actions: node.data?.actions || []
+                        }
+                    };
+                });
                 setNodes(nodesToSet);
                 setEdges(flowContent.edges || []);
                 
@@ -7146,8 +7007,8 @@ function generatePreviewHTML(data) {
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
         const onDrop = useCallback((event) => { 
             event.preventDefault(); 
-            const type = event.dataTransfer.getData('application/reactflow'); 
-            if (!type) return; 
+            const actionType = event.dataTransfer.getData('application/reactflow'); 
+            if (!actionType) return; 
             
             // Obter a posição relativa ao container do ReactFlow
             const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
@@ -7156,16 +7017,17 @@ function generatePreviewHTML(data) {
                 y: event.clientY - reactFlowBounds.top 
             }); 
             
+            // Criar node vazio com uma primeira ação
             const newNode = { 
-                id: `${type}-${Date.now()}`, 
-                type, 
+                id: `action-${Date.now()}`, 
+                type: 'action', 
                 position, 
-                data: { actions: [] }, 
+                data: { actions: [{ type: actionType, data: {} }] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
         const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
-        const addNode = (nodeType, position = null) => {
+        const addNode = (actionType, position = null) => {
             if (!reactFlowInstance) return;
             
             // If position is not provided, center it in the viewport
@@ -7179,28 +7041,17 @@ function generatePreviewHTML(data) {
                 nodePosition = viewportCenter;
             }
             
+            // Criar node vazio com uma primeira ação
             const newNode = { 
-                id: `${nodeType}-${Date.now()}`, 
-                type: nodeType, 
+                id: `action-${Date.now()}`, 
+                type: 'action', 
                 position: nodePosition, 
                 data: { 
-                    label: nodeType === 'message' ? 'Nova mensagem' : 
-                           nodeType === 'image' ? 'Nova imagem' :
-                           nodeType === 'video' ? 'Novo vídeo' :
-                           nodeType === 'audio' ? 'Novo áudio' :
-                           nodeType === 'delay' ? 'Atraso' :
-                           nodeType === 'typing_action' ? 'Digitando...' :
-                           nodeType === 'action_pix' ? 'Gerar PIX' :
-                           nodeType === 'action_check_pix' ? 'Consultar PIX' :
-                           nodeType === 'forward_flow' ? 'Encaminhar Fluxo' : 'Novo nó',
-                    actions: []
+                    actions: [{ type: actionType, data: {} }]
                 },
             };
             
             setNodes((nds) => nds.concat(newNode));
-            
-            // Auto-scroll to the new node with a small delay
-            
         };
         
         const onDragStart = (event, nodeType) => {
@@ -7288,7 +7139,7 @@ function generatePreviewHTML(data) {
                         </div>
                     </div>
                 )}
-                {selectedNode && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
+                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
             </div>
         );
     }
