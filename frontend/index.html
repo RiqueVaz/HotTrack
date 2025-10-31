@@ -5702,9 +5702,9 @@ function generatePreviewHTML(data) {
         // ******** CORREÇÃO DE SEGURANÇA (XSS) APLICADA AQUI ********
         const renderMessageContent = (msg) => {
             const text = msg.message_text || '';
-            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
-            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
-            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
+            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
+            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
+            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
             
             // SANITIZAÇÃO: Limpa o HTML de qualquer script malicioso antes de renderizar.
             // A biblioteca DOMPurify foi adicionada no <head> do HTML.
@@ -5873,7 +5873,7 @@ function generatePreviewHTML(data) {
                     {media.map(item => (
                         <div key={item.id} className="bot-card">
                              {item.thumbnail_file_id || item.file_type === 'image' ? (
-                                <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
                              ) : item.file_type === 'video' ? (
                                 <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
                              ) : (
@@ -6001,7 +6001,7 @@ function generatePreviewHTML(data) {
                         {media.map(item => (
                             <div key={item.id} className="bot-card" onClick={() => onSelect(item)} style={{cursor: 'pointer'}}>
                                 {item.thumbnail_file_id || item.file_type === 'image' ? (
-                                    <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                    <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
                                  ) : item.file_type === 'video' ? (
                                     <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
                                  ) : (
