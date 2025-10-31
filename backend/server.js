@@ -5417,16 +5417,27 @@ app.post('/api/media/upload', authenticateJwt, async (req, res) => {
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
-        const result = response.result;
+        if (!response?.ok || !response.result) {
+            throw new Error('Resposta inválida do Telegram ao enviar mídia.');
+        }
+        const result = response.result; // Mensagem retornada pelo Telegram
+
         let fileId, thumbnailFileId = null;
         if (fileType === 'image') {
-            fileId = result.photo[result.photo.length - 1].file_id;
-            thumbnailFileId = result.photo[0].file_id;
+            const photos = Array.isArray(result.photo) ? result.photo : [];
+            fileId = photos.length > 0 ? photos[photos.length - 1].file_id : null;
+            thumbnailFileId = photos.length > 0 ? photos[0].file_id : null;
         } else if (fileType === 'video') {
-            fileId = result.video.file_id;
-            thumbnailFileId = result.video.thumbnail?.file_id || null;
+            // Pode vir como result.video ou como result.document com mime de vídeo
+            const videoObj = result.video || (result.document && result.document.mime_type?.startsWith('video/') ? result.document : null);
+            fileId = videoObj?.file_id || null;
+            thumbnailFileId = videoObj?.thumbnail?.file_id || videoObj?.thumb?.file_id || null;
         } else {
-            fileId = result.voice.file_id;
+            // audio -> enviamos como voice
+            fileId = result.voice?.file_id || null;
+        }
+        if (!fileId) {
+            console.error('[Media Upload] Resposta Telegram inesperada (sem file_id):', JSON.stringify(result).slice(0, 1000));
         }
         if (!fileId) throw new Error('Não foi possível obter o file_id do Telegram.');
         const [newMedia] = await sqlWithRetry(`
