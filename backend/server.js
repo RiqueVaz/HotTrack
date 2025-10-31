@@ -4276,6 +4276,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             case 'delay':
                 const delaySeconds = currentNode.data.delayInSeconds || 1;
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                    // Processamento recursivo de ações aninhadas
+                if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+                    await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges, '[Delay Actions]');
+                }
                 currentNodeId = findNextNode(currentNodeId, null, edges);
                 break;
             
@@ -4372,6 +4376,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         currentNodeId = null; // Para o fluxo neste ponto em caso de erro no PIX
                         break; // Sai do switch
                     }
+                                        if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+                        await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges, '[Action Pix Actions]');
+                    }
                     // Se chegou aqui, o PIX foi gerado e enviado com sucesso
                     currentNodeId = findNextNode(currentNodeId, 'a', edges); // Assume que a saída 'a' é o caminho de sucesso
                     break; // Sai do switch
@@ -4431,6 +4438,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     }
                 } catch (error) {
                     console.error("[Flow Engine] Erro ao consultar PIX:", error);
+                    if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+    await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges, '[Action Check Pix Actions]');
+}
                     currentNodeId = findNextNode(currentNodeId, 'b', edges);
                 }
                 break;
