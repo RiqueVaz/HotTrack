@@ -5245,6 +5245,7 @@ function generatePreviewHTML(data) {
     const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
     // Use a state variable to hold the callback function for media selection
     const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+    const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null); // ['image'] | ['video'] | ['audio'] | null
 
     // Fetch contact count when selected bots change
     useEffect(() => {
@@ -5295,8 +5296,9 @@ function generatePreviewHTML(data) {
     };
 
     // Function to open the modal and store the callback
-    const openMediaLibrary = (callback) => {
+    const openMediaLibrary = (callback, allowedTypes = null) => {
         setMediaSelectionCallback(() => callback); // Store the specific callback
+        setMediaAllowedTypes(allowedTypes);
         setIsMediaModalOpen(true);
     };
 
@@ -5307,6 +5309,7 @@ function generatePreviewHTML(data) {
         }
         setIsMediaModalOpen(false);
         setMediaSelectionCallback(null); // Clear the callback
+        setMediaAllowedTypes(null);
     };
 
     const handleSubmit = async (e) => {
@@ -5834,8 +5837,18 @@ function generatePreviewHTML(data) {
     function MediaLibraryPage() {
         const [media, setMedia] = useState([]);
         const [isUploading, setIsUploading] = useState(false);
+        const [activeTab, setActiveTab] = useState('image'); // 'image' | 'video' | 'audio'
         const fetchMedia = async () => { try { const { data } = await api.get('/api/media'); setMedia(data); } catch (e) { console.error("Erro ao buscar mídias", e); }};
         useEffect(() => { fetchMedia(); }, []);
+        const resolveType = (item) => {
+            if (item.file_type) return item.file_type;
+            const name = (item.file_name || '').toLowerCase();
+            if (/(\.png|\.jpg|\.jpeg|\.gif|\.webp)$/.test(name)) return 'image';
+            if (/(\.mp4|\.mov|\.webm|\.mkv)$/.test(name)) return 'video';
+            if (/(\.mp3|\.wav|\.ogg)$/.test(name)) return 'audio';
+            return 'image';
+        };
+        const filtered = media.filter(item => resolveType(item) === activeTab);
         const handleFileChange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -5869,12 +5882,17 @@ function generatePreviewHTML(data) {
                         <input type="file" hidden onChange={handleFileChange} disabled={isUploading} accept="image/*,video/*,audio/*" />
                     </label>
                 </div>
+                <div style={{display:'flex', gap: '0.5rem', marginBottom: '1rem'}}>
+                    <button className={`btn btn-secondary ${activeTab==='image'?'active':''}`} onClick={()=>setActiveTab('image')}>Imagens</button>
+                    <button className={`btn btn-secondary ${activeTab==='video'?'active':''}`} onClick={()=>setActiveTab('video')}>Vídeos</button>
+                    <button className={`btn btn-secondary ${activeTab==='audio'?'active':''}`} onClick={()=>setActiveTab('audio')}>Áudios</button>
+                </div>
                 <div className="grid">
-                    {media.map(item => (
+                    {filtered.map(item => (
                         <div key={item.id} className="bot-card">
-                             {item.file_type === 'image' ? (
+                             {resolveType(item) === 'image' ? (
                                 <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
-                             ) : item.file_type === 'video' ? (
+                             ) : resolveType(item) === 'video' ? (
                                 item.thumbnail_file_id ? (
                                     <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
                                 ) : (
@@ -5991,9 +6009,18 @@ function generatePreviewHTML(data) {
         );
     }
     
-    function MediaLibraryModal({ onSelect, onClose }) {
+    function MediaLibraryModal({ onSelect, onClose, allowedTypes = null }) {
         const [media, setMedia] = useState([]);
         useEffect(() => { api.get('/api/media').then(res => setMedia(res.data)); }, []);
+        const resolveType = (item) => {
+            if (item.file_type) return item.file_type;
+            const name = (item.file_name || '').toLowerCase();
+            if (/(\.png|\.jpg|\.jpeg|\.gif|\.webp)$/.test(name)) return 'image';
+            if (/(\.mp4|\.mov|\.webm|\.mkv)$/.test(name)) return 'video';
+            if (/(\.mp3|\.wav|\.ogg)$/.test(name)) return 'audio';
+            return 'image';
+        };
+        const displayed = Array.isArray(allowedTypes) ? media.filter(m => allowedTypes.includes(resolveType(m))) : media;
         return (
             <div className="login-overlay" style={{zIndex: 2000}}>
                 <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
@@ -6002,11 +6029,11 @@ function generatePreviewHTML(data) {
                         <button onClick={onClose} style={{background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer'}}>&times;</button>
                     </div>
                     <div className="grid" style={{overflowY: 'auto', flex: 1, padding: '1rem'}}>
-                        {media.map(item => (
+                        {displayed.map(item => (
                             <div key={item.id} className="bot-card" onClick={() => onSelect(item)} style={{cursor: 'pointer'}}>
-                                {item.file_type === 'image' ? (
+                                {resolveType(item) === 'image' ? (
                                     <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
-                                 ) : item.file_type === 'video' ? (
+                                 ) : resolveType(item) === 'video' ? (
                                     item.thumbnail_file_id ? (
                                         <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
                                     ) : (
@@ -6598,7 +6625,7 @@ function generatePreviewHTML(data) {
                                 className="btn btn-secondary btn-sm" 
                                 onClick={() => openMediaLibrary(media => {
                                     updateAction(index, action.type === 'image' ? 'imageUrl' : 'videoUrl', media.file_id);
-                                })}
+                                }, [action.type])}
                                 style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
                             >
                                 Selecionar da Biblioteca
@@ -6641,7 +6668,7 @@ function generatePreviewHTML(data) {
                             <button 
                                 type="button"
                                 className="btn btn-secondary btn-sm" 
-                                onClick={() => openMediaLibrary(media => updateAction(index, 'audioUrl', media.file_id))}
+                                onClick={() => openMediaLibrary(media => updateAction(index, 'audioUrl', media.file_id), ['audio'])}
                                 style={{fontSize: '0.8rem', marginBottom: '0.5rem'}}
                             >
                                 Selecionar da Biblioteca
@@ -6971,6 +6998,7 @@ function generatePreviewHTML(data) {
         const [availableFlows, setAvailableFlows] = useState([]);
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
         
@@ -7014,7 +7042,7 @@ function generatePreviewHTML(data) {
                 zoom = Math.min(Math.max(0.3, zoom), 1.5);
                 
                 // Set the view
-                reactFlowInstance.setView({
+                reactFlowInstance.setViewport({
                     x: viewport.width / 2 - centerX * zoom,
                     y: viewport.height / 2 - centerY * zoom,
                     zoom: zoom
@@ -7164,8 +7192,8 @@ function generatePreviewHTML(data) {
             }
         };
         
-        const openMediaLibrary = (callback) => { setMediaSelectionCallback(() => callback); setIsMediaModalOpen(true); };
-        const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); };
+        const openMediaLibrary = (callback, allowedTypes = null) => { setMediaSelectionCallback(() => callback); setMediaAllowedTypes(allowedTypes); setIsMediaModalOpen(true); };
+        const handleSelectMedia = (mediaItem) => { if (mediaSelectionCallback) { mediaSelectionCallback(mediaItem); } setIsMediaModalOpen(false); setMediaSelectionCallback(null); setMediaAllowedTypes(null); };
         
         const nodeTypesList = [
             { type: 'message', icon: '💬', label: 'Mensagem', category: 'Componentes' },
@@ -7182,7 +7210,7 @@ function generatePreviewHTML(data) {
 
         return (
             <div className="flow-editor-page">
-                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
+                {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} allowedTypes={mediaAllowedTypes} />}
                 <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
