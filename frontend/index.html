@@ -2849,15 +2849,21 @@
                             }
                             
                             const newPressel = await this.apiRequest('/api/pressels', 'POST', payload);
-                            if (newPressel) {
-                                this.state.data.pressels.unshift(newPressel);
-                                this.navigateTo('pressels');
-                                
-                                if (newPressel.netlify_url) {
-                                    this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
-                                } else {
-                                    this.generatePresselCode(newPressel);
-                                }
+                            if (!newPressel) return;
+
+                            // Validação extra: se solicitou deploy Netlify, URL deve existir
+                            if (deploy_to_netlify && !newPressel.netlify_url) {
+                                this.showToast('Falha no deploy Netlify: URL não gerada.', 'error');
+                                return;
+                            }
+
+                            this.state.data.pressels.unshift(newPressel);
+                            this.navigateTo('pressels');
+
+                            if (newPressel.netlify_url) {
+                                this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
+                            } else {
+                                this.generatePresselCode(newPressel);
                             }
                         }
                     }
@@ -5696,9 +5702,9 @@ function generatePreviewHTML(data) {
         // ******** CORREÇÃO DE SEGURANÇA (XSS) APLICADA AQUI ********
         const renderMessageContent = (msg) => {
             const text = msg.message_text || '';
-            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
-            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
-            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
+            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
+            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
+            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
             
             // SANITIZAÇÃO: Limpa o HTML de qualquer script malicioso antes de renderizar.
             // A biblioteca DOMPurify foi adicionada no <head> do HTML.
@@ -5866,12 +5872,16 @@ function generatePreviewHTML(data) {
                 <div className="grid">
                     {media.map(item => (
                         <div key={item.id} className="bot-card">
-                             {item.thumbnail_file_id || item.file_type === 'image' ? (
-                                <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                             {item.file_type === 'image' ? (
+                                <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
                              ) : item.file_type === 'video' ? (
-                                <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
+                                item.thumbnail_file_id ? (
+                                    <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
+                                ) : (
+                                    <video src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
+                                )
                              ) : (
-                                <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.audio}</div>
+                                <audio src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" controls />
                              )}
                              <h3 style={{fontSize: '1.1rem', marginBottom: '0.5rem'}}>{item.file_name}</h3>
                              <p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', wordBreak: 'break-all', flexGrow: 1, marginBottom: '1rem'}}>File ID: {item.file_id}</p>
@@ -5994,12 +6004,16 @@ function generatePreviewHTML(data) {
                     <div className="grid" style={{overflowY: 'auto', flex: 1, padding: '1rem'}}>
                         {media.map(item => (
                             <div key={item.id} className="bot-card" onClick={() => onSelect(item)} style={{cursor: 'pointer'}}>
-                                {item.thumbnail_file_id || item.file_type === 'image' ? (
-                                    <img src={`${API_BASE_URL}/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                {item.file_type === 'image' ? (
+                                    <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
                                  ) : item.file_type === 'video' ? (
-                                    <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.video}</div>
+                                    item.thumbnail_file_id ? (
+                                        <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
+                                    ) : (
+                                        <video src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
+                                    )
                                  ) : (
-                                    <div className="media-preview" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{Icons.audio}</div>
+                                    <audio src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" controls />
                                  )}
                                 <div className="bot-card-header" style={{padding: 0, marginBottom: 0}}><h3 style={{fontSize: '1.1rem'}}>{item.file_name}</h3></div>
                             </div>
@@ -6013,6 +6027,12 @@ function generatePreviewHTML(data) {
     const initialNodes = [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }];
     
     const CustomNode = ({ id, type, data, isConnectable, selected }) => {
+        const API_BASE_URL = App.state.API_BASE_URL;
+        const buildPreviewSrc = (value) => {
+            if (!value) return null;
+            const v = String(value).trim();
+            return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
+        };
         const nodeInfo = {
             trigger: { icon: '🚀', name: 'Gatilho Inicial', content: 'Início do fluxo com click_id.' },
             message: { icon: '💬', name: 'Enviar Mensagem', content: data.text ? `"${data.text.substring(0, 50)}..."` : 'Configure o texto.' },
@@ -6079,17 +6099,40 @@ function generatePreviewHTML(data) {
                         )}
                     </div>
                 </div>
-                <div className="node-content">
+                <div className="node-content" style={{ position: 'relative' }}>
                     {info.content}
+                    {(['image','video','audio'].includes(type)) && (
+                        (() => {
+                            const src = buildPreviewSrc(type === 'image' ? data.imageUrl : type === 'video' ? data.videoUrl : data.audioUrl);
+                            if (!src) return null;
+                            return (
+                                <div style={{ position: 'absolute', right: 8, top: 8, width: 56, height: 40, overflow: 'hidden', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)' }}>
+                                    {type === 'image' && <img src={src} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                    {type === 'video' && <video src={src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted autoPlay loop playsInline preload="metadata" />}
+                                    {type === 'audio' && <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', opacity: 0.8 }}>🎵</div>}
+                                </div>
+                            );
+                        })()
+                    )}
                     {actions.length > 0 && (
                         <div style={{marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.1)'}}>
                             {actions.map((action, idx) => {
                                 const actInfo = getActionInfo(action.type, action.data || {});
+                                const actSrc = action.type === 'image' ? buildPreviewSrc((action.data||{}).imageUrl) : action.type === 'video' ? buildPreviewSrc((action.data||{}).videoUrl) : null;
                                 return (
                                     <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.3rem', opacity: 0.9}}>
                                         <span>{actInfo.icon}</span>
                                         <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
                                         <span>{actInfo.content}</span>
+                                        {actSrc && (
+                                            <span style={{ marginLeft: 'auto' }}>
+                                                {action.type === 'image' ? (
+                                                    <img src={actSrc} alt="preview" style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} />
+                                                ) : (
+                                                    <video src={actSrc} style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} muted autoPlay loop playsInline preload="metadata" />
+                                                )}
+                                            </span>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -6124,6 +6167,12 @@ function generatePreviewHTML(data) {
     const nodeTypes = { trigger: CustomNode, message: CustomNode, image: CustomNode, video: CustomNode, audio: CustomNode, delay: CustomNode, typing_action: CustomNode, action_pix: CustomNode, action_check_pix: CustomNode, forward_flow: CustomNode };
 
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
+        const API_BASE_URL = App.state.API_BASE_URL;
+        const buildPreviewSrc = (value) => {
+            if (!value) return null;
+            const v = String(value).trim();
+            return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
+        };
         const [nodeData, setNodeData] = useState(selectedNode.data || {});
         const textAreaRef = useRef(null);
         const modalContentRef = useRef(null);
@@ -6530,6 +6579,20 @@ function generatePreviewHTML(data) {
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
+                            {(() => {
+                                const src = buildPreviewSrc(actionData[action.type === 'image' ? 'imageUrl' : 'videoUrl']);
+                                if (!src) return null;
+                                return (
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>Preview</label>
+                                        {action.type === 'image' ? (
+                                            <img src={src} alt="preview" style={{ width: '100%', height: 150, objectFit: 'cover', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)' }} />
+                                        ) : (
+                                            <video src={src} controls style={{ width: '100%', height: 150, objectFit: 'cover', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)' }} />
+                                        )}
+                                    </div>
+                                );
+                            })()}
                             <button 
                                 type="button"
                                 className="btn btn-secondary btn-sm" 
@@ -6565,6 +6628,16 @@ function generatePreviewHTML(data) {
                                     style={{fontSize: '0.85rem'}}
                                 />
                             </div>
+                            {(() => {
+                                const src = buildPreviewSrc(actionData.audioUrl);
+                                if (!src) return null;
+                                return (
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>Preview</label>
+                                        <audio src={src} controls style={{ width: '100%' }} />
+                                    </div>
+                                );
+                            })()}
                             <button 
                                 type="button"
                                 className="btn btn-secondary btn-sm" 

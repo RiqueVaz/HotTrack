@@ -2370,85 +2370,35 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                     if (seller?.netlify_access_token) {
                         // Gerar HTML da pressel
                         const htmlContent = await generatePresselHTML(newPressel, numeric_pixel_ids);
-                        
-                        if (seller.netlify_site_id) {
-                            // Usar site existente
-                            const deployResult = await deployToNetlify(seller.netlify_access_token, seller.netlify_site_id, htmlContent, `pressel-${newPressel.id}.html`);
-                            
-                            if (deployResult.success) {
-                                netlifyUrl = deployResult.url;
-                                
-                                // Atualizar campo netlify_url na tabela pressels
-                                await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
-                                
-                                // Adicionar domínio automaticamente
-                                const domain = deployResult.url.replace('https://', '');
-                                await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
-                                
-                                console.log(`[Netlify] Pressel ${newPressel.id} deployada com sucesso: ${netlifyUrl}`);
-                            } else {
-                                console.warn(`[Netlify] Site existente não encontrado, criando novo site. Erro:`, deployResult.error);
-                                
-                                // Limpar site_id inválido e criar novo site
-                                await sql`UPDATE sellers SET netlify_site_id = NULL WHERE id = ${req.user.id}`;
-                                
-                                // Criar novo site
-                                const siteName = netlify_site_name && netlify_site_name.trim() 
-                                    ? netlify_site_name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
-                                    : `pressel-${newPressel.id}-${Date.now()}`;
-                                const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
-                                
-                                if (siteResult.success) {
-                                    // Salvar novo site_id
-                                    await sql`UPDATE sellers SET netlify_site_id = ${siteResult.site.id} WHERE id = ${req.user.id}`;
-                                    
-                                    // Fazer deploy
-                                    const deployResult2 = await deployToNetlify(seller.netlify_access_token, siteResult.site.id, htmlContent, 'index.html');
-                                    
-                                    if (deployResult2.success) {
-                                        netlifyUrl = deployResult2.url;
-                                        
-                                        // Atualizar campo netlify_url na tabela pressels
-                                        await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
-                                        
-                                        // Adicionar domínio automaticamente
-                                        const domain = deployResult2.url.replace('https://', '');
-                                        await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
-                                        
-                                        console.log(`[Netlify] Novo site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
-                                    }
-                                } else {
-                                    console.error(`[Netlify] Erro ao criar novo site para pressel ${newPressel.id}:`, siteResult.error);
-                                }
-                            }
-                        } else {
-                            // Criar novo site
-                            const siteName = netlify_site_name && netlify_site_name.trim() 
-                                ? netlify_site_name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
-                                : `pressel-${newPressel.id}-${Date.now()}`;
+
+                        if (deploy_to_netlify) {
+                            // Sempre criar site exclusivo por pressel
+                            const siteName = (netlify_site_name && netlify_site_name.trim()
+                                ? netlify_site_name.trim()
+                                : `pressel-${newPressel.id}-${Date.now()}`)
+                                .toLowerCase()
+                                .replace(/[^a-z0-9-]/g, '-');
+
                             const siteResult = await createNetlifySite(seller.netlify_access_token, siteName);
-                            
+
                             if (siteResult.success) {
-                                // Salvar site_id
-                                await sql`UPDATE sellers SET netlify_site_id = ${siteResult.site.id} WHERE id = ${req.user.id}`;
-                                
-                                // Fazer deploy
+                                // Deploy no novo site (não tocar em sellers.netlify_site_id)
                                 const deployResult = await deployToNetlify(seller.netlify_access_token, siteResult.site.id, htmlContent, 'index.html');
-                                
+
                                 if (deployResult.success) {
                                     netlifyUrl = deployResult.url;
-                                    
+
                                     // Atualizar campo netlify_url na tabela pressels
                                     await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
-                                    
+
                                     // Adicionar domínio automaticamente
                                     const domain = deployResult.url.replace('https://', '');
                                     await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
-                                    
-                                    console.log(`[Netlify] Site criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
+
+                                    console.log(`[Netlify] Site exclusivo criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
                                 }
                             } else {
-                                console.error(`[Netlify] Erro ao criar site para pressel ${newPressel.id}:`, siteResult.error);
+                                console.error(`[Netlify] Erro ao criar site exclusivo para pressel ${newPressel.id}:`, siteResult.error);
                             }
                         }
                     } else {
@@ -2460,8 +2410,14 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                 }
             }
             
+            // Se o deploy via Netlify foi solicitado, a URL é obrigatória
+            if (deploy_to_netlify && !netlifyUrl) {
+                await sql`ROLLBACK`;
+                return res.status(400).json({ message: 'Falha no deploy Netlify: URL não gerada.' });
+            }
+
             await sql`COMMIT`;
-            
+
             res.status(201).json({ 
                 ...newPressel, 
                 pixel_ids: numeric_pixel_ids, 
@@ -5461,16 +5417,27 @@ app.post('/api/media/upload', authenticateJwt, async (req, res) => {
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
-        const result = response.result;
+        if (!response?.ok || !response.result) {
+            throw new Error('Resposta inválida do Telegram ao enviar mídia.');
+        }
+        const result = response.result; // Mensagem retornada pelo Telegram
+
         let fileId, thumbnailFileId = null;
         if (fileType === 'image') {
-            fileId = result.photo[result.photo.length - 1].file_id;
-            thumbnailFileId = result.photo[0].file_id;
+            const photos = Array.isArray(result.photo) ? result.photo : [];
+            fileId = photos.length > 0 ? photos[photos.length - 1].file_id : null;
+            thumbnailFileId = photos.length > 0 ? photos[0].file_id : null;
         } else if (fileType === 'video') {
-            fileId = result.video.file_id;
-            thumbnailFileId = result.video.thumbnail?.file_id || null;
+            // Pode vir como result.video ou como result.document com mime de vídeo
+            const videoObj = result.video || (result.document && result.document.mime_type?.startsWith('video/') ? result.document : null);
+            fileId = videoObj?.file_id || null;
+            thumbnailFileId = videoObj?.thumbnail?.file_id || videoObj?.thumb?.file_id || null;
         } else {
-            fileId = result.voice.file_id;
+            // audio -> enviamos como voice
+            fileId = result.voice?.file_id || null;
+        }
+        if (!fileId) {
+            console.error('[Media Upload] Resposta Telegram inesperada (sem file_id):', JSON.stringify(result).slice(0, 1000));
         }
         if (!fileId) throw new Error('Não foi possível obter o file_id do Telegram.');
         const [newMedia] = await sqlWithRetry(`
