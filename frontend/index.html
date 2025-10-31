@@ -2849,15 +2849,21 @@
                             }
                             
                             const newPressel = await this.apiRequest('/api/pressels', 'POST', payload);
-                            if (newPressel) {
-                                this.state.data.pressels.unshift(newPressel);
-                                this.navigateTo('pressels');
-                                
-                                if (newPressel.netlify_url) {
-                                    this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
-                                } else {
-                                    this.generatePresselCode(newPressel);
-                                }
+                            if (!newPressel) return;
+
+                            // Validação extra: se solicitou deploy Netlify, URL deve existir
+                            if (deploy_to_netlify && !newPressel.netlify_url) {
+                                this.showToast('Falha no deploy Netlify: URL não gerada.', 'error');
+                                return;
+                            }
+
+                            this.state.data.pressels.unshift(newPressel);
+                            this.navigateTo('pressels');
+
+                            if (newPressel.netlify_url) {
+                                this.showToast(`✅ Deploy realizado! URL: ${newPressel.netlify_url}`, 'success');
+                            } else {
+                                this.generatePresselCode(newPressel);
                             }
                         }
                     }
