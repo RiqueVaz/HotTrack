@@ -156,7 +156,7 @@ async function getSyncPayAuthToken(seller) {
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0299;
+    const commission_rate = seller.commission_rate || 0.0500;
     const clientPayload = { document: { number: "21376710773", type: "CPF" }, name: "Cliente Padrão", email: "gabriel@email.com", phone: "27995310379" };
     
     if (provider === 'brpix') {

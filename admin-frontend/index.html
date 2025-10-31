@@ -281,7 +281,7 @@
         tbody.innerHTML = sellersData.map(s => {
             const revenue = rankingMap.get(s.id) || 0;
             const requests = usageMap.get(s.id) || 0;
-            const commission = ((s.commission_rate || 0.0299) * 100).toFixed(2);
+            const commission = ((s.commission_rate || 0.0500) * 100).toFixed(2);
             return `<tr>
                 <td>${s.name}<br><small style="color: var(--text-secondary);">${s.email}</small></td>
                 <td>${formatCurrency(revenue)}</td>
@@ -423,7 +423,7 @@
         if (!seller) return;
         setState({ currentSeller: seller });
         
-        const currentCommission = ((seller.commission_rate || 0.0299) * 100).toFixed(2);
+        const currentCommission = ((seller.commission_rate || 0.0500) * 100).toFixed(2);
 
         showModal(`
             <h3 style="margin-top: 0;">${seller.name}</h3>

@@ -1027,7 +1027,7 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
     let pixData;
     let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0299;
+    const commission_rate = seller.commission_rate || 0.0500;
     
     // Preferir domínio do HOTTRACK_API_URL para webhooks; alerta se ausente
     const preferredHost = process.env.HOTTRACK_API_URL ? (() => { try { return new URL(process.env.HOTTRACK_API_URL).host; } catch { return host; } })() : host;
@@ -1419,7 +1419,7 @@ app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
         const total_sellers = parseInt(totalSellers[0].count);
         const total_paid_transactions = parseInt(paidTransactions[0].count);
         const total_revenue = parseFloat(paidTransactions[0].total_revenue || 0);
-        const saas_profit = total_revenue * 0.0299;
+        const saas_profit = total_revenue * 0.0500;
         res.json({
             total_sellers, total_paid_transactions,
             total_revenue: total_revenue.toFixed(2),
@@ -3951,7 +3951,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const ip_address = click.ip_address;
                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-    
+                    
+                    const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                    await sendEventToUtmify(
+                        'waiting_payment', 
+                        click, 
+                        { 
+                            provider_transaction_id: pixResult.transaction_id, 
+                            pix_value: valueInCents / 100, 
+                            created_at: new Date() 
+                        }, 
+                        seller, 
+                        customerDataForUtmify, 
+                        productDataForUtmify
+                    );
+                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
                     variables.last_transaction_id = pixResult.transaction_id;
                     // A função 'processFlow' que chamou 'processActions' deve persistir as 'variables' atualizadas.
     
@@ -4302,7 +4319,24 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         // Usar 'localhost' ou um placeholder se req.headers.host não estiver disponível aqui
                         const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                         const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id); // Passa click.id
-    
+                        
+                        const customerDataForUtmify = { name: "Cliente (Fluxo Bot)", email: "bot@email.com" };
+                        const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+
+                        await sendEventToUtmify(
+                            'waiting_payment', 
+                            click, 
+                            { 
+                                provider_transaction_id: pixResult.transaction_id, 
+                                pix_value: valueInCents / 100, 
+                                created_at: new Date() 
+                            }, 
+                            seller, 
+                            customerDataForUtmify, 
+                            productDataForUtmify
+                        );
+                        console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
                         // O INSERT já foi feito dentro de generatePixWithFallback
     
                         variables.last_transaction_id = pixResult.transaction_id;
@@ -4464,36 +4498,35 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
 
         // PRIORIDADE 1: Comando /start reinicia tudo.
         if (isStartCommand) {
-            console.log(`[Webhook] Comando /start recebido. Reiniciando fluxo para o chat ${chatId}.`);
+            
+                        const parts = text.split(' ');
+                        
+                        // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
+                        if (parts.length > 1 && parts[1].trim() !== '') {
+                            const clickIdValue = text;
+                            console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
             
-            // Cancela qualquer tarefa pendente e deleta o estado antigo.
-            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            if (existingState && existingState.scheduled_message_id) {
-                try {
-                    await qstashClient.messages.delete(existingState.scheduled_message_id);
-                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
-                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
-            }
-            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-
-            // Lógica para criar click_id (orgânico ou de campanha)
-            let clickIdValue = null;
-            const parts = text.split(' ');
-            if (parts.length > 1 && parts[1].trim() !== '') {
-                clickIdValue = text;
-                console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}`);
-            } else {
-                console.log(`[Webhook] Tráfego orgânico do bot detectado. Gerando novo click_id.`);
-                const [newClick] = await sql`INSERT INTO clicks (seller_id, bot_id, is_organic) VALUES (${sellerId}, ${botId}, TRUE) RETURNING id`;
-                clickIdValue = `/start bot_org_${newClick.id.toString().padStart(7, '0')}`;
-                await sql`UPDATE clicks SET click_id = ${clickIdValue} WHERE id = ${newClick.id}`;
-                console.log(`[Webhook] Novo click_id orgânico gerado: ${clickIdValue}`);
-            }
-            
-            // Inicia o fluxo do zero.
-            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
-            return; // Finaliza a execução.
-        }
+                            // Cancela qualquer tarefa pendente e deleta o estado antigo.
+                            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            if (existingState && existingState.scheduled_message_id) {
+                                try {
+                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
+                            }
+                            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                            
+                            // Inicia o fluxo do zero.
+                            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
+                        
+                        } else {
+                            // É um /start orgânico (sozinho), que você quer ignorar.
+                            console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
+                            // Não faz nada e apenas termina a execução.
+                        }
+                        
+                        return; // Finaliza a execução (seja por iniciar o fluxo ou por ignorar)
+                    }
 
         // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
         const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -4865,7 +4898,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
             customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
             products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
             trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0299)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0299))) },
+            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
             isTest: false
         };
 
