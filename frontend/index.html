@@ -6027,6 +6027,9 @@ function generatePreviewHTML(data) {
     
     function MediaLibraryModal({ onSelect, onClose, allowedTypes = null }) {
         const [media, setMedia] = useState([]);
+        const tabsAll = ['image','video','audio'];
+        const initialTab = Array.isArray(allowedTypes) && allowedTypes.length > 0 ? allowedTypes[0] : 'image';
+        const [activeTab, setActiveTab] = useState(initialTab);
         useEffect(() => { api.get('/api/media').then(res => setMedia(res.data)); }, []);
         const resolveType = (item) => {
             if (item.file_type) return item.file_type;
@@ -6036,13 +6039,21 @@ function generatePreviewHTML(data) {
             if (/(\.mp3|\.wav|\.ogg)$/.test(name)) return 'audio';
             return 'image';
         };
-        const displayed = Array.isArray(allowedTypes) ? media.filter(m => allowedTypes.includes(resolveType(m))) : media;
+        const allowed = Array.isArray(allowedTypes) ? allowedTypes : tabsAll;
+        const displayed = media.filter(m => allowed.includes(resolveType(m)) && resolveType(m) === activeTab);
         return (
             <div className="login-overlay" style={{zIndex: 2000}}>
                 <div className="login-box" style={{width: '80vw', maxWidth: '900px', height: '80vh', display: 'flex', flexDirection: 'column'}}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
                         <h2>Selecionar Mídia</h2>
                         <button onClick={onClose} style={{background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer'}}>&times;</button>
+                    </div>
+                    <div style={{display:'flex', gap:'0.5rem', padding:'0 1rem'}}>
+                        {allowed.map(t => (
+                            <button key={t} className={`btn btn-secondary ${activeTab===t?'active':''}`} onClick={()=>setActiveTab(t)}>
+                                {t==='image'?'Imagens':t==='video'?'Vídeos':'Áudios'}
+                            </button>
+                        ))}
                     </div>
                     <div className="grid" style={{overflowY: 'auto', flex: 1, padding: '1rem'}}>
                         {displayed.map(item => (
