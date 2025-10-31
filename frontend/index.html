@@ -5246,6 +5246,12 @@ function generatePreviewHTML(data) {
     // Use a state variable to hold the callback function for media selection
     const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
     const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null); // ['image'] | ['video'] | ['audio'] | null
+    const API_BASE_URL = App.state.API_BASE_URL;
+    const buildPreviewSrc = (value) => {
+        if (!value) return null;
+        const v = String(value).trim();
+        return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
+    };
 
     // Fetch contact count when selected bots change
     useEffect(() => {
@@ -5343,7 +5349,17 @@ function generatePreviewHTML(data) {
     const renderStep = (step) => {
         switch (step.type) {
             case 'message': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>💬 Enviar Mensagem</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Texto da Mensagem</label><textarea className="form-textarea" rows="3" value={step.text || ''} onChange={e => updateStep(step.id, 'text', e.target.value)} placeholder="Use {{primeiro_nome}} ou {{nome_completo}}" /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão (Opcional)</label><input type="text" className="form-input" value={step.buttonText || ''} onChange={e => updateStep(step.id, 'buttonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão (Opcional)</label><input type="url" className="form-input" value={step.buttonUrl || ''} onChange={e => updateStep(step.id, 'buttonUrl', e.target.value)} /></div></div></div>);
-            case 'image': case 'video': case 'audio': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>{step.type === 'image' ? '🖼️' : (step.type === 'video' ? '🎬' : '🎵')} Enviar {step.type.charAt(0).toUpperCase() + step.type.slice(1)}</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>File ID ou URL</label><input type="text" className="form-input" value={step.fileUrl || ''} onChange={e => updateStep(step.id, 'fileUrl', e.target.value)} /></div><button type="button" className="btn btn-secondary btn-sm" style={{ marginBottom: '1rem' }} onClick={() => openMediaLibrary(fileId => updateStep(step.id, 'fileUrl', fileId))}>Selecionar da Biblioteca</button><div className="form-group"><label>Legenda (Opcional)</label><textarea className="form-textarea" rows="2" value={step.caption || ''} onChange={e => updateStep(step.id, 'caption', e.target.value)} /></div></div>);
+            case 'image': case 'video': case 'audio': return (
+                <div key={step.id} className="card" style={{ marginBottom: '1rem' }}>
+                    <h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{step.type === 'image' ? '🖼️' : (step.type === 'video' ? '🎬' : '🎵')} Enviar {step.type.charAt(0).toUpperCase() + step.type.slice(1)}</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button>
+                    </h4>
+                    <div className="form-group"><label>File ID ou URL</label><input type="text" className="form-input" value={step.fileUrl || ''} onChange={e => updateStep(step.id, 'fileUrl', e.target.value)} /></div>
+                    {(() => { const src = buildPreviewSrc(step.fileUrl); if (!src) return null; return (<div className="form-group"><label>Preview</label>{step.type === 'image' ? (<img src={src} alt="preview" className="media-preview" />) : step.type === 'video' ? (<video src={src} className="media-preview" muted autoPlay loop playsInline preload="metadata" controls />) : (<audio src={src} controls style={{ width: '100%' }} />)}</div>); })()}
+                    <button type="button" className="btn btn-secondary btn-sm" style={{ marginBottom: '1rem' }} onClick={() => openMediaLibrary(fileId => updateStep(step.id, 'fileUrl', fileId), [step.type])}>Selecionar da Biblioteca</button>
+                    <div className="form-group"><label>Legenda (Opcional)</label><textarea className="form-textarea" rows="2" value={step.caption || ''} onChange={e => updateStep(step.id, 'caption', e.target.value)} /></div>
+                </div>
+            );
             case 'pix': return (<div key={step.id} className="card" style={{ marginBottom: '1rem' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>💳 Gerar PIX</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><div className="form-group"><label>Valor (em centavos)</label><input type="number" className="form-input" value={step.valueInCents === undefined ? 100 : step.valueInCents} onChange={e => updateStep(step.id, 'valueInCents', parseInt(e.target.value, 10))} /></div><div className="form-group"><label>Texto da Mensagem PIX</label><textarea className="form-textarea" rows="2" value={step.pixMessage || ''} onChange={e => updateStep(step.id, 'pixMessage', e.target.value)} /></div><div className="form-group"><label>Texto do Botão PIX</label><input type="text" className="form-input" value={step.pixButtonText || ''} onChange={e => updateStep(step.id, 'pixButtonText', e.target.value)} /></div></div>);
             // check_pix might need adjustments depending on how the CRON job handles delivery logic
             case 'check_pix': return (<div key={step.id} className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid var(--info-bg)' }}><h4 style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}><span>🔍 Verificar PIX & Entregar</span> <button className="btn btn-red btn-sm" onClick={() => removeStep(step.id)}>&times;</button></h4><p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '1rem' }}>Esta ação só será executada se o PIX gerado na etapa anterior for pago.</p><div className="form-group"><label>Texto de Entrega (Pós-Pagamento)</label><textarea className="form-textarea" rows="3" value={step.deliveryText || ''} onChange={e => updateStep(step.id, 'deliveryText', e.target.value)} /></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><div className="form-group"><label>Texto do Botão de Entrega</label><input type="text" className="form-input" value={step.deliveryButtonText || ''} onChange={e => updateStep(step.id, 'deliveryButtonText', e.target.value)} /></div><div className="form-group"><label>URL do Botão de Entrega</label><input type="url" className="form-input" value={step.deliveryButtonUrl || ''} onChange={e => updateStep(step.id, 'deliveryButtonUrl', e.target.value)} /></div></div></div>);
@@ -5355,7 +5371,7 @@ function generatePreviewHTML(data) {
         // Use container div provided by AppHotBot or similar
         <div style={{ padding: '0 1.5rem 1.5rem 1.5rem', height: '100%', overflowY: 'auto' }}>
             {/* Render modal conditionally */}
-            {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} />}
+            {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} allowedTypes={mediaAllowedTypes} />}
 
             <div style={{ maxWidth: '800px', margin: '0 auto' }}>
                 <form onSubmit={handleSubmit}>
