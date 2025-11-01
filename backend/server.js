@@ -4393,8 +4393,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
                 break;
 
-        case 'action_group':
-                console.log(`${logPrefix} [Flow Engine] Executando nó 'action_group' ${currentNode.id}`);
+        case 'action':
+                console.log(`${logPrefix} [Flow Engine] Executando nó 'action' ${currentNode.id}`);
                 
                 // 1. Executa todas as ações aninhadas primeiro
                 if (currentNode.data.actions && currentNode.data.actions.length > 0) {
@@ -4403,7 +4403,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     // Persiste as variáveis que podem ter sido alteradas (ex: last_transaction_id)
                     await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 } else {
-                    console.warn(`${logPrefix} [Flow Engine] Nó 'action_group' ${currentNode.id} não tem ações. Pulando.`);
+                    console.warn(`${logPrefix} [Flow Engine] Nó 'action' ${currentNode.id} não tem ações. Pulando.`);
                 }
                 
                 // 2. VERIFICA SE O NÓ DE GRUPO DEVE ESPERAR POR UMA RESPOSTA
@@ -4414,9 +4414,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     const timeoutMinutes = currentNode.data.replyTimeout || 5;
                     
                     if (noReplyNodeId) {
-                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action_group') em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action') em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
                     } else {
-                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action_group') em ${timeoutMinutes} min para ENCERRAR o fluxo.`);
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action') em ${timeoutMinutes} min para ENCERRAR o fluxo.`);
                     }
 
                     try {
@@ -4448,7 +4448,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     
                     } catch (error) {
-                        console.error("Erro ao agendar timeout do 'action_group':", error);
+                        console.error("Erro ao agendar timeout do 'action':", error);
                     }
                     
                     currentNodeId = null; // PARE O FLUXO para esperar a resposta ou o timeout
