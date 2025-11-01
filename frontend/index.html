@@ -2876,6 +2876,9 @@
                         } else if (deploy_to_netlify && !netlify_site_name.trim()) {
                             console.log('Erro: Nome do site Netlify não fornecido');
                             this.showToast('Digite o nome do site para o deploy no Netlify.', 'error');
+                        } else if (!App.state.data.settings?.netlify_access_token) {
+                            this.showToast('Token do Netlify não configurado. Por favor, valide seu token nas configurações.', 'error');
+                            return;
                         } else {
                             console.log('Passou nas validações, processando...');
                             // Validação adicional do nome do site Netlify (se fornecido)
@@ -7045,7 +7048,7 @@ function generatePreviewHTML(data) {
                 }
                 
                 // Limit zoom to reasonable values
-                zoom = Math.min(Math.max(0.3, zoom), 1.5);
+                zoom = Math.min(Math.max(0.01, zoom), 2.0);
                 
                 // Set the view
                 reactFlowInstance.setViewport({
@@ -7228,7 +7231,7 @@ function generatePreviewHTML(data) {
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
                                 <Background />
                                 <Controls />
                 </ReactFlow>
