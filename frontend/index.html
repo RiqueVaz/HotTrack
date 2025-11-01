@@ -3988,7 +3988,7 @@
             const domainInput = document.getElementById('modal-domain-input');
             let domain = domainInput.value.trim();
             domain = domain.replace(/^(https?:\/\/)?/, '').split('/')[0];
-           
+            
             if (!presselId) {
                 this.showToast('Selecione uma pressel primeiro.', 'error');
                 return;
