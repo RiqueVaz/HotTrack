@@ -3828,9 +3828,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
 
         // CORREÇÃO: Usar 'action.data' e não 'currentNode.data'
-        const actionData = action.data || {}; // Garante que actionData exista
+        const actionData = actions.data || {}; // Garante que actionData exista
 
-        switch (action.type) {
+        switch (actions.type) {
             case 'message':
                 // Removido: typingDelay/showTyping da ação de mensagem (somente 'typing_action' controla digitação)
                 const textToSend = await replaceVariables(actionData.text, variables);
