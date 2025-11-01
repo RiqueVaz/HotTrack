@@ -3917,7 +3917,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     variables.last_transaction_id = pixResult.transaction_id;
     
                     const messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido de pixMessage
-                    const buttonText = await replaceVariables(actionDate.pixButtonText || "📋 Copiar", variables); // Corrigido de pixButtonText
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables); // Corrigido de pixButtonText
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
