@@ -4042,7 +4042,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // FIM DO PASSO 1
     // ==========================================================
 
-    const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} AND id = ${flow.id}`; // Busca o fluxo específico
+    const [flow] = await sql`
+        SELECT * FROM flows 
+        WHERE bot_id = ${botId} 
+        ORDER BY updated_at DESC LIMIT 1`;
     if (!flow || !flow.nodes) {
         console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId} e flow ID ${flow.id}.`);
         return;
