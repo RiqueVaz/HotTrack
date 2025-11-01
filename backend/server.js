@@ -3824,13 +3824,25 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     }
 }
 
-async function processActions(actions, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
-    console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+async function processActions(actionsOrNode, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
+    
+    // 1. Normaliza a entrada: Se for um objeto, transforma em um array de 1 item.
+    const actions = Array.isArray(actionsOrNode) ? actionsOrNode : [actionsOrNode];
 
-        // CORREÇÃO: Usar 'action.data' e não 'currentNode.data'
-        const actionData = actions.data || {}; // Garante que actionData exista
+    if (Array.isArray(actionsOrNode)) {
+        console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+    } else {
+        console.log(`${logPrefix} Executando ação única do tipo ${actionsOrNode.type} para chat ${chatId}`);
+    }
 
-        switch (actions.type) {
+    // 2. Itera sobre o array de ações
+    for (const action of actions) {
+        
+        // 3. Usa 'action' (singular) para obter os dados
+        const actionData = action.data || {}; // Garante que actionData exista
+
+        // 4. Usa 'action.type' no switch
+        switch (action.type) {
             case 'message':
                 // Removido: typingDelay/showTyping da ação de mensagem (somente 'typing_action' controla digitação)
                 const textToSend = await replaceVariables(actionData.text, variables);
