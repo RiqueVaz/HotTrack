@@ -600,7 +600,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
         switch (action.type) {
             case 'message':
                 const textToSend = await replaceVariables(actionData.text, variables);
-                // Corrigido: Removido o '0' extra da chamada sendMessage
+                // Corrigido: Assinatura correta da função sendMessage
                 await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables); 
                 break;
 
@@ -672,12 +672,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
                         seller, customerDataForUtmify, productDataForUtmify
                     );
-                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
                     variables.last_transaction_id = pixResult.transaction_id;
     
                     const messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido
-                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables); // Corrigido
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
@@ -714,7 +713,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (transaction.provider === 'pushinpay') {
                         const last = pushinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
                         const now = Date.now();
-                        if (now - last >= 60_000) {
+                        if (now - last >= 60_000) { 
                             const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
                                 { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
                             providerStatus = String(resp.data.status || '').toLowerCase();
@@ -741,30 +740,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 }
             
             case 'forward_flow':
-                const targetFlowId = actionData.targetFlowId;
+                const targetFlowId = actionData.targetFlowId; // Este é o ID (integer) da tabela 'flows'
                 if (!targetFlowId) {
                     console.error(`${logPrefix} 'forward_flow' action não tem targetFlowId.`);
                     break; 
                 }
                 
                 console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowId} para o chat ${chatId}`);
-                // Inicia o novo fluxo (passando o ID do fluxo como 'startNodeId' do novo fluxo)
-                // O 'startNodeId' do processFlow é o NÓ, mas como fluxos antigos não têm 'start node',
-                // precisamos adaptar processFlow para aceitar um ID de FLUXO.
-                
-                // *** CORREÇÃO DE LÓGICA ***
-                // O 'processFlow' que você tem busca o fluxo pelo bot_id.
-                // Precisamos que o 'processFlow' busque pelo 'flow.id' se 'startNodeId' for um ID de fluxo.
-                
-                // ASSUMINDO que 'processFlow' foi ajustado para receber um 'flowId'
-                // Esta é uma chamada RECURSIVA para o 'processFlow' deste worker.
-                
-                // CORREÇÃO: A função 'processFlow' precisa saber qual fluxo carregar.
-                // Se 'startNodeId' for um ID de fluxo (ex: 'flow_123'), 'processFlow' deve carregá-lo.
-                // Se 'startNodeId' for um ID de nó (ex: 'node_abc'), 'processFlow' deve continuar.
-                
-                // Simplesmente chamar 'processFlow' com o ID do *fluxo* não funciona.
-                // Devemos chamar 'processFlow' com o 'startNodeId' (trigger) *daquele* fluxo.
                 
                 const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowId} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
@@ -780,17 +762,16 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     break;
                 }
                 
-                // Encontra o primeiro nó *depois* do trigger
                 const firstNodeId = findNextNode(targetStartNode.id, 'a', targetFlowData.edges || []);
                 
                 if (firstNodeId) {
                     // Chama o 'processFlow' recursivamente para o *novo* fluxo.
-                    await processFlow(chatId, botId, botToken, sellerId, firstNodeId, variables);
+                    await processFlow(chatId, botId, botToken, sellerId, firstNodeId, variables, targetFlowId); // Passa o targetFlowId
                 } else {
-                    console.log(`${logPrefix} Fluxo de destino ${targetFlowId} está vazio (sem nó após o trigger).`);
+                    console.log(`${logPrefix} Fluxo de destino ${targetFlowId} está vazio.`);
                 }
 
-                return 'flow_forwarded'; // Sinaliza para o 'processFlow' atual PARAR.
+                return 'flow_forwarded';
 
             default:
                 console.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
@@ -803,30 +784,26 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
 /**
  * =================================================================
- * FUNÇÃO 'processFlow' (O NAVEGADOR) - VERSÃO NOVA
+ * FUNÇÃO 'processFlow' (O NAVEGADOR) - VERSÃO NOVA E CORRIGIDA
  * =================================================================
- * (Colada da sua resposta anterior)
  */
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowIdToLoad = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
-    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}. Fluxo: ${flowIdToLoad || 'Padrão'}`);
 
     // ==========================================================
-    // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
+    // PASSO 1: CARREGAR VARIÁVEIS
     // ==========================================================
     let variables = { ...initialVariables };
-
     const [user] = await sql`
         SELECT first_name, last_name 
         FROM telegram_chats 
         WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
         ORDER BY created_at DESC LIMIT 1`;
-
     if (user) {
         variables.primeiro_nome = user.first_name || '';
         variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
     }
-
     if (variables.click_id) {
         const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
         const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
@@ -839,30 +816,37 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // FIM DO PASSO 1
     // ==========================================================
     
-    // Lógica de Carregamento do Fluxo (Adaptada para 'forward_flow')
+    // ==========================================================
+    // PASSO 2: CARREGAR O FLUXO CORRETO
+    // ==========================================================
     let flow;
     let currentNodeId = startNodeId;
 
-    if (startNodeId && !startNodeId.startsWith('node_') && !startNodeId.startsWith('start')) {
-        // Se o startNodeId NÃO é um 'node_id', assume que é um 'flow_id'
-        console.log(`${logPrefix} [Flow Engine] Recebido 'forward_flow' para flowId: ${startNodeId}`);
+    if (flowIdToLoad) {
+        // Se um 'forward_flow' especificou um ID de fluxo
+        console.log(`${logPrefix} [Flow Engine] Carregando fluxo encaminhado: ${flowIdToLoad}`);
+        [flow] = await sql`SELECT * FROM flows WHERE id = ${flowIdToLoad} AND bot_id = ${botId}`;
+        
+    } else if (startNodeId && (!startNodeId.startsWith('node-') && !startNodeId.startsWith('start'))) {
+        // *** ESTA É A LÓGICA QUE ESTAVA CAUSANDO O ERRO ***
+        // *** CORREÇÃO: "node-" em vez de "node_" ***
+        // *** CORREÇÃO 2: A lógica estava invertida. Ela deve ser 'SE NÃO É UM NÓ, É UM FLOW ID' ***
+        // Esta lógica agora é tratada pelo 'flowIdToLoad' e não deve ser necessária aqui.
+        // No entanto, se o worker for chamado com um flow_id antigo, tratamos:
+        console.log(`${logPrefix} [Flow Engine] Recebido ID ${startNodeId} que não é um nó. Tentando carregar como ID de fluxo (legado).`);
         [flow] = await sql`SELECT * FROM flows WHERE id = ${startNodeId} AND bot_id = ${botId}`;
         
-        // Se encaminhou para um fluxo, precisamos encontrar o nó inicial desse fluxo
         if (flow && flow.nodes) {
             const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
             const startNode = (flowData.nodes || []).find(n => n.type === 'trigger');
-            if (startNode) {
-                currentNodeId = findNextNode(startNode.id, 'a', flowData.edges || []);
-            } else {
-                currentNodeId = null; // Fluxo de destino sem trigger
-            }
+            currentNodeId = startNode ? findNextNode(startNode.id, 'a', flowData.edges || []) : null;
         } else {
-            currentNodeId = null; // Fluxo de destino não encontrado
+            currentNodeId = null;
         }
         
     } else {
         // Comportamento normal: Carrega o fluxo principal (mais recente) do bot
+        // Este é o caminho que o worker (timeout) ou um /start deve tomar.
         [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
     }
 
@@ -875,8 +859,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     const nodes = flowData.nodes || [];
     const edges = flowData.edges || [];
 
-    // Se 'currentNodeId' ainda for nulo (início normal), define
-    if (!currentNodeId) {
+    // Se 'currentNodeId' ainda for nulo (início normal, não forward), define
+    if (!currentNodeId && !flowIdToLoad) {
         const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
         
         if (isStartCommand) {
@@ -885,7 +869,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message); }
             }
             await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -909,7 +892,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
         }
     }
-
+    // ==========================================================
+    // FIM DO PASSO 2
+    // ==========================================================
 
     if (!currentNodeId) {
         console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
@@ -918,7 +903,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     }
 
     // ==========================================================
-    // PASSO 3: O NOVO LOOP DE NAVEGAÇÃO
+    // PASSO 3: O LOOP DE NAVEGAÇÃO
     // ==========================================================
     let safetyLock = 0;
     while (currentNodeId && safetyLock < 20) {
@@ -926,11 +911,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         const currentNode = nodes.find(node => node.id === currentNodeId);
         
         if (!currentNode) {
-            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
+            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado no fluxo ${flow.id}.`);
             break;
         }
 
-        console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+        console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type}) no Fluxo ${flow.id}`);
 
         await sql`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
@@ -960,8 +945,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             if (actionResult === 'flow_forwarded') {
                 console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual (worker).`);
-                currentNodeId = null; // Para o loop atual
-                break; // Sai do 'while'
+                currentNodeId = null; 
+                break; 
             }
 
             if (currentNode.data.waitForReply) {
@@ -993,8 +978,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
                 }
 
-                currentNodeId = null; // PARA o loop
-                break; // Sai do 'while'
+                currentNodeId = null; 
+                break; 
             }
             
             if (actionResult === 'paid') {
