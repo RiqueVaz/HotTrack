@@ -3824,38 +3824,30 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     }
 }
 
-async function processActions(actionsOrNode, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
-    
-    // 1. Normaliza a entrada: Se for um objeto, transforma em um array de 1 item.
-    const actions = Array.isArray(actionsOrNode) ? actionsOrNode : [actionsOrNode];
-
-    if (Array.isArray(actionsOrNode)) {
-        console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
-    } else {
-        console.log(`${logPrefix} Executando ação única do tipo ${actionsOrNode.type} para chat ${chatId}`);
+async function processActions(actionsArray, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
+    // Validação: Garante que estamos lidando com um array
+    if (!Array.isArray(actionsArray) || actionsArray.length === 0) {
+        console.warn(`${logPrefix} 'processActions' foi chamado sem um array de ações. Abortando.`);
+        return;
     }
 
-    // 2. Itera sobre o array de ações
-    for (const action of actions) {
+    console.log(`${logPrefix} Iniciando processamento de ${actionsArray.length} ações aninhadas para chat ${chatId}`);
+
+    // Itera sobre cada ação no array
+    for (const action of actionsArray) {
         
-        // 3. Usa 'action' (singular) para obter os dados
+        // CORREÇÃO: Usar 'action.data' (singular) e não 'actions.data' (plural)
         const actionData = action.data || {}; // Garante que actionData exista
 
-        // 4. Usa 'action.type' no switch
         switch (action.type) {
             case 'message':
-                // Removido: typingDelay/showTyping da ação de mensagem (somente 'typing_action' controla digitação)
                 const textToSend = await replaceVariables(actionData.text, variables);
                 await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
                 
-                // Processamento recursivo (se esta ação tiver ações)
+                // Processamento recursivo (se esta ação tiver mais ações)
                 if (actionData.actions && actionData.actions.length > 0) {
                     await processActions(actionData.actions, chatId, botId, botToken, sellerId, variables, edges, `${logPrefix}-Nested`);
                 }
-
-                // REMOVIDO: Lógica de waitForReply e findNextNode não pertencem aqui.
-                // A função 'processFlow' é quem controla a navegação entre os NÓS.
-                // Esta função 'processActions' apenas executa a lista de AÇÕES.
                 break;
 
             case 'image':
@@ -3872,14 +3864,12 @@ async function processActions(actionsOrNode, chatId, botId, botToken, sellerId, 
                 } catch (e) {
                     console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
                 }
-                // REMOVIDO: findNextNode
                 break;
             }
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-                // REMOVIDO: findNextNode
                 break;
             
             case 'typing_action':
@@ -4403,16 +4393,81 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
                 break;
 
-                default:
-                    if (currentNode && currentNode.type) {
-                        console.log(currentNode);
-                        processActions(currentNode, chatId, botToken, sellerId, botId, variables);
+case 'action_group':
+                console.log(`${logPrefix} [Flow Engine] Executando nó 'action_group' ${currentNode.id}`);
+                
+                // 1. Executa todas as ações aninhadas primeiro
+                if (currentNode.data.actions && currentNode.data.actions.length > 0) {
+                    await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, edges);
+                    
+                    // Persiste as variáveis que podem ter sido alteradas (ex: last_transaction_id)
+                    await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                } else {
+                    console.warn(`${logPrefix} [Flow Engine] Nó 'action_group' ${currentNode.id} não tem ações. Pulando.`);
+                }
+                
+                // 2. VERIFICA SE O NÓ DE GRUPO DEVE ESPERAR POR UMA RESPOSTA
+                if (currentNode.data.waitForReply) {
+                    await sql`UPDATE user_flow_states SET waiting_for_input = true WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
+                    const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                    
+                    if (noReplyNodeId) {
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action_group') em ${timeoutMinutes} min para o nó ${noReplyNodeId}`);
                     } else {
-                        console.warn(`${logPrefix} [Flow Engine] Nó inválido ou tipo não especificado. Parando fluxo.`);
-                        currentNodeId = null;
+                        console.log(`${logPrefix} [Flow Engine] Agendando worker (do 'action_group') em ${timeoutMinutes} min para ENCERRAR o fluxo.`);
                     }
-                    break;
-            }
+
+                    try {
+                        // Cancela qualquer tarefa antiga
+                        const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        if (existingState && existingState.scheduled_message_id) {
+                            try {
+                                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                                console.log(`[Flow Engine] Tarefa de timeout antiga ${existingState.scheduled_message_id} cancelada.`);
+                            } catch (e) {
+                                console.warn(`[Flow Engine] Não foi possível cancelar a tarefa antiga ${existingState.scheduled_message_id}:`, e.message);
+                            }
+                        }
+
+                        // Agenda a nova tarefa
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { 
+                                chat_id: chatId, 
+                                bot_id: botId, 
+                                target_node_id: noReplyNodeId, // Envia 'null' se desconectado
+                                variables: variables 
+                            },
+                            delay: `${timeoutMinutes}m`,
+                            contentBasedDeduplication: true,
+                            method: "POST"
+                        });
+                        
+                        await sql`UPDATE user_flow_states SET scheduled_message_id = ${response.messageId} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    
+                    } catch (error) {
+                        console.error("Erro ao agendar timeout do 'action_group':", error);
+                    }
+                    
+                    currentNodeId = null; // PARE O FLUXO para esperar a resposta ou o timeout
+                
+                } else {
+                    // Se não espera resposta, continue para a saída 'a'
+                    currentNodeId = findNextNode(currentNodeId, 'a', edges);
+                }
+                break;
+
+
+            default:
+                // CORREÇÃO: O 'default' não deve tentar executar uma ação.
+                // A chamada 'processActions(currentNode, ...)' que estava aqui
+                // estava errada, pois passava um NÓ (objeto) em vez de um ARRAY de ações.
+                console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
+                currentNodeId = null;
+                break;
+        }
 
             if (!currentNodeId) {
                 const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
@@ -4422,6 +4477,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
             }
             safetyLock++;
+        }
     }
 }
 
