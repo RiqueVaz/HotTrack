@@ -230,27 +230,27 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 
 
 // ==========================================================
-//                     LÓGICA DO WORKER
+//           LÓGICA DO WORKER
 // ==========================================================
 
 async function handler(req, res) {
-        const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
+      const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
         console.log(`[WORKER-DISPARO] Recebido job para history: ${history_id}, chat: ${chat_id}, bot: ${bot_id}`);
     
-        const step = JSON.parse(step_json);
-        const userVariables = JSON.parse(variables_json);
-            
-        let logStatus = 'SENT';
+      const step = JSON.parse(step_json);
+      const userVariables = JSON.parse(variables_json);
+       
+      let logStatus = 'SENT';
         let logDetails = 'Enviado com sucesso.';
-        let lastTransactionId = null;
+      let lastTransactionId = null;
     
-        try {
-            const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
-            if (!bot || !bot.bot_token) {
-                throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
-            }
-                
-            const [seller] = await sqlWithRetry(sql`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
+      try {
+        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+        if (!bot || !bot.bot_token) {
+          throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
+        }
+         
+        const [seller] = await sqlWithRetry(sql`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
             if (!seller) {
                 throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
             }
@@ -265,32 +265,32 @@ async function handler(req, res) {
                 userVariables.click_id = chat.click_id;
             }
     
-                let response;
+          let response;
             const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
     
         try {
             if (step.type === 'message') {
                 // (Lógica para enviar 'message' ... igual a antes)
-                const textToSend = await replaceVariables(step.text, userVariables);
-                let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
-                if (step.buttonText && step.buttonUrl) {
-                    payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
-                }
-                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
-            } else if (['image', 'video', 'audio'].includes(step.type)) {
+          const textToSend = await replaceVariables(step.text, userVariables);
+          let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
+          if (step.buttonText && step.buttonUrl) {
+            payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
+          }
+          response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
+        } else if (['image', 'video', 'audio'].includes(step.type)) {
                 // (Lógica para enviar 'media' ... igual a antes)
-                const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
-                const fileIdentifier = step[urlMap[step.type]];
-                const caption = await replaceVariables(step.caption, userVariables);
-                const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
-                if (isLibraryFile) {
-                    response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
-                } else {
-                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
-                    const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
-                    const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
-                    response = await sendTelegramRequest(bot.bot_token, method, payload);
-                }
+          const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+          const fileIdentifier = step[urlMap[step.type]];
+          const caption = await replaceVariables(step.caption, userVariables);
+          const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
+          if (isLibraryFile) {
+            response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
+          } else {
+            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
+            const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
+            const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
+            response = await sendTelegramRequest(bot.bot_token, method, payload);
+          }
             } else if (step.type === 'pix') {
                 // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
                 if (!userVariables.click_id) {
@@ -318,35 +318,35 @@ async function handler(req, res) {
                     chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
                     reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: qr_code_text } }]] }
                 });
-            } else if (step.type === 'check_pix' || step.type === 'delay') {
+        } else if (step.type === 'check_pix' || step.type === 'delay') {
                 // Ignora ativamente esses passos, eles não enviam nada
                 logStatus = 'SKIPPED';
                 logDetails = `Passo ${step.type} ignorado pelo worker.`;
                 response = { ok: true, result: { message_id: `skip_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }};
             }
-                
-                if (response && response.ok) {
+         
+          if (response && response.ok) {
                     if (step.type !== 'delay' && step.type !== 'check_pix') {
-                        await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
+              await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
                     }
-                } else if(response && !response.ok) {
-                    throw new Error(response.description || 'Falha no Telegram');
-                }
-            } catch(e) {
-                logStatus = 'FAILED';
+          } else if(response && !response.ok) {
+            throw new Error(response.description || 'Falha no Telegram');
+          }
+        } catch(e) {
+          logStatus = 'FAILED';
                 logDetails = e.message.substring(0, 255); 
-                console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
-            }
+          console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
+        }
     
-            // --- LÓGICA DE CONCLUSÃO ---
-            try {
-                // 1. Loga o resultado deste job
-                await sqlWithRetry(
-                    sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
+        // --- LÓGICA DE CONCLUSÃO ---
+        try {
+          // 1. Loga o resultado deste job
+          await sqlWithRetry(
+            sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
                        VALUES (${history_id}, ${chat_id}, ${bot_id}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
-                );
+          );
     
-                // 2. Atualiza a contagem de falhas (se houver) e de processados
+          // 2. Atualiza a contagem de falhas (se houver) e de processados
             let query;
             if (logStatus === 'FAILED') {
                 query = sql`UPDATE disparo_history
@@ -360,15 +360,15 @@ async function handler(req, res) {
                             WHERE id = ${history_id}
                             RETURNING processed_jobs, total_jobs, status`;
             }
-                const [history] = await sqlWithRetry(query);
+          const [history] = await sqlWithRetry(query);
     
-                // 3. Verifica se a campanha terminou
-                if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
-                    console.log(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
-                    await sqlWithRetry(
-                        sql`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
-                    );
-                }
+          // 3. Verifica se a campanha terminou
+          if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
+            console.log(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
+            await sqlWithRetry(
+              sql`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
+            );
+          }
         } catch (dbError) {
             console.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
         }

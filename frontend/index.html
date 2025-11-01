@@ -1726,7 +1726,7 @@
                 return `<div class="flex items-center justify-center min-h-screen p-4">${page === 'login' ? this.loginForm() : this.registerForm()}</div>`;
             },
             loginForm() {
-                return `
+        return `
             <div class="min-h-screen flex items-center justify-center bg-gray-900 p-6">
             <!-- Card -->
             <div class="card p-6 rounded-2xl shadow-lg w-full max-w-md bg-gray-800/60 backdrop-blur-sm transition-opacity duration-400">
@@ -1764,7 +1764,7 @@
                 </button>
             </div>
             </div>`;
-            },
+      },
             hotbot() {
     return `
                 <div class="animate-fade-in" style="height: 100%; display: flex; flex-direction: column;">
@@ -2492,8 +2492,8 @@
                 </div>`;
             },
             modal(title, content) {
-                return `<div id="modal" class="modal active"><div class="card p-6 rounded-lg w-full max-w-md animate-fade-in"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-white">${title}</h2><button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>${content}</div></div>`;
-            }
+        return `<div id="modal" class="modal active"><div class="card p-6 rounded-lg w-full max-w-md animate-fade-in"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold text-white">${title}</h2><button id="closeModalBtn" class="text-gray-400 hover:text-white text-3xl">&times;</button></div>${content}</div></div>`;
+      }
 
         },
 
@@ -2529,7 +2529,7 @@
 
         addDashboardEventListeners() {
 
-             const listenerTarget = document.body; // USE document.body instead
+            const listenerTarget = document.body; // USE document.body instead
 
             // Remove listener antigo para evitar duplicação
             if (listenerTarget._clickListener) {
@@ -2540,29 +2540,29 @@
             }
 
             listenerTarget._clickListener = async (e) => { // Guarda a referência
-                const sidebar = document.getElementById('sidebar');
-                const overlay = document.getElementById('sidebar-overlay');
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
 
-                // Toggle Sidebar
-                if (sidebar && overlay) {
-                    const isOpenBtn = e.target.closest('#open-sidebar-btn');
-                    const isCloseBtn = e.target.closest('#close-sidebar-btn');
-                    const isOverlay = e.target.id === 'sidebar-overlay';
-                    const isNavLink = e.target.closest('.nav-link');
+        // Toggle Sidebar
+        if (sidebar && overlay) {
+          const isOpenBtn = e.target.closest('#open-sidebar-btn');
+          const isCloseBtn = e.target.closest('#close-sidebar-btn');
+          const isOverlay = e.target.id === 'sidebar-overlay';
+          const isNavLink = e.target.closest('.nav-link');
 
-                    if (isOpenBtn) {
-                        sidebar.classList.remove('-translate-x-full');
-                        overlay.classList.remove('hidden');
-                    } else if (isCloseBtn || isOverlay || (isNavLink && window.innerWidth < 768 && !isNavLink.closest('a[target="_blank"]'))) {
-                        sidebar.classList.add('-translate-x-full');
-                        overlay.classList.add('hidden');
-                    }
-                }
+          if (isOpenBtn) {
+            sidebar.classList.remove('-translate-x-full');
+            overlay.classList.remove('hidden');
+          } else if (isCloseBtn || isOverlay || (isNavLink && window.innerWidth < 768 && !isNavLink.closest('a[target="_blank"]'))) {
+            sidebar.classList.add('-translate-x-full');
+            overlay.classList.add('hidden');
+          }
+        }
 
-                // Logout
-                if (e.target.id === 'logoutButton') this.logout();
+        // Logout
+        if (e.target.id === 'logoutButton') this.logout();
 
-                // Close Modal (Atualizado)
+        // Close Modal (Atualizado)
                 const closeModalButton = e.target.closest('#closeModalBtn');
                 if (closeModalButton) {
                     const modalContainer = document.getElementById('modal-container');
@@ -2594,22 +2594,22 @@
                 }
 
 
-                // Open Add Utmify Modal
-                if (e.target.id === 'add-utmify-btn') {
-                    this.showAddUtmifyModal();
-                }
+        // Open Add Utmify Modal
+        if (e.target.id === 'add-utmify-btn') {
+          this.showAddUtmifyModal();
+        }
 
-                // Navigate SPA
-                const sidebarLink = e.target.closest('.nav-link[data-target]');
-                if (sidebarLink && sidebarLink.dataset.target) {
-                    // Limpa estados de edição ao navegar pelo menu
-                    if (sidebarLink.dataset.target === 'checkouts') { this.state.editingCheckoutId = null; }
-                    if (sidebarLink.dataset.target === 'thankYouPages') { this.state.editingThankYouPageId = null; }
-                    if (sidebarLink.dataset.target === 'pageCreator') { this.state.editingCheckoutId = null; }
-                    if (sidebarLink.dataset.target === 'thankYouCreator') { this.state.editingThankYouPageId = null; }
+        // Navigate SPA
+        const sidebarLink = e.target.closest('.nav-link[data-target]');
+        if (sidebarLink && sidebarLink.dataset.target) {
+          // Limpa estados de edição ao navegar pelo menu
+          if (sidebarLink.dataset.target === 'checkouts') { this.state.editingCheckoutId = null; }
+          if (sidebarLink.dataset.target === 'thankYouPages') { this.state.editingThankYouPageId = null; }
+          if (sidebarLink.dataset.target === 'pageCreator') { this.state.editingCheckoutId = null; }
+          if (sidebarLink.dataset.target === 'thankYouCreator') { this.state.editingThankYouPageId = null; }
 
-                    this.navigateTo(sidebarLink.dataset.target);
-                }
+          this.navigateTo(sidebarLink.dataset.target);
+        }
 
                 // Botões Criador de Checkout
                 if (e.target.id === 'go-to-creator-btn') { this.state.editingCheckoutId = null; this.navigateTo('pageCreator'); }
@@ -2622,50 +2622,50 @@
                     try { await navigator.clipboard.writeText(link); const o=copyCheckoutLinkBtn.textContent; copyCheckoutLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyCheckoutLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
                 }
 
-                // Botões Criador/Listagem Página de Obrigado
-                if (e.target.id === 'go-to-thankyou-creator-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouCreator'); }
-                if (e.target.id === 'back-to-ty-list-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouPages'); }
-                const editThankYouBtn = e.target.closest('.edit-thankyou-btn');
-                if (editThankYouBtn) { this.state.editingThankYouPageId = editThankYouBtn.dataset.id; this.navigateTo('thankYouCreator'); }
-                const copyThankYouLinkBtn = e.target.closest('.copy-thankyou-link-btn');
-                if (copyThankYouLinkBtn) {
-                     const link = `${window.location.origin}/obrigado/${copyThankYouLinkBtn.dataset.id}`;
-                     try { await navigator.clipboard.writeText(link); const o=copyThankYouLinkBtn.textContent; copyThankYouLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyThankYouLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
-                }
-                if (e.target.id === 'view-ty-pages-btn') { // Botão "Ver Minhas Páginas" no modal de sucesso TY
-                    const resultScreen = e.target.closest('#result-screen');
-                    if(resultScreen) resultScreen.classList.add('hidden');
-                    this.navigateTo('thankYouPages');
-                }
-                 if (e.target.id === 'create-another-btn') { // Botão "Criar Outra" ou "Ver Meus Checkouts" no modal de sucesso
-                     const resultScreen = e.target.closest('#result-screen');
-                     if(resultScreen) resultScreen.classList.add('hidden');
+        // Botões Criador/Listagem Página de Obrigado
+        if (e.target.id === 'go-to-thankyou-creator-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouCreator'); }
+        if (e.target.id === 'back-to-ty-list-btn') { this.state.editingThankYouPageId = null; this.navigateTo('thankYouPages'); }
+        const editThankYouBtn = e.target.closest('.edit-thankyou-btn');
+        if (editThankYouBtn) { this.state.editingThankYouPageId = editThankYouBtn.dataset.id; this.navigateTo('thankYouCreator'); }
+        const copyThankYouLinkBtn = e.target.closest('.copy-thankyou-link-btn');
+        if (copyThankYouLinkBtn) {
+          const link = `${window.location.origin}/obrigado/${copyThankYouLinkBtn.dataset.id}`;
+          try { await navigator.clipboard.writeText(link); const o=copyThankYouLinkBtn.textContent; copyThankYouLinkBtn.textContent='Copiado!'; setTimeout(()=>{copyThankYouLinkBtn.textContent='Copiar Link'},2000); } catch(err){this.showToast('Erro.', 'error');}
+        }
+        if (e.target.id === 'view-ty-pages-btn') { // Botão "Ver Minhas Páginas" no modal de sucesso TY
+          const resultScreen = e.target.closest('#result-screen');
+          if(resultScreen) resultScreen.classList.add('hidden');
+          this.navigateTo('thankYouPages');
+        }
+        if (e.target.id === 'create-another-btn') { // Botão "Criar Outra" ou "Ver Meus Checkouts" no modal de sucesso
+          const resultScreen = e.target.closest('#result-screen');
+          if(resultScreen) resultScreen.classList.add('hidden');
 
-                     if (document.getElementById('thankYouCreator')) {
-                         // Se estava no criador de TY, reinicia ele
-                         this.state.editingThankYouPageId = null;
-                         this.initThankYouCreatorPage();
-                     } else if (document.getElementById('pageCreator')) {
-                          // Se estava no criador de Checkout, vai para a lista
-                         this.navigateTo('checkouts');
-                     }
-                }
+          if (document.getElementById('thankYouCreator')) {
+            // Se estava no criador de TY, reinicia ele
+            this.state.editingThankYouPageId = null;
+            this.initThankYouCreatorPage();
+          } else if (document.getElementById('pageCreator')) {
+             // Se estava no criador de Checkout, vai para a lista
+            this.navigateTo('checkouts');
+          }
+        }
 
 
-                // Copy Buttons Genérico
-                const copyBtn = e.target.closest('.copy-btn');
-                if (copyBtn) {
-                     const targetSelector = copyBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const textToCopy=targetInput.value||targetInput.textContent; try { await navigator.clipboard.writeText(textToCopy); const o=copyBtn.textContent; copyBtn.textContent='Copiado!'; setTimeout(()=>{copyBtn.textContent=o},2000); } catch(err){ console.error('Falha:',err); this.showToast('Erro.', 'error'); } }
-                }
+        // Copy Buttons Genérico
+        const copyBtn = e.target.closest('.copy-btn');
+        if (copyBtn) {
+          const targetSelector = copyBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const textToCopy=targetInput.value||targetInput.textContent; try { await navigator.clipboard.writeText(textToCopy); const o=copyBtn.textContent; copyBtn.textContent='Copiado!'; setTimeout(()=>{copyBtn.textContent=o},2000); } catch(err){ console.error('Falha:',err); this.showToast('Erro.', 'error'); } }
+        }
 
-                // Toggle Password Visibility
-                const toggleBtn = e.target.closest('.toggle-visibility-btn');
-                if (toggleBtn) {
-                    const targetSelector = toggleBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const isPassword=targetInput.type==='password'; targetInput.type=isPassword?'text':'password'; toggleBtn.innerHTML=isPassword ? `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781z" clip-rule="evenodd" /><path d="M12.454 16.697L9.75 13.992a2.5 2.5 0 01-3.482-3.482l-2.455-2.455a10.048 10.048 0 00-3.263 5.218C1.732 14.057 5.522 17 10 17a9.95 9.95 0 005.023-1.303l-2.57-2.57z" /></svg>` : `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>`; }
-                }
+        // Toggle Password Visibility
+        const toggleBtn = e.target.closest('.toggle-visibility-btn');
+        if (toggleBtn) {
+          const targetSelector = toggleBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const isPassword=targetInput.type==='password'; targetInput.type=isPassword?'text':'password'; toggleBtn.innerHTML=isPassword ? `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781z" clip-rule="evenodd" /><path d="M12.454 16.697L9.75 13.992a2.5 2.5 0 01-3.482-3.482l-2.455-2.455a10.048 10.048 0 00-3.263 5.218C1.732 14.057 5.522 17 10 17a9.95 9.95 0 005.023-1.303l-2.57-2.57z" /></svg>` : `<svg class="pointer-events-none h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>`; }
+        }
 
-                // Generate Pressel Code
-                if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
+        // Generate Pressel Code
+        if (e.target.classList.contains('generate-pressel-code-btn')) { const id=e.target.dataset.id; const p=this.state.data.pressels.find(x=>x.id==id); if(p)this.generatePresselCode(p); }
 
                 // Copy Netlify Link
                 if (e.target.classList.contains('copy-netlify-link-btn')) {
@@ -2694,23 +2694,23 @@
                 if (e.target.id === 'validate-netlify-token') { this.validateNetlifyToken(e.target); }
                 if (e.target.id === 'create-netlify-site') { this.createNetlifySite(e.target); }
 
-                // Tab Buttons (Lógica Corrigida e Isolada)
-                const tabButton = e.target.closest('.tab-button');
-                if (tabButton && tabButton.dataset.tab) {
-                    const tabName = tabButton.dataset.tab;
-                    // Encontra o container pai mais próximo (o form ou uma div que contenha as abas)
-                    const container = tabButton.closest('form, div.hotbot-scope'); // Procura no form ou no escopo do hotbot
-                    if (container) {
-                        // Procura botões e conteúdos APENAS dentro deste container
-                        container.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-                        tabButton.classList.add('active');
-                        container.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                        const activeContent = container.querySelector(`#tab-${tabName}`);
-                        if (activeContent) activeContent.classList.add('active');
-                    }
-                }
+        // Tab Buttons (Lógica Corrigida e Isolada)
+        const tabButton = e.target.closest('.tab-button');
+        if (tabButton && tabButton.dataset.tab) {
+          const tabName = tabButton.dataset.tab;
+          // Encontra o container pai mais próximo (o form ou uma div que contenha as abas)
+          const container = tabButton.closest('form, div.hotbot-scope'); // Procura no form ou no escopo do hotbot
+          if (container) {
+            // Procura botões e conteúdos APENAS dentro deste container
+            container.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            tabButton.classList.add('active');
+            container.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            const activeContent = container.querySelector(`#tab-${tabName}`);
+            if (activeContent) activeContent.classList.add('active');
+          }
+        }
 
-                // Delete Buttons (Atualizado)
+        // Delete Buttons (Atualizado)
                 const deleteBtn = e.target.closest('.delete-pixel-btn, .delete-bot-btn, .delete-pressel-btn, .delete-utmify-btn, .delete-checkout-btn, .delete-thankyou-btn');
                 if (deleteBtn) {
                     const id = deleteBtn.dataset.id;
@@ -2760,38 +2760,38 @@
                     }
                 }
 
-                // Date Filters
-                const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
-                if (filterContainer) { const p=filterContainer.id.split('-')[0]; const b=e.target.closest('button'); if(b?.dataset.period){this.handleFilterChange(p,b.dataset.period);}else if(b?.id===`apply-custom-date-filter-${p}`){const sD=document.getElementById(`${p}-start-date`).value; const eD=document.getElementById(`${p}-end-date`).value; if(sD&&eD){this.handleFilterChange(p,'custom',sD,eD);}else{this.showToast('Selecione datas.','error');}}else if(b?.id===`clear-date-filter-${p}`){this.handleFilterChange(p,'all');} }
-            };
-            listenerTarget.addEventListener('click', listenerTarget._clickListener); // Attach to document.body
+        // Date Filters
+        const filterContainer = e.target.closest('#transactions-date-filter, #dashboard-date-filter');
+        if (filterContainer) { const p=filterContainer.id.split('-')[0]; const b=e.target.closest('button'); if(b?.dataset.period){this.handleFilterChange(p,b.dataset.period);}else if(b?.id===`apply-custom-date-filter-${p}`){const sD=document.getElementById(`${p}-start-date`).value; const eD=document.getElementById(`${p}-end-date`).value; if(sD&&eD){this.handleFilterChange(p,'custom',sD,eD);}else{this.showToast('Selecione datas.','error');}}else if(b?.id===`clear-date-filter-${p}`){this.handleFilterChange(p,'all');} }
+      };
+           listenerTarget.addEventListener('click', listenerTarget._clickListener); // Attach to document.body
 
             listenerTarget._submitListener = async (e) => {
-                const form = e.target.closest('form');
-                if (!form || ['loginForm', 'registerForm', 'checkout-form', 'thank-you-form'].includes(form.id)) return;
+        const form = e.target.closest('form');
+        if (!form || ['loginForm', 'registerForm', 'checkout-form', 'thank-you-form'].includes(form.id)) return;
 
-                e.preventDefault();
-                const button = form.querySelector('button[type="submit"]');
-                const originalButtonText = button ? button.innerHTML : 'Salvar';
-                 if(button){ button.innerHTML = 'Salvando...'; button.disabled = true; }
+        e.preventDefault();
+        const button = form.querySelector('button[type="submit"]');
+        const originalButtonText = button ? button.innerHTML : 'Salvar';
+        if(button){ button.innerHTML = 'Salvando...'; button.disabled = true; }
 
-                let data = Object.fromEntries(new FormData(form).entries());
-                try {
-                    if (form.id === 'pixSettingsForm') {
-                        await this.apiRequest('/api/settings/pix', 'POST', data);
-                        App.state.data.settings = { ...App.state.data.settings, ...data };
-                        this.showToast('Configurações PIX salvas!', 'success');
-                         this.updateAllPixStatusIndicators();
-                    }
-                    else if (form.id === 'utmifySettingsForm') {
-                        const newIntegration = await this.apiRequest('/api/integrations/utmify', 'POST', data);
-                        if(newIntegration) {
-                            this.state.data.utmifyIntegrations.unshift(newIntegration);
-                             document.getElementById('modal-container').innerHTML = '';
-                            this.navigateTo('integrations');
-                            this.showToast('Conta Utmify adicionada!', 'success');
-                        }
-                    }
+        let data = Object.fromEntries(new FormData(form).entries());
+        try {
+          if (form.id === 'pixSettingsForm') {
+            await this.apiRequest('/api/settings/pix', 'POST', data);
+            App.state.data.settings = { ...App.state.data.settings, ...data };
+            this.showToast('Configurações PIX salvas!', 'success');
+            this.updateAllPixStatusIndicators();
+          }
+          else if (form.id === 'utmifySettingsForm') {
+            const newIntegration = await this.apiRequest('/api/integrations/utmify', 'POST', data);
+            if(newIntegration) {
+              this.state.data.utmifyIntegrations.unshift(newIntegration);
+              document.getElementById('modal-container').innerHTML = '';
+              this.navigateTo('integrations');
+              this.showToast('Conta Utmify adicionada!', 'success');
+            }
+          }
                     else if (form.id === 'pixelForm') {
                         const newPixel = await this.apiRequest('/api/pixels', 'POST', data);
                         if (newPixel) { this.state.data.pixels.unshift(newPixel); this.navigateTo('pixels'); }
@@ -3041,81 +3041,81 @@
 
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
-            try {
-                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
-                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+    async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
+      try {
+        const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
+        if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
 
-                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
-                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
-                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
-                                       endpoint.includes('/api/thank-you-pages/create') ||
-                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+        // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+        const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                   (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                   endpoint.includes('/api/thank-you-pages/create') ||
+                   (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
 
-                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
-                    headers['x-api-key'] = this.state.data.settings.api_key;
-                }
+        if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+          headers['x-api-key'] = this.state.data.settings.api_key;
+        }
 
-                const options = { method, headers };
-                if (body) { options.body = JSON.stringify(body); }
+        const options = { method, headers };
+        if (body) { options.body = JSON.stringify(body); }
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
+        const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
 
-                if (response.status === 204) return null; // No Content
+        if (response.status === 204) return null; // No Content
 
-                const responseBody = await response.text(); // Lê como texto primeiro
-                let data;
-                try {
-                    data = JSON.parse(responseBody); // Tenta parsear como JSON
-                } catch (jsonError) {
-                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
-                    if (!response.ok) {
-                        console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
+        const responseBody = await response.text(); // Lê como texto primeiro
+        let data;
+        try {
+          data = JSON.parse(responseBody); // Tenta parsear como JSON
+        } catch (jsonError) {
+          // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
+          if (!response.ok) {
+            console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
                         // ****** MUDANÇA 1: ANEXA O STATUS AO ERRO ******
                         const err = new Error(responseBody || `Erro ${response.status}`);
                         err.status = response.status;
-                        throw err;
-                    }
-                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
-                    data = responseBody;
-                }
+            throw err;
+          }
+          // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
+          data = responseBody;
+        }
 
 
-                if (!response.ok) {
-                    console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
-                    let errorMsg = 'Erro desconhecido da API.';
-                    if (data && data.message) {
-                       errorMsg = data.message;
-                    } else if (typeof data === 'string') {
-                       errorMsg = data; // Usa o texto da resposta como mensagem de erro
-                    }
+        if (!response.ok) {
+          console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
+          let errorMsg = 'Erro desconhecido da API.';
+          if (data && data.message) {
+           errorMsg = data.message;
+          } else if (typeof data === 'string') {
+           errorMsg = data; // Usa o texto da resposta como mensagem de erro
+          }
                     // ****** MUDANÇA 1 (Cont.): ANEXA O STATUS AO ERRO ******
-                    const err = new Error(errorMsg);
+          const err = new Error(errorMsg);
                     err.status = response.status;
-                    throw err;
-                }
-                return data;
-            } catch (error) {
-                 if (error instanceof Error) {
-                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+          throw err;
+        }
+        return data;
+      } catch (error) {
+        if (error instanceof Error) {
+          this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
 
                     // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
                     const statusCode = error.status; // Pega o status que anexamos
                     const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
-                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+          const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
                     
-                    if (isAuthError && !isPublicRoute) {
+          if (isAuthError && !isPublicRoute) {
                         console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
-                       this.logout();
-                    }
+           this.logout();
+          }
                     // Se for status 400 (Bad Request), ele não vai mais deslogar.
-                 } else {
-                    console.error(`Network Error on ${method} ${endpoint}:`, error);
-                    this.showToast('Falha na conexão com o servidor.', 'error');
-                 }
-                 throw error; // Re-throw para quem chamou poder tratar
-            }
-        },
+        } else {
+          console.error(`Network Error on ${method} ${endpoint}:`, error);
+          this.showToast('Falha na conexão com o servidor.', 'error');
+        }
+        throw error; // Re-throw para quem chamou poder tratar
+      }
+    },
         
         async login(email, password) {
             try {
