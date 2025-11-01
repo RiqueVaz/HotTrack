@@ -831,8 +831,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
         const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
         if (click) {
-            variables.cidade = click.city || 'Desconhecida';
-            variables.estado = click.state || 'Desconhecido';
+            variables.cidade = click.city || '';
+            variables.estado = click.state || '';
+        }else{
+            variables.cidade = '';
+            variables.estado = '';
         }
     }
     // ==========================================================
