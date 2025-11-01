@@ -1047,7 +1047,7 @@ async function handler(req, res) {
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
 
         // 2. Busca o bot para obter o token e sellerId
-        const [bot] = await sql`SELECT * FROM bots WHERE id = ${bot_id}`;
+        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
         if (!bot || !bot.bot_token) {
             throw new Error(`[WORKER] Bot ${bot_id} ou token não encontrado.`);
         }
