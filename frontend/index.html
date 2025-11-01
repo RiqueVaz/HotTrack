@@ -912,6 +912,17 @@
         .hotbot-scope .react-flow__node { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 0; width: 280px; font-family: 'Inter', sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.2); color: var(--text-secondary); }
         .hotbot-scope .react-flow__node.selected { border: 2px solid var(--accent-primary); box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
         
+        .hotbot-scope .action-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.5rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+
         .hotbot-scope .node-header { 
             display: flex; 
             align-items: center; 
@@ -924,6 +935,52 @@
             position: relative;
             margin-top: 8px;
         }
+
+        /* Adicione estas regras após as regras existentes do .node-header */
+.hotbot-scope .node-header {
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Cores específicas para cada tipo de ação */
+.hotbot-scope .node-header.react-flow__node-message {
+    background-color: rgba(184, 204, 238, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-image,
+.hotbot-scope .node-header.react-flow__node-video,
+.hotbot-scope .node-header.react-flow__node-audio {
+    background-color: rgba(78, 49, 176, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-typing_action {
+    background-color: rgba(148, 104, 28, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-action_pix {
+    background-color: rgba(34, 197, 94, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-action_check_pix {
+    background-color: rgba(120, 53, 15, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-forward_flow {
+    background-color: rgba(214, 76, 242, 0.1);
+    
+}
+
+.hotbot-scope .node-header.react-flow__node-delay {
+    background-color: rgba(239, 68, 68, 0.2);  /* Aumentei a opacidade para 0.2 */
+      /* Deixa o texto um pouco mais escuro */
+}
+
         .hotbot-scope .node-actions {
             position: absolute;
             top: -4rem;
@@ -6080,6 +6137,37 @@ function generatePreviewHTML(data) {
     
     const initialNodes = [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }];
     
+
+    const getActionIcon = (actionType) => {
+        const icons = {
+            message: '💬',
+            image: '🖼️',
+            video: '🎬',
+            audio: '🎵',
+            typing_action: '✍️',
+            action_pix: '💳',
+            action_check_pix: '🔍',
+            forward_flow: '↗️',
+            delay: '⏱️'
+        };
+        return icons[actionType] || '❓';
+    };
+
+    const getActionLabel = (actionType) => {
+        const labels = {
+            message: 'Mensagem',
+            image: 'Imagem',
+            video: 'Vídeo',
+            audio: 'Áudio',
+            typing_action: 'Digitando',
+            action_pix: 'PIX',
+            action_check_pix: 'Verificar PIX',
+            forward_flow: 'Encaminhar',
+            delay: 'Atraso'
+        };
+        return labels[actionType] || actionType;
+    };
+
     const CustomNode = ({ id, type, data, isConnectable, selected }) => {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
@@ -6126,11 +6214,17 @@ function generatePreviewHTML(data) {
         
         return (
             <>
-                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
-                <div className={`node-header react-flow__node-action`}>
-                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                        {actions.length > 0 ? `${actions.length} ação${actions.length !== 1 ? 'ões' : ''}` : 'Nó vazio'}
-                    </div>
+    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
+        <div className="action-badge">
+            {actions.length > 0 ? (
+                <>
+                    {getActionIcon(actions[0].type)}
+                    {getActionLabel(actions[0].type)}
+                    {actions.length > 1 && ` +${actions.length - 1}`}
+                </>
+            ) : 'Nó vazio'}
+        </div>
                     <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
                         <button 
                             onClick={(e) => {
