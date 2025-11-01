@@ -3826,7 +3826,7 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, edges, logPrefix = '[Actions]') {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
-    for (const action of actions) {
+
         // CORREÇÃO: Usar 'action.data' e não 'currentNode.data'
         const actionData = action.data || {}; // Garante que actionData exista
 
@@ -4008,7 +4008,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 // REMOVIDO: findNextNode e currentNodeId = null
                 break;
         }
-    }
+    
 }
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
