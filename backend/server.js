@@ -4010,7 +4010,7 @@ async function processActions(actionsArray, chatId, botId, botToken, sellerId, v
                 // REMOVIDO: findNextNode e currentNodeId = null
                 break;
         }
-    
+    }
 }
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
@@ -4393,7 +4393,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 }
                 break;
 
-case 'action_group':
+        case 'action_group':
                 console.log(`${logPrefix} [Flow Engine] Executando nó 'action_group' ${currentNode.id}`);
                 
                 // 1. Executa todas as ações aninhadas primeiro
@@ -4461,25 +4461,22 @@ case 'action_group':
 
 
             default:
-                // CORREÇÃO: O 'default' não deve tentar executar uma ação.
-                // A chamada 'processActions(currentNode, ...)' que estava aqui
-                // estava errada, pois passava um NÓ (objeto) em vez de um ARRAY de ações.
                 console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
                 currentNodeId = null;
                 break;
-        }
+        } // Fim do switch
 
-            if (!currentNodeId) {
-                const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
-                if(!state){
-                    console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
-                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                }
+        if (!currentNodeId) {
+            const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+            if (!state) {
+                console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+                await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             }
-            safetyLock++;
         }
-    }
-}
+        safetyLock++;
+    } // Fim do while
+} // Fim da função processFlow
+
 
 app.post('/api/webhook/telegram/:botId', async (req, res) => {
     const { botId } = req.params;
