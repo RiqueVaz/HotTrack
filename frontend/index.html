@@ -6705,7 +6705,7 @@ function generatePreviewHTML(data) {
 
 
 
-        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action', 'forward_flow'];
+        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
             image: '🖼️ Imagem',
@@ -6751,7 +6751,7 @@ function generatePreviewHTML(data) {
                         )}
                         
                         {/* Botões para adicionar ações */}
-                        {actions.length < 5 && (
+                        {actions.length < 5 && !actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                             <div style={{marginTop: actions.length > 0 ? '1rem' : '0'}}>
                                 <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.5rem'}}>
                                     Adicionar Ação ({actions.length}/5)
