@@ -26,7 +26,7 @@ const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 
 
 const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
-      token: process.env.QSTASH_TOKEN,
+     token: process.env.QSTASH_TOKEN,
     });
 // ==========================================================
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
@@ -559,8 +559,8 @@ async function sendTypingAction(chatId, botToken) {
 }
 
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, typingDelay = 0, variables = {}) {
-    if (!text || text.trim() === '') return;
-    try {
+  if (!text || text.trim() === '') return;
+  try {
         if (showTyping) {
             // Use o delay definido no frontend (convertido para ms), ou um fallback se não for definido
             let typingDurationMs = (typingDelay && typingDelay > 0) 

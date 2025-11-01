@@ -87,34 +87,34 @@ app.post(
 );
 
 app.post(
-      '/api/worker/process-disparo',
-      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-      async (req, res) => {
-        try {
-          // 1. Verificar a assinatura do QStash
-          const signature = req.headers["upstash-signature"];
-          const bodyString = req.body.toString();
+     '/api/worker/process-disparo',
+     express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+     async (req, res) => {
+      try {
+       // 1. Verificar a assinatura do QStash
+       const signature = req.headers["upstash-signature"];
+       const bodyString = req.body.toString();
     
-          const isValid = await receiver.verify({
-            signature,
-            body: bodyString,
-          });
+       const isValid = await receiver.verify({
+        signature,
+        body: bodyString,
+       });
     
-          if (!isValid) {
-            console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
-            return res.status(401).send("Invalid signature");
-          }
+       if (!isValid) {
+        console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
+        return res.status(401).send("Invalid signature");
+       }
     
-          // 2. Se for válida, processar a tarefa
-          console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
-          req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
-          await processDisparoWorker(req, res); // Chama o handler do worker
+       // 2. Se for válida, processar a tarefa
+       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
+       req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
+       await processDisparoWorker(req, res); // Chama o handler do worker
     
-        } catch (error) {
-          console.error("Erro crítico no handler do worker de disparo:", error);
-          res.status(500).send("Internal Server Error");
-        }
-      }
+      } catch (error) {
+       console.error("Erro crítico no handler do worker de disparo:", error);
+       res.status(500).send("Internal Server Error");
+      }
+     }
     );
 // ==========================================================
 // FIM DA ROTA DO QSTASH
@@ -4455,35 +4455,35 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
 
         // PRIORIDADE 1: Comando /start reinicia tudo.
         if (isStartCommand) {
-            
-                        const parts = text.split(' ');
-                        
-                        // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
-                        if (parts.length > 1 && parts[1].trim() !== '') {
-                            const clickIdValue = text;
-                            console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
+     
+                  const parts = text.split(' ');
+                 
+                  // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
+                  if (parts.length > 1 && parts[1].trim() !== '') {
+                    const clickIdValue = text;
+                    console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
             
-                            // Cancela qualquer tarefa pendente e deleta o estado antigo.
-                            const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                            if (existingState && existingState.scheduled_message_id) {
-                                try {
-                                    await qstashClient.messages.delete(existingState.scheduled_message_id);
-                                    console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
-                                } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
-                            }
-                            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                            
-                            // Inicia o fluxo do zero.
-                            await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
-                        
-                        } else {
-                            // É um /start orgânico (sozinho), que você quer ignorar.
-                            console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
-                            // Não faz nada e apenas termina a execução.
-                        }
-                        
-                        return; // Finaliza a execução (seja por iniciar o fluxo ou por ignorar)
-                    }
+                    // Cancela qualquer tarefa pendente e deleta o estado antigo.
+                    const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    if (existingState && existingState.scheduled_message_id) {
+                      try {
+                        await qstashClient.messages.delete(existingState.scheduled_message_id);
+                        console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                      } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
+                    }
+                    await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                   
+                    // Inicia o fluxo do zero.
+                    await processFlow(chatId, botId, botToken, sellerId, null, { click_id: clickIdValue });
+                 
+                  } else {
+                    // É um /start orgânico (sozinho), que você quer ignorar.
+                    console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
+                    // Não faz nada e apenas termina a execução.
+                  }
+                 
+                  return; // Finaliza a execução (seja por iniciar o fluxo ou por ignorar)
+                }
 
         // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
         const [userState] = await sql`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -4552,19 +4552,19 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
-        const sellerId = req.user.id;
-        const { botIds, flowSteps, campaignName } = req.body;
+      const sellerId = req.user.id;
+      const { botIds, flowSteps, campaignName } = req.body;
     
-        if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
-            return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
-        }
+      if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
+        return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
+      }
     
         let historyId; 
     
-        try {
+      try {
             // 1. Buscar todos os contatos únicos (semelhante a antes)
-            const allContacts = new Map();
-            for (const botId of botIds) {
+        const allContacts = new Map();
+        for (const botId of botIds) {
                 const [botCheck] = await sqlWithRetry(
                     'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
                     [botId, sellerId]
@@ -4575,17 +4575,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
                 [botId, sellerId]
             );
-                contacts.forEach(c => {
-                    if (!allContacts.has(c.chat_id)) {
-                        allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
-                    }
-                });
-            }
-            const uniqueContacts = Array.from(allContacts.values());
+          contacts.forEach(c => {
+            if (!allContacts.has(c.chat_id)) {
+              allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
+            }
+          });
+        }
+        const uniqueContacts = Array.from(allContacts.values());
     
-            if (uniqueContacts.length === 0) {
-                return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
-            }
+        if (uniqueContacts.length === 0) {
+          return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
+        }
     
             // --- MUDANÇA PRINCIPAL AQUI ---
             // 2. Calcular o total de trabalhos (Contatos * Passos)
@@ -4594,9 +4594,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos ou 0 passos).' });
             }
     
-            // 3. Criar o registro mestre da campanha com os totais corretos
-            const [history] = await sqlWithRetry(
-                sql`INSERT INTO disparo_history (
+        // 3. Criar o registro mestre da campanha com os totais corretos
+        const [history] = await sqlWithRetry(
+          sql`INSERT INTO disparo_history (
                     seller_id, campaign_name, bot_ids, flow_steps, 
                     status, total_sent, failure_count, 
                     total_jobs, processed_jobs
@@ -4607,36 +4607,36 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     ${total_jobs_to_queue}, 0
                    ) 
                    RETURNING id`
-            );
-            historyId = history.id;
+        );
+        historyId = history.id;
             // --- FIM DA MUDANÇA ---
     
-            // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
-            let messageCounter = 0;
-            const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
+        // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
+        let messageCounter = 0;
+        const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
             const qstashPromises = [];
     
-            for (const contact of uniqueContacts) {
-                const userVariables = {
-                    primeiro_nome: contact.first_name || '',
-                    nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                    click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                };
-                
-                let currentStepDelay = 0; 
+        for (const contact of uniqueContacts) {
+          const userVariables = {
+            primeiro_nome: contact.first_name || '',
+            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+          };
+         
+          let currentStepDelay = 0; 
     
-                for (const step of flowSteps) {
-                    const payload = {
-                        history_id: historyId,
-                        chat_id: contact.chat_id,
-                        bot_id: contact.bot_id_source,
-                        step_json: JSON.stringify(step),
-                        variables_json: JSON.stringify(userVariables)
-                    };
+          for (const step of flowSteps) {
+            const payload = {
+              history_id: historyId,
+              chat_id: contact.chat_id,
+              bot_id: contact.bot_id_source,
+              step_json: JSON.stringify(step),
+              variables_json: JSON.stringify(userVariables)
+            };
     
                     const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
     
-                    qstashPromises.push(
+            qstashPromises.push(
                         qstashClient.publishJSON({
                             url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
                             body: payload,
@@ -4644,56 +4644,56 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             retries: 2 
                         })
                     );
-                    
+           
                     const delayData = step.data || step; 
                     if (step.type === 'delay') {
                         currentStepDelay += (delayData.delayInSeconds || 1);
                     } else {
                         currentStepDelay += 1; 
                     }
-                }
+          }
                 messageCounter++; 
-            }
+        }
     
             await Promise.all(qstashPromises);
     
-            // 5. Atualizar o status da campanha para "RUNNING"
-            await sqlWithRetry(
+        // 5. Atualizar o status da campanha para "RUNNING"
+        await sqlWithRetry(
                 sql`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
             );
     
-            res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
+        res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
     
-        } catch (error) {
-            console.error("Erro crítico no agendamento do disparo:", error);
-            if(historyId) {
+      } catch (error) {
+        console.error("Erro crítico no agendamento do disparo:", error);
+        if(historyId) {
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]).catch(e => console.error("Falha ao limpar histórico órfão:", e));
-            }
-            if (!res.headersSent) {
-                res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
-            }
-        }
+        }
+        if (!res.headersSent) {
+          res.status(500).json({ message: 'Erro interno ao agendar o disparo.' });
+        }
+      }
     });
 
 
     app.post('/api/webhook/pushinpay', async (req, res) => {
-           // 1. O webhook envia um payload simples
-           const { id, status } = req.body; 
-           const normalized = String(status || '').toLowerCase();
-           const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-           
-           if (paidStatuses.has(normalized)) {
-               try {
-                   // 2. Buscamos a transação E o seller_id associado (via clique)
-                   const [tx] = await sql`
+         // 1. O webhook envia um payload simples
+         const { id, status } = req.body; 
+         const normalized = String(status || '').toLowerCase();
+         const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+         
+         if (paidStatuses.has(normalized)) {
+           try {
+             // 2. Buscamos a transação E o seller_id associado (via clique)
+             const [tx] = await sql`
                        SELECT pt.id, pt.status, c.seller_id 
                        FROM pix_transactions pt 
                        JOIN clicks c ON pt.click_id_internal = c.id 
                        WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
                    `;
                        
-                   // 3. Se a transação existir e AINDA não estiver paga
-                   if (tx && tx.status !== 'paid') {
+             // 3. Se a transação existir e AINDA não estiver paga
+             if (tx && tx.status !== 'paid') {
                        console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) recebida como paga. Buscando dados do pagador...`);
                        
                        // 4. Buscar o token do vendedor para fazer a consulta GET
@@ -4717,65 +4717,65 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                        const payer_name = resp.data.payer_name;
                        const payer_national_registration = resp.data.payer_national_registration; // Nome correto do campo
        
-                       // 7. Chamar o handleSuccessfulPayment com os dados completos
-                       await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-                   
+               // 7. Chamar o handleSuccessfulPayment com os dados completos
+               await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+             
                    } else if (tx) {
                        console.log(`[Webhook PushinPay] Transação ${id} já estava como 'paid'. Ignorando webhook.`);
                    } else {
                        console.warn(`[Webhook PushinPay] Transação ${id} não encontrada no banco.`);
                    }
-               } catch (error) { 
+           } catch (error) { 
                    console.error("Erro no webhook da PushinPay:", error.response?.data || error.message); 
                }
-           }
-           res.sendStatus(200);
+         }
+         res.sendStatus(200);
        });
 app.post('/api/webhook/cnpay', async (req, res) => {
     // 1. Log para depuração (opcional, mas recomendado)
-    console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
+  console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
 
     // 2. Extrair os dados da estrutura ANINHADA correta
-    const transactionData = req.body.transaction;
-    const customer = req.body.client;
+  const transactionData = req.body.transaction;
+  const customer = req.body.client;
 
-    if (!transactionData || !transactionData.status) {
-        console.log("[Webhook CNPay] Webhook ignorado: objeto 'transaction' ou 'status' ausente.");
-        return res.sendStatus(200);
-    }
+  if (!transactionData || !transactionData.status) {
+    console.log("[Webhook CNPay] Webhook ignorado: objeto 'transaction' ou 'status' ausente.");
+    return res.sendStatus(200);
+  }
 
     // 3. Extrair dados de dentro dos objetos
-    const { id: transactionId, status } = transactionData;
-    
-    const normalized = String(status || '').toLowerCase();
+  const { id: transactionId, status } = transactionData;
+  
+  const normalized = String(status || '').toLowerCase();
     
     // 4. A documentação da CNPay diz que o status pago é 'COMPLETED'
     //    O seu 'paidStatuses' já inclui 'completed', então está OK.
-    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-    
-    if (paidStatuses.has(normalized)) {
-        try {
-            console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
+  const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+  
+  if (paidStatuses.has(normalized)) {
+    try {
+      console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
             
             // 5. Buscar no banco usando 'provider' = 'cnpay'
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
-            
-            if (tx && tx.status !== 'paid') {
-                console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
+      const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
+      
+      if (tx && tx.status !== 'paid') {
+        console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
                 
                 // 6. Usar os dados do 'client' para o handleSuccessfulPayment
-                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-            
-            } else if (tx) {
-                console.log(`[Webhook CNPay] Transação ${tx.id} já estava como 'paga'.`);
-            } else {
-                console.warn(`[Webhook CNPay] AVISO: Transação ${transactionId} não foi encontrada.`);
-            }
-        } catch (error) { 
-            console.error("Erro no webhook da CNPay:", error); 
-        }
-    }
-    res.sendStatus(200);
+        await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
+      
+      } else if (tx) {
+        console.log(`[Webhook CNPay] Transação ${tx.id} já estava como 'paga'.`);
+      } else {
+        console.warn(`[Webhook CNPay] AVISO: Transação ${transactionId} não foi encontrada.`);
+      }
+    } catch (error) { 
+      console.error("Erro no webhook da CNPay:", error); 
+    }
+  }
+  res.sendStatus(200);
 });
 app.post('/api/webhook/oasyfy', async (req, res) => {
     console.log('[Webhook Oasy.fy] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
@@ -5346,40 +5346,40 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
 });
 
 app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
-        try {
-            const { bot_id, file_id } = req.params;
-            let token;
-            if (bot_id === 'storage') {
-                token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-            } else {
-                const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
-                token = bot?.bot_token;
-            }
+      try {
+        const { bot_id, file_id } = req.params;
+        let token;
+        if (bot_id === 'storage') {
+          token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+        } else {
+          const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
+          token = bot?.bot_token;
+        }
     
-            if (!token) return res.status(404).send('Bot não encontrado.');
+        if (!token) return res.status(404).send('Bot não encontrado.');
     
-            const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-            if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-                return res.status(404).send('Arquivo não encontrado no Telegram.');
-            }
+        const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
+        if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
+          return res.status(404).send('Arquivo não encontrado no Telegram.');
+        }
     
-            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
+        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
     
-            // ***** A CORREÇÃO ESTÁ AQUI *****
-            // Adiciona 'httpsAgent' para reutilizar a conexão
-            const response = await axios.get(fileUrl, { 
-                responseType: 'stream',
-                httpsAgent: httpsAgent // <<-- ADICIONE ESTA LINHA
-            });
-            // *********************************
+        // ***** A CORREÇÃO ESTÁ AQUI *****
+        // Adiciona 'httpsAgent' para reutilizar a conexão
+        const response = await axios.get(fileUrl, { 
+          responseType: 'stream',
+          httpsAgent: httpsAgent // <<-- ADICIONE ESTA LINHA
+        });
+        // *********************************
     
-            res.setHeader('Content-Type', response.headers['content-type']);
-            response.data.pipe(res);
+        res.setHeader('Content-Type', response.headers['content-type']);
+        response.data.pipe(res);
     
-        } catch (error) {
-            console.error("Erro no preview:", error.message);
-            res.status(500).send('Erro ao buscar o arquivo.');
-        }
+      } catch (error) {
+        console.error("Erro no preview:", error.message);
+        res.status(500).send('Erro ao buscar o arquivo.');
+      }
     });
 
 // Endpoint 11: Listar biblioteca de mídia
