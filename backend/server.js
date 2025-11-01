@@ -4392,6 +4392,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 break;
 
                 default:
+                    console.log(currentNode)
                     console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Parando fluxo.`);
                     currentNodeId = null;
                     break;
