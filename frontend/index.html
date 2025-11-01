@@ -2876,6 +2876,9 @@
                         } else if (deploy_to_netlify && !netlify_site_name.trim()) {
                             console.log('Erro: Nome do site Netlify não fornecido');
                             this.showToast('Digite o nome do site para o deploy no Netlify.', 'error');
+                        } else if (!App.state.data.settings?.netlify_access_token) {
+                            this.showToast('Token do Netlify não configurado. Por favor, valide seu token nas configurações.', 'error');
+                            return;
                         } else {
                             console.log('Passou nas validações, processando...');
                             // Validação adicional do nome do site Netlify (se fornecido)
