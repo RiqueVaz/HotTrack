@@ -68,8 +68,10 @@
                     const data = await response.json();
 
                     if (response.ok) {
-                        // Salvar token e redirecionar
-                        localStorage.setItem('hottrack_token', data.token);
+                        // Salvar token em sessionStorage (mais seguro, expira ao fechar navegador)
+                        sessionStorage.setItem('hottrack_token', data.token);
+                        // Remover do localStorage se existir (migração)
+                        localStorage.removeItem('hottrack_token');
                         window.location.href = '/?success=google_login';
                     } else {
                         // Redirecionar com erro

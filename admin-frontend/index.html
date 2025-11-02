@@ -193,13 +193,39 @@
         DOM.modalContainer.innerHTML = '';
     }
 
+    // --- SEGURANÇA: Função para obter chave admin de forma segura ---
+    function getAdminKey() {
+        // Primeiro tenta sessionStorage (mais seguro, expira ao fechar)
+        let adminKey = sessionStorage.getItem('adminApiKey');
+        // Fallback para localStorage (migração gradual, será removido)
+        if (!adminKey) {
+            adminKey = localStorage.getItem('adminApiKey');
+            if (adminKey) {
+                // Migrar para sessionStorage e remover do localStorage
+                sessionStorage.setItem('adminApiKey', adminKey);
+                localStorage.removeItem('adminApiKey');
+            }
+        }
+        return adminKey;
+    }
+
     // --- API ---
     async function apiFetch(endpoint, options = {}) {
-        const adminKey = localStorage.getItem('adminApiKey');
-        if (!adminKey) throw new Error("Chave de Admin não encontrada.");
+        const adminKey = getAdminKey();
+        if (!adminKey) {
+            // Limpar qualquer resquício de dados
+            sessionStorage.removeItem('adminApiKey');
+            localStorage.removeItem('adminApiKey');
+            throw new Error("Chave de Admin não encontrada. Faça login novamente.");
+        }
         const config = { method: 'GET', ...options, headers: { 'Content-Type': 'application/json', 'x-admin-api-key': adminKey, ...options.headers } };
         const res = await fetch(`${CONFIG.API_URL}${endpoint}`, config);
-        if (res.status === 403) throw new Error("Chave de API inválida ou expirada.");
+        if (res.status === 403) {
+            // Token inválido - limpar armazenamento
+            sessionStorage.removeItem('adminApiKey');
+            localStorage.removeItem('adminApiKey');
+            throw new Error("Chave de API inválida ou expirada.");
+        }
         if (!res.ok) {
             const errJson = await res.json().catch(() => ({ message: "Erro desconhecido na resposta da API." }));
             throw new Error(errJson.message || "Erro de rede.");
@@ -393,7 +419,10 @@
             const responseData = await response.json();
 
             if (response.ok && responseData.valid) {
-                localStorage.setItem('adminApiKey', key);
+                // Armazenar em sessionStorage (mais seguro, expira ao fechar navegador)
+                sessionStorage.setItem('adminApiKey', key);
+                // Remover do localStorage se existir (migração)
+                localStorage.removeItem('adminApiKey');
                 showToast('Acesso autorizado!', 'success');
                 await initializeApp();
             } else {
@@ -405,6 +434,8 @@
     }
 
     function handleLogout() {
+        // Limpar ambos para garantir
+        sessionStorage.removeItem('adminApiKey');
         localStorage.removeItem('adminApiKey');
         DOM.appContainer.style.visibility = 'hidden';
         DOM.loginScreen.style.display = 'flex';
@@ -686,8 +717,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. Registra os listeners de evento IMEDIATAMENTE.
     setupEventListeners(); 
 
-    // 2. Agora, verifica se o usuário já está logado.
-    if (localStorage.getItem('adminApiKey')) {
+    // 2. Agora, verifica se o usuário já está logado (usa sessionStorage preferencialmente).
+    if (getAdminKey()) {
         initializeApp();
     }
 });

@@ -1245,6 +1245,34 @@
             revenueChart: null,
         },
 
+        // --- SEGURANÇA: Função para obter token de forma segura ---
+        getToken() {
+            // Primeiro tenta sessionStorage (mais seguro, expira ao fechar)
+            let token = sessionStorage.getItem('hottrack_token');
+            // Fallback para localStorage (migração gradual, será removido)
+            if (!token) {
+                token = localStorage.getItem('hottrack_token');
+                if (token) {
+                    // Migrar para sessionStorage e remover do localStorage
+                    sessionStorage.setItem('hottrack_token', token);
+                    localStorage.removeItem('hottrack_token');
+                }
+            }
+            return token;
+        },
+
+        setToken(token) {
+            // Armazenar em sessionStorage (mais seguro)
+            if (token) {
+                sessionStorage.setItem('hottrack_token', token);
+                localStorage.removeItem('hottrack_token'); // Remover do localStorage
+            } else {
+                sessionStorage.removeItem('hottrack_token');
+                localStorage.removeItem('hottrack_token');
+            }
+            this.state.token = token;
+        },
+
         async init() {
             // Determina a URL base do backend para buscar a configuração
             const backendHost = window.location.origin; // Usa a mesma origem do frontend
@@ -1279,7 +1307,7 @@
                 return;
             }
 
-            this.state.token = localStorage.getItem('hottrack_token');
+            this.state.token = this.getToken();
             if (this.state.token) {
                 try {
                     const [staticData] = await Promise.all([
@@ -3162,12 +3190,15 @@
                     // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
                     const statusCode = error.status; // Pega o status que anexamos
                     const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
-                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
                     
-                    if (isAuthError && !isPublicRoute) {
+                    if (isAuthError && !isPublicRoute) {
                         console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
-                       this.logout();
-                    }
+                        // Limpar token do armazenamento antes de fazer logout
+                        sessionStorage.removeItem('hottrack_token');
+                        localStorage.removeItem('hottrack_token');
+                        this.logout();
+                    }
                     // Se for status 400 (Bad Request), ele não vai mais deslogar.
                  } else {
                     console.error(`Network Error on ${method} ${endpoint}:`, error);
@@ -3180,8 +3211,7 @@
         async login(email, password) {
             try {
                 const data = await this.apiRequest('/api/sellers/login', 'POST', { email, password });
-                this.state.token = data.token;
-                localStorage.setItem('hottrack_token', data.token);
+                this.setToken(data.token); // Usa função segura para armazenar token
                 window.location.href = window.location.pathname; 
             } catch (e) {
                 if (e.response && e.response.status === 403 && e.response.data && e.response.data.requiresVerification) {
@@ -3287,6 +3317,8 @@
             this.state.editingCheckoutId = null;
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
+            // Limpar ambos para garantir
+            sessionStorage.removeItem('hottrack_token');
             localStorage.removeItem('hottrack_token');
             // Limpa cache de status de PIX (opcional)
             const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
@@ -4913,9 +4945,14 @@ function generatePreviewHTML(data) {
         
         api.interceptors.request.use(
             config => {
-            const token = localStorage.getItem('hottrack_token');
+            // Usar função helper segura para obter token
+            const token = App.getToken ? App.getToken() : (sessionStorage.getItem('hottrack_token') || localStorage.getItem('hottrack_token'));
                 if (token) {
                     config.headers['Authorization'] = `Bearer ${token}`;
+                } else {
+                    // Token não encontrado - limpar qualquer resquício
+                    sessionStorage.removeItem('hottrack_token');
+                    localStorage.removeItem('hottrack_token');
                 }
                 return config;
             },
