@@ -3832,8 +3832,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
+        console.log(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
 
         switch (action.type) {
             case 'message':
@@ -3859,7 +3861,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
+                console.log(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
                 break;
             
             case 'typing_action':
@@ -4017,18 +4021,45 @@ function convertLegacyNode(node) {
     }
     
     if (legacyTypes.includes(node.type)) {
-        // Converte nó antigo para estrutura nova
-        const mainAction = {
-            type: node.type,
-            data: { ...node.data }
-        };
-        return {
-            ...node,
-            type: 'action',
-            data: {
-                actions: [mainAction, ...(node.data?.actions || [])]
-            }
-        };
+        // Se já tem actions no data, o nó pode já estar parcialmente migrado
+        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
+        const existingActions = node.data?.actions || [];
+        
+        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
+        const hasMatchingAction = existingActions.some(a => a.type === node.type);
+        
+        if (!hasMatchingAction) {
+            // Converte nó antigo para estrutura nova
+            const mainAction = {
+                type: node.type,
+                data: { ...node.data }
+            };
+            // Remove propriedades que não devem estar no data da ação, apenas nas ações
+            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
+            mainAction.data = actionData;
+            
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: [mainAction, ...existingActions],
+                    // Preserva waitForReply e replyTimeout se existirem
+                    waitForReply: node.data?.waitForReply,
+                    replyTimeout: node.data?.replyTimeout
+                }
+            };
+        } else {
+            // Já tem a ação, só precisa mudar o tipo
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: existingActions
+                }
+            };
+        }
     }
     
     return null; // Tipo desconhecido
@@ -4158,7 +4189,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         // Converte nó antigo para estrutura nova se necessário
         const convertedNode = convertLegacyNode(currentNode);
         if (convertedNode) {
-            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova`);
+            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova. Ações antes: ${(currentNode.data?.actions || []).length}, depois: ${(convertedNode.data?.actions || []).length}`);
             currentNode = convertedNode;
             // Atualiza o nó no array se necessário (para próximas iterações)
             const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
@@ -4193,6 +4224,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         if (currentNode.type === 'action') {
             // 1. Executa todas as ações dentro do nó
             const actions = currentNode.data.actions || [];
+            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actions.length} ação(ões): ${actions.map(a => a.type).join(', ')}`);
             const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
             // 2. Persiste as variáveis (caso 'action_pix' tenha atualizado 'last_transaction_id')

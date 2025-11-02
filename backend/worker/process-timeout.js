@@ -819,18 +819,45 @@ function convertLegacyNode(node) {
     }
     
     if (legacyTypes.includes(node.type)) {
-        // Converte nó antigo para estrutura nova
-        const mainAction = {
-            type: node.type,
-            data: { ...node.data }
-        };
-        return {
-            ...node,
-            type: 'action',
-            data: {
-                actions: [mainAction, ...(node.data?.actions || [])]
-            }
-        };
+        // Se já tem actions no data, o nó pode já estar parcialmente migrado
+        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
+        const existingActions = node.data?.actions || [];
+        
+        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
+        const hasMatchingAction = existingActions.some(a => a.type === node.type);
+        
+        if (!hasMatchingAction) {
+            // Converte nó antigo para estrutura nova
+            const mainAction = {
+                type: node.type,
+                data: { ...node.data }
+            };
+            // Remove propriedades que não devem estar no data da ação, apenas nas ações
+            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
+            mainAction.data = actionData;
+            
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: [mainAction, ...existingActions],
+                    // Preserva waitForReply e replyTimeout se existirem
+                    waitForReply: node.data?.waitForReply,
+                    replyTimeout: node.data?.replyTimeout
+                }
+            };
+        } else {
+            // Já tem a ação, só precisa mudar o tipo
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: existingActions
+                }
+            };
+        }
     }
     
     return null; // Tipo desconhecido
