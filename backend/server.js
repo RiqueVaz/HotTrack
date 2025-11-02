@@ -4006,6 +4006,35 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 }
 
 /**
+ * Converte nó antigo (com tipo específico) para estrutura nova (type: 'action')
+ * Retorna null se já estiver na estrutura correta
+ */
+function convertLegacyNode(node) {
+    const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+    
+    if (node.type === 'trigger' || node.type === 'action') {
+        return null; // Já está na estrutura correta
+    }
+    
+    if (legacyTypes.includes(node.type)) {
+        // Converte nó antigo para estrutura nova
+        const mainAction = {
+            type: node.type,
+            data: { ...node.data }
+        };
+        return {
+            ...node,
+            type: 'action',
+            data: {
+                actions: [mainAction, ...(node.data?.actions || [])]
+            }
+        };
+    }
+    
+    return null; // Tipo desconhecido
+}
+
+/**
  * [REATORADO] Processa o fluxo principal, navegando entre os nós.
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
  * Ela chama 'processActions' para EXECUTAR o conteúdo de cada nó.
@@ -4126,6 +4155,18 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
+        // Converte nó antigo para estrutura nova se necessário
+        const convertedNode = convertLegacyNode(currentNode);
+        if (convertedNode) {
+            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova`);
+            currentNode = convertedNode;
+            // Atualiza o nó no array se necessário (para próximas iterações)
+            const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
+            if (nodeIndex >= 0) {
+                nodes[nodeIndex] = currentNode;
+            }
+        }
+
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
@@ -4213,6 +4254,38 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
             
             // 6. Se nada acima aconteceu, é um nó de ação simples. Segue pelo handle 'a'.
+            currentNodeId = findNextNode(currentNode.id, 'a', edges);
+            continue;
+        }
+
+        // Suporte para nós antigos (já convertidos acima, mas mantém compatibilidade adicional)
+        const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+        if (legacyTypes.includes(currentNode.type)) {
+            // Se ainda chegou aqui, converte e processa como nó 'action'
+            const mainAction = {
+                type: currentNode.type,
+                data: { ...currentNode.data }
+            };
+            const actions = [mainAction, ...(currentNode.data?.actions || [])];
+            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+            
+            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            
+            // Processa resultado especial para action_check_pix
+            if (actionResult === 'paid') {
+                currentNodeId = findNextNode(currentNode.id, 'a', edges);
+                continue;
+            }
+            if (actionResult === 'pending') {
+                currentNodeId = findNextNode(currentNode.id, 'b', edges);
+                continue;
+            }
+            if (actionResult === 'flow_forwarded') {
+                currentNodeId = null;
+                break;
+            }
+            
+            // Continua pelo handle 'a' para outros tipos
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
             continue;
         }
