@@ -212,11 +212,12 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
         try {
             console.log(`[WORKER-DISPARO - PIX Fallback] Tentando ${provider.toUpperCase()}`);
             const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            console.log(`[WORKER-DISPARO - PIX Fallback] SUCESSO com ${provider.toUpperCase()}.`);
+            
             const [transaction] = await sql`
                 INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
                 VALUES (${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
                 RETURNING id`;
+            console.log(`[WORKER-DISPARO - PIX Fallback] SUCESSO com ${provider.toUpperCase()}.`);
             pixResult.internal_transaction_id = transaction.id;
             return pixResult;
         } catch (error) {

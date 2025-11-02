@@ -992,7 +992,7 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
         try {
             console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
             const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
+            
 
             // Salvar a transação no banco AQUI DENTRO da função de fallback
             // Isso garante que a transação só é salva se a geração for bem-sucedida
@@ -1005,7 +1005,7 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
                     ${pixResult.qr_code_base64}, ${pixResult.provider},
                     ${pixResult.transaction_id}, ${pixResult.transaction_id}
                 ) RETURNING id`;
-
+                console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
              // Adiciona o ID interno da transação salva ao resultado para uso posterior
             pixResult.internal_transaction_id = transaction.id;
 
