@@ -58,9 +58,16 @@ app.post(
   express.raw({ type: 'application/json' }), // 1. Ainda é OBRIGATÓRIO para pegar o corpo original
   async (req, res) => {
     try {
+      console.log("[WORKER] Recebida requisição do QStash para process-timeout");
+      
       // 2. Extraia as informações necessárias manualmente
       const signature = req.headers["upstash-signature"];
       const bodyString = req.body.toString(); // O Receiver espera uma string, não um Buffer
+
+      if (!signature) {
+        console.error("[WORKER] Requisição sem assinatura QStash. Headers:", Object.keys(req.headers));
+        return res.status(401).send("Missing signature");
+      }
 
       // 3. Verifique a assinatura
       const isValid = await receiver.verify({
@@ -70,7 +77,7 @@ app.post(
 
       // 4. Se a assinatura for inválida, rejeite a requisição
       if (!isValid) {
-        console.error("QStash Signature Verification Failed (Manual Receiver)");
+        console.error("[WORKER] QStash Signature Verification Failed (Manual Receiver)");
         return res.status(401).send("Invalid signature");
       }
 
@@ -80,7 +87,8 @@ app.post(
       await processTimeoutWorker(req, res);
 
     } catch (error) {
-      console.error("Erro crítico no handler do worker:", error);
+      console.error("[WORKER] Erro crítico no handler do worker:", error);
+      console.error("[WORKER] Stack trace:", error.stack);
       res.status(500).send("Internal Server Error");
     }
   }
@@ -4171,8 +4179,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                 try {
                     // Agenda o worker de timeout
+                    // HOTTRACK_API_URL já inclui /api, então não precisa adicionar novamente
+                    const baseUrl = process.env.HOTTRACK_API_URL || 'https://hottrack.vercel.app/api';
+                    // Remove /api se existir no final para evitar duplicação
+                    const cleanBase = baseUrl.endsWith('/api') ? baseUrl.slice(0, -4) : (baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl);
+                    const qstashUrl = `${cleanBase}/api/worker/process-timeout`;
+                    console.log(`${logPrefix} [Flow Engine] Agendando tarefa QStash para: ${qstashUrl} (HOTTRACK_API_URL: ${baseUrl})`);
+                    
                     const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                        url: qstashUrl,
                         body: { 
                             chat_id: chatId, 
                             bot_id: botId, 
@@ -4184,6 +4199,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         method: "POST"
                     });
                     
+                    console.log(`${logPrefix} [Flow Engine] QStash retornou messageId: ${response.messageId}`);
+                    
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     await sql`
                         UPDATE user_flow_states 
@@ -4194,6 +4211,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 
                 } catch (error) {
                     console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    console.error(`${logPrefix} [Flow Engine] Detalhes do erro:`, error.message, error.stack);
+                    // Mesmo com erro, salva o estado como esperando (sem scheduled_message_id)
+                    await sql`
+                        UPDATE user_flow_states 
+                        SET waiting_for_input = true, scheduled_message_id = NULL 
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -4466,7 +4489,12 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     
             qstashPromises.push(
                         qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                            // HOTTRACK_API_URL já inclui /api, então remove para evitar duplicação
+                            url: (() => {
+                                const baseUrl = process.env.HOTTRACK_API_URL || 'https://hottrack.vercel.app/api';
+                                const cleanBase = baseUrl.endsWith('/api') ? baseUrl.slice(0, -4) : (baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl);
+                                return `${cleanBase}/api/worker/process-disparo`;
+                            })(), 
                             body: payload,
                             delay: `${totalDelaySeconds}s`, 
                             retries: 2 
