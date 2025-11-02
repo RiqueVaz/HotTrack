@@ -937,7 +937,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     let safetyLock = 0;
     while (currentNodeId && safetyLock < 20) {
         safetyLock++;
-        const currentNode = nodes.find(node => node.id === currentNodeId);
+        let currentNode = nodes.find(node => node.id === currentNodeId);
         
         if (!currentNode) {
             console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
