@@ -6834,9 +6834,9 @@ function generatePreviewHTML(data) {
                             <label style={{fontSize: '0.85rem'}}>Encaminhar para o fluxo</label>
                             <select 
                                 className="form-select" 
-                                value={actionData.targetFlowId || ''} 
+                                value={String(actionData.targetFlowId || '')} 
                                 onChange={e => {
-                                    const selectedFlow = availableFlows.find(f => f.id == e.target.value);
+                                    const selectedFlow = availableFlows.find(f => String(f.id) === String(e.target.value));
                                     updateAction(index, 'targetFlowId', e.target.value);
                                     updateAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
                                 }}
@@ -6844,7 +6844,7 @@ function generatePreviewHTML(data) {
                             >
                                 <option value="">Selecione um fluxo...</option>
                                 {availableFlows.map(f => (
-                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                    <option key={f.id} value={String(f.id)}>{f.name}</option>
                                 ))}
                             </select>
                         </div>
@@ -6950,7 +6950,7 @@ function generatePreviewHTML(data) {
                     </div>
                     <div className="node-editor-modal-footer">
                         <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            {!actions.some(a => a.type === 'action_check_pix') && (
+                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
