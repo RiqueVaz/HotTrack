@@ -4008,15 +4008,30 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'forward_flow':
                 const targetFlowId = actionData.targetFlowId;
                 if (!targetFlowId) {
-                    console.error(`${logPrefix} 'forward_flow' action no nó ${currentNodeId} não tem targetFlowId.`);
-                    break; // Continua para a próxima ação (se houver) ou termina o nó
+                    console.error(`${logPrefix} 'forward_flow' action não tem targetFlowId.`);
+                    break;
                 }
-                
+
                 console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowId} para o chat ${chatId}`);
-                // Inicia o novo fluxo.
-                await processFlow(chatId, botId, botToken, sellerId, targetFlowId, variables);
-                
-                // Sinaliza para o 'processFlow' atual que ele deve parar.
+
+                // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
+                const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowId} AND bot_id = ${botId}`;
+                if (!targetFlow || !targetFlow.nodes) {
+                    console.error(`${logPrefix} Fluxo de destino ${targetFlowId} não encontrado.`);
+                    break;
+                }
+                const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
+                const targetStartNode = (targetFlowData.nodes || []).find(n => n.type === 'trigger');
+                if (!targetStartNode) {
+                    console.error(`${logPrefix} Fluxo de destino ${targetFlowId} não tem nó de 'trigger'.`);
+                    break;
+                }
+                const firstNodeId = findNextNode(targetStartNode.id, 'a', targetFlowData.edges || []);
+                if (firstNodeId) {
+                    await processFlow(chatId, botId, botToken, sellerId, firstNodeId, variables);
+                } else {
+                    console.log(`${logPrefix} Fluxo de destino ${targetFlowId} está vazio (sem nó após o trigger).`);
+                }
                 return 'flow_forwarded';
 
             default:
