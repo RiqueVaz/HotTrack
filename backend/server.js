@@ -124,6 +124,26 @@ app.post(
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Middleware JSON específico para uploads grandes via base64 (~70MB)
+const json70mb = express.json({ limit: '70mb' });
+
+// Validação de tamanho conforme limites do Telegram
+function validateTelegramSize(fileBuffer, fileType) {
+    const size = fileBuffer.length; // bytes
+    const MB = 1024 * 1024;
+    try {
+        if (fileType && fileType.startsWith && fileType.startsWith('video/')) {
+            if (size > 50 * MB) throw new Error('Arquivo de vídeo excede 50 MB (limite do Telegram).');
+        } else if (fileType && fileType.startsWith && fileType.startsWith('image/')) {
+            if (size > 10 * MB) throw new Error('Imagem excede 10 MB (limite do Telegram).');
+        } else if (fileType && fileType.startsWith && fileType.startsWith('audio/')) {
+            if (size > 50 * MB) throw new Error('Áudio excede 50 MB (limite do Telegram).');
+        }
+    } catch (e) {
+        throw e;
+    }
+}
+
 // ==========================================================
 //          CONFIGURAÇÃO CORS SEGURA E SELETIVA
 // ==========================================================
@@ -5107,7 +5127,7 @@ app.post('/api/bots/remove-contacts', authenticateJwt, async (req, res) => {
 });
 
 // Endpoint 5: Envio de mídia (base64)
-app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
+app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, res) => {
     const { chatId, fileData, fileType, fileName } = req.body;
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
@@ -5116,6 +5136,7 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
+        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -5138,7 +5159,8 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
-        res.status(500).json({ message: 'Não foi possível enviar a mídia.' });
+        const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
+        res.status(500).json({ message: msg });
     }
 });
 
@@ -5326,7 +5348,7 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
 });
 
 // Endpoint 12: Upload para biblioteca de mídia
-app.post('/api/media/upload', authenticateJwt, async (req, res) => {
+app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
     try {
@@ -5334,6 +5356,10 @@ app.post('/api/media/upload', authenticateJwt, async (req, res) => {
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
+        // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
+        const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
+        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
