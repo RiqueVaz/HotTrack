@@ -6237,7 +6237,7 @@ function generatePreviewHTML(data) {
             typing_action: 'Digitando',
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
-           // forward_flow: 'Encaminhar',
+            forward_flow: 'Encaminhar',
             delay: 'Atraso'
         };
         return labels[actionType] || actionType;
@@ -6280,7 +6280,7 @@ function generatePreviewHTML(data) {
                 typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
-             //   forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6874,13 +6874,14 @@ function generatePreviewHTML(data) {
 
 
 
-        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action'];
+        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action','forward_flow'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
             image: '🖼️ Imagem',
             video: '🎬 Vídeo',
             audio: '🎵 Áudio',
             typing_action: '✍️ Digitando',
+            forward_flow: '↪️ Encaminhar'
         };
 
         if (!selectedNode) return null;
