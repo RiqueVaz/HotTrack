@@ -346,7 +346,6 @@
         .flow-sidebar::-webkit-scrollbar-thumb:hover {
             background-color: var(--accent-secondary);
         }
-        
         .flow-sidebar h3 {
             color: var(--text-primary);
             margin-top: 0;
@@ -691,7 +690,6 @@
             flex-direction: column;
             overflow: hidden;
         }
-        
         .hotbot-scope .node-editor-modal-header {
             padding: 0.7rem;
             border-bottom: 1px solid var(--border-color);
@@ -1035,7 +1033,6 @@
         .hotbot-scope .react-flow__handle { width: 12px; height: 12px; background-color: var(--bg-secondary); border: 2px solid var(--border-color); }
         .hotbot-scope .react-flow__handle:hover { border-color: var(--accent-primary); }
         .hotbot-scope .handle-label { position: absolute; bottom: -20px; font-size: 10px; color: var(--text-secondary); }
-    
         /* Cores dos Headers dos Nós */
         .hotbot-scope .react-flow__node-trigger .node-header { background-color: rgba(139, 92, 246, 0.1); }
         .hotbot-scope .react-flow__node-message .node-header { background-color: rgba(59, 130, 246, 0.1); }
@@ -1385,7 +1382,6 @@
                             </div>
                         </div>`
                     : '';
-
                 const testimonials = Array.isArray(config.testimonials) ? config.testimonials : [];
                 const testimonialsHTML = testimonials.filter(t => t.name && t.text).length > 0
                     ? `<div style="margin-top: 2.5rem;">
@@ -1811,45 +1807,43 @@
                 return `<div class="flex items-center justify-center min-h-screen p-4">${page === 'login' ? this.loginForm() : this.registerForm()}</div>`;
             },
             loginForm() {
-                return `
-            <div class="min-h-screen flex items-center justify-center bg-gray-900 p-6">
-            <!-- Card -->
-            <div class="card p-6 rounded-2xl shadow-lg w-full max-w-md bg-gray-800/60 backdrop-blur-sm transition-opacity duration-400">
-                <!-- Cabeçalho -->
-                <div class="text-center mb-8">
-                <div class="flex items-center justify-center gap-3">
-                    <!-- ícone -->
-                    <svg class="h-10 w-10 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"></path>
-                    </svg>
-
-                    <!-- título -->
-                    <h1 class="text-4xl font-bold text-white">HotTrack</h1>
-                </div>
-
-                <p class="text-slate-400 mt-2">Acesse sua conta para continuar.</p>
-                </div>
-
-                <!-- Botão de login com Google -->
-                <button
-                id="googleLoginBtn"
-                type="button"
-                class="mt-2 w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-semibold py-3 px-4 rounded-md hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 transition-colors"
-                aria-label="Entrar com Google"
-                >
-                <!-- ícone Google -->
-                <svg class="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"></path>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"></path>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"></path>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"></path>
-                </svg>
-
-                Entrar com Google
-                </button>
-            </div>
-            </div>`;
-            },
+                return `
+                <div class="card p-8 rounded-2xl shadow-lg w-full max-w-md animate-fade-in">
+                    <div class="text-center mb-8">
+                        <div class="flex items-center justify-center gap-2">
+                            <svg class="h-10 w-10 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
+                            <h1 class="text-4xl font-bold text-white">HotTrack</h1>
+                        </div>
+                        <p class="text-slate-400 mt-2">Acesse sua conta para continuar.</p>
+                    </div>
+                    <form id="loginForm" class="space-y-6">
+                        <div><label class="text-sm font-medium text-gray-400 mb-1 block">E-mail</label><input name="email" type="email" required class="form-input w-full p-3"></div>
+                        <div><label class="text-sm font-medium text-gray-400 mb-1 block">Senha</label><input name="password" type="password" required class="form-input w-full p-3"></div>
+                        <button type="submit" class="btn w-full font-semibold py-3 rounded-md">Entrar na Plataforma</button>
+                    </form>
+                    
+                    <div class="relative my-6">
+                        <div class="absolute inset-0 flex items-center">
+                            <div class="w-full border-t border-slate-600"></div>
+                        </div>
+                        <div class="relative flex justify-center text-sm">
+                            <span class="px-2 bg-slate-800 text-slate-400">ou</span>
+                        </div>
+                    </div>
+                    
+                    <button id="googleLoginBtn" class="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-semibold py-3 px-4 rounded-md hover:bg-gray-100 transition-colors">
+                        <svg class="w-5 h-5" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        Entrar com Google
+                    </button>
+                    
+                    <div class="text-center mt-6"><a href="#" id="showRegister" class="text-sm text-sky-400 hover:text-sky-300 hover:underline">Não tem uma conta? Cadastre-se agora</a></div>
+                </div>`;
+            },
             hotbot() {
     return `
                 <div class="animate-fade-in" style="height: 100%; display: flex; flex-direction: column;">
@@ -1901,7 +1895,7 @@
                                 </svg>
                                 <span>HotBot</span>
                             </div>
-                            <div data-target="bots" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M11 17a1 1 0 001.447.894l4-2A1 1 0 0017 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 0011 7v10zM4 17a1 1 0 001.447.894l4-2A1 1 0 0010 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 004 7v10z" /></svg>Gerenciar Bots</div>
+                            
                             <div data-target="pressels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>Criador de Pressel</div>
                             <div data-target="checkouts" class="nav-link">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1H2V6z" clip-rule="evenodd" /><path d="M2 12a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2z" /></svg>
@@ -1913,8 +1907,8 @@
                                 </svg>
                                 <span>Págs. de Obrigado</span>
                             </div>
-                            <div data-target="pixels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h10a3 3 0 013 3v5a.997.997 0 01-.293-.707zM5 4a1 1 0 00-1 1v.01L8 9.01l4-4.002V5a1 1 0 00-1-1H5z" clip-rule="evenodd" /></svg>Gerenciar Pixels</div>
-                            <div data-target="transactions" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.158-.103.346-.196.567-.267v1.698a2.5 2.5 0 00-1.168-.217c-.165 0-.33.018-.488.054a1 1 0 01-.502 1.765l.986.328c.73.243 1.196.96 1.196 1.765 0 1.132-.98 1.99-2.206 1.99-1.225 0-2.205-.858-2.205-1.99 0-.962.63-1.698 1.447-1.938l.986-.329a1 1 0 01.502-1.765z" /><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.5 4.5 0 00-1.838.385l-.234-.14a1 1 0 00-1.18.157l-1 1.732a1 1 0 00.157 1.18l.234.14A4.5 4.5 0 005.5 8.5v.092l-1.07.356a1 1 0 00-.503 1.765l.986.329a2.5 2.5 0 001.09.243v.092a4.5 4.5 0 001.838-.385l.234.14a1 1 0 001.18-.157l1-1.732a1 1 0 00-.157-1.18l-.234-.14a4.5 4.5 0 001.03-2.062V5z" clip-rule="evenodd" /></svg>Transações</div>
+                            <div data-target="pixels" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h10a3 3 0 013 3v5a.997.997 0 01-.293.707zM5 4a1 1 0 00-1 1v.01L8 9.01l4-4.002V5a1 1 0 00-1-1H5z" clip-rule="evenodd" /></svg>Gerenciar Pixels</div>
+                            <div data-target="transactions" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.158-.103.346-.196.567-.267v1.698a2.5 2.5 0 00-1.168-.217c-.165 0-.33.018-.488.054a1 1 0 01-.502 1.765l.986.328c.73.243 1.196.96 1.196 1.765 0 1.132-.98 1.99-2.206 1.99-1.225 0-2.205-.858-2.205-1.99 0-.962.63-1.698 1.447-1.938l.986-.329a1 1 0 01.502-1.765z" /><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 00-2 0v.092a4.5 4.5 0 00-1.838.385l-.234-.14a1 1 0 00-1.18.157l-1 1.732a1 1 0 00.157 1.18l.234.14A4.5 4.5 0 005.5 8.5v.092l-1.07.356a1 1 0 00-.503 1.765l.986.329a2.5 2.5 0 001.09.243v.092a4.5 4.5 0 001.838-.385l.234.14a1 1 0 001.18-.157l1-1.732a1 1 0 00-.157-1.18l-.234-.14a4.5 4.5 0 001.03-2.062V5z" clip-rule="evenodd" /></svg>Transações</div>
                             <div class="h-px bg-slate-700 my-2"></div>
                             <div data-target="settings" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" /></svg>API PIX</div>
                             <div data-target="integrations" class="nav-link"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M6.414 11.586a2 2 0 10-2.828 2.828l3 3a2 2 0 002.828 0l1.5-1.5a2 2 0 10-2.828-2.828l-1.5 1.5z" clip-rule="evenodd" /></svg>Integrações</div>
@@ -2281,35 +2275,8 @@
                     </div>
                 </div>`;
             },
-            bots() {
-                 const botListHTML = App.state.data.bots.map(b => `
-                    <div class="p-3 bg-slate-900/50 rounded-lg flex justify-between items-center">
-                        <div>
-                            <span class="text-sm font-medium">${b.bot_name}</span>
-                            <span id="status-indicator-bot-${b.id}"></span>
-                        </div>
-                        <div class="flex items-center space-x-2">
-                            <button data-id="${b.id}" class="delete-bot-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                        </div>
-                    </div>`).join('');
-                return `
-                <div class="animate-fade-in">
-                    <div class="mb-6"><h1 class="text-3xl font-bold text-white">Gerenciar Bots</h1><p class="text-slate-400">Conecte seus bots do Telegram para automatizar processos.</p></div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div class="card p-6 rounded-lg">
-                            <h2 class="text-xl font-semibold mb-4 text-white">Adicionar Novo Bot</h2>
-                            <form id="botForm" class="space-y-4">
-                                <input name="bot_name" placeholder="Username do Bot (sem @)" class="form-input w-full p-2" required>
-                                <button type="submit" class="btn w-full p-2 rounded-md">Adicionar Bot</button>
-                            </form>
-                        </div>
-                        <div class="card p-6 rounded-lg"><h2 class="text-xl font-semibold text-white mb-4">Bots Salvos</h2><div id="bot-list" class="space-y-3 max-h-96 overflow-y-auto">${botListHTML.length ? botListHTML : '<p class="text-gray-500 text-sm">Nenhum bot salvo.</p>'}</div></div>
-                    </div>
-                </div>`;
-            },
             pressels() {
-                const { pixels, bots, pressels, utmifyIntegrations } = App.state.data;
-                const botOptions = bots.map(b => `<option value="${b.id}">${b.bot_name}</option>`).join('');
+                const { pixels, pressels, utmifyIntegrations } = App.state.data;
                 const utmifyOptions = utmifyIntegrations.map(u => `<option value="${u.id}">${u.account_name}</option>`).join('');
                 const pixelCheckboxes = pixels.map(p => `<label class="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer p-2 rounded-md hover:bg-slate-700/50"><input type="checkbox" name="pixel_ids" value="${p.id}" class="h-4 w-4 bg-slate-700 border-slate-500 rounded text-sky-500 focus:ring-sky-500"><span>${p.account_name}</span></label>`).join('');
                 const presselList = pressels.map(pr => {
@@ -2319,7 +2286,6 @@
                         <div class="flex items-center">
                             <div>
                                 <p class="font-semibold">${pr.name}${netlifyIcon}</p>
-                                <p class="text-xs text-gray-400">Bot: ${pr.bot_name}</p>
                             </div>
                         </div>
                         <div class="space-x-2">
@@ -2339,7 +2305,6 @@
                             <form id="presselForm" class="space-y-4">
                                 <input name="name" placeholder="Nome da Pressel (Ex: Campanha Black Friday)" class="form-input w-full p-2" required>
                                 <input name="white_page_url" type="url" placeholder="URL da Página Branca" class="form-input w-full p-2" required>
-                                <select name="bot_id" class="form-select w-full p-2" required><option value="">Selecione um Bot</option>${botOptions}</select>
                                 
                                 <div>
                                     <label class="text-sm font-medium text-gray-400 mb-1 block">Enviar Eventos para Utmify (Opcional)</label>
@@ -2742,7 +2707,6 @@
                 if (copyBtn) {
                      const targetSelector = copyBtn.dataset.target; const targetInput = document.querySelector(targetSelector); if(targetInput){ const textToCopy=targetInput.value||targetInput.textContent; try { await navigator.clipboard.writeText(textToCopy); const o=copyBtn.textContent; copyBtn.textContent='Copiado!'; setTimeout(()=>{copyBtn.textContent=o},2000); } catch(err){ console.error('Falha:',err); this.showToast('Erro.', 'error'); } }
                 }
-
                 // Toggle Password Visibility
                 const toggleBtn = e.target.closest('.toggle-visibility-btn');
                 if (toggleBtn) {
@@ -2883,7 +2847,7 @@
                     }
                     else if (form.id === 'botForm') {
                         const newBot = await this.apiRequest('/api/bots', 'POST', data);
-                        if (newBot) { this.state.data.bots.unshift(newBot); this.navigateTo('bots'); }
+                        if (newBot) { this.state.data.bots.unshift(newBot); this.showToast('Bot adicionado!', 'success'); }
                     }
                     else if (form.id === 'presselForm') {
                         console.log('Processando formulário presselForm...');
@@ -3083,7 +3047,6 @@
                     }
                 }
             });
-
             // Event listener para input do Netlify
             document.addEventListener('input', e => {
                 if (e.target.id === 'netlify_site_name') {
@@ -3418,7 +3381,6 @@
             else if (page === 'dashboard') { this.handleFilterChange(page, this.state.dateFilter.period || 'last7days'); }
             else if (page === 'transactions') { await this.fetchTransactions(); this.handleFilterChange(page, this.state.dateFilter.period || 'all'); } 
             else if (page === 'settings') { this.updateAllPixStatusIndicators(); }
-            else if (page === 'bots') { this.updateAllBotStatusIndicators(); }
             else if (page === 'pageCreator') { await this.initCreatorPage(); }
             else if (page === 'thankYouCreator') { await this.initThankYouCreatorPage(); }
             else if (page === 'thankYouPages') { await this.fetchAndRenderThankYouPages(); }
@@ -4410,7 +4372,6 @@
                  const getElValue=(s,d='')=>contentEl.querySelector(s)?.value||d; const getElChecked=(s)=>contentEl.querySelector(s)?.checked||false; const getElFloat=(s,d=0)=>parseFloat(contentEl.querySelector(s)?.value)||d; const getElInt=(s,d=0)=>parseInt(contentEl.querySelector(s)?.value)||d; const pT=getElValue('#pricing-type-select','fixed'); let pD; if(pT==='fixed'){pD={type:'fixed',packages:Array.from(contentEl.querySelectorAll('#packages-container > div')).map(p=>({title:p.querySelector('.package-title')?.value||'',description:p.querySelector('.package-description')?.value||'',value_cents:Math.round((parseFloat(p.querySelector('.package-value')?.value)||0)*100)}))};}else{pD={type:'open',label:getElValue('#open_value_label'),minimum_value_cents:Math.round(getElFloat('#open_value_min',5)*100),suggested_value_cents:Math.round(getElFloat('#open_value_suggested',50)*100)};}
                  return{content:{main_title:getElValue('#main_title'),subtitle:getElValue('#subtitle'),media_url:getElValue('#media_url')||null},pricing:pD,order_bump:{enabled:getElChecked('#enable_order_bump'),product_name:getElValue('#order_bump_product_name'),description:getElValue('#order_bump_description'),value_cents:Math.round(getElFloat('#order_bump_value',0)*100)},conversion_elements:{countdown:{enabled:getElChecked('#enable_countdown'),minutes:getElInt('#countdown_minutes',15)},guarantee:{text:getElValue('#guarantee_text',''),seal_url:getElValue('#guarantee_seal_url')||null}},testimonials:Array.from(contentEl.querySelectorAll('#testimonials-container > div')).map(t=>({name:t.querySelector('.testimonial-name')?.value||'',text:t.querySelector('.testimonial-text')?.value||'',photo_url:t.querySelector('.testimonial-photo')?.value||null})),style:{background_color:getElValue('#background_color','#0f172a'),accent_color:getElValue('#accent_color','#38bdf8')},tracking:{pixel_id:getElValue('#pixel_id',''),utmify_integration_id:getElValue('#utmify_integration_id','')||null}, redirects: { success_url: getElValue('#success_redirect_url') || null }}; // Adiciona redirects
             }
-
 // DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
 // DENTRO DE async initCreatorPage(), SUBSTITUA A FUNÇÃO INTEIRA:
 
@@ -5096,7 +5057,6 @@ function generatePreviewHTML(data) {
           </div>
         );
     }
-    
     function ShareFlowModal({ flow, onClose, onLinkGenerated }) {
         const [isPaid, setIsPaid] = useState(false);
         const [price, setPrice] = useState(10);
@@ -5441,7 +5401,6 @@ function generatePreviewHTML(data) {
         setIsSending(false);
     }
 };
-
     // renderStep function remains largely the same, just ensure classNames match the new CSS if needed
     const renderStep = (step) => {
         switch (step.type) {
@@ -6111,8 +6070,6 @@ function generatePreviewHTML(data) {
                 setIsLoading(false);
             }
         };
-
-
         return (
             <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
                 <div className="page-header"><h2>Higienização de Contatos</h2></div>
@@ -6453,7 +6410,6 @@ function generatePreviewHTML(data) {
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
-        
         // Função de auto-scroll durante drag
         const handleAutoScroll = useCallback((e) => {
             if (!modalContentRef.current || draggedIndex === null) {
@@ -6803,7 +6759,6 @@ function generatePreviewHTML(data) {
                             />
                         </div>
                     )}
-                    
                     {action.type === 'action_pix' && (
                         <>
                             <div className="form-group">
@@ -7130,7 +7085,6 @@ function generatePreviewHTML(data) {
                 });
             }
         }, [reactFlowInstance, nodes]);
-        
         // Initialize flow and center view
         useEffect(() => {
             if (flow?.nodes) {
