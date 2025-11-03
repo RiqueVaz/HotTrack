@@ -5782,7 +5782,38 @@ function generatePreviewHTML(data) {
         }, [selectedChat]);
 
         const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
-        const handleFileChange = (e) => { const file = e.target.files[0]; if (!file || !selectedChat) return; const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = async () => { try { const base64Data = reader.result.split(',')[1]; await api.post(`/api/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name }); fetchMessages(); } catch (error) { alert('Falha no upload: ' + (error.response?.data?.message || error.message)); }}; e.target.value = null; };
+		const handleFileChange = (e) => {
+			const file = e.target.files[0];
+			if (!file || !selectedChat) return;
+			const MB = 1024 * 1024;
+			if (file.type?.startsWith('video/') && file.size > 50 * MB) {
+				alert('Vídeo maior que 50 MB (limite do Telegram).');
+				e.target.value = null;
+				return;
+			}
+			if (file.type?.startsWith('image/') && file.size > 10 * MB) {
+				alert('Imagem maior que 10 MB (limite do Telegram).');
+				e.target.value = null;
+				return;
+			}
+			if (file.type?.startsWith('audio/') && file.size > 50 * MB) {
+				alert('Áudio maior que 50 MB (limite do Telegram).');
+				e.target.value = null;
+				return;
+			}
+			const reader = new FileReader();
+			reader.readAsDataURL(file);
+			reader.onload = async () => {
+				try {
+					const base64Data = reader.result.split(',')[1];
+					await api.post(`/api/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name });
+					fetchMessages();
+				} catch (error) {
+					alert('Falha no upload: ' + (error.response?.data?.message || error.message));
+				}
+			};
+			e.target.value = null;
+		};
         
         const handleSendFromLibrary = async (mediaItem) => {
             if (!selectedChat || !selectedBotId) return;
@@ -5970,6 +6001,10 @@ function generatePreviewHTML(data) {
                 alert("Formato de ficheiro não suportado.");
                 return;
             }
+			const MB = 1024 * 1024;
+			if (fileType === 'video' && file.size > 50 * MB) { alert('Vídeo maior que 50 MB (limite do Telegram).'); e.target.value = null; return; }
+			if (fileType === 'image' && file.size > 10 * MB) { alert('Imagem maior que 10 MB (limite do Telegram).'); e.target.value = null; return; }
+			if (fileType === 'audio' && file.size > 50 * MB) { alert('Áudio maior que 50 MB (limite do Telegram).'); e.target.value = null; return; }
             const reader = new FileReader();
             reader.readAsDataURL(file);
             reader.onload = async () => {
@@ -6202,7 +6237,7 @@ function generatePreviewHTML(data) {
             typing_action: 'Digitando',
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
-            forward_flow: 'Encaminhar',
+           // forward_flow: 'Encaminhar',
             delay: 'Atraso'
         };
         return labels[actionType] || actionType;
@@ -6245,7 +6280,7 @@ function generatePreviewHTML(data) {
                 typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
-                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+             //   forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6583,7 +6618,7 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-                forward_flow: '↪️ Encaminhar'
+              //  forward_flow: '↪️ Encaminhar'
             };
             
             const isDragging = draggedIndex === index;
@@ -7253,7 +7288,7 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+         //   { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {

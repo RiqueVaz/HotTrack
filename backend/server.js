@@ -124,6 +124,26 @@ app.post(
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Middleware JSON específico para uploads grandes via base64 (~70MB)
+const json70mb = express.json({ limit: '70mb' });
+
+// Validação de tamanho conforme limites do Telegram
+function validateTelegramSize(fileBuffer, fileType) {
+    const size = fileBuffer.length; // bytes
+    const MB = 1024 * 1024;
+    try {
+        if (fileType && fileType.startsWith && fileType.startsWith('video/')) {
+            if (size > 50 * MB) throw new Error('Arquivo de vídeo excede 50 MB (limite do Telegram).');
+        } else if (fileType && fileType.startsWith && fileType.startsWith('image/')) {
+            if (size > 10 * MB) throw new Error('Imagem excede 10 MB (limite do Telegram).');
+        } else if (fileType && fileType.startsWith && fileType.startsWith('audio/')) {
+            if (size > 50 * MB) throw new Error('Áudio excede 50 MB (limite do Telegram).');
+        }
+    } catch (e) {
+        throw e;
+    }
+}
+
 // ==========================================================
 //          CONFIGURAÇÃO CORS SEGURA E SELETIVA
 // ==========================================================
@@ -3832,8 +3852,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
+        console.log(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
 
         switch (action.type) {
             case 'message':
@@ -3859,7 +3881,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
+                console.log(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
                 break;
             
             case 'typing_action':
@@ -4006,6 +4030,62 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 }
 
 /**
+ * Converte nó antigo (com tipo específico) para estrutura nova (type: 'action')
+ * Retorna null se já estiver na estrutura correta
+ */
+function convertLegacyNode(node) {
+    const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+    
+    if (node.type === 'trigger' || node.type === 'action') {
+        return null; // Já está na estrutura correta
+    }
+    
+    if (legacyTypes.includes(node.type)) {
+        // Se já tem actions no data, o nó pode já estar parcialmente migrado
+        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
+        const existingActions = node.data?.actions || [];
+        
+        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
+        const hasMatchingAction = existingActions.some(a => a.type === node.type);
+        
+        if (!hasMatchingAction) {
+            // Converte nó antigo para estrutura nova
+            const mainAction = {
+                type: node.type,
+                data: { ...node.data }
+            };
+            // Remove propriedades que não devem estar no data da ação, apenas nas ações
+            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
+            mainAction.data = actionData;
+            
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: [mainAction, ...existingActions],
+                    // Preserva waitForReply e replyTimeout se existirem
+                    waitForReply: node.data?.waitForReply,
+                    replyTimeout: node.data?.replyTimeout
+                }
+            };
+        } else {
+            // Já tem a ação, só precisa mudar o tipo
+            return {
+                ...node,
+                type: 'action',
+                data: {
+                    ...node.data,
+                    actions: existingActions
+                }
+            };
+        }
+    }
+    
+    return null; // Tipo desconhecido
+}
+
+/**
  * [REATORADO] Processa o fluxo principal, navegando entre os nós.
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
  * Ela chama 'processActions' para EXECUTAR o conteúdo de cada nó.
@@ -4117,7 +4197,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     let safetyLock = 0;
     while (currentNodeId && safetyLock < 20) {
         safetyLock++;
-        const currentNode = nodes.find(node => node.id === currentNodeId);
+        let currentNode = nodes.find(node => node.id === currentNodeId);
         
         if (!currentNode) {
             console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
@@ -4125,6 +4205,18 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+
+        // Converte nó antigo para estrutura nova se necessário
+        const convertedNode = convertLegacyNode(currentNode);
+        if (convertedNode) {
+            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova. Ações antes: ${(currentNode.data?.actions || []).length}, depois: ${(convertedNode.data?.actions || []).length}`);
+            currentNode = convertedNode;
+            // Atualiza o nó no array se necessário (para próximas iterações)
+            const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
+            if (nodeIndex >= 0) {
+                nodes[nodeIndex] = currentNode;
+            }
+        }
 
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
@@ -4152,6 +4244,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         if (currentNode.type === 'action') {
             // 1. Executa todas as ações dentro do nó
             const actions = currentNode.data.actions || [];
+            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actions.length} ação(ões): ${actions.map(a => a.type).join(', ')}`);
             const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
             // 2. Persiste as variáveis (caso 'action_pix' tenha atualizado 'last_transaction_id')
@@ -4213,6 +4306,38 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
             
             // 6. Se nada acima aconteceu, é um nó de ação simples. Segue pelo handle 'a'.
+            currentNodeId = findNextNode(currentNode.id, 'a', edges);
+            continue;
+        }
+
+        // Suporte para nós antigos (já convertidos acima, mas mantém compatibilidade adicional)
+        const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
+        if (legacyTypes.includes(currentNode.type)) {
+            // Se ainda chegou aqui, converte e processa como nó 'action'
+            const mainAction = {
+                type: currentNode.type,
+                data: { ...currentNode.data }
+            };
+            const actions = [mainAction, ...(currentNode.data?.actions || [])];
+            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+            
+            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            
+            // Processa resultado especial para action_check_pix
+            if (actionResult === 'paid') {
+                currentNodeId = findNextNode(currentNode.id, 'a', edges);
+                continue;
+            }
+            if (actionResult === 'pending') {
+                currentNodeId = findNextNode(currentNode.id, 'b', edges);
+                continue;
+            }
+            if (actionResult === 'flow_forwarded') {
+                currentNodeId = null;
+                break;
+            }
+            
+            // Continua pelo handle 'a' para outros tipos
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
             continue;
         }
@@ -5002,7 +5127,7 @@ app.post('/api/bots/remove-contacts', authenticateJwt, async (req, res) => {
 });
 
 // Endpoint 5: Envio de mídia (base64)
-app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
+app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, res) => {
     const { chatId, fileData, fileType, fileName } = req.body;
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
@@ -5011,6 +5136,7 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
+        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -5033,7 +5159,8 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, async (req, res) => {
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
-        res.status(500).json({ message: 'Não foi possível enviar a mídia.' });
+        const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
+        res.status(500).json({ message: msg });
     }
 });
 
@@ -5221,7 +5348,7 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
 });
 
 // Endpoint 12: Upload para biblioteca de mídia
-app.post('/api/media/upload', authenticateJwt, async (req, res) => {
+app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
     try {
@@ -5229,6 +5356,10 @@ app.post('/api/media/upload', authenticateJwt, async (req, res) => {
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
+        // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
+        const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
+        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
