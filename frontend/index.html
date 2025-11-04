@@ -5197,6 +5197,16 @@ function generatePreviewHTML(data) {
             }
         };
 
+        const handleToggleActive = async (flowId, currentStatus) => {
+            try {
+                const newStatus = !currentStatus;
+                await api.patch(`/api/flows/${flowId}/activate`, { isActive: newStatus });
+                fetchFlows();
+            } catch (e) { 
+                alert("Erro ao atualizar status do fluxo."); 
+            }
+        };
+
         const handleOpenShareModal = (flow) => {
             setFlowToShare(flow);
             setIsShareModalOpen(true);
@@ -5213,6 +5223,19 @@ function generatePreviewHTML(data) {
                             <div key={flow.id} className="bot-card">
                                <div className="bot-card-header"><div className="icon">{Icons.flows}</div><h3>{flow.name}</h3></div>
                                <p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', flexGrow: 1}}>Modificado em: {new Date(flow.updated_at).toLocaleDateString()}</p>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem'}}>
+                                    <label style={{display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer'}}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={!!flow.is_active} 
+                                            onChange={() => handleToggleActive(flow.id, flow.is_active)}
+                                            style={{cursor: 'pointer'}}
+                                        />
+                                        <span style={{color: flow.is_active ? 'var(--brand-primary)' : 'var(--text-secondary)', fontWeight: flow.is_active ? '600' : '400'}}>
+                                            {flow.is_active ? 'Gatilho Ativo' : 'Gatilho Inativo'}
+                                        </span>
+                                    </label>
+                                </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
@@ -6434,6 +6457,18 @@ function generatePreviewHTML(data) {
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
+        
+        const updateActionMultiple = (index, updates) => {
+            const actions = [...(nodeData.actions || [])];
+            if (!actions[index]) return;
+            actions[index] = {
+                ...actions[index],
+                data: { ...actions[index].data, ...updates }
+            };
+            const newData = { ...nodeData, actions };
+            setNodeData(newData);
+            setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+        };
 
         const updateNode = (field, value) => {
             const newData = { ...nodeData, [field]: value };
@@ -6604,7 +6639,7 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-              //  forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar'
             };
             
             const isDragging = draggedIndex === index;
@@ -6819,17 +6854,26 @@ function generatePreviewHTML(data) {
                             <label style={{fontSize: '0.85rem'}}>Encaminhar para o fluxo</label>
                             <select 
                                 className="form-select" 
-                                value={actionData.targetFlowId || ''} 
+                                value={(nodeData.actions && nodeData.actions[index] && nodeData.actions[index].data && nodeData.actions[index].data.targetFlowId != null) ? String(nodeData.actions[index].data.targetFlowId) : ''} 
                                 onChange={e => {
-                                    const selectedFlow = availableFlows.find(f => f.id == e.target.value);
-                                    updateAction(index, 'targetFlowId', e.target.value);
-                                    updateAction(index, 'targetFlowName', selectedFlow ? selectedFlow.name : '');
+                                    const selectedValue = e.target.value;
+                                    const selectedFlow = availableFlows.find(f => String(f.id) === String(selectedValue));
+                                    
+                                    // Garante que targetFlowId seja sempre um número
+                                    const targetFlowId = selectedValue && selectedValue !== '' ? Number(selectedValue) : null;
+                                    const targetFlowName = selectedFlow ? selectedFlow.name : '';
+                                    
+                                    // Salva ambos os valores de uma vez para evitar problemas de timing
+                                    updateActionMultiple(index, {
+                                        targetFlowId: targetFlowId,
+                                        targetFlowName: targetFlowName
+                                    });
                                 }}
                                 style={{fontSize: '0.85rem'}}
                             >
                                 <option value="">Selecione um fluxo...</option>
                                 {availableFlows.map(f => (
-                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                    <option key={f.id} value={String(f.id)}>{f.name}</option>
                                 ))}
                             </select>
                         </div>
@@ -6859,7 +6903,7 @@ function generatePreviewHTML(data) {
 
 
 
-        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action','forward_flow'];
+        const availableActionTypes = ['message', 'image', 'video', 'audio','typing_action'];
         const actionTypeLabels = {
             message: '💬 Mensagem',
             image: '🖼️ Imagem',
@@ -6935,7 +6979,7 @@ function generatePreviewHTML(data) {
                     </div>
                     <div className="node-editor-modal-footer">
                         <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            {!actions.some(a => a.type === 'action_check_pix') && (
+                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
@@ -7273,7 +7317,7 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-         //   { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {
