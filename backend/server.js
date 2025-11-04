@@ -1798,12 +1798,6 @@ app.post('/api/sellers/register', async (req, res) => {
 app.post('/api/sellers/verify-email', async (req, res) => {
     const { code, email } = req.body;
     
-    console.log('=== VERIFICAÇÃO DE EMAIL ===');
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-    console.log('Code:', code);
-    console.log('Email:', email);
-    
     if (!code || !email) {
         console.log('Erro: Código ou email não fornecidos');
         return res.status(400).json({ message: 'Código e email são obrigatórios.' });
