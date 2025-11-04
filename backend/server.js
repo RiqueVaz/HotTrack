@@ -1697,10 +1697,10 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
 
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, phone } = req.body;
 
-    if (!name || !email || !password || password.length < 8) {
-        return res.status(400).json({ message: 'Dados inválidos. Nome, email e senha (mínimo 8 caracteres) são obrigatórios.' });
+    if (!name || !email || !password || password.length < 8 || !phone) {
+        return res.status(400).json({ message: 'Dados inválidos. Nome, email, senha (mínimo 8 caracteres) e telefone são obrigatórios.' });
     }
     
     try {
@@ -1725,7 +1725,7 @@ app.post('/api/sellers/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
         
         // Criar usuário como não verificado
-        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires})`;
+        await sql`INSERT INTO sellers (name, email, password_hash, api_key, is_active, email_verified, verification_code, verification_expires, phone) VALUES (${name}, ${normalizedEmail}, ${hashedPassword}, ${apiKey}, FALSE, FALSE, ${verificationCode}, ${verificationExpires}, ${phone})`;
         
         // Enviar email de verificação
         try {
