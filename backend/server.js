@@ -1586,8 +1586,11 @@ app.post('/api/flows', authenticateJwt, async (req, res) => {
     if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
     try {
         const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {} }], edges: [] };
+        // Primeiro, desativa todos os fluxos do mesmo bot
+        await sqlWithRetry(`UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2`, [botId, req.user.id]);
+        // Cria o novo fluxo como ativo
         const [newFlow] = await sqlWithRetry(`
-            INSERT INTO flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, [req.user.id, botId, name, JSON.stringify(initialFlow)]);
+            INSERT INTO flows (seller_id, bot_id, name, nodes, is_active) VALUES ($1, $2, $3, $4, TRUE) RETURNING *;`, [req.user.id, botId, name, JSON.stringify(initialFlow)]);
         res.status(201).json(newFlow);
     } catch (error) { res.status(500).json({ message: 'Erro ao criar o fluxo.' }); }
 });
@@ -1596,10 +1599,38 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
     const { name, nodes } = req.body;
     if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
     try {
-        const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
+        // Busca o fluxo para pegar o bot_id
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        
+        // Ao editar, automaticamente ativa o fluxo (desativa os outros do mesmo bot)
+        await sqlWithRetry('UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
+        
+        const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW(), is_active = TRUE WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
         if (updated) res.status(200).json(updated);
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
     } catch (error) { res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); }
+});
+
+app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
+    try {
+        const { isActive } = req.body;
+        if (typeof isActive !== 'boolean') return res.status(400).json({ message: 'isActive deve ser um boolean.' });
+        
+        // Busca o fluxo para pegar o bot_id
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        
+        if (isActive) {
+            // Se está ativando, desativa todos os outros fluxos do mesmo bot
+            await sqlWithRetry('UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
+        }
+        
+        // Atualiza o status do fluxo
+        const [updated] = await sqlWithRetry('UPDATE flows SET is_active = $1 WHERE id = $2 AND seller_id = $3 RETURNING *;', [isActive, req.params.id, req.user.id]);
+        if (updated) res.status(200).json(updated);
+        else res.status(404).json({ message: 'Fluxo não encontrado.' });
+    } catch (error) { res.status(500).json({ message: 'Erro ao atualizar status do fluxo.' }); }
 });
 
 app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
@@ -1797,12 +1828,6 @@ app.post('/api/sellers/register', async (req, res) => {
 // Endpoint para verificar email
 app.post('/api/sellers/verify-email', async (req, res) => {
     const { code, email } = req.body;
-    
-    console.log('=== VERIFICAÇÃO DE EMAIL ===');
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-    console.log('Code:', code);
-    console.log('Email:', email);
     
     if (!code || !email) {
         console.log('Erro: Código ou email não fornecidos');
@@ -4008,15 +4033,68 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'forward_flow':
                 const targetFlowId = actionData.targetFlowId;
                 if (!targetFlowId) {
-                    console.error(`${logPrefix} 'forward_flow' action no nó ${currentNodeId} não tem targetFlowId.`);
-                    break; // Continua para a próxima ação (se houver) ou termina o nó
+                    console.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
+                    break;
+                }
+
+                // Garante que targetFlowId seja um número para a query SQL
+                const targetFlowIdNum = parseInt(targetFlowId, 10);
+                if (isNaN(targetFlowIdNum)) {
+                    console.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
+                    break;
+                }
+
+                console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
+
+                // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
+                const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
+                if (!targetFlow || !targetFlow.nodes) {
+                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
+                    break;
+                }
+                const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
+                const targetNodes = targetFlowData.nodes || [];
+                const targetEdges = targetFlowData.edges || [];
+                const targetStartNode = targetNodes.find(n => n.type === 'trigger');
+                if (!targetStartNode) {
+                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
+                    break;
                 }
                 
-                console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowId} para o chat ${chatId}`);
-                // Inicia o novo fluxo.
-                await processFlow(chatId, botId, botToken, sellerId, targetFlowId, variables);
+                // Encontra o primeiro nó válido (não trigger) após o trigger inicial
+                let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
+                let attempts = 0;
+                const maxAttempts = 20; // Proteção contra loops infinitos
                 
-                // Sinaliza para o 'processFlow' atual que ele deve parar.
+                // Pula nós do tipo 'trigger' até encontrar um nó válido
+                while (currentNodeId && attempts < maxAttempts) {
+                    const currentNode = targetNodes.find(n => n.id === currentNodeId);
+                    if (!currentNode) {
+                        console.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
+                        break;
+                    }
+                    
+                    if (currentNode.type !== 'trigger') {
+                        // Encontrou um nó válido (não é trigger)
+                        console.log(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
+                        // Passa os dados do fluxo de destino para o processFlow recursivo
+                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
+                        break;
+                    }
+                    
+                    // Se for trigger, continua procurando o próximo nó
+                    console.log(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
+                    currentNodeId = findNextNode(currentNodeId, 'a', targetEdges);
+                    attempts++;
+                }
+                
+                if (!currentNodeId || attempts >= maxAttempts) {
+                    if (attempts >= maxAttempts) {
+                        console.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
+                    } else {
+                        console.log(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
+                    }
+                }
                 return 'flow_forwarded';
 
             default:
@@ -4090,7 +4168,7 @@ function convertLegacyNode(node) {
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
  * Ela chama 'processActions' para EXECUTAR o conteúdo de cada nó.
  */
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
@@ -4126,18 +4204,28 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // FIM DO PASSO 1
     // ==========================================================
 
-    const [flow] = await sql`
-        SELECT * FROM flows 
-        WHERE bot_id = ${botId} 
-        ORDER BY updated_at DESC LIMIT 1`;
-    if (!flow || !flow.nodes) {
-        console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId} e flow ID ${flow.id}.`);
-        return;
-    }
+    // Se os dados do fluxo foram fornecidos (ex: forward_flow), usa eles. Caso contrário, busca do banco.
+    let nodes, edges;
+    if (flowNodes && flowEdges) {
+        // Usa os dados do fluxo fornecido (do forward_flow)
+        nodes = flowNodes;
+        edges = flowEdges;
+        console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+    } else {
+        // Busca o fluxo ativo do banco
+        const [flow] = await sql`
+            SELECT * FROM flows 
+            WHERE bot_id = ${botId} AND is_active = TRUE
+            ORDER BY updated_at DESC LIMIT 1`;
+        if (!flow || !flow.nodes) {
+            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+            return;
+        }
 
-    const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-    const nodes = flowData.nodes || [];
-    const edges = flowData.edges || [];
+        const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+        nodes = flowData.nodes || [];
+        edges = flowData.edges || [];
+    }
 
     let currentNodeId = startNodeId;
     const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
@@ -4451,7 +4539,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             }
 
             // Continua o fluxo a partir do próximo nó.
-            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId}`;
+            const [flow] = await sql`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
             if (flow && flow.nodes) {
                 const nodes = flow.nodes.nodes || [];
                 const edges = flow.nodes.edges || [];

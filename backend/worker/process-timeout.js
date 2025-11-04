@@ -766,28 +766,62 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 // Simplesmente chamar 'processFlow' com o ID do *fluxo* não funciona.
                 // Devemos chamar 'processFlow' com o 'startNodeId' (trigger) *daquele* fluxo.
                 
-                const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowId} AND bot_id = ${botId}`;
+                // Garante que targetFlowId seja um número para a query SQL
+                const targetFlowIdNum = parseInt(targetFlowId, 10);
+                if (isNaN(targetFlowIdNum)) {
+                    console.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
+                    break;
+                }
+                
+                const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
-                     console.error(`${logPrefix} Fluxo de destino ${targetFlowId} não encontrado.`);
+                     console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
                      break;
                 }
                 
                 const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
-                const targetStartNode = (targetFlowData.nodes || []).find(n => n.type === 'trigger');
+                const targetNodes = targetFlowData.nodes || [];
+                const targetEdges = targetFlowData.edges || [];
+                const targetStartNode = targetNodes.find(n => n.type === 'trigger');
                 
                 if (!targetStartNode) {
-                    console.error(`${logPrefix} Fluxo de destino ${targetFlowId} não tem nó de 'trigger'.`);
+                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
                     break;
                 }
                 
-                // Encontra o primeiro nó *depois* do trigger
-                const firstNodeId = findNextNode(targetStartNode.id, 'a', targetFlowData.edges || []);
+                // Encontra o primeiro nó válido (não trigger) após o trigger inicial
+                let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
+                let attempts = 0;
+                const maxAttempts = 20; // Proteção contra loops infinitos
                 
-                if (firstNodeId) {
-                    // Chama o 'processFlow' recursivamente para o *novo* fluxo.
-                    await processFlow(chatId, botId, botToken, sellerId, firstNodeId, variables);
-                } else {
-                    console.log(`${logPrefix} Fluxo de destino ${targetFlowId} está vazio (sem nó após o trigger).`);
+                // Pula nós do tipo 'trigger' até encontrar um nó válido
+                while (currentNodeId && attempts < maxAttempts) {
+                    const currentNode = targetNodes.find(n => n.id === currentNodeId);
+                    if (!currentNode) {
+                        console.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
+                        break;
+                    }
+                    
+                    if (currentNode.type !== 'trigger') {
+                        // Encontrou um nó válido (não é trigger)
+                        console.log(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
+                        // Passa os dados do fluxo de destino para o processFlow recursivo
+                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
+                        break;
+                    }
+                    
+                    // Se for trigger, continua procurando o próximo nó
+                    console.log(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
+                    currentNodeId = findNextNode(currentNodeId, 'a', targetEdges);
+                    attempts++;
+                }
+                
+                if (!currentNodeId || attempts >= maxAttempts) {
+                    if (attempts >= maxAttempts) {
+                        console.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
+                    } else {
+                        console.log(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
+                    }
                 }
 
                 return 'flow_forwarded'; // Sinaliza para o 'processFlow' atual PARAR.
@@ -863,7 +897,7 @@ function convertLegacyNode(node) {
     return null; // Tipo desconhecido
 }
 
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
@@ -898,23 +932,26 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // FIM DO PASSO 1
     // ==========================================================
     
-    // Lógica de Carregamento do Fluxo (Adaptada para 'forward_flow')
-    let flow;
-    let currentNodeId = startNodeId;
-
-
-        // Comportamento normal: Carrega o fluxo principal (mais recente) do bot
-    [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} ORDER BY updated_at DESC LIMIT 1`;
-    
-
-    if (!flow || !flow.nodes) {
-        console.log(`${logPrefix} [Flow Engine] Nenhum fluxo encontrado (Bot: ${botId}, Fluxo/Nó: ${startNodeId}).`);
-        return;
+    // Se os dados do fluxo foram fornecidos (ex: forward_flow), usa eles. Caso contrário, busca do banco.
+    let nodes, edges;
+    if (flowNodes && flowEdges) {
+        // Usa os dados do fluxo fornecido (do forward_flow)
+        nodes = flowNodes;
+        edges = flowEdges;
+        console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+    } else {
+        // Busca o fluxo ativo do banco
+        const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`;
+        if (!flow || !flow.nodes) {
+            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+            return;
+        }
+        const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+        nodes = flowData.nodes || [];
+        edges = flowData.edges || [];
     }
-
-    const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-    const nodes = flowData.nodes || [];
-    const edges = flowData.edges || [];
+    
+    let currentNodeId = startNodeId;
 
     // Se 'currentNodeId' ainda for nulo (início normal), define
     if (!currentNodeId) {
