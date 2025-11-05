@@ -4490,11 +4490,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         body: { 
                             chat_id: chatId, 
                             bot_id: botId, 
-                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables
+                            target_node_id: noReplyNodeId,
+                            variables: variables,
+                            timestamp: Date.now() // 👈 ADICIONE ISSO para evitar deduplicação
                         },
                         delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
+                        contentBasedDeduplication: false, // 👈 MUDE DE true PARA false
                         method: "POST"
                     });
                     
