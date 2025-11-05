@@ -6247,7 +6247,7 @@ function generatePreviewHTML(data) {
             typing_action: 'Digitando',
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
-           // forward_flow: 'Encaminhar',
+            forward_flow: 'Encaminhar',
             delay: 'Atraso'
         };
         return labels[actionType] || actionType;
@@ -6290,7 +6290,7 @@ function generatePreviewHTML(data) {
                 typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
-               // forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6639,7 +6639,7 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-               // forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar'
             };
             
             const isDragging = draggedIndex === index;
@@ -6680,9 +6680,10 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="3" 
+                                    maxLength="4096" 
                                     value={actionData.text || ''} 
                                     onChange={e => updateAction(index, 'text', e.target.value)} 
-                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}}"
+                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
                             </div>
                             <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
@@ -6748,9 +6749,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.caption || ''} 
                                     onChange={e => updateAction(index, 'caption', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Legenda (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6841,9 +6844,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.pixMessageText || ''} 
                                     onChange={e => updateAction(index, 'pixMessageText', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Texto da mensagem (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6885,9 +6890,11 @@ function generatePreviewHTML(data) {
                             <textarea 
                                 className="form-textarea" 
                                 rows="2" 
+                                maxLength="4096" 
                                 value={actionData.deliveryText || ''} 
                                 onChange={e => updateAction(index, 'deliveryText', e.target.value)}
                                 style={{fontSize: '0.85rem'}}
+                                placeholder="Texto de entrega (máx: 4096 caracteres)"
                             />
                         </div>
                     )}
@@ -6910,7 +6917,7 @@ function generatePreviewHTML(data) {
             video: '🎬 Vídeo',
             audio: '🎵 Áudio',
             typing_action: '✍️ Digitando',
-           // forward_flow: '↪️ Encaminhar'
+            forward_flow: '↪️ Encaminhar'
         };
 
         if (!selectedNode) return null;
@@ -7317,7 +7324,7 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-           // { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {
