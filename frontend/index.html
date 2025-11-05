@@ -5271,6 +5271,8 @@ function generatePreviewHTML(data) {
         const [error, setError] = useState('');
         const [pixData, setPixData] = useState(null);
         const [isWaitingPayment, setIsWaitingPayment] = useState(false);
+        const [transactionId, setTransactionId] = useState(null);
+        const [pollingInterval, setPollingInterval] = useState(null);
 
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -5308,9 +5310,79 @@ function generatePreviewHTML(data) {
             }
         };
         
-        const handleInitiatePixPayment = () => {
-             alert("Funcionalidade de pagamento via PIX em desenvolvimento. O backend precisa ser conectado à API de PIX para esta ação.");
+        const handleInitiatePixPayment = async () => {
+            if (!selectedBotId) {
+                alert('Por favor, selecione um bot antes de continuar.');
+                return;
+            }
+            
+            setIsWaitingPayment(true);
+            try {
+                const response = await api.post('/api/flows/purchase/generate-pix', {
+                    shareableLinkId,
+                    botId: selectedBotId
+                });
+                
+                setPixData(response.data);
+                setTransactionId(response.data.transaction_id);
+                
+                // Iniciar polling para verificar status do pagamento
+                const interval = setInterval(async () => {
+                    try {
+                        const statusResponse = await api.get(`/api/flows/purchase/status/${response.data.transaction_id}`);
+                        if (statusResponse.data.status === 'paid' && statusResponse.data.can_import) {
+                            clearInterval(interval);
+                            setPollingInterval(null);
+                            await handleImportPaidFlow(response.data.transaction_id);
+                        }
+                    } catch (err) {
+                        console.error('Erro ao verificar status:', err);
+                    }
+                }, 3000); // Verificar a cada 3 segundos
+                
+                setPollingInterval(interval);
+                
+            } catch (err) {
+                alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            }
         };
+        
+        const handleImportPaidFlow = async (txId) => {
+            try {
+                const response = await api.post('/api/flows/purchase/import', {
+                    transactionId: txId,
+                    botId: selectedBotId
+                });
+                
+                alert('Pagamento confirmado! Fluxo importado com sucesso!');
+                setPixData(null);
+                setIsWaitingPayment(false);
+                onImported();
+            } catch (err) {
+                alert('Erro ao importar fluxo: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            }
+        };
+        
+        const handleCancelPixPayment = () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                setPollingInterval(null);
+            }
+            setPixData(null);
+            setIsWaitingPayment(false);
+            setTransactionId(null);
+        };
+        
+        // Limpar polling ao desmontar componente
+        useEffect(() => {
+            return () => {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            };
+        }, [pollingInterval]);
 
         if (isLoading) {
             return <div style={{ padding: '2rem 3rem' }}><h2>A carregar detalhes do fluxo...</h2></div>;
@@ -5330,12 +5402,70 @@ function generatePreviewHTML(data) {
                     
                     {isPaid ? (
                         <>
-                            <h3>Este é um fluxo pago</h3>
-                            <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
-                            <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
-                            <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment}>
-                                {isWaitingPayment ? 'Aguardando Pagamento...' : 'Pagar com PIX para Importar'}
-                            </button>
+                            {!pixData ? (
+                                <>
+                                    <h3>Este é um fluxo pago</h3>
+                                    <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
+                                    <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
+                                    
+                                    <div className="form-group" style={{marginBottom: '1.5rem'}}>
+                                        <label htmlFor="botSelectPaid">Selecione o Bot de Destino</label>
+                                        <select id="botSelectPaid" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
+                                            <option value="">-- Selecione um Bot --</option>
+                                            {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
+                                        </select>
+                                    </div>
+                                    
+                                    <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={!selectedBotId}>
+                                        Gerar PIX para Pagamento
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <h3 style={{marginBottom: '1.5rem'}}>Pagamento via PIX</h3>
+                                    <div style={{textAlign: 'center', marginBottom: '1.5rem'}}>
+                                        <p style={{color: 'var(--text-secondary)', marginBottom: '1rem'}}>Escaneie o QR Code ou copie o código PIX:</p>
+                                        <p style={{fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--brand-primary)', marginBottom: '1rem'}}>{priceInReais}</p>
+                                        {pixData.qr_code_base64 && (
+                                            <img 
+                                                src={`data:image/png;base64,${pixData.qr_code_base64}`} 
+                                                alt="QR Code PIX" 
+                                                style={{maxWidth: '280px', width: '100%', margin: '0 auto 1rem', display: 'block', borderRadius: '8px'}}
+                                            />
+                                        )}
+                                        <div style={{marginBottom: '1rem'}}>
+                                            <label style={{display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Código PIX (Copia e Cola)</label>
+                                            <div style={{display: 'flex', gap: '0.5rem'}}>
+                                                <input 
+                                                    type="text" 
+                                                    readOnly 
+                                                    value={pixData.qr_code_text} 
+                                                    className="form-input" 
+                                                    style={{flex: 1, fontSize: '0.85rem'}}
+                                                />
+                                                <button 
+                                                    className="btn btn-secondary" 
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(pixData.qr_code_text);
+                                                        alert('Código PIX copiado!');
+                                                    }}
+                                                >
+                                                    Copiar
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div style={{padding: '1rem', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '8px', marginTop: '1.5rem'}}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center'}}>
+                                                <div className="spinner" style={{width: '16px', height: '16px', border: '2px solid var(--brand-primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite'}}></div>
+                                                <p style={{margin: 0, color: 'var(--brand-primary)', fontSize: '0.95rem'}}>Aguardando confirmação do pagamento...</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button className="btn btn-danger" onClick={handleCancelPixPayment} style={{width: '100%'}}>
+                                        Cancelar
+                                    </button>
+                                </>
+                            )}
                         </>
                     ) : (
                         <>

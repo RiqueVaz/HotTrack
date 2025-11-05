@@ -5777,7 +5777,297 @@ app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
     }
 });
 
-// Endpoint 22: Histórico de disparos
+// Endpoint 20: Gerar PIX para compra de fluxo pago
+app.post('/api/flows/purchase/generate-pix', authenticateJwt, async (req, res) => {
+    const { shareableLinkId, botId } = req.body;
+    const buyerId = req.user.id;
+    
+    try {
+        if (!botId || !shareableLinkId) {
+            return res.status(400).json({ message: 'ID do link e ID do bot são obrigatórios.' });
+        }
+        
+        // Buscar detalhes do fluxo compartilhado
+        const [flow] = await sqlWithRetry(
+            'SELECT name, share_price_cents, seller_id FROM flows WHERE shareable_link_id = $1',
+            [shareableLinkId]
+        );
+        
+        if (!flow) {
+            return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        }
+        
+        if (flow.share_price_cents <= 0) {
+            return res.status(400).json({ message: 'Este fluxo é gratuito.' });
+        }
+        
+        // Não permitir que o próprio criador compre seu fluxo
+        if (flow.seller_id === buyerId) {
+            return res.status(400).json({ message: 'Você não pode comprar seu próprio fluxo.' });
+        }
+        
+        // Buscar informações do comprador
+        const [buyer] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [buyerId]);
+        if (!buyer) {
+            return res.status(404).json({ message: 'Comprador não encontrado.' });
+        }
+        
+        const host = req.headers.host || 'localhost';
+        const apiKey = req.headers['x-api-key'];
+        const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        
+        // Gerar PIX usando sistema de fallback (mesmo da função generatePixWithFallback)
+        const providerOrder = [
+            buyer.pix_provider_primary,
+            buyer.pix_provider_secondary,
+            buyer.pix_provider_tertiary
+        ].filter(Boolean);
+        
+        if (providerOrder.length === 0) {
+            return res.status(400).json({ message: 'Nenhum provedor de PIX configurado. Configure em API PIX.' });
+        }
+        
+        let pixResult = null;
+        let lastError = null;
+        
+        // Tentar gerar PIX com fallback automático
+        for (const provider of providerOrder) {
+            try {
+                console.log(`[Flow Purchase PIX] Tentando gerar PIX com ${provider.toUpperCase()} para ${flow.share_price_cents} centavos.`);
+                pixResult = await generatePixForProvider(provider, buyer, flow.share_price_cents, host, apiKey, ip_address);
+                console.log(`[Flow Purchase PIX] SUCESSO com ${provider.toUpperCase()}.`);
+                break; // Sucesso, sair do loop
+            } catch (error) {
+                console.error(`[Flow Purchase PIX] FALHA com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
+                lastError = error;
+            }
+        }
+        
+        // Se todos os provedores falharam
+        if (!pixResult) {
+            const errorMessage = lastError?.response?.data?.message || lastError?.message || 'Todos os provedores de PIX falharam.';
+            return res.status(500).json({ message: `Erro ao gerar PIX: ${errorMessage}` });
+        }
+        
+        // IMPORTANTE: Salvar em pix_transactions primeiro (para webhooks funcionarem)
+        // Criar um click_id_internal fictício para flow purchases (identificador único)
+        const flowPurchaseClickId = `flow_purchase_${buyerId}_${Date.now()}`;
+        
+        // Inserir em clicks (necessário para foreign key de pix_transactions)
+        const [clickRecord] = await sqlWithRetry(`
+            INSERT INTO clicks (seller_id, click_id, ip_address, user_agent)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+        `, [buyerId, flowPurchaseClickId, ip_address || '0.0.0.0', 'Flow Purchase']);
+        
+        // Salvar em pix_transactions (para webhooks e relatórios gerais)
+        const [pixTransaction] = await sqlWithRetry(`
+            INSERT INTO pix_transactions (
+                click_id_internal, pix_value, qr_code_text, qr_code_base64,
+                provider, provider_transaction_id, pix_id, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
+        `, [
+            clickRecord.id,
+            flow.share_price_cents / 100,
+            pixResult.qr_code_text,
+            pixResult.qr_code_base64,
+            pixResult.provider,
+            pixResult.transaction_id,
+            pixResult.transaction_id,
+            'pending'
+        ]);
+        
+        // Salvar em flow_purchase_transactions (para controle de compras de fluxos)
+        const [flowTransaction] = await sqlWithRetry(`
+            INSERT INTO flow_purchase_transactions (
+                buyer_id, flow_share_link_id, flow_name, price_cents,
+                pix_value, qr_code_text, qr_code_base64,
+                provider, provider_transaction_id, status,
+                pix_transaction_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id
+        `, [
+            buyerId,
+            shareableLinkId,
+            flow.name,
+            flow.share_price_cents,
+            flow.share_price_cents / 100,
+            pixResult.qr_code_text,
+            pixResult.qr_code_base64,
+            pixResult.provider,
+            pixResult.transaction_id,
+            'pending',
+            pixTransaction.id
+        ]);
+        
+        res.status(200).json({
+            transaction_id: flowTransaction.id,
+            pix_transaction_id: pixTransaction.id,
+            provider_transaction_id: pixResult.transaction_id,
+            qr_code_text: pixResult.qr_code_text,
+            qr_code_base64: pixResult.qr_code_base64,
+            pix_value: flow.share_price_cents / 100,
+            flow_name: flow.name
+        });
+        
+    } catch (error) {
+        console.error("Erro ao gerar PIX para compra de fluxo:", error);
+        res.status(500).json({ 
+            message: 'Erro ao gerar PIX: ' + (error.message || 'Tente novamente.')
+        });
+    }
+});
+
+// Endpoint 21: Verificar status do pagamento do fluxo
+app.get('/api/flows/purchase/status/:transactionId', authenticateJwt, async (req, res) => {
+    const { transactionId } = req.params;
+    const buyerId = req.user.id;
+    
+    try {
+        const [transaction] = await sqlWithRetry(`
+            SELECT * FROM flow_purchase_transactions 
+            WHERE id = $1 AND buyer_id = $2
+        `, [transactionId, buyerId]);
+        
+        if (!transaction) {
+            return res.status(404).json({ message: 'Transação não encontrada.' });
+        }
+        
+        // Se já está pago, retornar status
+        if (transaction.status === 'paid') {
+            return res.status(200).json({
+                status: 'paid',
+                paid_at: transaction.paid_at,
+                can_import: true
+            });
+        }
+        
+        // Tentar verificar status no provedor se ainda está pendente
+        if (transaction.status === 'pending' && transaction.provider_transaction_id) {
+            try {
+                // Buscar seller para verificar credenciais
+                const [buyer] = await sqlWithRetry('SELECT * FROM sellers WHERE id = $1', [buyerId]);
+                
+                let providerStatus = null;
+                
+                if (transaction.provider === 'syncpay') {
+                    const token = await getSyncPayAuthToken(buyer);
+                    const response = await axios.get(
+                        `${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in/${transaction.provider_transaction_id}`,
+                        { headers: { 'Authorization': `Bearer ${token}` } }
+                    );
+                    providerStatus = response.data.status;
+                } else if (transaction.provider === 'pushinpay') {
+                    const response = await axios.get(
+                        `https://api.pushinpay.com.br/api/pix/${transaction.provider_transaction_id}`,
+                        { headers: { Authorization: `Bearer ${buyer.pushinpay_token}` } }
+                    );
+                    providerStatus = response.data.status;
+                } else if (transaction.provider === 'brpix') {
+                    const credentials = Buffer.from(`${buyer.brpix_secret_key}:${buyer.brpix_company_id}`).toString('base64');
+                    const response = await axios.get(
+                        `https://api.brpixdigital.com/functions/v1/transactions/${transaction.provider_transaction_id}`,
+                        { headers: { 'Authorization': `Basic ${credentials}` } }
+                    );
+                    providerStatus = response.data.status;
+                }
+                
+                // Se o provedor indicar que está pago, atualizar status
+                if (providerStatus === 'paid' || providerStatus === 'approved' || providerStatus === 'PAID') {
+                    await sqlWithRetry(`
+                        UPDATE flow_purchase_transactions 
+                        SET status = 'paid', paid_at = NOW() 
+                        WHERE id = $1
+                    `, [transactionId]);
+                    
+                    return res.status(200).json({
+                        status: 'paid',
+                        paid_at: new Date(),
+                        can_import: true
+                    });
+                }
+            } catch (providerError) {
+                console.error("Erro ao verificar status no provedor:", providerError.message);
+            }
+        }
+        
+        res.status(200).json({
+            status: transaction.status,
+            can_import: false
+        });
+        
+    } catch (error) {
+        console.error("Erro ao verificar status do pagamento:", error);
+        res.status(500).json({ message: 'Erro ao verificar status.' });
+    }
+});
+
+// Endpoint 22: Importar fluxo pago após confirmação de pagamento
+app.post('/api/flows/purchase/import', authenticateJwt, async (req, res) => {
+    const { transactionId, botId } = req.body;
+    const buyerId = req.user.id;
+    
+    try {
+        if (!transactionId || !botId) {
+            return res.status(400).json({ message: 'ID da transação e ID do bot são obrigatórios.' });
+        }
+        
+        // Verificar transação
+        const [transaction] = await sqlWithRetry(`
+            SELECT * FROM flow_purchase_transactions 
+            WHERE id = $1 AND buyer_id = $2
+        `, [transactionId, buyerId]);
+        
+        if (!transaction) {
+            return res.status(404).json({ message: 'Transação não encontrada.' });
+        }
+        
+        if (transaction.status !== 'paid') {
+            return res.status(400).json({ message: 'Pagamento não confirmado.' });
+        }
+        
+        if (transaction.imported_at) {
+            return res.status(400).json({ message: 'Este fluxo já foi importado.' });
+        }
+        
+        // Buscar fluxo original
+        const [originalFlow] = await sqlWithRetry(
+            'SELECT name, nodes FROM flows WHERE shareable_link_id = $1',
+            [transaction.flow_share_link_id]
+        );
+        
+        if (!originalFlow) {
+            return res.status(404).json({ message: 'Fluxo original não encontrado.' });
+        }
+        
+        // Importar fluxo
+        const newFlowName = `${originalFlow.name} (Comprado)`;
+        const [newFlow] = await sqlWithRetry(`
+            INSERT INTO flows (seller_id, bot_id, name, nodes) 
+            VALUES ($1, $2, $3, $4) 
+            RETURNING *
+        `, [buyerId, botId, newFlowName, originalFlow.nodes]);
+        
+        // Marcar como importado
+        await sqlWithRetry(`
+            UPDATE flow_purchase_transactions 
+            SET imported_at = NOW() 
+            WHERE id = $1
+        `, [transactionId]);
+        
+        res.status(201).json({
+            message: 'Fluxo importado com sucesso!',
+            flow: newFlow
+        });
+        
+    } catch (error) {
+        console.error("Erro ao importar fluxo pago:", error);
+        res.status(500).json({ message: 'Erro ao importar fluxo: ' + error.message });
+    }
+});
+
+// Endpoint 23: Histórico de disparos
 app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     try {
         const history = await sqlWithRetry(`
