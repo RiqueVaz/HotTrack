@@ -5921,52 +5921,87 @@ function generatePreviewHTML(data) {
             return () => clearInterval(intervalId);
         }, [fetchMessages, selectedChat]);
         
-        useEffect(() => {
-            const activeUsers = showOnlyActive 
-                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
-                : users;
-
-            setFilteredUsers(
-                activeUsers.filter(u => 
-                    ((u.first_name || '') + ' ' + (u.last_name || '')).toLowerCase().includes(searchTerm.toLowerCase()) || 
-                    (u.chat_id || '').toString().includes(searchTerm) || 
-                    (u.click_id || '').toLowerCase().includes(searchTerm.toLowerCase())
-                )
-            );
-        }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
-
-        const handleFilterActiveToggle = async () => {
-            const nextState = !showOnlyActive;
-            setShowOnlyActive(nextState);
-
-            if (nextState && selectedBotId) {
-                setIsValidating(true);
-                try {
-                    const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
-                    setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
-                } catch (error) {
-                    console.error("Erro ao validar contatos", error);
-                    alert('Não foi possível validar os contatos.');
-                } finally {
-                    setIsValidating(false);
-                }
-            }
+        // Função auxiliar que retorna o nome completo (lógica original)
+        const getDisplayName = (u) => { 
+            if (!u) return ''; 
+            if (u.click_id) { 
+                const cleanId = u.click_id.replace('/start ', ''); 
+                return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); 
+            } 
+            return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; 
         };
-
+        
+        // Função para pegar apenas o primeiro nome
+        const getFirstName = (u) => {
+            if (!u) return 'Desconhecido';
+            // Se tiver first_name do Telegram, usa ele
+            if (u.first_name) return u.first_name;
+            // Senão, pega o nome do click_id (lógica original)
+            if (u.click_id) {
+                const cleanId = u.click_id.replace('/start ', '');
+                return cleanId.charAt(0).toUpperCase() + cleanId.slice(1);
+            }
+            return 'Desconhecido';
+        };
+        
+        // Função para pegar o ID do lead (lógica original - click_id ou chat_id)
+        const getLeadId = (u) => {
+            if (!u) return '';
+            if (u.click_id) {
+                const cleanId = u.click_id.replace('/start ', '');
+                return cleanId;
+            }
+            return u.chat_id ? String(u.chat_id) : '';
+        };
+        
         useEffect(() => {
-            if (selectedBotId) {
-                setSelectedChat(null);
-            }
-        }, [selectedBotId]);
+        const activeUsers = showOnlyActive 
+            ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+            : users;
 
-        const handleSelectChat = useCallback((user) => {
-            if (selectedChat?.chat_id !== user.chat_id) {
-                setMessages([]);
-                setSelectedChat(user);
-            }
-        }, [selectedChat]);
+        setFilteredUsers(
+            activeUsers.filter(u => {
+                const term = searchTerm.toLowerCase();
+                const firstName = (u.first_name || '').toLowerCase();
+                const leadId = getLeadId(u).toLowerCase();
+                
+                return firstName.includes(term) || leadId.includes(term);
+            })
+        );
+    }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
 
-        const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
+    const handleFilterActiveToggle = async () => {
+        const nextState = !showOnlyActive;
+        setShowOnlyActive(nextState);
+
+        if (nextState && selectedBotId) {
+            setIsValidating(true);
+            try {
+                const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
+                setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
+            } catch (error) {
+                console.error("Erro ao validar contatos", error);
+                alert('Não foi possível validar os contatos.');
+            } finally {
+                setIsValidating(false);
+            }
+        }
+    };
+
+    useEffect(() => {
+        if (selectedBotId) {
+            setSelectedChat(null);
+        }
+    }, [selectedBotId]);
+
+    const handleSelectChat = useCallback((user) => {
+        if (selectedChat?.chat_id !== user.chat_id) {
+            setMessages([]);
+            setSelectedChat(user);
+        }
+    }, [selectedChat]);
+
+    const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
 		const handleFileChange = (e) => {
 			const file = e.target.files[0];
 			if (!file || !selectedChat) return;
@@ -6016,7 +6051,7 @@ function generatePreviewHTML(data) {
         };
 
         const handleDelete = async (id) => { if (confirm(`Certeza?`)) { try { await api.delete(`/api/chats/${selectedBotId}/${id}`); fetchUsers(); if (selectedChat?.chat_id === id) { setSelectedChat(null); } } catch (e) { alert('Erro'); } } };
-        const getDisplayName = (u) => { if (!u) return ''; if (u.click_id) { const cleanId = u.click_id.replace('/start ', ''); return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); } return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; };
+        
         const getMessageSender = (msg) => {
             const selectedBot = bots.find(b => b.id == selectedBotId);
             switch(msg.sender_type) {
@@ -6070,10 +6105,18 @@ function generatePreviewHTML(data) {
                                 />
                             </div>
                             <div className="conversations-list">
-                                {filteredUsers.map(u => (<div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}><div className="conversation-item-name">{getDisplayName(u)}</div><p className="conversation-item-preview">{u.message_text}</p></div>))}
+                                {filteredUsers.map(u => (
+                                    <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                        <div className="conversation-item-name">
+                                            {getFirstName(u)}
+                                            <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                        </div>
+                                        <p className="conversation-item-preview">{u.message_text}</p>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getDisplayName(selectedChat)}</h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
                         <div className="contact-panel">
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
