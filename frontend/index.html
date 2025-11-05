@@ -5931,12 +5931,12 @@ function generatePreviewHTML(data) {
             return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; 
         };
         
-        // Função para pegar apenas o primeiro nome
+        // Função para pegar apenas o primeiro nome do Telegram
         const getFirstName = (u) => {
             if (!u) return 'Desconhecido';
-            // Se tiver first_name do Telegram, usa ele
+            // Usa first_name do Telegram se existir
             if (u.first_name) return u.first_name;
-            // Senão, pega o nome do click_id (lógica original)
+            // Fallback: se não tiver first_name, usa click_id
             if (u.click_id) {
                 const cleanId = u.click_id.replace('/start ', '');
                 return cleanId.charAt(0).toUpperCase() + cleanId.slice(1);
@@ -5944,13 +5944,15 @@ function generatePreviewHTML(data) {
             return 'Desconhecido';
         };
         
-        // Função para pegar o ID do lead (lógica original - click_id ou chat_id)
+        // Função para pegar o ID (click_id se tiver, senão chat_id)
         const getLeadId = (u) => {
             if (!u) return '';
+            // Prioridade: click_id
             if (u.click_id) {
                 const cleanId = u.click_id.replace('/start ', '');
                 return cleanId;
             }
+            // Fallback: chat_id
             return u.chat_id ? String(u.chat_id) : '';
         };
         
