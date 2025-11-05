@@ -154,8 +154,14 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
+    // Log removido por segurança
+    
+    // Mapeamento de campos para cada tipo de mídia
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    let fileIdentifier = nodeData[urlMap[type]];
+    const urlField = urlMap[type];
+    let fileIdentifier = nodeData[urlField];
+    
+    // Log removido por segurança
     
     // Se o nó tem mediaLibraryId, busca o file_id da biblioteca
     if (nodeData.mediaLibraryId) {
@@ -165,7 +171,7 @@ async function handleMediaNode(node, botToken, chatId, caption) {
             `;
             if (media && media.file_id) {
                 fileIdentifier = media.file_id;
-                console.log(`[WORKER] Arquivo recuperado da biblioteca: mediaLibraryId ${nodeData.mediaLibraryId} -> file_id ${fileIdentifier}`);
+                // Log removido por segurança
             } else {
                 console.error(`[WORKER] Arquivo da biblioteca não encontrado: mediaLibraryId ${nodeData.mediaLibraryId}`);
                 throw new Error(`Arquivo da biblioteca não encontrado: ${nodeData.mediaLibraryId}`);
@@ -181,7 +187,17 @@ async function handleMediaNode(node, botToken, chatId, caption) {
         return null;
     }
 
-    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
+    // Verifica se é um file_id do Telegram (começa com certos prefixos)
+    const isLibraryFile = fileIdentifier && (
+        fileIdentifier.startsWith('BAAC') || 
+        fileIdentifier.startsWith('AgAC') || 
+        fileIdentifier.startsWith('AwAC') || 
+        fileIdentifier.startsWith('CQACAg') || 
+        fileIdentifier.startsWith('DQACAg')
+    );
+    
+    // Log removido por segurança
+    
     let response;
     const timeout = type === 'video' ? 60000 : 30000;
 
@@ -303,7 +319,6 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         }
 
         const utmifyApiToken = integration.api_token;
-        console.log(`[Utmify] Token encontrado. Montando payload...`);
         
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
@@ -318,10 +333,10 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         };
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+        // Log removido por segurança
 
     } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}'`);
     }
 }
 async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
@@ -652,13 +667,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     console.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
-                } 
+                }
                 break;
-
+                
             case 'image':
             case 'video':
             case 'audio': {
                 try {
+                    console.log(`${logPrefix} [Flow Media] Processando mídia tipo: ${action.type}, actionData:`, JSON.stringify(action.data || {}));
+                    
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
@@ -667,6 +684,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
+                    console.log(`${logPrefix} [Flow Media] Chamando handleMediaNode para ${action.type}`);
                     const response = await handleMediaNode(action, botToken, chatId, caption);
 
                     if (response && response.ok) {
@@ -1262,6 +1280,42 @@ async function handler(req, res) {
 
         // 4. O usuário NÃO respondeu a tempo.
         console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
+        
+        // Verifica se há mídia para enviar (que foi armazenada nas variáveis)
+        if (variables.last_media_type && variables.last_media_url) {
+            console.log(`${logPrefix} [Timeout] Enviando mídia pendente: ${variables.last_media_type}`);
+            
+            try {
+                // Cria um objeto de ação para processar com handleMediaNode
+                const mediaAction = {
+                    type: variables.last_media_type,
+                    data: {
+                        imageUrl: variables.last_media_type === 'image' ? variables.last_media_url : undefined,
+                        videoUrl: variables.last_media_type === 'video' ? variables.last_media_url : undefined,
+                        audioUrl: variables.last_media_type === 'audio' ? variables.last_media_url : undefined,
+                        mediaLibraryId: variables.last_media_library_id,
+                        caption: variables.last_media_caption
+                    }
+                };
+                
+                // Envia a mídia
+                const response = await handleMediaNode(mediaAction, botToken, chat_id, variables.last_media_caption);
+                
+                if (response && response.ok) {
+                    await saveMessageToDb(sellerId, bot_id, response.result, 'bot');
+                    // Log removido por segurança
+                }
+                
+                // Limpa as variáveis de mídia para não reenviar
+                delete variables.last_media_type;
+                delete variables.last_media_url;
+                delete variables.last_media_caption;
+                delete variables.last_media_library_id;
+                
+            } catch (error) {
+                console.error(`${logPrefix} [Timeout] Erro ao enviar mídia`);
+            }
+        }
         
         // Limpa o estado de 'espera' ANTES de processar o próximo nó
         await sql`

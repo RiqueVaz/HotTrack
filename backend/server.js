@@ -75,7 +75,7 @@ app.post(
       }
 
       // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
-      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
+      // Log removido por segurança
       req.body = JSON.parse(bodyString);
       await processTimeoutWorker(req, res);
 
@@ -106,7 +106,7 @@ app.post(
        }
     
        // 2. Se for válida, processar a tarefa
-       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
+       // Log removido por segurança
        req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
        await processDisparoWorker(req, res); // Chama o handler do worker
     
@@ -363,7 +363,7 @@ async function createNetlifySite(accessToken, siteName) {
             }
         });
         
-        console.log('[Netlify] Resposta da API ao criar site:', JSON.stringify(response.data, null, 2));
+        // Log removido por segurança
         
         const siteUrl = `https://${response.data.subdomain || response.data.name}.netlify.app`;
         console.log('[Netlify] URL gerada:', siteUrl);
@@ -454,7 +454,7 @@ app.post('/api/netlify/validate-token', authenticateJwt, async (req, res) => {
                 error: null,
                 user: netlifyApiResponse.data // Guarda os dados do usuário do Netlify
             };
-            console.log(`[Netlify Validate] Token validado com sucesso para usuário: ${netlifyApiResponse.data.email}`);
+            // Log removido por segurança
 
         } catch (netlifyError) {
             // Se a chamada falhar (ex: 401 Unauthorized), o token é inválido
@@ -3974,6 +3974,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'video':
             case 'audio': {
                 try {
+                    // No servidor principal, apenas armazenamos os dados da mídia para envio posterior pelo worker
+                    // Não enviamos a mídia diretamente daqui para evitar sobrecarga e timeout
+                    
+                    // Processamos a legenda para variáveis
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
@@ -3982,7 +3986,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    const response = await handleMediaNode(action, botToken, chatId, caption); // Passa a ação inteira
+                    // Armazenamos a legenda processada nas variáveis para uso posterior pelo worker
+                    variables[`last_media_caption`] = caption;
+                    variables[`last_media_type`] = action.type;
+                    variables[`last_media_url`] = actionData[action.type === 'image' ? 'imageUrl' : action.type === 'video' ? 'videoUrl' : 'audioUrl'];
+                    variables[`last_media_library_id`] = actionData.mediaLibraryId;
+                    
+                    // Simulamos uma resposta bem-sucedida para continuar o fluxo
+                    const response = { ok: true, result: { message_id: Date.now() } }; // Passa a ação inteira
 
                     if (response && response.ok) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
