@@ -2400,7 +2400,7 @@ app.get('/api/bots/users', authenticateJwt, async (req, res) => {
 });
 app.post('/api/pressels', authenticateJwt, async (req, res) => {
     const { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify, netlify_site_name } = req.body;
-    console.log('Dados recebidos na criação de pressel:', { name, bot_id, white_page_url, pixel_ids, utmify_integration_id, traffic_type, deploy_to_netlify, netlify_site_name }); // Debug
+    
     if (!name || !bot_id || !white_page_url || !Array.isArray(pixel_ids) || pixel_ids.length === 0) return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     
     // Validação do nome do site Netlify
@@ -4020,7 +4020,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, callback_data: `copy_${pixResult.transaction_id}` }]] } // Usando callback_data para 'copy' (ou copy_text se suportado)
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
                     });
     
                     if (sentMessage.ok) {
