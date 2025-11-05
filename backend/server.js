@@ -75,7 +75,7 @@ app.post(
       }
 
       // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
-      // Log removido por segurança
+      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
       req.body = JSON.parse(bodyString);
       await processTimeoutWorker(req, res);
 
@@ -106,7 +106,7 @@ app.post(
        }
     
        // 2. Se for válida, processar a tarefa
-       // Log removido por segurança
+       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
        req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
        await processDisparoWorker(req, res); // Chama o handler do worker
     
@@ -363,7 +363,7 @@ async function createNetlifySite(accessToken, siteName) {
             }
         });
         
-        // Log removido por segurança
+        console.log('[Netlify] Resposta da API ao criar site:', JSON.stringify(response.data, null, 2));
         
         const siteUrl = `https://${response.data.subdomain || response.data.name}.netlify.app`;
         console.log('[Netlify] URL gerada:', siteUrl);
@@ -454,7 +454,7 @@ app.post('/api/netlify/validate-token', authenticateJwt, async (req, res) => {
                 error: null,
                 user: netlifyApiResponse.data // Guarda os dados do usuário do Netlify
             };
-            // Log removido por segurança
+            console.log(`[Netlify Validate] Token validado com sucesso para usuário: ${netlifyApiResponse.data.email}`);
 
         } catch (netlifyError) {
             // Se a chamada falhar (ex: 401 Unauthorized), o token é inválido
@@ -814,12 +814,6 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
-    // Verificação de segurança para garantir que message e chat existem
-    if (!message || !message.chat) {
-        console.error(`[saveMessageToDb] Erro: message ou message.chat é undefined`);
-        return; // Sai da função se não tiver os dados necessários
-    }
-    
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -963,101 +957,42 @@ async function processStepForQStash(step, sellerId) {
     }
 }
 
-// Função para processar variáveis e substituir file_ids pesados por mediaLibraryIds antes de enviar ao QStash
-async function processVariablesForQStash(variables, sellerId) {
-    const processedVars = { ...variables };
-    
-    // Verifica se há referências de mídia nas variáveis
-    if (processedVars.last_media_url) {
-        const fileUrl = processedVars.last_media_url;
-        
-        // Verifica se é um file_id da biblioteca
-        const isLibraryFile = fileUrl && (fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC'));
-        
-        if (isLibraryFile) {
-            try {
-                const [media] = await sqlWithRetry(
-                    'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
-                    [fileUrl, sellerId]
-                );
-                
-                if (media) {
-                    // Substitui o file_id pelo mediaLibraryId
-                    processedVars.last_media_url = null;
-                    processedVars.last_media_library_id = media.id;
-                    console.log(`[processVariablesForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
-                } else {
-                    console.warn(`[processVariablesForQStash] Arquivo da biblioteca não encontrado: ${fileUrl}`);
-                }
-            } catch (error) {
-                console.error(`[processVariablesForQStash] Erro ao processar variável de mídia:`, error);
-            }
-        }
-    }
-    
-    return processedVars;
-}
-
-/**
- * Esta função é usada para enviar mídia diretamente pelo servidor principal.
- * É chamada pelo processActions apenas para nós sem agendamento (waitForReply = false).
- * Para nós com agendamento, apenas referências à mídia são armazenadas nas variáveis
- * e o worker (process-timeout.js) usa sua própria versão de handleMediaNode para enviar a mídia.
- */
 async function handleMediaNode(node, botToken, chatId, caption) {
-    try {
-        const type = node.type;
-        const nodeData = node.data || {};
-        const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-        const fileIdentifier = nodeData[urlMap[type]];
+    const type = node.type;
+    const nodeData = node.data || {};
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
+    const fileIdentifier = nodeData[urlMap[type]];
 
-        if (!fileIdentifier) {
-            console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
-            return { ok: false, error: `Nenhum file_id ou URL fornecido para o nó de ${type}` };
-        }
-
-        // Verifica se é um file_id do Telegram (começa com certos prefixos)
-        const isLibraryFile = fileIdentifier && (
-            fileIdentifier.startsWith('BAAC') || 
-            fileIdentifier.startsWith('AgAC') || 
-            fileIdentifier.startsWith('AwAC') ||
-            fileIdentifier.startsWith('CQACAg') ||
-            fileIdentifier.startsWith('DQACAg')
-        );
-        
-        let response;
-        const timeout = type === 'video' ? 60000 : 30000;
-
-        if (isLibraryFile) {
-            if (type === 'audio') {
-                const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
-                if (duration > 0) {
-                    await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
-                    await new Promise(resolve => setTimeout(resolve, duration * 1000));
-                }
-            }
-            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
-        } else {
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            
-            const method = methodMap[type];
-            const field = fieldMap[type];
-            
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-            response = await sendTelegramRequest(botToken, method, payload, { timeout });
-        }
-        
-        // Verifica se a resposta é válida
-        if (!response) {
-            return { ok: false, error: 'Resposta vazia do Telegram' };
-        }
-        
-        return response;
-    } catch (error) {
-        console.error(`[Flow Media] Erro ao enviar mídia ${node.type}:`, error.message);
-        return { ok: false, error: `Erro ao enviar mídia: ${error.message}` };
+    if (!fileIdentifier) {
+        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        return null;
     }
+
+    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
+    let response;
+    const timeout = type === 'video' ? 60000 : 30000;
+
+    if (isLibraryFile) {
+        if (type === 'audio') {
+            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+            if (duration > 0) {
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+            }
+        }
+        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+    } else {
+        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+        
+        const method = methodMap[type];
+        const field = fieldMap[type];
+        
+        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+    }
+    
+    return response;
 }
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
@@ -4039,7 +3974,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'video':
             case 'audio': {
                 try {
-                    // Processamos a legenda para variáveis
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
@@ -4048,55 +3982,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    // Verificamos se o nó atual tem agendamento (waitForReply)
-                    // Buscamos o nó atual na lista de nós do fluxo
-                    const currentNodeId = variables._current_node_id; // Assumindo que temos o ID do nó atual nas variáveis
-                    const [flowState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                    let hasScheduling = false;
-                    
-                    if (flowState) {
-                        // Verificamos se o nó atual tem waitForReply = true
-                        // Isso é uma simplificação - idealmente buscaríamos o nó atual no fluxo e verificaríamos seu waitForReply
-                        hasScheduling = flowState.waiting_for_input || flowState.scheduled_message_id;
-                    }
-                    
-                    if (hasScheduling) {
-                        // Se tem agendamento, apenas armazenamos os dados da mídia para envio posterior pelo worker
-                        console.log(`${logPrefix} [Flow Media] Nó com agendamento. Armazenando referência da mídia para envio posterior.`);
-                        
-                        // Armazenamos a legenda processada nas variáveis para uso posterior pelo worker
-                        variables[`last_media_caption`] = caption;
-                        variables[`last_media_type`] = action.type;
-                        variables[`last_media_url`] = actionData[action.type === 'image' ? 'imageUrl' : action.type === 'video' ? 'videoUrl' : 'audioUrl'];
-                        variables[`last_media_library_id`] = actionData.mediaLibraryId;
-                        
-                        // Simulamos uma resposta bem-sucedida para continuar o fluxo
-                        const response = { 
-                            ok: true, 
-                            result: { 
-                                message_id: Date.now(),
-                                chat: { id: chatId } // Adicionamos o chat.id para evitar erro no saveMessageToDb
-                            } 
-                        };
-    
-                        if (response && response.ok && response.result && response.result.chat) {
-                            try {
-                                await saveMessageToDb(sellerId, botId, response.result, 'bot');
-                            } catch (dbError) {
-                                console.error(`${logPrefix} [Flow Media] Erro ao salvar mensagem no banco: ${dbError.message}`);
-                                // Continua o fluxo mesmo se falhar ao salvar no banco
-                            }
-                        }
-                    } else {
-                        // Se não tem agendamento, enviamos a mídia diretamente
-                        console.log(`${logPrefix} [Flow Media] Nó sem agendamento. Enviando mídia diretamente.`);
-                        const response = await handleMediaNode(action, botToken, chatId, caption);
-                        
-                        if (response && response.ok && response.result && response.result.chat) {
-                            await saveMessageToDb(sellerId, botId, response.result, 'bot');
-                        } else if (response && !response.ok) {
-                            console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
-                        }
+                    const response = await handleMediaNode(action, botToken, chatId, caption); // Passa a ação inteira
+
+                    if (response && response.ok) {
+                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
                     }
                 } catch (e) {
                     console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
@@ -4578,9 +4467,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Processa as variáveis para substituir file_ids pesados por mediaLibraryIds
-                    const processedVariables = await processVariablesForQStash(variables, sellerId);
-                    
                     // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
@@ -4588,7 +4474,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             chat_id: chatId, 
                             bot_id: botId, 
                             target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: processedVariables
+                            variables: variables
                         },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
@@ -4915,8 +4801,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
                             body: payload,
                             delay: `${totalDelaySeconds}s`, 
-                            retries: 2,
-                            method: "POST"
+                            retries: 2 
                         })
                     );
            
