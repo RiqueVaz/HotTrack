@@ -814,6 +814,12 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
+    // Verificação de segurança para garantir que message e chat existem
+    if (!message || !message.chat) {
+        console.error(`[saveMessageToDb] Erro: message ou message.chat é undefined`);
+        return; // Sai da função se não tiver os dados necessários
+    }
+    
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -957,42 +963,66 @@ async function processStepForQStash(step, sellerId) {
     }
 }
 
+/**
+ * Esta função é usada para enviar mídia diretamente pelo servidor principal.
+ * É chamada pelo processActions apenas para nós sem agendamento (waitForReply = false).
+ * Para nós com agendamento, apenas referências à mídia são armazenadas nas variáveis
+ * e o worker (process-timeout.js) usa sua própria versão de handleMediaNode para enviar a mídia.
+ */
 async function handleMediaNode(node, botToken, chatId, caption) {
-    const type = node.type;
-    const nodeData = node.data || {};
-    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    const fileIdentifier = nodeData[urlMap[type]];
+    try {
+        const type = node.type;
+        const nodeData = node.data || {};
+        const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
+        const fileIdentifier = nodeData[urlMap[type]];
 
-    if (!fileIdentifier) {
-        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
-        return null;
-    }
-
-    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
-    let response;
-    const timeout = type === 'video' ? 60000 : 30000;
-
-    if (isLibraryFile) {
-        if (type === 'audio') {
-            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
-            if (duration > 0) {
-                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
-                await new Promise(resolve => setTimeout(resolve, duration * 1000));
-            }
+        if (!fileIdentifier) {
+            console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+            return { ok: false, error: `Nenhum file_id ou URL fornecido para o nó de ${type}` };
         }
-        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
-    } else {
-        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+
+        // Verifica se é um file_id do Telegram (começa com certos prefixos)
+        const isLibraryFile = fileIdentifier && (
+            fileIdentifier.startsWith('BAAC') || 
+            fileIdentifier.startsWith('AgAC') || 
+            fileIdentifier.startsWith('AwAC') ||
+            fileIdentifier.startsWith('CQACAg') ||
+            fileIdentifier.startsWith('DQACAg')
+        );
         
-        const method = methodMap[type];
-        const field = fieldMap[type];
+        let response;
+        const timeout = type === 'video' ? 60000 : 30000;
+
+        if (isLibraryFile) {
+            if (type === 'audio') {
+                const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+                if (duration > 0) {
+                    await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                    await new Promise(resolve => setTimeout(resolve, duration * 1000));
+                }
+            }
+            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+        } else {
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            
+            const method = methodMap[type];
+            const field = fieldMap[type];
+            
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+            response = await sendTelegramRequest(botToken, method, payload, { timeout });
+        }
         
-        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+        // Verifica se a resposta é válida
+        if (!response) {
+            return { ok: false, error: 'Resposta vazia do Telegram' };
+        }
+        
+        return response;
+    } catch (error) {
+        console.error(`[Flow Media] Erro ao enviar mídia ${node.type}:`, error.message);
+        return { ok: false, error: `Erro ao enviar mídia: ${error.message}` };
     }
-    
-    return response;
 }
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
@@ -3974,9 +4004,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'video':
             case 'audio': {
                 try {
-                    // No servidor principal, apenas armazenamos os dados da mídia para envio posterior pelo worker
-                    // Não enviamos a mídia diretamente daqui para evitar sobrecarga e timeout
-                    
                     // Processamos a legenda para variáveis
                     let caption = await replaceVariables(actionData.caption, variables);
                     
@@ -3986,17 +4013,55 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    // Armazenamos a legenda processada nas variáveis para uso posterior pelo worker
-                    variables[`last_media_caption`] = caption;
-                    variables[`last_media_type`] = action.type;
-                    variables[`last_media_url`] = actionData[action.type === 'image' ? 'imageUrl' : action.type === 'video' ? 'videoUrl' : 'audioUrl'];
-                    variables[`last_media_library_id`] = actionData.mediaLibraryId;
+                    // Verificamos se o nó atual tem agendamento (waitForReply)
+                    // Buscamos o nó atual na lista de nós do fluxo
+                    const currentNodeId = variables._current_node_id; // Assumindo que temos o ID do nó atual nas variáveis
+                    const [flowState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    let hasScheduling = false;
                     
-                    // Simulamos uma resposta bem-sucedida para continuar o fluxo
-                    const response = { ok: true, result: { message_id: Date.now() } }; // Passa a ação inteira
-
-                    if (response && response.ok) {
-                        await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    if (flowState) {
+                        // Verificamos se o nó atual tem waitForReply = true
+                        // Isso é uma simplificação - idealmente buscaríamos o nó atual no fluxo e verificaríamos seu waitForReply
+                        hasScheduling = flowState.waiting_for_input || flowState.scheduled_message_id;
+                    }
+                    
+                    if (hasScheduling) {
+                        // Se tem agendamento, apenas armazenamos os dados da mídia para envio posterior pelo worker
+                        console.log(`${logPrefix} [Flow Media] Nó com agendamento. Armazenando referência da mídia para envio posterior.`);
+                        
+                        // Armazenamos a legenda processada nas variáveis para uso posterior pelo worker
+                        variables[`last_media_caption`] = caption;
+                        variables[`last_media_type`] = action.type;
+                        variables[`last_media_url`] = actionData[action.type === 'image' ? 'imageUrl' : action.type === 'video' ? 'videoUrl' : 'audioUrl'];
+                        variables[`last_media_library_id`] = actionData.mediaLibraryId;
+                        
+                        // Simulamos uma resposta bem-sucedida para continuar o fluxo
+                        const response = { 
+                            ok: true, 
+                            result: { 
+                                message_id: Date.now(),
+                                chat: { id: chatId } // Adicionamos o chat.id para evitar erro no saveMessageToDb
+                            } 
+                        };
+    
+                        if (response && response.ok && response.result && response.result.chat) {
+                            try {
+                                await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                            } catch (dbError) {
+                                console.error(`${logPrefix} [Flow Media] Erro ao salvar mensagem no banco: ${dbError.message}`);
+                                // Continua o fluxo mesmo se falhar ao salvar no banco
+                            }
+                        }
+                    } else {
+                        // Se não tem agendamento, enviamos a mídia diretamente
+                        console.log(`${logPrefix} [Flow Media] Nó sem agendamento. Enviando mídia diretamente.`);
+                        const response = await handleMediaNode(action, botToken, chatId, caption);
+                        
+                        if (response && response.ok && response.result && response.result.chat) {
+                            await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                        } else if (response && !response.ok) {
+                            console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
+                        }
                     }
                 } catch (e) {
                     console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);

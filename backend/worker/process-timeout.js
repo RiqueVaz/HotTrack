@@ -174,17 +174,17 @@ async function handleMediaNode(node, botToken, chatId, caption) {
                 // Log removido por segurança
             } else {
                 console.error(`[WORKER] Arquivo da biblioteca não encontrado: mediaLibraryId ${nodeData.mediaLibraryId}`);
-                throw new Error(`Arquivo da biblioteca não encontrado: ${nodeData.mediaLibraryId}`);
+                return { ok: false, error: `Arquivo da biblioteca não encontrado: ${nodeData.mediaLibraryId}` };
             }
         } catch (error) {
             console.error(`[WORKER] Erro ao buscar arquivo da biblioteca:`, error);
-            throw error;
+            return { ok: false, error: `Erro ao buscar arquivo da biblioteca: ${error.message}` };
         }
     }
 
     if (!fileIdentifier) {
         console.warn(`[Flow Media] Nenhum file_id, URL ou mediaLibraryId fornecido para o nó de ${type} ${node.id}`);
-        return null;
+        return { ok: false, error: `Nenhum file_id, URL ou mediaLibraryId fornecido para o nó de ${type}` };
     }
 
     // Verifica se é um file_id do Telegram (começa com certos prefixos)
@@ -201,30 +201,46 @@ async function handleMediaNode(node, botToken, chatId, caption) {
     let response;
     const timeout = type === 'video' ? 60000 : 30000;
 
-    if (isLibraryFile) {
-        if (type === 'audio') {
-            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
-            if (duration > 0) {
-                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
-                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+    try {
+        if (isLibraryFile) {
+            if (type === 'audio') {
+                const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+                if (duration > 0) {
+                    await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                    await new Promise(resolve => setTimeout(resolve, duration * 1000));
+                }
             }
+            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+        } else {
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            
+            const method = methodMap[type];
+            const field = fieldMap[type];
+            
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+            response = await sendTelegramRequest(botToken, method, payload, { timeout });
         }
-        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
-    } else {
-        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
         
-        const method = methodMap[type];
-        const field = fieldMap[type];
+        // Verifica se a resposta é válida
+        if (!response) {
+            return { ok: false, error: 'Resposta vazia do Telegram' };
+        }
         
-        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+        return response;
+    } catch (error) {
+        console.error(`[WORKER] Erro ao enviar mídia ${type}:`, error.message);
+        return { ok: false, error: `Erro ao enviar mídia: ${error.message}` };
     }
-    
-    return response;
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
+    // Verificação de segurança para garantir que message e chat existem
+    if (!message || !message.chat) {
+        console.error(`[saveMessageToDb] Erro: message ou message.chat é undefined`);
+        return; // Sai da função se não tiver os dados necessários
+    }
+    
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -687,8 +703,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     console.log(`${logPrefix} [Flow Media] Chamando handleMediaNode para ${action.type}`);
                     const response = await handleMediaNode(action, botToken, chatId, caption);
 
-                    if (response && response.ok) {
+                    if (response && response.ok && response.result && response.result.chat) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                    } else if (response && !response.ok) {
+                        console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
                     }
                 } catch (e) {
                     console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
@@ -1299,11 +1317,17 @@ async function handler(req, res) {
                 };
                 
                 // Envia a mídia
-                const response = await handleMediaNode(mediaAction, botToken, chat_id, variables.last_media_caption);
-                
-                if (response && response.ok) {
-                    await saveMessageToDb(sellerId, bot_id, response.result, 'bot');
-                    // Log removido por segurança
+                try {
+                    const response = await handleMediaNode(mediaAction, botToken, chat_id, variables.last_media_caption);
+                    
+                    if (response && response.ok && response.result && response.result.chat) {
+                        await saveMessageToDb(sellerId, bot_id, response.result, 'bot');
+                        // Log removido por segurança
+                    } else if (response && !response.ok) {
+                        console.error(`${logPrefix} [Timeout] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
+                    }
+                } catch (mediaError) {
+                    console.error(`${logPrefix} [Timeout] Exceção ao enviar mídia: ${mediaError.message}`);
                 }
                 
                 // Limpa as variáveis de mídia para não reenviar
