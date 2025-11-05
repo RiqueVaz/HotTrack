@@ -5105,7 +5105,7 @@ function generatePreviewHTML(data) {
                     bundleMedia
                 };
                 const response = await api.post(`/api/flows/${flow.id}/generate-share-link`, options);
-                const link = `${FRONTEND_URL}/?link=${response.data.shareable_link_id}`;
+                const link = `${window.location.origin}/?link=${response.data.shareable_link_id}`;
                 prompt("Link de compartilhamento gerado! Copie abaixo:", link);
                 onLinkGenerated();
                 onClose();
@@ -5135,15 +5135,17 @@ function generatePreviewHTML(data) {
                         </div>
                     )}
                     
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Atenção: As funcionalidades de anexar fluxos e mídias ainda estão em desenvolvimento.</p>
+                    <div style={{ background: 'rgba(56, 189, 248, 0.1)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+                        <p style={{ color: 'var(--brand-primary)', fontSize: '0.9rem', margin: 0, fontWeight: '500' }}>💡 Configure o que será incluído no compartilhamento:</p>
+                    </div>
 
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} disabled />
-                        <label htmlFor="bundleFlows">Incluir fluxos anexados (encaminhados)</label>
+                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} />
+                        <label htmlFor="bundleFlows" style={{ fontWeight: '500' }}>✅ Incluir fluxos anexados (encaminhados)</label>
                     </div>
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} disabled />
-                        <label htmlFor="bundleMedia">Incluir mídias (imagens, vídeos, áudios)</label>
+                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} />
+                        <label htmlFor="bundleMedia" style={{ fontWeight: '500' }}>✅ Incluir mídias (imagens, vídeos, áudios)</label>
                     </div>
                      <div className="form-group checkbox-group">
                         <input type="checkbox" id="allowReshare" checked={allowReshare} onChange={e => setAllowReshare(e.target.checked)} />
@@ -5237,9 +5239,28 @@ function generatePreviewHTML(data) {
                                     </label>
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
+                                {(() => {
+                                    const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                    const cannotShare = isImported && flow.share_allow_reshare === false;
+                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Importado sem permissão de compartilhamento</p>;
+                                })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => handleOpenShareModal(flow)}>Compartilhar</button>
+                                    <button 
+                                        className="btn btn-secondary btn-sm" 
+                                        onClick={() => handleOpenShareModal(flow)}
+                                        disabled={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            return isImported && flow.share_allow_reshare === false;
+                                        })()}
+                                        title={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            const cannotShare = isImported && flow.share_allow_reshare === false;
+                                            return cannotShare ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo';
+                                        })()}
+                                    >
+                                        Compartilhar
+                                    </button>
                                     <button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDelete(flow.id)}>Excluir</button>
                                 </div>
                             </div>
@@ -5259,6 +5280,7 @@ function generatePreviewHTML(data) {
         const [error, setError] = useState('');
         const [pixData, setPixData] = useState(null);
         const [isWaitingPayment, setIsWaitingPayment] = useState(false);
+        const [pollingInterval, setPollingInterval] = useState(null);
 
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -5296,9 +5318,86 @@ function generatePreviewHTML(data) {
             }
         };
         
-        const handleInitiatePixPayment = () => {
-             alert("Funcionalidade de pagamento via PIX em desenvolvimento. O backend precisa ser conectado à API de PIX para esta ação.");
+        const handleInitiatePixPayment = async () => {
+            if (!selectedBotId) { 
+                alert('Por favor, selecione um bot para importar o fluxo.'); 
+                return; 
+            }
+            
+            setIsWaitingPayment(true);
+            try {
+                const response = await api.post('/api/flows/generate-pix-import', { shareableLinkId });
+                setPixData(response.data);
+                
+                // Iniciar polling para verificar pagamento
+                startPaymentPolling(response.data.purchase_transaction_id);
+            } catch (err) {
+                alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            }
         };
+        
+        const startPaymentPolling = (purchaseTransactionId) => {
+            console.log('[Polling] Iniciando verificação de pagamento:', purchaseTransactionId);
+            
+            const interval = setInterval(async () => {
+                try {
+                    const response = await api.get(`/api/flows/check-payment/${purchaseTransactionId}`);
+                    console.log('[Polling] Status:', response.data);
+                    
+                    if (response.data.is_paid) {
+                        console.log('[Polling] Pagamento confirmado! Importando fluxo...');
+                        clearInterval(interval);
+                        setPollingInterval(null);
+                        
+                        // Importar fluxo automaticamente
+                        await handlePaidImport(purchaseTransactionId);
+                    }
+                } catch (err) {
+                    console.error('[Polling] Erro ao verificar pagamento:', err);
+                }
+            }, 3000); // Verifica a cada 3 segundos
+            
+            setPollingInterval(interval);
+        };
+        
+        const handlePaidImport = async (purchaseTransactionId) => {
+            setIsImporting(true);
+            try {
+                await api.post('/api/flows/import-paid', { 
+                    purchaseTransactionId, 
+                    botId: selectedBotId
+                });
+                
+                alert('🎉 Pagamento confirmado! Fluxo importado com sucesso!');
+                setPixData(null);
+                setIsWaitingPayment(false);
+                onImported();
+            } catch (err) {
+                alert('Erro ao importar fluxo pago: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            } finally {
+                setIsImporting(false);
+            }
+        };
+        
+        const handleCancelPayment = () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                setPollingInterval(null);
+            }
+            setPixData(null);
+            setIsWaitingPayment(false);
+        };
+        
+        // Cleanup ao desmontar componente
+        useEffect(() => {
+            return () => {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            };
+        }, [pollingInterval]);
 
         if (isLoading) {
             return <div style={{ padding: '2rem 3rem' }}><h2>A carregar detalhes do fluxo...</h2></div>;
@@ -5318,12 +5417,86 @@ function generatePreviewHTML(data) {
                     
                     {isPaid ? (
                         <>
-                            <h3>Este é um fluxo pago</h3>
-                            <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
-                            <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
-                            <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment}>
-                                {isWaitingPayment ? 'Aguardando Pagamento...' : 'Pagar com PIX para Importar'}
-                            </button>
+                            {!pixData ? (
+                                <>
+                                    <h3>Este é um fluxo pago</h3>
+                                    <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
+                                    <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
+                                    
+                                    <div className="form-group" style={{marginBottom: '1.5rem'}}>
+                                        <label htmlFor="botSelectImportPaid">Selecione o Bot de Destino</label>
+                                        <select id="botSelectImportPaid" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
+                                            <option value="">-- Selecione um Bot --</option>
+                                            {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
+                                        </select>
+                                    </div>
+                                    
+                                    <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment || !selectedBotId}>
+                                        {isWaitingPayment ? 'Gerando PIX...' : 'Pagar com PIX para Importar'}
+                                    </button>
+                                </>
+                            ) : (
+                                <div style={{textAlign: 'center'}}>
+                                    <h3 style={{color: 'var(--brand-primary)', marginBottom: '1rem'}}>Pague com PIX</h3>
+                                    <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem'}}>
+                                        Valor: <strong>{(pixData.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                                    </p>
+                                    
+                                    {pixData.qr_code_base64 && (
+                                        <div style={{marginBottom: '1.5rem'}}>
+                                            <img 
+                                                src={`data:image/png;base64,${pixData.qr_code_base64}`} 
+                                                alt="QR Code PIX" 
+                                                style={{maxWidth: '280px', border: '2px solid var(--border-color)', borderRadius: '8px', padding: '10px', backgroundColor: 'white'}}
+                                            />
+                                        </div>
+                                    )}
+                                    
+                                    <div style={{marginBottom: '1.5rem'}}>
+                                        <p style={{fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.5rem'}}>Código PIX Copia e Cola:</p>
+                                        <div style={{
+                                            backgroundColor: 'var(--bg-secondary)', 
+                                            padding: '0.75rem', 
+                                            borderRadius: '6px', 
+                                            border: '1px solid var(--border-color)',
+                                            wordBreak: 'break-all',
+                                            fontSize: '0.85rem',
+                                            fontFamily: 'monospace',
+                                            maxHeight: '100px',
+                                            overflowY: 'auto'
+                                        }}>
+                                            {pixData.qr_code_text}
+                                        </div>
+                                        <button 
+                                            className="btn btn-secondary btn-sm" 
+                                            style={{marginTop: '0.5rem'}}
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(pixData.qr_code_text);
+                                                alert('Código PIX copiado!');
+                                            }}
+                                        >
+                                            📋 Copiar Código PIX
+                                        </button>
+                                    </div>
+                                    
+                                    <div style={{
+                                        backgroundColor: '#fff3cd', 
+                                        border: '1px solid #ffc107', 
+                                        borderRadius: '6px', 
+                                        padding: '1rem',
+                                        marginBottom: '1rem'
+                                    }}>
+                                        <p style={{margin: 0, fontSize: '0.9rem', color: '#856404'}}>
+                                            ⏱️ <strong>Aguardando confirmação do pagamento...</strong><br/>
+                                            O fluxo será importado automaticamente após a confirmação.
+                                        </p>
+                                    </div>
+                                    
+                                    <button className="btn btn-danger btn-sm" onClick={handleCancelPayment}>
+                                        Cancelar Pagamento
+                                    </button>
+                                </div>
+                            )}
                         </>
                     ) : (
                         <>
