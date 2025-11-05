@@ -154,93 +154,42 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
-    // Log removido por segurança
-    
-    // Mapeamento de campos para cada tipo de mídia
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    const urlField = urlMap[type];
-    let fileIdentifier = nodeData[urlField];
-    
-    // Log removido por segurança
-    
-    // Se o nó tem mediaLibraryId, busca o file_id da biblioteca
-    if (nodeData.mediaLibraryId) {
-        try {
-            const [media] = await sql`
-                SELECT file_id FROM media_library WHERE id = ${nodeData.mediaLibraryId} LIMIT 1
-            `;
-            if (media && media.file_id) {
-                fileIdentifier = media.file_id;
-                // Log removido por segurança
-            } else {
-                console.error(`[WORKER] Arquivo da biblioteca não encontrado: mediaLibraryId ${nodeData.mediaLibraryId}`);
-                return { ok: false, error: `Arquivo da biblioteca não encontrado: ${nodeData.mediaLibraryId}` };
-            }
-        } catch (error) {
-            console.error(`[WORKER] Erro ao buscar arquivo da biblioteca:`, error);
-            return { ok: false, error: `Erro ao buscar arquivo da biblioteca: ${error.message}` };
-        }
-    }
+    const fileIdentifier = nodeData[urlMap[type]];
 
     if (!fileIdentifier) {
-        console.warn(`[Flow Media] Nenhum file_id, URL ou mediaLibraryId fornecido para o nó de ${type} ${node.id}`);
-        return { ok: false, error: `Nenhum file_id, URL ou mediaLibraryId fornecido para o nó de ${type}` };
+        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        return null;
     }
 
-    // Verifica se é um file_id do Telegram (começa com certos prefixos)
-    const isLibraryFile = fileIdentifier && (
-        fileIdentifier.startsWith('BAAC') || 
-        fileIdentifier.startsWith('AgAC') || 
-        fileIdentifier.startsWith('AwAC') || 
-        fileIdentifier.startsWith('CQACAg') || 
-        fileIdentifier.startsWith('DQACAg')
-    );
-    
-    // Log removido por segurança
-    
+    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
     let response;
     const timeout = type === 'video' ? 60000 : 30000;
 
-    try {
-        if (isLibraryFile) {
-            if (type === 'audio') {
-                const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
-                if (duration > 0) {
-                    await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
-                    await new Promise(resolve => setTimeout(resolve, duration * 1000));
-                }
+    if (isLibraryFile) {
+        if (type === 'audio') {
+            const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
+            if (duration > 0) {
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
             }
-            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
-        } else {
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            
-            const method = methodMap[type];
-            const field = fieldMap[type];
-            
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-            response = await sendTelegramRequest(botToken, method, payload, { timeout });
         }
+        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+    } else {
+        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
         
-        // Verifica se a resposta é válida
-        if (!response) {
-            return { ok: false, error: 'Resposta vazia do Telegram' };
-        }
+        const method = methodMap[type];
+        const field = fieldMap[type];
         
-        return response;
-    } catch (error) {
-        console.error(`[WORKER] Erro ao enviar mídia ${type}:`, error.message);
-        return { ok: false, error: `Erro ao enviar mídia: ${error.message}` };
+        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+        response = await sendTelegramRequest(botToken, method, payload, { timeout });
     }
+    
+    return response;
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
-    // Verificação de segurança para garantir que message e chat existem
-    if (!message || !message.chat) {
-        console.error(`[saveMessageToDb] Erro: message ou message.chat é undefined`);
-        return; // Sai da função se não tiver os dados necessários
-    }
-    
     const { message_id, chat, from, text, photo, video, voice } = message;
     let mediaType = null;
     let mediaFileId = null;
@@ -335,6 +284,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         }
 
         const utmifyApiToken = integration.api_token;
+        console.log(`[Utmify] Token encontrado. Montando payload...`);
         
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
@@ -349,10 +299,10 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         };
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        // Log removido por segurança
+        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
 
     } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}'`);
+        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
     }
 }
 async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
@@ -683,15 +633,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     console.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
-                }
+                } 
                 break;
-                
+
             case 'image':
             case 'video':
             case 'audio': {
                 try {
-                    console.log(`${logPrefix} [Flow Media] Processando mídia tipo: ${action.type}, actionData:`, JSON.stringify(action.data || {}));
-                    
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
@@ -700,16 +648,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    // No worker, sempre enviamos a mídia diretamente
-                    // Se o nó tinha agendamento, o servidor já armazenou as referências nas variáveis
-                    // e o worker vai processar essas referências no handler de timeout
-                    console.log(`${logPrefix} [Flow Media] Worker enviando mídia diretamente`);
                     const response = await handleMediaNode(action, botToken, chatId, caption);
 
-                    if (response && response.ok && response.result && response.result.chat) {
+                    if (response && response.ok) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
-                    } else if (response && !response.ok) {
-                        console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
                     }
                 } catch (e) {
                     console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
@@ -1166,14 +1108,13 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
                         body: { 
                             chat_id: chatId, 
                             bot_id: botId, 
-                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables
+                            target_node_id: noReplyNodeId,
+                            variables: variables 
                         },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
@@ -1268,15 +1209,8 @@ async function handler(req, res) {
 
     try {
         // 1. Recebe os dados agendados pelo QStash
-        const { chat_id, bot_id, target_node_id, variables } = req.body;
+        const { chat_id, bot_id, target_node_id, variables, scheduled_message_id } = req.body;
         const logPrefix = '[WORKER]';
-        
-        // Log para depuração das variáveis recebidas
-        console.log(`${logPrefix} [Timeout] Variáveis recebidas:`, JSON.stringify(variables));
-        console.log(`${logPrefix} [Timeout] Verificando variáveis de mídia:`, 
-            variables.last_media_type, 
-            variables.last_media_url, 
-            variables.last_media_library_id ? 'mediaLibraryId presente' : 'sem mediaLibraryId');
 
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
 
@@ -1305,51 +1239,15 @@ async function handler(req, res) {
             console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
             return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
         }
+        
+        // Verifica se este é o timeout mais recente (evita que timeouts antigos sejam processados)
+        if (scheduled_message_id && currentState.scheduled_message_id !== scheduled_message_id) {
+            console.log(`${logPrefix} [Timeout] Ignorado: ID da mensagem agendada não corresponde ao estado atual. Atual: ${currentState.scheduled_message_id}, Recebido: ${scheduled_message_id}`);
+            return res.status(200).json({ message: 'Timeout ignored, scheduled message ID mismatch.' });
+        }
 
         // 4. O usuário NÃO respondeu a tempo.
         console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
-        
-        // Verifica se há mídia para enviar (que foi armazenada nas variáveis)
-        if (variables.last_media_type && variables.last_media_url) {
-            console.log(`${logPrefix} [Timeout] Enviando mídia pendente: ${variables.last_media_type}`);
-            
-            try {
-                // Cria um objeto de ação para processar com handleMediaNode
-                const mediaAction = {
-                    type: variables.last_media_type,
-                    data: {
-                        imageUrl: variables.last_media_type === 'image' ? variables.last_media_url : undefined,
-                        videoUrl: variables.last_media_type === 'video' ? variables.last_media_url : undefined,
-                        audioUrl: variables.last_media_type === 'audio' ? variables.last_media_url : undefined,
-                        mediaLibraryId: variables.last_media_library_id,
-                        caption: variables.last_media_caption
-                    }
-                };
-                
-                // Envia a mídia
-                try {
-                    const response = await handleMediaNode(mediaAction, botToken, chat_id, variables.last_media_caption);
-                    
-                    if (response && response.ok && response.result && response.result.chat) {
-                        await saveMessageToDb(sellerId, bot_id, response.result, 'bot');
-                        // Log removido por segurança
-                    } else if (response && !response.ok) {
-                        console.error(`${logPrefix} [Timeout] Erro ao enviar mídia: ${response.error || 'Erro desconhecido'}`);
-                    }
-                } catch (mediaError) {
-                    console.error(`${logPrefix} [Timeout] Exceção ao enviar mídia: ${mediaError.message}`);
-                }
-                
-                // Limpa as variáveis de mídia para não reenviar
-                delete variables.last_media_type;
-                delete variables.last_media_url;
-                delete variables.last_media_caption;
-                delete variables.last_media_library_id;
-                
-            } catch (error) {
-                console.error(`${logPrefix} [Timeout] Erro ao enviar mídia`);
-            }
-        }
         
         // Limpa o estado de 'espera' ANTES de processar o próximo nó
         await sql`
