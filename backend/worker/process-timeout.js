@@ -700,7 +700,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    console.log(`${logPrefix} [Flow Media] Chamando handleMediaNode para ${action.type}`);
+                    // No worker, sempre enviamos a mídia diretamente
+                    // Se o nó tinha agendamento, o servidor já armazenou as referências nas variáveis
+                    // e o worker vai processar essas referências no handler de timeout
+                    console.log(`${logPrefix} [Flow Media] Worker enviando mídia diretamente`);
                     const response = await handleMediaNode(action, botToken, chatId, caption);
 
                     if (response && response.ok && response.result && response.result.chat) {
@@ -1267,6 +1270,13 @@ async function handler(req, res) {
         // 1. Recebe os dados agendados pelo QStash
         const { chat_id, bot_id, target_node_id, variables } = req.body;
         const logPrefix = '[WORKER]';
+        
+        // Log para depuração das variáveis recebidas
+        console.log(`${logPrefix} [Timeout] Variáveis recebidas:`, JSON.stringify(variables));
+        console.log(`${logPrefix} [Timeout] Verificando variáveis de mídia:`, 
+            variables.last_media_type, 
+            variables.last_media_url, 
+            variables.last_media_library_id ? 'mediaLibraryId presente' : 'sem mediaLibraryId');
 
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
 
