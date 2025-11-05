@@ -1313,18 +1313,7 @@
                     ]);
                     this.state.data = { ...this.state.data, ...staticData };
                     this.renderLayout();
-                    
-                    // Verificar se há parâmetro de link de compartilhamento na URL
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const shareLink = urlParams.get('link');
-                    
-                    if (shareLink) {
-                        // Se houver link de compartilhamento, vai para HotBot
-                        this.navigateTo('hotbot');
-                    } else {
-                        // Caso contrário, vai para dashboard
-                        this.navigateTo('dashboard');
-                    }
+                    this.navigateTo('dashboard');
                 } catch (e) {
                     console.error("Erro ao inicializar:", e);
                     this.logout();
@@ -5109,7 +5098,6 @@ function generatePreviewHTML(data) {
         const handleGenerateLink = async () => {
             setIsGenerating(true);
             try {
-                const FRONTEND_URL = window.location.origin;
                 const options = {
                     priceInCents: isPaid ? Math.round(price * 100) : 0,
                     allowReshare,
@@ -5117,7 +5105,7 @@ function generatePreviewHTML(data) {
                     bundleMedia
                 };
                 const response = await api.post(`/api/flows/${flow.id}/generate-share-link`, options);
-                const link = `${FRONTEND_URL}/?link=${response.data.shareable_link_id}`;
+                const link = `${window.location.origin}/?link=${response.data.shareable_link_id}`;
                 prompt("Link de compartilhamento gerado! Copie abaixo:", link);
                 onLinkGenerated();
                 onClose();
@@ -5251,9 +5239,28 @@ function generatePreviewHTML(data) {
                                     </label>
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
+                                {(() => {
+                                    const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                    const cannotShare = isImported && flow.share_allow_reshare === false;
+                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Importado sem permissão de compartilhamento</p>;
+                                })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => handleOpenShareModal(flow)}>Compartilhar</button>
+                                    <button 
+                                        className="btn btn-secondary btn-sm" 
+                                        onClick={() => handleOpenShareModal(flow)}
+                                        disabled={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            return isImported && flow.share_allow_reshare === false;
+                                        })()}
+                                        title={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            const cannotShare = isImported && flow.share_allow_reshare === false;
+                                            return cannotShare ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo';
+                                        })()}
+                                    >
+                                        Compartilhar
+                                    </button>
                                     <button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDelete(flow.id)}>Excluir</button>
                                 </div>
                             </div>
@@ -5273,7 +5280,6 @@ function generatePreviewHTML(data) {
         const [error, setError] = useState('');
         const [pixData, setPixData] = useState(null);
         const [isWaitingPayment, setIsWaitingPayment] = useState(false);
-        const [transactionId, setTransactionId] = useState(null);
         const [pollingInterval, setPollingInterval] = useState(null);
 
         useEffect(() => {
@@ -5313,71 +5319,78 @@ function generatePreviewHTML(data) {
         };
         
         const handleInitiatePixPayment = async () => {
-            if (!selectedBotId) {
-                alert('Por favor, selecione um bot antes de continuar.');
-                return;
+            if (!selectedBotId) { 
+                alert('Por favor, selecione um bot para importar o fluxo.'); 
+                return; 
             }
             
             setIsWaitingPayment(true);
             try {
-                const response = await api.post('/api/flows/purchase/generate-pix', {
-                    shareableLinkId,
-                    botId: selectedBotId
-                });
-                
+                const response = await api.post('/api/flows/generate-pix-import', { shareableLinkId });
                 setPixData(response.data);
-                setTransactionId(response.data.transaction_id);
                 
-                // Iniciar polling para verificar status do pagamento
-                const interval = setInterval(async () => {
-                    try {
-                        const statusResponse = await api.get(`/api/flows/purchase/status/${response.data.transaction_id}`);
-                        if (statusResponse.data.status === 'paid' && statusResponse.data.can_import) {
-                            clearInterval(interval);
-                            setPollingInterval(null);
-                            await handleImportPaidFlow(response.data.transaction_id);
-                        }
-                    } catch (err) {
-                        console.error('Erro ao verificar status:', err);
-                    }
-                }, 3000); // Verificar a cada 3 segundos
-                
-                setPollingInterval(interval);
-                
+                // Iniciar polling para verificar pagamento
+                startPaymentPolling(response.data.purchase_transaction_id);
             } catch (err) {
                 alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
                 setIsWaitingPayment(false);
             }
         };
         
-        const handleImportPaidFlow = async (txId) => {
+        const startPaymentPolling = (purchaseTransactionId) => {
+            console.log('[Polling] Iniciando verificação de pagamento:', purchaseTransactionId);
+            
+            const interval = setInterval(async () => {
+                try {
+                    const response = await api.get(`/api/flows/check-payment/${purchaseTransactionId}`);
+                    console.log('[Polling] Status:', response.data);
+                    
+                    if (response.data.is_paid) {
+                        console.log('[Polling] Pagamento confirmado! Importando fluxo...');
+                        clearInterval(interval);
+                        setPollingInterval(null);
+                        
+                        // Importar fluxo automaticamente
+                        await handlePaidImport(purchaseTransactionId);
+                    }
+                } catch (err) {
+                    console.error('[Polling] Erro ao verificar pagamento:', err);
+                }
+            }, 3000); // Verifica a cada 3 segundos
+            
+            setPollingInterval(interval);
+        };
+        
+        const handlePaidImport = async (purchaseTransactionId) => {
+            setIsImporting(true);
             try {
-                const response = await api.post('/api/flows/purchase/import', {
-                    transactionId: txId,
+                await api.post('/api/flows/import-paid', { 
+                    purchaseTransactionId, 
                     botId: selectedBotId
                 });
                 
-                alert('Pagamento confirmado! Fluxo importado com sucesso!');
+                alert('🎉 Pagamento confirmado! Fluxo importado com sucesso!');
                 setPixData(null);
                 setIsWaitingPayment(false);
                 onImported();
             } catch (err) {
-                alert('Erro ao importar fluxo: ' + (err.response?.data?.message || 'Tente novamente.'));
+                alert('Erro ao importar fluxo pago: ' + (err.response?.data?.message || 'Tente novamente.'));
                 setIsWaitingPayment(false);
+            } finally {
+                setIsImporting(false);
             }
         };
         
-        const handleCancelPixPayment = () => {
+        const handleCancelPayment = () => {
             if (pollingInterval) {
                 clearInterval(pollingInterval);
                 setPollingInterval(null);
             }
             setPixData(null);
             setIsWaitingPayment(false);
-            setTransactionId(null);
         };
         
-        // Limpar polling ao desmontar componente
+        // Cleanup ao desmontar componente
         useEffect(() => {
             return () => {
                 if (pollingInterval) {
@@ -5411,62 +5424,78 @@ function generatePreviewHTML(data) {
                                     <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
                                     
                                     <div className="form-group" style={{marginBottom: '1.5rem'}}>
-                                        <label htmlFor="botSelectPaid">Selecione o Bot de Destino</label>
-                                        <select id="botSelectPaid" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
+                                        <label htmlFor="botSelectImportPaid">Selecione o Bot de Destino</label>
+                                        <select id="botSelectImportPaid" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
                                             <option value="">-- Selecione um Bot --</option>
                                             {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
                                         </select>
                                     </div>
                                     
-                                    <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={!selectedBotId}>
-                                        Gerar PIX para Pagamento
+                                    <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment || !selectedBotId}>
+                                        {isWaitingPayment ? 'Gerando PIX...' : 'Pagar com PIX para Importar'}
                                     </button>
                                 </>
                             ) : (
-                                <>
-                                    <h3 style={{marginBottom: '1.5rem'}}>Pagamento via PIX</h3>
-                                    <div style={{textAlign: 'center', marginBottom: '1.5rem'}}>
-                                        <p style={{color: 'var(--text-secondary)', marginBottom: '1rem'}}>Escaneie o QR Code ou copie o código PIX:</p>
-                                        <p style={{fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--brand-primary)', marginBottom: '1rem'}}>{priceInReais}</p>
-                                        {pixData.qr_code_base64 && (
+                                <div style={{textAlign: 'center'}}>
+                                    <h3 style={{color: 'var(--brand-primary)', marginBottom: '1rem'}}>Pague com PIX</h3>
+                                    <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem'}}>
+                                        Valor: <strong>{(pixData.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                                    </p>
+                                    
+                                    {pixData.qr_code_base64 && (
+                                        <div style={{marginBottom: '1.5rem'}}>
                                             <img 
                                                 src={`data:image/png;base64,${pixData.qr_code_base64}`} 
                                                 alt="QR Code PIX" 
-                                                style={{maxWidth: '280px', width: '100%', margin: '0 auto 1rem', display: 'block', borderRadius: '8px'}}
+                                                style={{maxWidth: '280px', border: '2px solid var(--border-color)', borderRadius: '8px', padding: '10px', backgroundColor: 'white'}}
                                             />
-                                        )}
-                                        <div style={{marginBottom: '1rem'}}>
-                                            <label style={{display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Código PIX (Copia e Cola)</label>
-                                            <div style={{display: 'flex', gap: '0.5rem'}}>
-                                                <input 
-                                                    type="text" 
-                                                    readOnly 
-                                                    value={pixData.qr_code_text} 
-                                                    className="form-input" 
-                                                    style={{flex: 1, fontSize: '0.85rem'}}
-                                                />
-                                                <button 
-                                                    className="btn btn-secondary" 
-                                                    onClick={() => {
-                                                        navigator.clipboard.writeText(pixData.qr_code_text);
-                                                        alert('Código PIX copiado!');
-                                                    }}
-                                                >
-                                                    Copiar
-                                                </button>
-                                            </div>
                                         </div>
-                                        <div style={{padding: '1rem', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '8px', marginTop: '1.5rem'}}>
-                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center'}}>
-                                                <div className="spinner" style={{width: '16px', height: '16px', border: '2px solid var(--brand-primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite'}}></div>
-                                                <p style={{margin: 0, color: 'var(--brand-primary)', fontSize: '0.95rem'}}>Aguardando confirmação do pagamento...</p>
-                                            </div>
+                                    )}
+                                    
+                                    <div style={{marginBottom: '1.5rem'}}>
+                                        <p style={{fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.5rem'}}>Código PIX Copia e Cola:</p>
+                                        <div style={{
+                                            backgroundColor: 'var(--bg-secondary)', 
+                                            padding: '0.75rem', 
+                                            borderRadius: '6px', 
+                                            border: '1px solid var(--border-color)',
+                                            wordBreak: 'break-all',
+                                            fontSize: '0.85rem',
+                                            fontFamily: 'monospace',
+                                            maxHeight: '100px',
+                                            overflowY: 'auto'
+                                        }}>
+                                            {pixData.qr_code_text}
                                         </div>
+                                        <button 
+                                            className="btn btn-secondary btn-sm" 
+                                            style={{marginTop: '0.5rem'}}
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(pixData.qr_code_text);
+                                                alert('Código PIX copiado!');
+                                            }}
+                                        >
+                                            📋 Copiar Código PIX
+                                        </button>
                                     </div>
-                                    <button className="btn btn-danger" onClick={handleCancelPixPayment} style={{width: '100%'}}>
-                                        Cancelar
+                                    
+                                    <div style={{
+                                        backgroundColor: '#fff3cd', 
+                                        border: '1px solid #ffc107', 
+                                        borderRadius: '6px', 
+                                        padding: '1rem',
+                                        marginBottom: '1rem'
+                                    }}>
+                                        <p style={{margin: 0, fontSize: '0.9rem', color: '#856404'}}>
+                                            ⏱️ <strong>Aguardando confirmação do pagamento...</strong><br/>
+                                            O fluxo será importado automaticamente após a confirmação.
+                                        </p>
+                                    </div>
+                                    
+                                    <button className="btn btn-danger btn-sm" onClick={handleCancelPayment}>
+                                        Cancelar Pagamento
                                     </button>
-                                </>
+                                </div>
                             )}
                         </>
                     ) : (
