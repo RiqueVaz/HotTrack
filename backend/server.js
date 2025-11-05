@@ -908,6 +908,55 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 }
 
+// Função para processar steps e substituir file_id da biblioteca por mediaLibraryId antes de enviar ao QStash
+async function processStepForQStash(step, sellerId) {
+    // Se o step não é de mídia, retorna sem alterações
+    if (!['image', 'video', 'audio'].includes(step.type)) {
+        return step;
+    }
+    
+    const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+    const fileUrl = step[urlMap[step.type]];
+    
+    if (!fileUrl) {
+        return step;
+    }
+    
+    // Verifica se é um file_id da biblioteca (começa com BAAC, AgAC, AwAC)
+    const isLibraryFile = fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC');
+    
+    if (!isLibraryFile) {
+        // Se não é da biblioteca, pode ser URL ou outro file_id, mantém como está
+        return step;
+    }
+    
+    try {
+        // Busca o ID da biblioteca de mídia pelo file_id
+        const [media] = await sqlWithRetry(
+            'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+            [fileUrl, sellerId]
+        );
+        
+        if (!media) {
+            console.warn(`[processStepForQStash] Arquivo da biblioteca não encontrado: ${fileUrl}`);
+            return step; // Retorna o step original se não encontrar
+        }
+        
+        // Cria uma cópia do step substituindo file_id por mediaLibraryId
+        const processedStep = { ...step };
+        processedStep[urlMap[step.type]] = null; // Remove o file_id
+        processedStep.mediaLibraryId = media.id; // Adiciona o ID da biblioteca
+        
+        console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
+        
+        return processedStep;
+    } catch (error) {
+        console.error(`[processStepForQStash] Erro ao processar arquivo da biblioteca:`, error);
+        // Em caso de erro, retorna o step original
+        return step;
+    }
+}
+
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
@@ -4734,11 +4783,14 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
           let currentStepDelay = 0; 
     
           for (const step of flowSteps) {
+            // Processa o step para converter arquivos base64 em file_id antes de enviar ao QStash
+            const processedStep = await processStepForQStash(step, sellerId);
+            
             const payload = {
               history_id: historyId,
               chat_id: contact.chat_id,
               bot_id: contact.bot_id_source,
-              step_json: JSON.stringify(step),
+              step_json: JSON.stringify(processedStep),
               variables_json: JSON.stringify(userVariables)
             };
     

@@ -279,10 +279,34 @@ async function handler(req, res) {
           }
           response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
         } else if (['image', 'video', 'audio'].includes(step.type)) {
-                // (Lógica para enviar 'media' ... igual a antes)
           const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
-          const fileIdentifier = step[urlMap[step.type]];
+          let fileIdentifier = step[urlMap[step.type]];
           const caption = await replaceVariables(step.caption, userVariables);
+          
+          // Se o step tem mediaLibraryId, busca o file_id da biblioteca
+          if (step.mediaLibraryId) {
+            try {
+              const [media] = await sqlWithRetry(
+                'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
+                [step.mediaLibraryId]
+              );
+              if (media && media.file_id) {
+                fileIdentifier = media.file_id;
+                console.log(`[WORKER-DISPARO] Arquivo recuperado da biblioteca: mediaLibraryId ${step.mediaLibraryId} -> file_id ${fileIdentifier}`);
+              } else {
+                console.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
+                throw new Error(`Arquivo da biblioteca não encontrado: ${step.mediaLibraryId}`);
+              }
+            } catch (error) {
+              console.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
+              throw error;
+            }
+          }
+          
+          if (!fileIdentifier) {
+            throw new Error(`Nenhum file_id ou mediaLibraryId fornecido para o step ${step.type}`);
+          }
+          
           const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
           if (isLibraryFile) {
             response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);

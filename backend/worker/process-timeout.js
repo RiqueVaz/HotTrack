@@ -155,10 +155,29 @@ async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    const fileIdentifier = nodeData[urlMap[type]];
+    let fileIdentifier = nodeData[urlMap[type]];
+    
+    // Se o nó tem mediaLibraryId, busca o file_id da biblioteca
+    if (nodeData.mediaLibraryId) {
+        try {
+            const [media] = await sql`
+                SELECT file_id FROM media_library WHERE id = ${nodeData.mediaLibraryId} LIMIT 1
+            `;
+            if (media && media.file_id) {
+                fileIdentifier = media.file_id;
+                console.log(`[WORKER] Arquivo recuperado da biblioteca: mediaLibraryId ${nodeData.mediaLibraryId} -> file_id ${fileIdentifier}`);
+            } else {
+                console.error(`[WORKER] Arquivo da biblioteca não encontrado: mediaLibraryId ${nodeData.mediaLibraryId}`);
+                throw new Error(`Arquivo da biblioteca não encontrado: ${nodeData.mediaLibraryId}`);
+            }
+        } catch (error) {
+            console.error(`[WORKER] Erro ao buscar arquivo da biblioteca:`, error);
+            throw error;
+        }
+    }
 
     if (!fileIdentifier) {
-        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        console.warn(`[Flow Media] Nenhum file_id, URL ou mediaLibraryId fornecido para o nó de ${type} ${node.id}`);
         return null;
     }
 
