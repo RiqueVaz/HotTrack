@@ -3971,7 +3971,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, callback_data: `copy_${pixResult.transaction_id}` }]] } // Usando callback_data para 'copy' (ou copy_text se suportado)
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
                     });
     
                     if (sentMessage.ok) {
