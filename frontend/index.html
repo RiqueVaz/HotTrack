@@ -6680,9 +6680,10 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="3" 
+                                    maxLength="4096" 
                                     value={actionData.text || ''} 
                                     onChange={e => updateAction(index, 'text', e.target.value)} 
-                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}}"
+                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
                             </div>
                             <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
@@ -6748,9 +6749,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.caption || ''} 
                                     onChange={e => updateAction(index, 'caption', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Legenda (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6841,9 +6844,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.pixMessageText || ''} 
                                     onChange={e => updateAction(index, 'pixMessageText', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Texto da mensagem (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6885,9 +6890,11 @@ function generatePreviewHTML(data) {
                             <textarea 
                                 className="form-textarea" 
                                 rows="2" 
+                                maxLength="4096" 
                                 value={actionData.deliveryText || ''} 
                                 onChange={e => updateAction(index, 'deliveryText', e.target.value)}
                                 style={{fontSize: '0.85rem'}}
+                                placeholder="Texto de entrega (máx: 4096 caracteres)"
                             />
                         </div>
                     )}

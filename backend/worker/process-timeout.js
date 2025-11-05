@@ -600,7 +600,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
         switch (action.type) {
             case 'message':
                 try {
-                    const textToSend = await replaceVariables(actionData.text, variables);
+                    let textToSend = await replaceVariables(actionData.text, variables);
+                    
+                    // Validação do tamanho do texto (limite do Telegram: 4096 caracteres)
+                    if (textToSend.length > 4096) {
+                        console.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
+                        textToSend = textToSend.substring(0, 4093) + '...';
+                    }
                     
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
@@ -634,7 +640,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'video':
             case 'audio': {
                 try {
-                    const caption = await replaceVariables(actionData.caption, variables);
+                    let caption = await replaceVariables(actionData.caption, variables);
+                    
+                    // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
+                    if (caption && caption.length > 1024) {
+                        console.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
+                        caption = caption.substring(0, 1021) + '...';
+                    }
+                    
                     const response = await handleMediaNode(action, botToken, chatId, caption);
 
                     if (response && response.ok) {
@@ -702,7 +715,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                     variables.last_transaction_id = pixResult.transaction_id;
     
-                    const messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido
+                    
+                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                    if (messageText && messageText.length > 1024) {
+                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        messageText = messageText.substring(0, 1021) + '...';
+                    }
+                    
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
