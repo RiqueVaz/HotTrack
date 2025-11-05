@@ -4446,10 +4446,27 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         if (currentNode.type === 'action') {
-            // 1. Executa todas as ações dentro do nó
-            const actions = currentNode.data.actions || [];
-            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actions.length} ação(ões): ${actions.map(a => a.type).join(', ')}`);
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+            // 1. Prepara as ações para execução
+            const allActions = currentNode.data.actions || [];
+            const willBeScheduled = currentNode.data.waitForReply === true;
+            
+            // Se o nó será agendado (waitForReply), separa ações de mídia
+            let actionsToExecuteNow = allActions;
+            let scheduledMediaActions = [];
+            
+            if (willBeScheduled) {
+                const mediaTypes = ['image', 'video', 'audio'];
+                scheduledMediaActions = allActions.filter(a => mediaTypes.includes(a.type));
+                actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
+                
+                if (scheduledMediaActions.length > 0) {
+                    console.log(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
+                    variables._scheduled_media_actions = scheduledMediaActions;
+                }
+            }
+            
+            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
+            const actionResult = await processActions(actionsToExecuteNow, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
             // 2. Persiste as variáveis (caso 'action_pix' tenha atualizado 'last_transaction_id')
             await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
