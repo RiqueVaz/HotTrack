@@ -4418,25 +4418,19 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Cria o payload com todas as informações necessárias
-                    const payload = {
-                        chat_id: chatId, 
-                        bot_id: botId, 
-                        target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                        variables: variables
-                    };
-                    
-                    // Agenda o worker de timeout (apenas uma vez)
+                    // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: payload,
+                        body: { 
+                            chat_id: chatId, 
+                            bot_id: botId, 
+                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
+                            variables: variables
+                        },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
                         method: "POST"
                     });
-                    
-                    // O ID da mensagem agendada será salvo no banco e enviado no payload
-                    // quando o worker for executado
                     
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     await sql`

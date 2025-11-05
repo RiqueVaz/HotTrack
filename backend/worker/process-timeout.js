@@ -1108,25 +1108,19 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Cria o payload com todas as informações necessárias
-                    const payload = {
-                        chat_id: chatId, 
-                        bot_id: botId, 
-                        target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                        variables: variables
-                    };
-                    
-                    // Agenda o worker de timeout (apenas uma vez)
+                    // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: payload,
+                        body: { 
+                            chat_id: chatId, 
+                            bot_id: botId, 
+                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
+                            variables: variables
+                        },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
                         method: "POST"
                     });
-                    
-                    // O ID da mensagem agendada será salvo no banco e enviado no payload
-                    // quando o worker for executado
                     
                     await sql`
                         UPDATE user_flow_states 
@@ -1216,7 +1210,7 @@ async function handler(req, res) {
 
     try {
         // 1. Recebe os dados agendados pelo QStash
-        const { chat_id, bot_id, target_node_id, variables, scheduled_message_id } = req.body;
+        const { chat_id, bot_id, target_node_id, variables } = req.body;
         const logPrefix = '[WORKER]';
 
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
@@ -1245,12 +1239,6 @@ async function handler(req, res) {
         if (!currentState.waiting_for_input) {
             console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
             return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
-        }
-        
-        // Verifica se este é o timeout mais recente (evita que timeouts antigos sejam processados)
-        if (scheduled_message_id && currentState.scheduled_message_id !== scheduled_message_id) {
-            console.log(`${logPrefix} [Timeout] Ignorado: ID da mensagem agendada não corresponde ao estado atual. Atual: ${currentState.scheduled_message_id}, Recebido: ${scheduled_message_id}`);
-            return res.status(200).json({ message: 'Timeout ignored, scheduled message ID mismatch.' });
         }
 
         // 4. O usuário NÃO respondeu a tempo.
