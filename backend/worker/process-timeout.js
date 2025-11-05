@@ -794,23 +794,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 }
                 
                 console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowId} para o chat ${chatId}`);
-                // Inicia o novo fluxo (passando o ID do fluxo como 'startNodeId' do novo fluxo)
-                // O 'startNodeId' do processFlow é o NÓ, mas como fluxos antigos não têm 'start node',
-                // precisamos adaptar processFlow para aceitar um ID de FLUXO.
                 
-                // *** CORREÇÃO DE LÓGICA ***
-                // O 'processFlow' que você tem busca o fluxo pelo bot_id.
-                // Precisamos que o 'processFlow' busque pelo 'flow.id' se 'startNodeId' for um ID de fluxo.
-                
-                // ASSUMINDO que 'processFlow' foi ajustado para receber um 'flowId'
-                // Esta é uma chamada RECURSIVA para o 'processFlow' deste worker.
-                
-                // CORREÇÃO: A função 'processFlow' precisa saber qual fluxo carregar.
-                // Se 'startNodeId' for um ID de fluxo (ex: 'flow_123'), 'processFlow' deve carregá-lo.
-                // Se 'startNodeId' for um ID de nó (ex: 'node_abc'), 'processFlow' deve continuar.
-                
-                // Simplesmente chamar 'processFlow' com o ID do *fluxo* não funciona.
-                // Devemos chamar 'processFlow' com o 'startNodeId' (trigger) *daquele* fluxo.
+                // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
+                try {
+                    const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    if (stateToCancel && stateToCancel.scheduled_message_id) {
+                        try {
+                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                        } catch (e) {
+                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                }
                 
                 // Garante que targetFlowId seja um número para a query SQL
                 const targetFlowIdNum = parseInt(targetFlowId, 10);
@@ -839,6 +837,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
                 let attempts = 0;
                 const maxAttempts = 20; // Proteção contra loops infinitos
+                
+                // Limpa o estado atual antes de iniciar o novo fluxo
+                await sql`UPDATE user_flow_states 
+                          SET waiting_for_input = false, scheduled_message_id = NULL 
+                          WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 // Pula nós do tipo 'trigger' até encontrar um nó válido
                 while (currentNodeId && attempts < maxAttempts) {
@@ -1105,16 +1108,33 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
+                    // Primeiro cria o payload base
+                    const payload = {
+                        chat_id: chatId, 
+                        bot_id: botId, 
+                        target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
+                        variables: variables
+                    };
+                    
+                    // Agenda o worker de timeout
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { 
-                            chat_id: chatId, 
-                            bot_id: botId, 
-                            target_node_id: noReplyNodeId,
-                            variables: variables 
-                        },
+                        body: payload,
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
+                        method: "POST"
+                    });
+                    
+                    // Atualiza o payload com o ID da mensagem agendada
+                    payload.scheduled_message_id = response.messageId;
+                    
+                    // Atualiza a mensagem agendada com o ID correto
+                    await qstashClient.publishJSON({
+                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                        body: payload,
+                        delay: `${timeoutMinutes}m`,
+                        contentBasedDeduplication: false,
+                        messageId: response.messageId,
                         method: "POST"
                     });
                     
@@ -1197,9 +1217,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
     }
 }
-
-
-// ==========================================================
 // ==========================================================
 
 async function handler(req, res) {
@@ -1209,7 +1226,7 @@ async function handler(req, res) {
 
     try {
         // 1. Recebe os dados agendados pelo QStash
-        const { chat_id, bot_id, target_node_id, variables } = req.body;
+        const { chat_id, bot_id, target_node_id, variables, scheduled_message_id } = req.body;
         const logPrefix = '[WORKER]';
 
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
@@ -1223,19 +1240,27 @@ async function handler(req, res) {
         const sellerId = bot.seller_id;
 
         // 3. *** VERIFICAÇÃO CRÍTICA ***
-        // O usuário AINDA está esperando? (Se 'waiting_for_input' for false,
-        // significa que ele respondeu e o fluxo principal já continuou).
+        // Verifica se o estado atual corresponde ao esperado
         const [currentState] = await sql`
-            SELECT 1 FROM user_flow_states 
-            WHERE chat_id = ${chat_id} 
-              AND bot_id = ${bot_id} 
-              AND waiting_for_input = true`;
+            SELECT waiting_for_input, scheduled_message_id, current_node_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
 
+        // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
-            // O usuário já respondeu. O fluxo principal já limpou o 'waiting_for_input'.
-            // Este timeout chegou atrasado e deve ser ignorado.
+            console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
+            return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
+        }
+        
+        if (!currentState.waiting_for_input) {
             console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
             return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
+        }
+        
+        // Verifica se este é o timeout mais recente (evita que timeouts antigos sejam processados)
+        if (scheduled_message_id && currentState.scheduled_message_id !== scheduled_message_id) {
+            console.log(`${logPrefix} [Timeout] Ignorado: ID da mensagem agendada não corresponde ao estado atual. Atual: ${currentState.scheduled_message_id}, Recebido: ${scheduled_message_id}`);
+            return res.status(200).json({ message: 'Timeout ignored, scheduled message ID mismatch.' });
         }
 
         // 4. O usuário NÃO respondeu a tempo.
@@ -1250,16 +1275,21 @@ async function handler(req, res) {
         // 5. Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
         // o 'processFlow' saberá que deve encerrar o fluxo.
-        await processFlow(
-            chat_id, 
-            bot_id, 
-            botToken, 
-            sellerId, 
-            target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
-            variables
-        );
-
-        return res.status(200).json({ message: 'Timeout processed successfully.' });
+        if (target_node_id) {
+            await processFlow(
+                chat_id, 
+                bot_id, 
+                botToken, 
+                sellerId, 
+                target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
+                variables
+            );
+            return res.status(200).json({ message: 'Timeout processed successfully.' });
+        } else {
+            console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
+            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+            return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
+        }
 
     } catch (error) {
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);

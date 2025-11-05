@@ -4093,6 +4093,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                 console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
 
+                // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
+                try {
+                    const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    if (stateToCancel && stateToCancel.scheduled_message_id) {
+                        try {
+                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                        } catch (e) {
+                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                }
+
                 // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
                 const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
@@ -4112,6 +4127,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
                 let attempts = 0;
                 const maxAttempts = 20; // Proteção contra loops infinitos
+                
+                // Limpa o estado atual antes de iniciar o novo fluxo
+                await sql`UPDATE user_flow_states 
+                          SET waiting_for_input = false, scheduled_message_id = NULL 
+                          WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 // Pula nós do tipo 'trigger' até encontrar um nó válido
                 while (currentNodeId && attempts < maxAttempts) {
@@ -4398,17 +4418,33 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
+                    // Primeiro cria o payload base
+                    const payload = {
+                        chat_id: chatId, 
+                        bot_id: botId, 
+                        target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
+                        variables: variables
+                    };
+                    
                     // Agenda o worker de timeout
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { 
-                            chat_id: chatId, 
-                            bot_id: botId, 
-                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables 
-                        },
+                        body: payload,
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
+                        method: "POST"
+                    });
+                    
+                    // Atualiza o payload com o ID da mensagem agendada
+                    payload.scheduled_message_id = response.messageId;
+                    
+                    // Atualiza a mensagem agendada com o ID correto
+                    await qstashClient.publishJSON({
+                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                        body: payload,
+                        delay: `${timeoutMinutes}m`,
+                        contentBasedDeduplication: false,
+                        messageId: response.messageId,
                         method: "POST"
                     });
                     
