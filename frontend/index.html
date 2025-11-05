@@ -5147,15 +5147,17 @@ function generatePreviewHTML(data) {
                         </div>
                     )}
                     
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Atenção: As funcionalidades de anexar fluxos e mídias ainda estão em desenvolvimento.</p>
+                    <div style={{ background: 'rgba(56, 189, 248, 0.1)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+                        <p style={{ color: 'var(--brand-primary)', fontSize: '0.9rem', margin: 0, fontWeight: '500' }}>💡 Configure o que será incluído no compartilhamento:</p>
+                    </div>
 
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} disabled />
-                        <label htmlFor="bundleFlows">Incluir fluxos anexados (encaminhados)</label>
+                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} />
+                        <label htmlFor="bundleFlows" style={{ fontWeight: '500' }}>✅ Incluir fluxos anexados (encaminhados)</label>
                     </div>
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} disabled />
-                        <label htmlFor="bundleMedia">Incluir mídias (imagens, vídeos, áudios)</label>
+                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} />
+                        <label htmlFor="bundleMedia" style={{ fontWeight: '500' }}>✅ Incluir mídias (imagens, vídeos, áudios)</label>
                     </div>
                      <div className="form-group checkbox-group">
                         <input type="checkbox" id="allowReshare" checked={allowReshare} onChange={e => setAllowReshare(e.target.checked)} />

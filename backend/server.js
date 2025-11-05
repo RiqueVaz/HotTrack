@@ -5751,25 +5751,177 @@ app.get('/api/share/details/:shareId', async (req, res) => {
     }
 });
 
-// Endpoint 19: Importar fluxo por link
+// ============================================================
+// FUNÇÕES AUXILIARES PARA IMPORTAÇÃO DE FLUXOS
+// ============================================================
+
+/**
+ * Copia fluxos anexados (linked flows) referenciados nos nós
+ */
+async function copyLinkedFlows(nodes, originalSellerId, newSellerId, newBotId) {
+    const flowIdMapping = {};
+    if (!nodes || !Array.isArray(nodes)) return flowIdMapping;
+    
+    const linkedFlowIds = new Set();
+    for (const node of nodes) {
+        if (node.data?.linked_flow_id) {
+            linkedFlowIds.add(node.data.linked_flow_id);
+        }
+    }
+    
+    if (linkedFlowIds.size === 0) return flowIdMapping;
+    console.log(`[Copy Linked Flows] Encontrados ${linkedFlowIds.size} fluxos anexados para copiar`);
+    
+    for (const oldFlowId of linkedFlowIds) {
+        try {
+            const [linkedFlow] = await sqlWithRetry(
+                'SELECT name, nodes, trigger_keyword FROM flows WHERE id = $1 AND seller_id = $2',
+                [oldFlowId, originalSellerId]
+            );
+            
+            if (linkedFlow) {
+                const newFlowName = `${linkedFlow.name} (Anexado)`;
+                const [newLinkedFlow] = await sqlWithRetry(`
+                    INSERT INTO flows (seller_id, bot_id, name, nodes, trigger_keyword)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id
+                `, [newSellerId, newBotId, newFlowName, linkedFlow.nodes, linkedFlow.trigger_keyword]);
+                
+                flowIdMapping[oldFlowId] = newLinkedFlow.id;
+                console.log(`[Copy Linked Flows] Copiado fluxo ${oldFlowId} -> ${newLinkedFlow.id}`);
+            }
+        } catch (error) {
+            console.error(`[Copy Linked Flows] Erro ao copiar fluxo ${oldFlowId}:`, error.message);
+        }
+    }
+    
+    return flowIdMapping;
+}
+
+/**
+ * Copia mídias referenciadas nos nós
+ */
+async function copyMediaFiles(nodes, originalSellerId, newSellerId) {
+    const mediaMapping = {};
+    if (!nodes || !Array.isArray(nodes)) return mediaMapping;
+    
+    const mediaFileIds = new Set();
+    for (const node of nodes) {
+        const data = node.data || {};
+        if (data.image) mediaFileIds.add(data.image);
+        if (data.video) mediaFileIds.add(data.video);
+        if (data.audio) mediaFileIds.add(data.audio);
+        if (data.file_id) mediaFileIds.add(data.file_id);
+    }
+    
+    if (mediaFileIds.size === 0) return mediaMapping;
+    console.log(`[Copy Media] Encontrados ${mediaFileIds.size} arquivos de mídia para copiar`);
+    
+    for (const fileId of mediaFileIds) {
+        try {
+            const [originalMedia] = await sqlWithRetry(
+                'SELECT file_name, file_id, file_type, thumbnail_file_id FROM media_library WHERE file_id = $1 AND seller_id = $2',
+                [fileId, originalSellerId]
+            );
+            
+            if (originalMedia) {
+                const [existingMedia] = await sqlWithRetry(
+                    'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2',
+                    [fileId, newSellerId]
+                );
+                
+                if (!existingMedia) {
+                    const newFileName = `${originalMedia.file_name} (Importado)`;
+                    await sqlWithRetry(`
+                        INSERT INTO media_library (seller_id, file_name, file_id, file_type, thumbnail_file_id)
+                        VALUES ($1, $2, $3, $4, $5)
+                    `, [newSellerId, newFileName, originalMedia.file_id, originalMedia.file_type, originalMedia.thumbnail_file_id]);
+                    
+                    console.log(`[Copy Media] Copiado registro de mídia ${fileId}`);
+                }
+                mediaMapping[fileId] = fileId;
+            }
+        } catch (error) {
+            console.error(`[Copy Media] Erro ao copiar mídia ${fileId}:`, error.message);
+        }
+    }
+    
+    return mediaMapping;
+}
+
+/**
+ * Atualiza referências de linked_flow_id nos nós
+ */
+function updateNodeReferences(nodes, flowIdMapping) {
+    if (!nodes || !Array.isArray(nodes) || Object.keys(flowIdMapping).length === 0) {
+        return nodes;
+    }
+    
+    return nodes.map(node => {
+        if (node.data?.linked_flow_id && flowIdMapping[node.data.linked_flow_id]) {
+            return {
+                ...node,
+                data: {
+                    ...node.data,
+                    linked_flow_id: flowIdMapping[node.data.linked_flow_id]
+                }
+            };
+        }
+        return node;
+    });
+}
+
+// Endpoint 19: Importar fluxo por link (GRATUITO)
 app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
     const { shareableLinkId, botId } = req.body;
     const sellerId = req.user.id;
     try {
         if (!botId || !shareableLinkId) return res.status(400).json({ message: 'ID do link e ID do bot são obrigatórios.' });
         
-        const [originalFlow] = await sqlWithRetry('SELECT name, nodes, share_price_cents FROM flows WHERE shareable_link_id = $1', [shareableLinkId]);
+        // Buscar fluxo original com configurações de compartilhamento
+        const [originalFlow] = await sqlWithRetry(`
+            SELECT name, nodes, share_price_cents, seller_id,
+                   share_bundle_linked_flows, share_bundle_media
+            FROM flows WHERE shareable_link_id = $1
+        `, [shareableLinkId]);
+        
         if (!originalFlow) return res.status(404).json({ message: 'Link de compartilhamento inválido ou expirado.' });
 
         if (originalFlow.share_price_cents > 0) {
             return res.status(400).json({ message: 'Este fluxo é pago e não pode ser importado por esta via.' });
         }
 
+        let processedNodes = originalFlow.nodes;
+        
+        // Copiar fluxos anexados se configurado
+        if (originalFlow.share_bundle_linked_flows) {
+            console.log('[Import Free Flow] Copiando fluxos anexados...');
+            const flowIdMapping = await copyLinkedFlows(
+                originalFlow.nodes,
+                originalFlow.seller_id,
+                sellerId,
+                botId
+            );
+            processedNodes = updateNodeReferences(processedNodes, flowIdMapping);
+        }
+        
+        // Copiar mídias se configurado
+        if (originalFlow.share_bundle_media) {
+            console.log('[Import Free Flow] Copiando mídias...');
+            await copyMediaFiles(
+                originalFlow.nodes,
+                originalFlow.seller_id,
+                sellerId
+            );
+        }
+
         const newFlowName = `${originalFlow.name} (Importado)`;
         const [newFlow] = await sqlWithRetry(
             `INSERT INTO flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *`,
-            [sellerId, botId, newFlowName, originalFlow.nodes]
+            [sellerId, botId, newFlowName, processedNodes]
         );
+        
+        console.log(`[Import Free Flow] Fluxo ${newFlow.id} importado com sucesso`);
         res.status(201).json(newFlow);
     } catch (error) {
         console.error("Erro ao importar fluxo por link:", error);
@@ -6031,14 +6183,39 @@ app.post('/api/flows/purchase/import', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: 'Este fluxo já foi importado.' });
         }
         
-        // Buscar fluxo original
-        const [originalFlow] = await sqlWithRetry(
-            'SELECT name, nodes FROM flows WHERE shareable_link_id = $1',
-            [transaction.flow_share_link_id]
-        );
+        // Buscar fluxo original com configurações de compartilhamento
+        const [originalFlow] = await sqlWithRetry(`
+            SELECT name, nodes, seller_id,
+                   share_bundle_linked_flows, share_bundle_media
+            FROM flows WHERE shareable_link_id = $1
+        `, [transaction.flow_share_link_id]);
         
         if (!originalFlow) {
             return res.status(404).json({ message: 'Fluxo original não encontrado.' });
+        }
+        
+        let processedNodes = originalFlow.nodes;
+        
+        // Copiar fluxos anexados se configurado
+        if (originalFlow.share_bundle_linked_flows) {
+            console.log('[Import Paid Flow] Copiando fluxos anexados...');
+            const flowIdMapping = await copyLinkedFlows(
+                originalFlow.nodes,
+                originalFlow.seller_id,
+                buyerId,
+                botId
+            );
+            processedNodes = updateNodeReferences(processedNodes, flowIdMapping);
+        }
+        
+        // Copiar mídias se configurado
+        if (originalFlow.share_bundle_media) {
+            console.log('[Import Paid Flow] Copiando mídias...');
+            await copyMediaFiles(
+                originalFlow.nodes,
+                originalFlow.seller_id,
+                buyerId
+            );
         }
         
         // Importar fluxo
@@ -6047,7 +6224,7 @@ app.post('/api/flows/purchase/import', authenticateJwt, async (req, res) => {
             INSERT INTO flows (seller_id, bot_id, name, nodes) 
             VALUES ($1, $2, $3, $4) 
             RETURNING *
-        `, [buyerId, botId, newFlowName, originalFlow.nodes]);
+        `, [buyerId, botId, newFlowName, processedNodes]);
         
         // Marcar como importado
         await sqlWithRetry(`
