@@ -599,9 +599,35 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
         switch (action.type) {
             case 'message':
-                const textToSend = await replaceVariables(actionData.text, variables);
-                // Corrigido: Removido o '0' extra da chamada sendMessage
-                await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables); 
+                try {
+                    const textToSend = await replaceVariables(actionData.text, variables);
+                    
+                    // Verifica se tem botão para anexar
+                    if (actionData.buttonText && actionData.buttonUrl) {
+                        const btnText = await replaceVariables(actionData.buttonText, variables);
+                        const btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Envia com botão inline
+                        const payload = { 
+                            chat_id: chatId, 
+                            text: textToSend, 
+                            parse_mode: 'HTML',
+                            reply_markup: { 
+                                inline_keyboard: [[{ text: btnText, url: btnUrl }]] 
+                            }
+                        };
+                        
+                        const response = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        if (response && response.ok) {
+                            await saveMessageToDb(sellerId, botId, response.result, 'bot');
+                        }
+                    } else {
+                        // Envia mensagem normal sem botão
+                        await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
+                } 
                 break;
 
             case 'image':
