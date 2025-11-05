@@ -1313,7 +1313,18 @@
                     ]);
                     this.state.data = { ...this.state.data, ...staticData };
                     this.renderLayout();
-                    this.navigateTo('dashboard');
+                    
+                    // Verificar se há parâmetro de link de compartilhamento na URL
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const shareLink = urlParams.get('link');
+                    
+                    if (shareLink) {
+                        // Se houver link de compartilhamento, vai para HotBot
+                        this.navigateTo('hotbot');
+                    } else {
+                        // Caso contrário, vai para dashboard
+                        this.navigateTo('dashboard');
+                    }
                 } catch (e) {
                     console.error("Erro ao inicializar:", e);
                     this.logout();
@@ -5098,6 +5109,7 @@ function generatePreviewHTML(data) {
         const handleGenerateLink = async () => {
             setIsGenerating(true);
             try {
+                const FRONTEND_URL = window.location.origin;
                 const options = {
                     priceInCents: isPaid ? Math.round(price * 100) : 0,
                     allowReshare,
