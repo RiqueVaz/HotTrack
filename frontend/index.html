@@ -6896,6 +6896,7 @@ function generatePreviewHTML(data) {
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem'}}>Texto</label>
                                 <textarea 
+                                    id={`message-textarea-${index}`}
                                     className="form-textarea" 
                                     rows="3" 
                                     maxLength="4096" 
@@ -6921,6 +6922,74 @@ function generatePreviewHTML(data) {
                                     placeholder="URL do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
+                            </div>
+                            
+                            <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
+                                <label style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', display: 'block'}}>
+                                    Adicionar Variável:
+                                </label>
+                                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{primeiro_nome}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Primeiro Nome
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{nome_completo}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Nome Completo
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{cidade}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 10, cursorPos + 10);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Cidade
+                                    </button>
+                                </div>
                             </div>
                             
                         </>
