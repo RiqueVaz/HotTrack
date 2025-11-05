@@ -4418,7 +4418,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Primeiro cria o payload base
+                    // Cria o payload com todas as informações necessárias
                     const payload = {
                         chat_id: chatId, 
                         bot_id: botId, 
@@ -4426,7 +4426,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         variables: variables
                     };
                     
-                    // Agenda o worker de timeout
+                    // Agenda o worker de timeout (apenas uma vez)
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
                         body: payload,
@@ -4435,18 +4435,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         method: "POST"
                     });
                     
-                    // Atualiza o payload com o ID da mensagem agendada
-                    payload.scheduled_message_id = response.messageId;
-                    
-                    // Atualiza a mensagem agendada com o ID correto
-                    await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: payload,
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: false,
-                        messageId: response.messageId,
-                        method: "POST"
-                    });
+                    // O ID da mensagem agendada será salvo no banco e enviado no payload
+                    // quando o worker for executado
                     
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     await sql`
