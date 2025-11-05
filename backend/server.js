@@ -963,6 +963,41 @@ async function processStepForQStash(step, sellerId) {
     }
 }
 
+// Função para processar variáveis e substituir file_ids pesados por mediaLibraryIds antes de enviar ao QStash
+async function processVariablesForQStash(variables, sellerId) {
+    const processedVars = { ...variables };
+    
+    // Verifica se há referências de mídia nas variáveis
+    if (processedVars.last_media_url) {
+        const fileUrl = processedVars.last_media_url;
+        
+        // Verifica se é um file_id da biblioteca
+        const isLibraryFile = fileUrl && (fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC'));
+        
+        if (isLibraryFile) {
+            try {
+                const [media] = await sqlWithRetry(
+                    'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+                    [fileUrl, sellerId]
+                );
+                
+                if (media) {
+                    // Substitui o file_id pelo mediaLibraryId
+                    processedVars.last_media_url = null;
+                    processedVars.last_media_library_id = media.id;
+                    console.log(`[processVariablesForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
+                } else {
+                    console.warn(`[processVariablesForQStash] Arquivo da biblioteca não encontrado: ${fileUrl}`);
+                }
+            } catch (error) {
+                console.error(`[processVariablesForQStash] Erro ao processar variável de mídia:`, error);
+            }
+        }
+    }
+    
+    return processedVars;
+}
+
 /**
  * Esta função é usada para enviar mídia diretamente pelo servidor principal.
  * É chamada pelo processActions apenas para nós sem agendamento (waitForReply = false).
@@ -4543,6 +4578,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
+                    // Processa as variáveis para substituir file_ids pesados por mediaLibraryIds
+                    const processedVariables = await processVariablesForQStash(variables, sellerId);
+                    
                     // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
@@ -4550,7 +4588,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             chat_id: chatId, 
                             bot_id: botId, 
                             target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables
+                            variables: processedVariables
                         },
                         delay: `${timeoutMinutes}m`,
                         contentBasedDeduplication: true,
