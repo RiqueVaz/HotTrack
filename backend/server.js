@@ -4076,8 +4076,18 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error);
-                   
+                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                    if (error.response) {
+                        console.error(`${logPrefix} Status HTTP:`, error.response.status);
+                        console.error(`${logPrefix} Resposta da API:`, JSON.stringify(error.response.data, null, 2));
+                        console.error(`${logPrefix} Headers:`, JSON.stringify(error.response.headers, null, 2));
+                    }
+                    console.error(`${logPrefix} Stack trace:`, error.stack);
+                    try {
+                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Por favor, tente novamente.", botToken, sellerId, botId, false, variables);
+                    } catch (sendErr) {
+                        console.error(`${logPrefix} Falha ao enviar mensagem de erro:`, sendErr.message);
+                    }
                 }
                 break;
 
