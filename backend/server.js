@@ -5631,16 +5631,23 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao processar o upload do ficheiro: ' + error.message });
+        res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
     }
 });
 
 // Endpoint 13: Deletar mídia da biblioteca
 app.delete('/api/media/:id', authenticateJwt, async (req, res) => {
     try {
-        const result = await sqlWithRetry('DELETE FROM media_library WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
-        if (result.count > 0) res.status(204).send();
-        else res.status(404).json({ message: 'Mídia não encontrada.' });
+        // Primeiro verificar se a mídia existe e pertence ao usuário
+        const [existingMedia] = await sqlWithRetry('SELECT id FROM media_library WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        
+        if (!existingMedia) {
+            return res.status(404).json({ message: 'Mídia não encontrada.' });
+        }
+        
+        // Se existe, deletar
+        await sqlWithRetry('DELETE FROM media_library WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        res.status(204).send();
     } catch (error) {
         res.status(500).json({ message: 'Erro ao excluir a mídia.' });
     }
