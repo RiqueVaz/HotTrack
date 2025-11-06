@@ -4083,11 +4083,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         console.error(`${logPrefix} Headers:`, JSON.stringify(error.response.headers, null, 2));
                     }
                     console.error(`${logPrefix} Stack trace:`, error.stack);
-                    try {
-                        await sendMessage(chatId, "Desculpe, não consegui gerar o PIX neste momento. Por favor, tente novamente.", botToken, sellerId, botId, false, variables);
-                    } catch (sendErr) {
-                        console.error(`${logPrefix} Falha ao enviar mensagem de erro:`, sendErr.message);
-                    }
+                    
                 }
                 break;
 
