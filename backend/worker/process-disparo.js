@@ -341,7 +341,7 @@ async function handler(req, res) {
                 const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
                 response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
                     chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: qr_code_text }]] }
+                    reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: qr_code_text } }]] }
                 });
         } else if (step.type === 'check_pix' || step.type === 'delay') {
                 // Ignora ativamente esses passos, eles não enviam nada
