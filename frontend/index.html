@@ -4978,8 +4978,12 @@ function generatePreviewHTML(data) {
             const [importingFlowLink, setImportingFlowLink] = useState(null);
 
             // Salvar a página atual no localStorage sempre que mudar
+            // Mas não salvar estados temporários como flow-editor ou import-flow
             useEffect(() => {
-                localStorage.setItem('hotbot-currentPage', currentPage);
+                const temporaryPages = ['flow-editor', 'import-flow'];
+                if (!temporaryPages.includes(currentPage)) {
+                    localStorage.setItem('hotbot-currentPage', currentPage);
+                }
             }, [currentPage]);
 
             const fetchInitialData = useCallback(() => {
@@ -5000,10 +5004,17 @@ function generatePreviewHTML(data) {
                 }
             }, [fetchInitialData]);
 
+            // Se tentar acessar flow-editor sem um fluxo válido, redirecionar para flows
+            useEffect(() => {
+                if (currentPage === 'flow-editor' && !editingFlow) {
+                    setCurrentPage('flows');
+                }
+            }, [currentPage, editingFlow]);
+
             const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
             
         if (isLoading) return <div className="flex items-center justify-center h-full text-white">Carregando dados do HotBot...</div>;
-      
+
             const PageComponent = {
                 bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
                 flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
@@ -5012,7 +5023,7 @@ function generatePreviewHTML(data) {
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
                 'disparos-history': <DisparosHistoryPage />,
-                'flow-editor': <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} />,
+                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} /> : null,
                 'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
             }[currentPage];
 
