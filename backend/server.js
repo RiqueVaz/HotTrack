@@ -4855,8 +4855,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       }
     });
 
-
-// ==========================================================
 //          WEBHOOKS DE PROVEDORES DE PAGAMENTO PIX
 // ==========================================================
 
@@ -4866,7 +4864,9 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
     
     const normalized = String(status || '').toLowerCase();
     const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    const canceledStatuses = new Set(['canceled', 'cancelled', 'expired', 'failed']);
     
+    // Processar PIX pago
     if (paidStatuses.has(normalized)) {
       try {
         const [tx] = await sql`
@@ -4915,8 +4915,27 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
               console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
               console.error(`[Webhook PushinPay] Stack:`, error.stack);
           }
-    } else {
-        console.log(`[Webhook PushinPay] Status '${status}' não é considerado pago. Ignorando.`);
+    } 
+    // Processar PIX cancelado/expirado
+    else if (canceledStatuses.has(normalized)) {
+        try {
+            console.log(`[Webhook PushinPay] PIX cancelado/expirado - ID: ${id}, Status: ${status}`);
+            
+            const [tx] = await sql`
+                UPDATE pix_transactions 
+                SET status = 'expired', updated_at = NOW() 
+                WHERE provider_transaction_id = ${id} AND provider = 'pushinpay' AND status = 'pending'
+                RETURNING id, status`;
+            
+            if (tx) {
+                console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) marcada como expirada.`);
+            }
+        } catch (error) {
+            console.error(`[Webhook PushinPay] Erro ao processar cancelamento:`, error.message);
+        }
+    } 
+    else {
+        console.log(`[Webhook PushinPay] Status '${status}' não processado. Ignorando.`);
     }
     res.sendStatus(200);
   });
