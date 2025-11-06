@@ -4080,9 +4080,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (error.response) {
                         console.error(`${logPrefix} Status HTTP:`, error.response.status);
                         console.error(`${logPrefix} Resposta da API:`, JSON.stringify(error.response.data, null, 2));
-                        console.error(`${logPrefix} Headers:`, JSON.stringify(error.response.headers, null, 2));
                     }
-                    console.error(`${logPrefix} Stack trace:`, error.stack);
                     
                 }
                 break;
