@@ -764,7 +764,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
                                 { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
                             providerStatus = String(resp.data.status || '').toLowerCase();
-                            customerData = { name: resp.data.payer_name, document: resp.data.payer_document };
+                            customerData = { name: resp.data.payer_name, document: resp.data.payer_national_registration };
                             pushinpayLastCheckAt.set(transaction.provider_transaction_id, now);
                         }
                     } else if (transaction.provider === 'syncpay') {

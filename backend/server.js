@@ -1195,6 +1195,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
             value: value_cents,
             webhook_url: `https://${preferredHost}/api/webhook/pushinpay`,
         };
+        console.log(`[PushinPay] Criando PIX com webhook_url: ${payload.webhook_url}`);
         const commission_cents = Math.floor(value_cents * commission_rate);
         if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
             payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
@@ -4105,7 +4106,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
                                 { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
                             providerStatus = String(resp.data.status || '').toLowerCase();
-                            customerData = { name: resp.data.payer_name, document: resp.data.payer_document };
+                            customerData = { name: resp.data.payer_name, document: resp.data.payer_national_registration };
                             pushinpayLastCheckAt.set(transaction.provider_transaction_id, now);
                         }
                     } else if (transaction.provider === 'syncpay') {
