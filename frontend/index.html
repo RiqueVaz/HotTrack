@@ -5105,7 +5105,7 @@ function generatePreviewHTML(data) {
                     bundleMedia
                 };
                 const response = await api.post(`/api/flows/${flow.id}/generate-share-link`, options);
-                const link = `${FRONTEND_URL}/?link=${response.data.shareable_link_id}`;
+                const link = `${window.location.origin}/?link=${response.data.shareable_link_id}`;
                 prompt("Link de compartilhamento gerado! Copie abaixo:", link);
                 onLinkGenerated();
                 onClose();
@@ -5135,15 +5135,17 @@ function generatePreviewHTML(data) {
                         </div>
                     )}
                     
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>Atenção: As funcionalidades de anexar fluxos e mídias ainda estão em desenvolvimento.</p>
+                    <div style={{ background: 'rgba(56, 189, 248, 0.1)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+                        <p style={{ color: 'var(--brand-primary)', fontSize: '0.9rem', margin: 0, fontWeight: '500' }}>💡 Configure o que será incluído no compartilhamento:</p>
+                    </div>
 
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} disabled />
-                        <label htmlFor="bundleFlows">Incluir fluxos anexados (encaminhados)</label>
+                        <input type="checkbox" id="bundleFlows" checked={bundleLinkedFlows} onChange={e => setBundleLinkedFlows(e.target.checked)} />
+                        <label htmlFor="bundleFlows" style={{ fontWeight: '500' }}>✅ Incluir fluxos anexados (encaminhados)</label>
                     </div>
                     <div className="form-group checkbox-group">
-                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} disabled />
-                        <label htmlFor="bundleMedia">Incluir mídias (imagens, vídeos, áudios)</label>
+                        <input type="checkbox" id="bundleMedia" checked={bundleMedia} onChange={e => setBundleMedia(e.target.checked)} />
+                        <label htmlFor="bundleMedia" style={{ fontWeight: '500' }}>✅ Incluir mídias (imagens, vídeos, áudios)</label>
                     </div>
                      <div className="form-group checkbox-group">
                         <input type="checkbox" id="allowReshare" checked={allowReshare} onChange={e => setAllowReshare(e.target.checked)} />
@@ -5237,9 +5239,28 @@ function generatePreviewHTML(data) {
                                     </label>
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
+                                {(() => {
+                                    const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                    const cannotShare = isImported && flow.share_allow_reshare === false;
+                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Importado sem permissão de compartilhamento</p>;
+                                })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => handleOpenShareModal(flow)}>Compartilhar</button>
+                                    <button 
+                                        className="btn btn-secondary btn-sm" 
+                                        onClick={() => handleOpenShareModal(flow)}
+                                        disabled={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            return isImported && flow.share_allow_reshare === false;
+                                        })()}
+                                        title={(() => {
+                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+                                            const cannotShare = isImported && flow.share_allow_reshare === false;
+                                            return cannotShare ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo';
+                                        })()}
+                                    >
+                                        Compartilhar
+                                    </button>
                                     <button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDelete(flow.id)}>Excluir</button>
                                 </div>
                             </div>
@@ -5259,6 +5280,7 @@ function generatePreviewHTML(data) {
         const [error, setError] = useState('');
         const [pixData, setPixData] = useState(null);
         const [isWaitingPayment, setIsWaitingPayment] = useState(false);
+        const [pollingInterval, setPollingInterval] = useState(null);
 
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -5296,9 +5318,86 @@ function generatePreviewHTML(data) {
             }
         };
         
-        const handleInitiatePixPayment = () => {
-             alert("Funcionalidade de pagamento via PIX em desenvolvimento. O backend precisa ser conectado à API de PIX para esta ação.");
+        const handleInitiatePixPayment = async () => {
+            if (!selectedBotId) { 
+                alert('Por favor, selecione um bot para importar o fluxo.'); 
+                return; 
+            }
+            
+            setIsWaitingPayment(true);
+            try {
+                const response = await api.post('/api/flows/generate-pix-import', { shareableLinkId });
+                setPixData(response.data);
+                
+                // Iniciar polling para verificar pagamento
+                startPaymentPolling(response.data.purchase_transaction_id);
+            } catch (err) {
+                alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            }
         };
+        
+        const startPaymentPolling = (purchaseTransactionId) => {
+            console.log('[Polling] Iniciando verificação de pagamento:', purchaseTransactionId);
+            
+            const interval = setInterval(async () => {
+                try {
+                    const response = await api.get(`/api/flows/check-payment/${purchaseTransactionId}`);
+                    console.log('[Polling] Status:', response.data);
+                    
+                    if (response.data.is_paid) {
+                        console.log('[Polling] Pagamento confirmado! Importando fluxo...');
+                        clearInterval(interval);
+                        setPollingInterval(null);
+                        
+                        // Importar fluxo automaticamente
+                        await handlePaidImport(purchaseTransactionId);
+                    }
+                } catch (err) {
+                    console.error('[Polling] Erro ao verificar pagamento:', err);
+                }
+            }, 3000); // Verifica a cada 3 segundos
+            
+            setPollingInterval(interval);
+        };
+        
+        const handlePaidImport = async (purchaseTransactionId) => {
+            setIsImporting(true);
+            try {
+                await api.post('/api/flows/import-paid', { 
+                    purchaseTransactionId, 
+                    botId: selectedBotId
+                });
+                
+                alert('🎉 Pagamento confirmado! Fluxo importado com sucesso!');
+                setPixData(null);
+                setIsWaitingPayment(false);
+                onImported();
+            } catch (err) {
+                alert('Erro ao importar fluxo pago: ' + (err.response?.data?.message || 'Tente novamente.'));
+                setIsWaitingPayment(false);
+            } finally {
+                setIsImporting(false);
+            }
+        };
+        
+        const handleCancelPayment = () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                setPollingInterval(null);
+            }
+            setPixData(null);
+            setIsWaitingPayment(false);
+        };
+        
+        // Cleanup ao desmontar componente
+        useEffect(() => {
+            return () => {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            };
+        }, [pollingInterval]);
 
         if (isLoading) {
             return <div style={{ padding: '2rem 3rem' }}><h2>A carregar detalhes do fluxo...</h2></div>;
@@ -5318,12 +5417,86 @@ function generatePreviewHTML(data) {
                     
                     {isPaid ? (
                         <>
-                            <h3>Este é um fluxo pago</h3>
-                            <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
-                            <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
-                            <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment}>
-                                {isWaitingPayment ? 'Aguardando Pagamento...' : 'Pagar com PIX para Importar'}
-                            </button>
+                            {!pixData ? (
+                                <>
+                                    <h3>Este é um fluxo pago</h3>
+                                    <p style={{color: 'var(--text-secondary)', margin: '1rem 0' }}>Para importar este fluxo, é necessário o pagamento de:</p>
+                                    <h2 style={{color: 'var(--brand-primary)', marginBottom: '2rem' }}>{priceInReais}</h2>
+                                    
+                                    <div className="form-group" style={{marginBottom: '1.5rem'}}>
+                                        <label htmlFor="botSelectImportPaid">Selecione o Bot de Destino</label>
+                                        <select id="botSelectImportPaid" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}>
+                                            <option value="">-- Selecione um Bot --</option>
+                                            {bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}
+                                        </select>
+                                    </div>
+                                    
+                                    <button className="btn btn-primary" onClick={handleInitiatePixPayment} disabled={isWaitingPayment || !selectedBotId}>
+                                        {isWaitingPayment ? 'Gerando PIX...' : 'Pagar com PIX para Importar'}
+                                    </button>
+                                </>
+                            ) : (
+                                <div style={{textAlign: 'center'}}>
+                                    <h3 style={{color: 'var(--brand-primary)', marginBottom: '1rem'}}>Pague com PIX</h3>
+                                    <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem'}}>
+                                        Valor: <strong>{(pixData.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                                    </p>
+                                    
+                                    {pixData.qr_code_base64 && (
+                                        <div style={{marginBottom: '1.5rem'}}>
+                                            <img 
+                                                src={`data:image/png;base64,${pixData.qr_code_base64}`} 
+                                                alt="QR Code PIX" 
+                                                style={{maxWidth: '280px', border: '2px solid var(--border-color)', borderRadius: '8px', padding: '10px', backgroundColor: 'white', display: 'block', margin: '0 auto'}}
+                                            />
+                                        </div>
+                                    )}
+                                    
+                                    <div style={{marginBottom: '1.5rem'}}>
+                                        <p style={{fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.5rem'}}>Código PIX Copia e Cola:</p>
+                                        <div style={{
+                                            backgroundColor: 'var(--bg-secondary)', 
+                                            padding: '0.75rem', 
+                                            borderRadius: '6px', 
+                                            border: '1px solid var(--border-color)',
+                                            wordBreak: 'break-all',
+                                            fontSize: '0.85rem',
+                                            fontFamily: 'monospace',
+                                            maxHeight: '100px',
+                                            overflowY: 'auto'
+                                        }}>
+                                            {pixData.qr_code_text}
+                                        </div>
+                                        <button 
+                                            className="btn btn-secondary btn-sm" 
+                                            style={{marginTop: '0.5rem'}}
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(pixData.qr_code_text);
+                                                alert('Código PIX copiado!');
+                                            }}
+                                        >
+                                            📋 Copiar Código PIX
+                                        </button>
+                                    </div>
+                                    
+                                    <div style={{
+                                        backgroundColor: '#fff3cd', 
+                                        border: '1px solid #ffc107', 
+                                        borderRadius: '6px', 
+                                        padding: '1rem',
+                                        marginBottom: '1rem'
+                                    }}>
+                                        <p style={{margin: 0, fontSize: '0.9rem', color: '#856404'}}>
+                                            ⏱️ <strong>Aguardando confirmação do pagamento...</strong><br/>
+                                            O fluxo será importado automaticamente após a confirmação.
+                                        </p>
+                                    </div>
+                                    
+                                    <button className="btn btn-danger btn-sm" onClick={handleCancelPayment}>
+                                        Cancelar Pagamento
+                                    </button>
+                                </div>
+                            )}
                         </>
                     ) : (
                         <>
@@ -5748,52 +5921,89 @@ function generatePreviewHTML(data) {
             return () => clearInterval(intervalId);
         }, [fetchMessages, selectedChat]);
         
-        useEffect(() => {
-            const activeUsers = showOnlyActive 
-                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
-                : users;
-
-            setFilteredUsers(
-                activeUsers.filter(u => 
-                    ((u.first_name || '') + ' ' + (u.last_name || '')).toLowerCase().includes(searchTerm.toLowerCase()) || 
-                    (u.chat_id || '').toString().includes(searchTerm) || 
-                    (u.click_id || '').toLowerCase().includes(searchTerm.toLowerCase())
-                )
-            );
-        }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
-
-        const handleFilterActiveToggle = async () => {
-            const nextState = !showOnlyActive;
-            setShowOnlyActive(nextState);
-
-            if (nextState && selectedBotId) {
-                setIsValidating(true);
-                try {
-                    const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
-                    setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
-                } catch (error) {
-                    console.error("Erro ao validar contatos", error);
-                    alert('Não foi possível validar os contatos.');
-                } finally {
-                    setIsValidating(false);
-                }
-            }
+        // Função auxiliar que retorna o nome completo (lógica original)
+        const getDisplayName = (u) => { 
+            if (!u) return ''; 
+            if (u.click_id) { 
+                const cleanId = u.click_id.replace('/start ', ''); 
+                return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); 
+            } 
+            return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; 
         };
-
+        
+        // Função para pegar apenas o primeiro nome do Telegram
+        const getFirstName = (u) => {
+            if (!u) return 'Desconhecido';
+            // Usa first_name do Telegram se existir
+            if (u.first_name) return u.first_name;
+            // Fallback: se não tiver first_name, usa click_id
+            if (u.click_id) {
+                const cleanId = u.click_id.replace('/start ', '');
+                return cleanId.charAt(0).toUpperCase() + cleanId.slice(1);
+            }
+            return 'Desconhecido';
+        };
+        
+        // Função para pegar o ID (click_id se tiver, senão chat_id)
+        const getLeadId = (u) => {
+            if (!u) return '';
+            // Prioridade: click_id
+            if (u.click_id) {
+                const cleanId = u.click_id.replace('/start ', '');
+                return cleanId;
+            }
+            // Fallback: chat_id
+            return u.chat_id ? String(u.chat_id) : '';
+        };
+        
         useEffect(() => {
-            if (selectedBotId) {
-                setSelectedChat(null);
-            }
-        }, [selectedBotId]);
+        const activeUsers = showOnlyActive 
+            ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+            : users;
 
-        const handleSelectChat = useCallback((user) => {
-            if (selectedChat?.chat_id !== user.chat_id) {
-                setMessages([]);
-                setSelectedChat(user);
-            }
-        }, [selectedChat]);
+        setFilteredUsers(
+            activeUsers.filter(u => {
+                const term = searchTerm.toLowerCase();
+                const firstName = (u.first_name || '').toLowerCase();
+                const leadId = getLeadId(u).toLowerCase();
+                
+                return firstName.includes(term) || leadId.includes(term);
+            })
+        );
+    }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
 
-        const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
+    const handleFilterActiveToggle = async () => {
+        const nextState = !showOnlyActive;
+        setShowOnlyActive(nextState);
+
+        if (nextState && selectedBotId) {
+            setIsValidating(true);
+            try {
+                const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
+                setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
+            } catch (error) {
+                console.error("Erro ao validar contatos", error);
+                alert('Não foi possível validar os contatos.');
+            } finally {
+                setIsValidating(false);
+            }
+        }
+    };
+
+    useEffect(() => {
+        if (selectedBotId) {
+            setSelectedChat(null);
+        }
+    }, [selectedBotId]);
+
+    const handleSelectChat = useCallback((user) => {
+        if (selectedChat?.chat_id !== user.chat_id) {
+            setMessages([]);
+            setSelectedChat(user);
+        }
+    }, [selectedChat]);
+
+    const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
 		const handleFileChange = (e) => {
 			const file = e.target.files[0];
 			if (!file || !selectedChat) return;
@@ -5843,7 +6053,7 @@ function generatePreviewHTML(data) {
         };
 
         const handleDelete = async (id) => { if (confirm(`Certeza?`)) { try { await api.delete(`/api/chats/${selectedBotId}/${id}`); fetchUsers(); if (selectedChat?.chat_id === id) { setSelectedChat(null); } } catch (e) { alert('Erro'); } } };
-        const getDisplayName = (u) => { if (!u) return ''; if (u.click_id) { const cleanId = u.click_id.replace('/start ', ''); return cleanId.charAt(0).toUpperCase() + cleanId.slice(1); } return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Desconhecido'; };
+        
         const getMessageSender = (msg) => {
             const selectedBot = bots.find(b => b.id == selectedBotId);
             switch(msg.sender_type) {
@@ -5897,10 +6107,18 @@ function generatePreviewHTML(data) {
                                 />
                             </div>
                             <div className="conversations-list">
-                                {filteredUsers.map(u => (<div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}><div className="conversation-item-name">{getDisplayName(u)}</div><p className="conversation-item-preview">{u.message_text}</p></div>))}
+                                {filteredUsers.map(u => (
+                                    <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                        <div className="conversation-item-name">
+                                            {getFirstName(u)}
+                                            <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                        </div>
+                                        <p className="conversation-item-preview">{u.message_text}</p>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getDisplayName(selectedChat)}</h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
                         <div className="contact-panel">
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
@@ -6247,7 +6465,7 @@ function generatePreviewHTML(data) {
             typing_action: 'Digitando',
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
-           // forward_flow: 'Encaminhar',
+            forward_flow: 'Encaminhar',
             delay: 'Atraso'
         };
         return labels[actionType] || actionType;
@@ -6290,7 +6508,7 @@ function generatePreviewHTML(data) {
                 typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
-               // forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6639,7 +6857,7 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-               // forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar'
             };
             
             const isDragging = draggedIndex === index;
@@ -6678,11 +6896,13 @@ function generatePreviewHTML(data) {
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem'}}>Texto</label>
                                 <textarea 
+                                    id={`message-textarea-${index}`}
                                     className="form-textarea" 
                                     rows="3" 
+                                    maxLength="4096" 
                                     value={actionData.text || ''} 
                                     onChange={e => updateAction(index, 'text', e.target.value)} 
-                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}}"
+                                    placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
                             </div>
                             <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
@@ -6702,6 +6922,74 @@ function generatePreviewHTML(data) {
                                     placeholder="URL do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
+                            </div>
+                            
+                            <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
+                                <label style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', display: 'block'}}>
+                                    Adicionar Variável:
+                                </label>
+                                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{primeiro_nome}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Primeiro Nome
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{nome_completo}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Nome Completo
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                            const textarea = document.getElementById(`message-textarea-${index}`);
+                                            if (textarea) {
+                                                const cursorPos = textarea.selectionStart;
+                                                const textBefore = actionData.text?.substring(0, cursorPos) || '';
+                                                const textAfter = actionData.text?.substring(cursorPos) || '';
+                                                updateAction(index, 'text', textBefore + '{{cidade}}' + textAfter);
+                                                setTimeout(() => {
+                                                    textarea.focus();
+                                                    textarea.setSelectionRange(cursorPos + 10, cursorPos + 10);
+                                                }, 0);
+                                            }
+                                        }}
+                                        style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                    >
+                                        + Cidade
+                                    </button>
+                                </div>
                             </div>
                             
                         </>
@@ -6748,9 +7036,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.caption || ''} 
                                     onChange={e => updateAction(index, 'caption', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Legenda (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6841,9 +7131,11 @@ function generatePreviewHTML(data) {
                                 <textarea 
                                     className="form-textarea" 
                                     rows="2" 
+                                    maxLength="1024" 
                                     value={actionData.pixMessageText || ''} 
                                     onChange={e => updateAction(index, 'pixMessageText', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
+                                    placeholder="Texto da mensagem (máx: 1024 caracteres)"
                                 />
                             </div>
                         </>
@@ -6885,9 +7177,11 @@ function generatePreviewHTML(data) {
                             <textarea 
                                 className="form-textarea" 
                                 rows="2" 
+                                maxLength="4096" 
                                 value={actionData.deliveryText || ''} 
                                 onChange={e => updateAction(index, 'deliveryText', e.target.value)}
                                 style={{fontSize: '0.85rem'}}
+                                placeholder="Texto de entrega (máx: 4096 caracteres)"
                             />
                         </div>
                     )}
@@ -6910,7 +7204,7 @@ function generatePreviewHTML(data) {
             video: '🎬 Vídeo',
             audio: '🎵 Áudio',
             typing_action: '✍️ Digitando',
-           // forward_flow: '↪️ Encaminhar'
+            forward_flow: '↪️ Encaminhar'
         };
 
         if (!selectedNode) return null;
@@ -7317,7 +7611,7 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-           // { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {

@@ -908,6 +908,55 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 }
 
+// Função para processar steps e substituir file_id da biblioteca por mediaLibraryId antes de enviar ao QStash
+async function processStepForQStash(step, sellerId) {
+    // Se o step não é de mídia, retorna sem alterações
+    if (!['image', 'video', 'audio'].includes(step.type)) {
+        return step;
+    }
+    
+    const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+    const fileUrl = step[urlMap[step.type]];
+    
+    if (!fileUrl) {
+        return step;
+    }
+    
+    // Verifica se é um file_id da biblioteca (começa com BAAC, AgAC, AwAC)
+    const isLibraryFile = fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC');
+    
+    if (!isLibraryFile) {
+        // Se não é da biblioteca, pode ser URL ou outro file_id, mantém como está
+        return step;
+    }
+    
+    try {
+        // Busca o ID da biblioteca de mídia pelo file_id
+        const [media] = await sqlWithRetry(
+            'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+            [fileUrl, sellerId]
+        );
+        
+        if (!media) {
+            console.warn(`[processStepForQStash] Arquivo da biblioteca não encontrado: ${fileUrl}`);
+            return step; // Retorna o step original se não encontrar
+        }
+        
+        // Cria uma cópia do step substituindo file_id por mediaLibraryId
+        const processedStep = { ...step };
+        processedStep[urlMap[step.type]] = null; // Remove o file_id
+        processedStep.mediaLibraryId = media.id; // Adiciona o ID da biblioteca
+        
+        console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
+        
+        return processedStep;
+    } catch (error) {
+        console.error(`[processStepForQStash] Erro ao processar arquivo da biblioteca:`, error);
+        // Em caso de erro, retorna o step original
+        return step;
+    }
+}
+
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
     const nodeData = node.data || {};
@@ -3885,7 +3934,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
         switch (action.type) {
             case 'message':
                 try {
-                    const textToSend = await replaceVariables(actionData.text, variables);
+                    let textToSend = await replaceVariables(actionData.text, variables);
+                    
+                    // Validação do tamanho do texto (limite do Telegram: 4096 caracteres)
+                    if (textToSend.length > 4096) {
+                        console.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
+                        textToSend = textToSend.substring(0, 4093) + '...';
+                    }
                     
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
@@ -3919,7 +3974,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'video':
             case 'audio': {
                 try {
-                    const caption = await replaceVariables(actionData.caption, variables);
+                    let caption = await replaceVariables(actionData.caption, variables);
+                    
+                    // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
+                    if (caption && caption.length > 1024) {
+                        console.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
+                        caption = caption.substring(0, 1021) + '...';
+                    }
+                    
                     const response = await handleMediaNode(action, botToken, chatId, caption); // Passa a ação inteira
 
                     if (response && response.ok) {
@@ -3992,7 +4054,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
     
-                    const messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido de pixMessage
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido de pixMessage
+                    
+                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                    if (messageText && messageText.length > 1024) {
+                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        messageText = messageText.substring(0, 1021) + '...';
+                    }
+                    
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables); // Corrigido de pixButtonText
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
@@ -4073,6 +4142,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                 console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
 
+                // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
+                try {
+                    const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    if (stateToCancel && stateToCancel.scheduled_message_id) {
+                        try {
+                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                        } catch (e) {
+                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                }
+
                 // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
                 const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
@@ -4092,6 +4176,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
                 let attempts = 0;
                 const maxAttempts = 20; // Proteção contra loops infinitos
+                
+                // Limpa o estado atual antes de iniciar o novo fluxo
+                await sql`UPDATE user_flow_states 
+                          SET waiting_for_input = false, scheduled_message_id = NULL 
+                          WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 // Pula nós do tipo 'trigger' até encontrar um nó válido
                 while (currentNodeId && attempts < maxAttempts) {
@@ -4357,10 +4446,27 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         if (currentNode.type === 'action') {
-            // 1. Executa todas as ações dentro do nó
-            const actions = currentNode.data.actions || [];
-            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actions.length} ação(ões): ${actions.map(a => a.type).join(', ')}`);
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+            // 1. Prepara as ações para execução
+            const allActions = currentNode.data.actions || [];
+            const willBeScheduled = currentNode.data.waitForReply === true;
+            
+            // Se o nó será agendado (waitForReply), separa ações de mídia
+            let actionsToExecuteNow = allActions;
+            let scheduledMediaActions = [];
+            
+            if (willBeScheduled) {
+                const mediaTypes = ['image', 'video', 'audio'];
+                scheduledMediaActions = allActions.filter(a => mediaTypes.includes(a.type));
+                actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
+                
+                if (scheduledMediaActions.length > 0) {
+                    console.log(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
+                    variables._scheduled_media_actions = scheduledMediaActions;
+                }
+            }
+            
+            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
+            const actionResult = await processActions(actionsToExecuteNow, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
             // 2. Persiste as variáveis (caso 'action_pix' tenha atualizado 'last_transaction_id')
             await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -4378,17 +4484,18 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Agenda o worker de timeout
+                    // Agenda o worker de timeout com uma única chamada
                     const response = await qstashClient.publishJSON({
                         url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
                         body: { 
                             chat_id: chatId, 
                             bot_id: botId, 
-                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables 
+                            target_node_id: noReplyNodeId,
+                            variables: variables,
+                            timestamp: Date.now() // 👈 ADICIONE ISSO para evitar deduplicação
                         },
                         delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
+                        contentBasedDeduplication: false, // 👈 MUDE DE true PARA false
                         method: "POST"
                     });
                     
@@ -4694,11 +4801,14 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
           let currentStepDelay = 0; 
     
           for (const step of flowSteps) {
+            // Processa o step para converter arquivos base64 em file_id antes de enviar ao QStash
+            const processedStep = await processStepForQStash(step, sellerId);
+            
             const payload = {
               history_id: historyId,
               chat_id: contact.chat_id,
               bot_id: contact.bot_id_source,
-              step_json: JSON.stringify(step),
+              step_json: JSON.stringify(processedStep),
               variables_json: JSON.stringify(userVariables)
             };
     
@@ -5601,8 +5711,33 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
     const sellerId = req.user.id;
     const { priceInCents, allowReshare, bundleLinkedFlows, bundleMedia } = req.body;
 
+    console.log(`[Generate Share Link] Flow ID: ${id}, Seller: ${sellerId}`);
+    console.log(`[Generate Share Link] Params: price=${priceInCents}, reshare=${allowReshare}, flows=${bundleLinkedFlows}, media=${bundleMedia}`);
+
     try {
+        // Buscar informações do fluxo antes de gerar link
+        const [flow] = await sqlWithRetry(
+            'SELECT name, share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
+            [id, sellerId]
+        );
+        
+        if (!flow) {
+            console.log(`[Generate Share Link] Fluxo não encontrado: id=${id}, seller=${sellerId}`);
+            return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        }
+        
+        // Verificar se é um fluxo importado que não permite reshare
+        const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
+        if (isImported && flow.share_allow_reshare === false) {
+            console.log(`[Generate Share Link] Bloqueado: fluxo importado sem permissão de reshare`);
+            return res.status(403).json({ 
+                message: 'Este fluxo foi importado sem permissão para compartilhamento. Você não pode gerar um link para ele.' 
+            });
+        }
+        
         const shareId = uuidv4();
+        console.log(`[Generate Share Link] Generated UUID: ${shareId}`);
+        
         const [updatedFlow] = await sqlWithRetry(
             `UPDATE flows SET 
                 shareable_link_id = $1,
@@ -5613,11 +5748,13 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
              WHERE id = $6 AND seller_id = $7 RETURNING shareable_link_id`,
             [shareId, priceInCents || 0, !!allowReshare, !!bundleLinkedFlows, !!bundleMedia, id, sellerId]
         );
-        if (!updatedFlow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        
+        console.log(`[Generate Share Link] Sucesso! Link: ${updatedFlow.shareable_link_id}`);
         res.status(200).json({ shareable_link_id: updatedFlow.shareable_link_id });
     } catch (error) {
         console.error("Erro ao gerar link de compartilhamento:", error);
-        res.status(500).json({ message: 'Erro ao gerar link de compartilhamento.' });
+        console.error("Stack:", error.stack);
+        res.status(500).json({ message: 'Erro ao gerar link de compartilhamento: ' + error.message });
     }
 });
 
@@ -5641,29 +5778,597 @@ app.get('/api/share/details/:shareId', async (req, res) => {
     }
 });
 
-// Endpoint 19: Importar fluxo por link
+/**
+ * Copia fluxos anexados (linked flows) referenciados nos nós
+ */
+async function copyLinkedFlows(nodes, originalSellerId, newSellerId, newBotId, shouldCopyMedia, inheritAllowReshare = false) {
+    const flowIdMapping = {};
+    if (!nodes || !Array.isArray(nodes)) {
+        console.log('[Copy Linked Flows] Nós inválidos ou vazios');
+        return flowIdMapping;
+    }
+    
+    const linkedFlowIds = new Set();
+    for (const node of nodes) {
+        // Verificar dentro de actions (estrutura atual)
+        if (node.data?.actions && Array.isArray(node.data.actions)) {
+            for (const action of node.data.actions) {
+                if (action.type === 'forward_flow' && action.data?.targetFlowId) {
+                    linkedFlowIds.add(action.data.targetFlowId);
+                    console.log(`[Copy Linked Flows] Detectado targetFlowId: ${action.data.targetFlowId} (${action.data.targetFlowName}) em action do nó ${node.id}`);
+                }
+            }
+        }
+    }
+    
+    if (linkedFlowIds.size === 0) return flowIdMapping;
+    console.log(`[Copy Linked Flows] Encontrados ${linkedFlowIds.size} fluxos anexados para copiar (inheritAllowReshare=${inheritAllowReshare})`);
+    
+    for (const oldFlowId of linkedFlowIds) {
+        try {
+            const [linkedFlow] = await sqlWithRetry(
+                'SELECT name, nodes, share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
+                [oldFlowId, originalSellerId]
+            );
+            
+            if (linkedFlow) {
+                let linkedFlowNodes = JSON.parse(JSON.stringify(linkedFlow.nodes));
+                
+                // Se não deve copiar mídias, limpar mídias do fluxo anexado também
+                if (!shouldCopyMedia) {
+                    const linkedNodesArray = linkedFlowNodes?.nodes || [];
+                    if (linkedNodesArray.length > 0) {
+                        console.log(`[Copy Linked Flows] Removendo mídias do fluxo anexado ${oldFlowId}`);
+                        linkedFlowNodes.nodes = cleanMediaReferences(linkedNodesArray);
+                    }
+                }
+                
+                // Decidir qual valor de share_allow_reshare usar
+                // Se inheritAllowReshare=true, usa o valor herdado; senão usa o do fluxo anexado original
+                const allowReshare = inheritAllowReshare || (linkedFlow.share_allow_reshare || false);
+                
+                const newFlowName = `${linkedFlow.name} (Anexado)`;
+                const [newFlow] = await sqlWithRetry(
+                    'INSERT INTO flows (seller_id, bot_id, name, nodes, share_allow_reshare) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+                    [newSellerId, newBotId, newFlowName, linkedFlowNodes, allowReshare]
+                );
+                flowIdMapping[oldFlowId] = newFlow.id;
+                console.log(`[Copy Linked Flows] Fluxo ${oldFlowId} copiado para ${newFlow.id} (allow_reshare=${allowReshare})`);
+            }
+        } catch (error) {
+            console.error(`[Copy Linked Flows] Erro ao copiar fluxo ${oldFlowId}:`, error.message);
+        }
+    }
+    
+    return flowIdMapping;
+}
+
+/**
+ * Copia mídias referenciadas nos nós
+ */
+async function copyMediaFiles(nodes, originalSellerId, newSellerId) {
+    const mediaMapping = {};
+    if (!nodes || !Array.isArray(nodes)) {
+        console.log('[Copy Media] Nós inválidos ou vazios');
+        return mediaMapping;
+    }
+    
+    const mediaFileIds = new Set();
+    const mediaFields = ['image', 'imageUrl', 'video', 'videoUrl', 'audio', 'audioUrl', 'file_id'];
+    
+    for (const node of nodes) {
+        const data = node.data || {};
+        
+        // Verificar campos dentro de actions
+        if (data.actions && Array.isArray(data.actions)) {
+            for (const action of data.actions) {
+                if (action.data) {
+                    for (const field of mediaFields) {
+                        if (action.data[field]) {
+                            mediaFileIds.add(action.data[field]);
+                            console.log(`[Copy Media] Detectado ${field}: ${action.data[field]} em action do nó ${node.id}`);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (mediaFileIds.size === 0) return mediaMapping;
+    console.log(`[Copy Media] Encontrados ${mediaFileIds.size} arquivos de mídia para copiar`);
+    
+    for (const fileId of mediaFileIds) {
+        try {
+            const [originalMedia] = await sqlWithRetry(
+                'SELECT file_name, file_id, file_type, thumbnail_file_id FROM media_library WHERE file_id = $1 AND seller_id = $2',
+                [fileId, originalSellerId]
+            );
+            
+            if (originalMedia) {
+                const [existingMedia] = await sqlWithRetry(
+                    'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2',
+                    [originalMedia.file_id, newSellerId]
+                );
+                
+                if (!existingMedia) {
+                    const newFileName = `${originalMedia.file_name} (Importado)`;
+                    await sqlWithRetry(`
+                        INSERT INTO media_library (seller_id, file_name, file_id, file_type, thumbnail_file_id)
+                        VALUES ($1, $2, $3, $4, $5)
+                    `, [newSellerId, newFileName, originalMedia.file_id, originalMedia.file_type, originalMedia.thumbnail_file_id]);
+                    
+                    console.log(`[Copy Media] Copiado registro de mídia ${fileId}`);
+                }
+                mediaMapping[fileId] = fileId;
+            }
+        } catch (error) {
+            console.error(`[Copy Media] Erro ao copiar mídia ${fileId}:`, error.message);
+        }
+    }
+    
+    return mediaMapping;
+}
+
+/**
+ * Atualiza referências de fluxos anexados nos nós
+ */
+function updateNodeReferences(nodes, flowIdMapping) {
+    if (!nodes || !Array.isArray(nodes) || Object.keys(flowIdMapping).length === 0) {
+        return nodes;
+    }
+    
+    return nodes.map(node => {
+        const updatedData = { ...node.data };
+        let updated = false;
+        
+        // Atualizar targetFlowId dentro de actions
+        if (updatedData.actions && Array.isArray(updatedData.actions)) {
+            updatedData.actions = updatedData.actions.map(action => {
+                if (action.type === 'forward_flow' && action.data?.targetFlowId) {
+                    const oldId = action.data.targetFlowId;
+                    if (flowIdMapping[oldId]) {
+                        console.log(`[Update Refs] Atualizado targetFlowId de ${oldId} para ${flowIdMapping[oldId]} em action do nó ${node.id}`);
+                        updated = true;
+                        return {
+                            ...action,
+                            data: {
+                                ...action.data,
+                                targetFlowId: flowIdMapping[oldId]
+                            }
+                        };
+                    }
+                }
+                return action;
+            });
+        }
+        
+        return updated ? { ...node, data: updatedData } : node;
+    });
+}
+
+/**
+ * Remove referências de mídia dos nós
+ */
+function cleanMediaReferences(nodes) {
+    if (!nodes || !Array.isArray(nodes)) {
+        console.log('[Clean Media] Nós inválidos ou vazios');
+        return nodes;
+    }
+    
+    console.log(`[Clean Media] Iniciando limpeza em ${nodes.length} nós...`);
+    
+    return nodes.map(node => {
+        const cleanedData = { ...node.data };
+        let cleaned = false;
+        
+        // Limpar campos de mídia dentro de actions
+        if (cleanedData.actions && Array.isArray(cleanedData.actions)) {
+            cleanedData.actions = cleanedData.actions.map(action => {
+                if (action.type === 'image' || action.type === 'video' || action.type === 'audio') {
+                    console.log(`[Clean Media] Removendo action de mídia (${action.type}) do nó ${node.id}`);
+                    cleaned = true;
+                    return null;
+                }
+                
+                // Limpar campos de mídia dentro do action.data
+                if (action.data) {
+                    const cleanedActionData = { ...action.data };
+                    const mediaFields = ['image', 'imageUrl', 'video', 'videoUrl', 'audio', 'audioUrl', 'file_id'];
+                    for (const field of mediaFields) {
+                        if (cleanedActionData[field]) {
+                            console.log(`[Clean Media] Removendo ${field} de action em nó ${node.id}: ${cleanedActionData[field]}`);
+                            delete cleanedActionData[field];
+                            cleaned = true;
+                        }
+                    }
+                    return { ...action, data: cleanedActionData };
+                }
+                
+                return action;
+            }).filter(action => action !== null);
+        }
+        
+        if (cleaned) {
+            console.log(`[Clean Media] Nó ${node.id} limpo`);
+        }
+        
+        return {
+            ...node,
+            data: cleanedData
+        };
+    });
+}
+
+/**
+ * Remove referências de fluxos anexados dos nós
+ */
+function cleanLinkedFlowReferences(nodes) {
+    if (!nodes || !Array.isArray(nodes)) {
+        return nodes;
+    }
+    
+    console.log('[Clean Linked Flows] Removendo referências de fluxos anexados dos nós...');
+    
+    return nodes.map(node => {
+        const cleanedData = { ...node.data };
+        let cleaned = false;
+        
+        // Remover actions de forward_flow
+        if (cleanedData.actions && Array.isArray(cleanedData.actions)) {
+            const originalLength = cleanedData.actions.length;
+            cleanedData.actions = cleanedData.actions.filter(action => {
+                if (action.type === 'forward_flow') {
+                    console.log(`[Clean Linked Flows] Removendo action forward_flow do nó ${node.id}`);
+                    cleaned = true;
+                    return false;
+                }
+                return true;
+            });
+            
+            if (cleanedData.actions.length !== originalLength) {
+                cleaned = true;
+            }
+        }
+        
+        if (cleaned) {
+            console.log(`[Clean Linked Flows] Referências removidas do nó ${node.id}`);
+        }
+        
+        return {
+            ...node,
+            data: cleanedData
+        };
+    });
+}
+
+// Endpoint 19: Importar fluxo por link (GRATUITO)
 app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
     const { shareableLinkId, botId } = req.body;
     const sellerId = req.user.id;
     try {
         if (!botId || !shareableLinkId) return res.status(400).json({ message: 'ID do link e ID do bot são obrigatórios.' });
         
-        const [originalFlow] = await sqlWithRetry('SELECT name, nodes, share_price_cents FROM flows WHERE shareable_link_id = $1', [shareableLinkId]);
+        // Buscar fluxo original com configurações de compartilhamento
+        const [originalFlow] = await sqlWithRetry(`
+            SELECT name, nodes, share_price_cents, seller_id,
+                   share_bundle_linked_flows, share_bundle_media
+            FROM flows WHERE shareable_link_id = $1
+        `, [shareableLinkId]);
+        
         if (!originalFlow) return res.status(404).json({ message: 'Link de compartilhamento inválido ou expirado.' });
 
         if (originalFlow.share_price_cents > 0) {
             return res.status(400).json({ message: 'Este fluxo é pago e não pode ser importado por esta via.' });
         }
 
+        console.log(`[Import Free Flow] Configurações: bundle_linked_flows=${originalFlow.share_bundle_linked_flows}, bundle_media=${originalFlow.share_bundle_media}`);
+
+        // Deep clone para evitar mutar o original
+        let processedNodes = JSON.parse(JSON.stringify(originalFlow.nodes));
+        
+        // Verificar se a estrutura tem o array de nós
+        const nodesArray = processedNodes?.nodes || [];
+        console.log(`[Import Free Flow] Estrutura de nós: ${nodesArray.length} nós encontrados`);
+        
+        // Flags independentes
+        const shouldCopyLinkedFlows = originalFlow.share_bundle_linked_flows === true;
+        const shouldCopyMedia = originalFlow.share_bundle_media === true;
+        
+        // Copiar fluxos anexados se configurado
+        if (shouldCopyLinkedFlows) {
+            console.log('[Import Free Flow] Copiando fluxos anexados...');
+            const flowIdMapping = await copyLinkedFlows(
+                nodesArray,
+                originalFlow.seller_id,
+                sellerId,
+                botId,
+                shouldCopyMedia, // Passar flag para limpar mídias dos fluxos anexados se necessário
+                originalFlow.share_allow_reshare || false // Herdar share_allow_reshare do fluxo principal
+            );
+            processedNodes.nodes = updateNodeReferences(nodesArray, flowIdMapping);
+        } else {
+            console.log('[Import Free Flow] NÃO copiando fluxos anexados (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanLinkedFlowReferences(nodesArray);
+        }
+        
+        // Copiar mídias se configurado
+        if (shouldCopyMedia) {
+            console.log('[Import Free Flow] Copiando mídias...');
+            await copyMediaFiles(
+                nodesArray,
+                originalFlow.seller_id,
+                sellerId
+            );
+        } else {
+            console.log('[Import Free Flow] NÃO copiando mídias (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanMediaReferences(processedNodes.nodes || nodesArray);
+        }
+
         const newFlowName = `${originalFlow.name} (Importado)`;
         const [newFlow] = await sqlWithRetry(
-            `INSERT INTO flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *`,
-            [sellerId, botId, newFlowName, originalFlow.nodes]
+            `INSERT INTO flows (seller_id, bot_id, name, nodes, share_allow_reshare) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [sellerId, botId, newFlowName, processedNodes, originalFlow.share_allow_reshare || false]
         );
+        
+        console.log(`[Import Free Flow] Fluxo importado com sucesso (allow_reshare=${originalFlow.share_allow_reshare})`);
         res.status(201).json(newFlow);
     } catch (error) {
         console.error("Erro ao importar fluxo por link:", error);
         res.status(500).json({ message: 'Erro ao importar fluxo por link: ' + error.message });
+    }
+});
+
+// Endpoint 21.1: Gerar PIX para importar fluxo pago
+app.post('/api/flows/generate-pix-import', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+    const { shareableLinkId } = req.body;
+
+    console.log(`[Generate PIX Import] Seller: ${sellerId}, Link: ${shareableLinkId}`);
+
+    try {
+        // Buscar dados do fluxo compartilhado
+        const [sharedFlow] = await sqlWithRetry(
+            'SELECT name, share_price_cents FROM flows WHERE shareable_link_id = $1',
+            [shareableLinkId]
+        );
+
+        if (!sharedFlow) {
+            return res.status(404).json({ message: 'Link de compartilhamento inválido.' });
+        }
+
+        if (sharedFlow.share_price_cents <= 0) {
+            return res.status(400).json({ message: 'Este fluxo é gratuito. Use a importação gratuita.' });
+        }
+
+        // Buscar dados do vendedor (quem está importando)
+        const [seller] = await sqlWithRetry(
+            'SELECT * FROM sellers WHERE id = $1',
+            [sellerId]
+        );
+
+        if (!seller) {
+            return res.status(404).json({ message: 'Vendedor não encontrado.' });
+        }
+
+        // Gerar PIX usando a função de fallback
+        const host = req.headers.host || 'localhost';
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+        
+        // Criar um click temporário para tracking (necessário pela constraint NOT NULL)
+        console.log(`[Generate PIX Import] Criando click temporário...`);
+        const [click] = await sqlWithRetry(
+            `INSERT INTO clicks (seller_id, ip_address, user_agent) 
+             VALUES ($1, $2, $3) 
+             RETURNING id`,
+            [sellerId, ipAddress, req.headers['user-agent'] || 'Flow Import']
+        );
+        console.log(`[Generate PIX Import] Click criado: ${click.id}`);
+        
+        console.log(`[Generate PIX Import] Gerando PIX com fallback...`);
+        const pixResult = await generatePixWithFallback(
+            seller, 
+            sharedFlow.share_price_cents, 
+            host, 
+            seller.api_key, 
+            ipAddress, 
+            click.id
+        );
+        console.log(`[Generate PIX Import] PIX gerado com sucesso. Pix Transaction ID: ${pixResult.internal_transaction_id}`);
+
+        // Criar registro na tabela flow_purchase_transactions
+        const [purchaseTransaction] = await sqlWithRetry(
+            `INSERT INTO flow_purchase_transactions (
+                buyer_id, flow_share_link_id, flow_name, price_cents, pix_value,
+                qr_code_text, qr_code_base64, provider, provider_transaction_id,
+                pix_transaction_id, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+            [
+                sellerId,
+                shareableLinkId,
+                sharedFlow.name,
+                sharedFlow.share_price_cents,
+                sharedFlow.share_price_cents / 100,
+                pixResult.qr_code_text,
+                pixResult.qr_code_base64,
+                pixResult.provider,
+                pixResult.transaction_id,
+                pixResult.internal_transaction_id,
+                'pending'
+            ]
+        );
+        
+        console.log(`[Generate PIX Import] Purchase transaction criada: ${purchaseTransaction.id}`);
+
+        res.status(200).json({
+            qr_code_text: pixResult.qr_code_text,
+            qr_code_base64: pixResult.qr_code_base64,
+            purchase_transaction_id: purchaseTransaction.id,
+            value: sharedFlow.share_price_cents / 100,
+            flow_name: sharedFlow.name
+        });
+
+    } catch (error) {
+        console.error('[Generate PIX Import] Erro:', error);
+        res.status(500).json({ message: error.message || 'Erro ao gerar PIX para importação.' });
+    }
+});
+
+// Endpoint 21.2: Verificar status do pagamento (polling)
+app.get('/api/flows/check-payment/:purchaseTransactionId', authenticateJwt, async (req, res) => {
+    const { purchaseTransactionId } = req.params;
+    const sellerId = req.user.id;
+
+    try {
+        const [purchase] = await sqlWithRetry(
+            `SELECT fpt.*, pt.status as pix_status, pt.paid_at
+             FROM flow_purchase_transactions fpt
+             LEFT JOIN pix_transactions pt ON fpt.pix_transaction_id = pt.id
+             WHERE fpt.id = $1`,
+            [purchaseTransactionId]
+        );
+
+        if (!purchase) {
+            return res.status(404).json({ message: 'Transação não encontrada.' });
+        }
+
+        // Verificar se a transação pertence ao vendedor correto
+        if (purchase.buyer_id !== sellerId) {
+            return res.status(403).json({ message: 'Acesso negado a esta transação.' });
+        }
+
+        // Atualizar status se PIX foi pago mas purchase ainda está pending
+        if (purchase.pix_status === 'paid' && purchase.status === 'pending') {
+            await sqlWithRetry(
+                `UPDATE flow_purchase_transactions 
+                 SET status = 'paid', paid_at = NOW() 
+                 WHERE id = $1`,
+                [purchaseTransactionId]
+            );
+            purchase.status = 'paid';
+            purchase.paid_at = new Date();
+        }
+
+        res.status(200).json({
+            status: purchase.status,
+            paid_at: purchase.paid_at,
+            is_paid: purchase.status === 'paid' || purchase.status === 'imported'
+        });
+
+    } catch (error) {
+        console.error('[Check Payment] Erro:', error);
+        res.status(500).json({ message: 'Erro ao verificar status do pagamento.' });
+    }
+});
+
+// Endpoint 21.3: Importar fluxo pago após confirmação de pagamento
+app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+    const { purchaseTransactionId, botId } = req.body;
+
+    console.log(`[Import Paid Flow] Purchase Transaction: ${purchaseTransactionId}, Bot: ${botId}, Seller: ${sellerId}`);
+
+    try {
+        // Verificar se o pagamento foi confirmado
+        const [purchase] = await sqlWithRetry(
+            `SELECT * FROM flow_purchase_transactions WHERE id = $1`,
+            [purchaseTransactionId]
+        );
+
+        if (!purchase) {
+            return res.status(404).json({ message: 'Transação de compra não encontrada.' });
+        }
+
+        if (purchase.buyer_id !== sellerId) {
+            return res.status(403).json({ message: 'Acesso negado a esta transação.' });
+        }
+
+        if (purchase.status !== 'paid' && purchase.status !== 'imported') {
+            return res.status(400).json({ message: 'Pagamento ainda não foi confirmado.' });
+        }
+
+        // Se já foi importado, retornar sucesso
+        if (purchase.status === 'imported') {
+            console.log(`[Import Paid Flow] Fluxo já foi importado anteriormente`);
+            return res.status(200).json({ message: 'Fluxo já foi importado com sucesso.' });
+        }
+
+        const shareableLinkId = purchase.flow_share_link_id;
+
+        // Buscar fluxo original
+        const [originalFlow] = await sqlWithRetry(
+            'SELECT * FROM flows WHERE shareable_link_id = $1',
+            [shareableLinkId]
+        );
+
+        if (!originalFlow) {
+            return res.status(404).json({ message: 'Fluxo compartilhado não encontrado.' });
+        }
+
+        // Copiar fluxo (mesma lógica do endpoint gratuito)
+        // Deep clone para evitar mutar o original
+        let processedNodes = JSON.parse(JSON.stringify(originalFlow.nodes));
+        
+        // Verificar se a estrutura tem o array de nós
+        const nodesArray = processedNodes?.nodes || [];
+        console.log(`[Import Paid Flow] Estrutura de nós: ${nodesArray.length} nós encontrados`);
+        
+        // Flags independentes
+        const shouldCopyLinkedFlows = originalFlow.share_bundle_linked_flows === true;
+        const shouldCopyMedia = originalFlow.share_bundle_media === true;
+        
+        console.log(`[Import Paid Flow] Configurações: bundle_linked_flows=${shouldCopyLinkedFlows}, bundle_media=${shouldCopyMedia}`);
+
+        // Copiar fluxos anexados se configurado
+        if (shouldCopyLinkedFlows) {
+            console.log('[Import Paid Flow] Copiando fluxos anexados...');
+            const flowIdMapping = await copyLinkedFlows(
+                nodesArray,
+                originalFlow.seller_id,
+                sellerId,
+                botId,
+                shouldCopyMedia,
+                originalFlow.share_allow_reshare || false // Herdar share_allow_reshare do fluxo principal
+            );
+            console.log(`[Import Paid Flow] Fluxos copiados. Mapeamento:`, flowIdMapping);
+            processedNodes.nodes = updateNodeReferences(nodesArray, flowIdMapping);
+        } else {
+            console.log('[Import Paid Flow] NÃO copiando fluxos anexados (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanLinkedFlowReferences(nodesArray);
+        }
+        
+        // Copiar mídias se configurado
+        if (shouldCopyMedia) {
+            console.log('[Import Paid Flow] Copiando mídias...');
+            await copyMediaFiles(
+                nodesArray,
+                originalFlow.seller_id,
+                sellerId
+            );
+        } else {
+            console.log('[Import Paid Flow] NÃO copiando mídias (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanMediaReferences(processedNodes.nodes || nodesArray);
+        }
+
+        const newFlowName = `${originalFlow.name} (Importado)`;
+        const [newFlow] = await sqlWithRetry(
+            `INSERT INTO flows (seller_id, bot_id, name, nodes, share_allow_reshare) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [sellerId, botId, newFlowName, processedNodes, originalFlow.share_allow_reshare || false]
+        );
+
+        // Atualizar purchase transaction para status 'imported'
+        await sqlWithRetry(
+            `UPDATE flow_purchase_transactions 
+             SET status = 'imported', imported_at = NOW() 
+             WHERE id = $1`,
+            [purchaseTransactionId]
+        );
+
+        console.log(`[Import Paid Flow] Fluxo importado com sucesso após pagamento confirmado`);
+        res.status(201).json(newFlow);
+
+    } catch (error) {
+        console.error('[Import Paid Flow] Erro:', error);
+        res.status(500).json({ message: 'Erro ao importar fluxo pago: ' + error.message });
     }
 });
 

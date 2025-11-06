@@ -210,14 +210,14 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
     let lastError = null;
     for (const provider of providerOrder) {
         try {
-            console.log(`[WORKER-DISPARO - PIX Fallback] Tentando ${provider.toUpperCase()}`);
+            // Log removido por segurança
             const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
             
             const [transaction] = await sql`
                 INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
                 VALUES (${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
                 RETURNING id`;
-            console.log(`[WORKER-DISPARO - PIX Fallback] SUCESSO com ${provider.toUpperCase()}.`);
+            // Log removido por segurança
             pixResult.internal_transaction_id = transaction.id;
             return pixResult;
         } catch (error) {
@@ -236,7 +236,7 @@ async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_add
 
 async function handler(req, res) {
       const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
-        console.log(`[WORKER-DISPARO] Recebido job para history: ${history_id}, chat: ${chat_id}, bot: ${bot_id}`);
+        // Log removido por segurança
     
       const step = JSON.parse(step_json);
       const userVariables = JSON.parse(variables_json);
@@ -279,10 +279,34 @@ async function handler(req, res) {
           }
           response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
         } else if (['image', 'video', 'audio'].includes(step.type)) {
-                // (Lógica para enviar 'media' ... igual a antes)
           const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
-          const fileIdentifier = step[urlMap[step.type]];
+          let fileIdentifier = step[urlMap[step.type]];
           const caption = await replaceVariables(step.caption, userVariables);
+          
+          // Se o step tem mediaLibraryId, busca o file_id da biblioteca
+          if (step.mediaLibraryId) {
+            try {
+              const [media] = await sqlWithRetry(
+                'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
+                [step.mediaLibraryId]
+              );
+              if (media && media.file_id) {
+                fileIdentifier = media.file_id;
+                // Log removido por segurança
+              } else {
+                console.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
+                throw new Error(`Arquivo da biblioteca não encontrado: ${step.mediaLibraryId}`);
+              }
+            } catch (error) {
+              console.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
+              throw error;
+            }
+          }
+          
+          if (!fileIdentifier) {
+            throw new Error(`Nenhum file_id ou mediaLibraryId fornecido para o step ${step.type}`);
+          }
+          
           const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
           if (isLibraryFile) {
             response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
