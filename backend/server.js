@@ -3726,7 +3726,8 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
                 } else if (transaction.provider === 'pushinpay') {
                     const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
                     providerStatus = response.data.status;
-                    customerData = { name: response.data.payer_name, document: response.data.payer_document };
+                    // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
+                    customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
                 }
 
                 if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
@@ -4854,66 +4855,74 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     });
 
 
-    app.post('/api/webhook/pushinpay', async (req, res) => {
-         // 1. O webhook envia um payload simples
-         const { id, status } = req.body; 
-         const normalized = String(status || '').toLowerCase();
-         const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-         
-         if (paidStatuses.has(normalized)) {
-           try {
-             // 2. Buscamos a transação E o seller_id associado (via clique)
-             const [tx] = await sql`
-                       SELECT pt.id, pt.status, c.seller_id 
-                       FROM pix_transactions pt 
-                       JOIN clicks c ON pt.click_id_internal = c.id 
-                       WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
-                   `;
-                       
-             // 3. Se a transação existir e AINDA não estiver paga
-             if (tx && tx.status !== 'paid') {
-                       console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) recebida como paga. Buscando dados do pagador...`);
-                       
-                       // 4. Buscar o token do vendedor para fazer a consulta GET
-                       const [seller] = await sql`SELECT pushinpay_token FROM sellers WHERE id = ${tx.seller_id}`;
-                       if (!seller || !seller.pushinpay_token) {
-                           console.error(`[Webhook PushinPay] Vendedor ${tx.seller_id} não encontrado ou sem token PushinPay.`);
-                           return res.sendStatus(200); // Responde OK, mas loga o erro
-                       }
-       
-                       // 5. FAZ A CONSULTA GET para obter os dados completos
-                       const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${id}`, { 
-                           headers: { 
-                               Authorization: `Bearer ${seller.pushinpay_token}`,
-                               Accept: 'application/json', 
-                               'Content-Type': 'application/json' 
-                           },
-                           httpsAgent: httpsAgent // Reutiliza sua conexão keep-alive
-                       });
-       
-                       // 6. Extrai os dados corretos da resposta do GET
-                       const payer_name = resp.data.payer_name;
-                       const payer_national_registration = resp.data.payer_national_registration; // Nome correto do campo
-       
-               // 7. Chamar o handleSuccessfulPayment com os dados completos
-               await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-             
-                   } else if (tx) {
-                       console.log(`[Webhook PushinPay] Transação ${id} já estava como 'paid'. Ignorando webhook.`);
-                   } else {
-                       console.warn(`[Webhook PushinPay] Transação ${id} não encontrada no banco.`);
-                   }
-           } catch (error) { 
-                   console.error("Erro no webhook da PushinPay:", error.response?.data || error.message); 
-               }
-         }
-         res.sendStatus(200);
-       });
+// ==========================================================
+//          WEBHOOKS DE PROVEDORES DE PAGAMENTO PIX
+// ==========================================================
+
+app.post('/api/webhook/pushinpay', async (req, res) => {
+    const { id, status } = req.body; 
+    console.log(`[Webhook PushinPay] Recebido webhook - ID: ${id}, Status: ${status}`);
+    
+    const normalized = String(status || '').toLowerCase();
+    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    
+    if (paidStatuses.has(normalized)) {
+      try {
+        const [tx] = await sql`
+                  SELECT pt.id, pt.status, pt.provider_transaction_id, c.seller_id 
+                  FROM pix_transactions pt 
+                  JOIN clicks c ON pt.click_id_internal = c.id 
+                  WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
+              `;
+        
+        if (!tx) {
+            console.error(`[Webhook PushinPay] ERRO: Transação não encontrada! provider_transaction_id='${id}', provider='pushinpay'`);
+            const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'pushinpay'`;
+            console.error(`[Webhook PushinPay] Total de transações PushinPay no banco: ${countResult[0].total}`);
+            return res.sendStatus(200);
+        }
+        
+        if (tx.status === 'paid') {
+            console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) já processada. Ignorando webhook duplicado.`);
+            return res.sendStatus(200);
+        }
+        
+        console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) encontrada. Status atual: '${tx.status}'. Processando pagamento...`);
+        
+        const [seller] = await sql`SELECT pushinpay_token FROM sellers WHERE id = ${tx.seller_id}`;
+        if (!seller || !seller.pushinpay_token) {
+            console.error(`[Webhook PushinPay] ERRO: Vendedor ${tx.seller_id} sem token PushinPay configurado.`);
+            return res.sendStatus(200);
+        }
+        
+        const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${id}`, { 
+            headers: { 
+                Authorization: `Bearer ${seller.pushinpay_token}`,
+                Accept: 'application/json', 
+                'Content-Type': 'application/json' 
+            },
+            httpsAgent: httpsAgent
+        });
+        
+        const payer_name = resp.data.payer_name;
+        const payer_national_registration = resp.data.payer_national_registration;
+        
+        await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+        console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada com sucesso!`);
+        
+      } catch (error) { 
+              console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
+              console.error(`[Webhook PushinPay] Stack:`, error.stack);
+          }
+    } else {
+        console.log(`[Webhook PushinPay] Status '${status}' não é considerado pago. Ignorando.`);
+    }
+    res.sendStatus(200);
+  });
+
 app.post('/api/webhook/cnpay', async (req, res) => {
-    // 1. Log para depuração (opcional, mas recomendado)
   console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
 
-    // 2. Extrair os dados da estrutura ANINHADA correta
   const transactionData = req.body.transaction;
   const customer = req.body.client;
 
@@ -4922,68 +4931,82 @@ app.post('/api/webhook/cnpay', async (req, res) => {
     return res.sendStatus(200);
   }
 
-    // 3. Extrair dados de dentro dos objetos
   const { id: transactionId, status } = transactionData;
-  
   const normalized = String(status || '').toLowerCase();
-    
-    // 4. A documentação da CNPay diz que o status pago é 'COMPLETED'
-    //    O seu 'paidStatuses' já inclui 'completed', então está OK.
   const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
   
   if (paidStatuses.has(normalized)) {
     try {
       console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
             
-            // 5. Buscar no banco usando 'provider' = 'cnpay'
       const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
       
-      if (tx && tx.status !== 'paid') {
-        console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
-                
-                // 6. Usar os dados do 'client' para o handleSuccessfulPayment
-        await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-      
-      } else if (tx) {
-        console.log(`[Webhook CNPay] Transação ${tx.id} já estava como 'paga'.`);
-      } else {
-        console.warn(`[Webhook CNPay] AVISO: Transação ${transactionId} não foi encontrada.`);
+      if (!tx) {
+          console.error(`[Webhook CNPay] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='cnpay'`);
+          const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'cnpay'`;
+          console.error(`[Webhook CNPay] Total de transações CNPay no banco: ${countResult[0].total}`);
+          return res.sendStatus(200);
       }
+      
+      if (tx.status === 'paid') {
+        console.log(`[Webhook CNPay] Transação ${tx.id} já está marcada como 'paga'. Ignorando webhook duplicado.`);
+        return res.sendStatus(200);
+      }
+      
+      console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+      await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
+      console.log(`[Webhook CNPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+      
     } catch (error) { 
-      console.error("Erro no webhook da CNPay:", error); 
+      console.error(`[Webhook CNPay] ERRO CRÍTICO:`, error);
+      console.error(`[Webhook CNPay] Stack:`, error.stack);
     }
+  } else {
+      console.log(`[Webhook CNPay] Status '${status}' não é considerado pago. Ignorando.`);
   }
   res.sendStatus(200);
 });
+
 app.post('/api/webhook/oasyfy', async (req, res) => {
     console.log('[Webhook Oasy.fy] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
+    
     const transactionData = req.body.transaction;
     const customer = req.body.client;
+    
     if (!transactionData || !transactionData.status) {
         console.log("[Webhook Oasy.fy] Webhook ignorado: objeto 'transaction' ou 'status' ausente.");
         return res.sendStatus(200);
     }
+    
     const { id: transactionId, status } = transactionData;
     const normalized = String(status || '').toLowerCase();
     const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+    
     if (paidStatuses.has(normalized)) {
         try {
             console.log(`[Webhook Oasy.fy] Processando pagamento para transactionId: ${transactionId}`);
+            
             const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'oasyfy'`;
-            if (tx) {
-                console.log(`[Webhook Oasy.fy] Transação encontrada no banco. ID interno: ${tx.id}, Status atual: ${tx.status}`);
-                if (tx.status !== 'paid') {
-                    console.log(`[Webhook Oasy.fy] Status não é 'paid'. Chamando handleSuccessfulPayment...`);
-                    await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-                    console.log(`[Webhook Oasy.fy] handleSuccessfulPayment concluído para transação ID ${tx.id}.`);
-                } else {
-                    console.log(`[Webhook Oasy.fy] Transação ${transactionId} já está marcada como 'paid'. Nenhuma ação necessária.`);
-                }
-            } else {
-                console.error(`[Webhook Oasy.fy] ERRO CRÍTICO: Transação com provider_transaction_id = '${transactionId}' NÃO FOI ENCONTRADA no banco de dados.`);
+            
+            if (!tx) {
+                console.error(`[Webhook Oasy.fy] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='oasyfy'`);
+                const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'oasyfy'`;
+                console.error(`[Webhook Oasy.fy] Total de transações Oasyfy no banco: ${countResult[0].total}`);
+                return res.sendStatus(200);
             }
+            
+            if (tx.status === 'paid') {
+                console.log(`[Webhook Oasy.fy] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paid'. Ignorando webhook duplicado.`);
+                return res.sendStatus(200);
+            }
+            
+            console.log(`[Webhook Oasy.fy] Transação encontrada. ID interno: ${tx.id}, Status atual: '${tx.status}'. Processando...`);
+            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
+            console.log(`[Webhook Oasy.fy] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            
         } catch (error) { 
-            console.error("[Webhook Oasy.fy] ERRO DURANTE O PROCESSAMENTO:", error); 
+            console.error(`[Webhook Oasy.fy] ERRO CRÍTICO:`, error);
+            console.error(`[Webhook Oasy.fy] Stack:`, error.stack);
         }
     } else {
         console.log(`[Webhook Oasy.fy] Recebido webhook com status '${status}', não identificado como pago. Ignorando.`);
@@ -5153,7 +5176,8 @@ async function checkPendingTransactions() {
                 } else if (tx.provider === 'pushinpay') {
                     const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${tx.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
                     providerStatus = response.data.status;
-                    customerData = { name: response.data.payer_name, document: response.data.payer_document };
+                    // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
+                    customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
                 }
                 
                 if ((providerStatus === 'paid' || providerStatus === 'COMPLETED') && tx.status !== 'paid') {
@@ -5183,6 +5207,7 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 
         const transactionData = notification.data;
         const transactionId = transactionData.id;
+        const identifier = transactionData.identifier; // CORREÇÃO: SyncPay pode usar 'identifier'
         const status = transactionData.status;
         const customer = transactionData.client;
 
@@ -5193,29 +5218,44 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 
         const normalized = String(status || '').toLowerCase();
         const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+        
         if (paidStatuses.has(normalized)) {
+            console.log(`[Webhook SyncPay] Processando pagamento - ID: ${transactionId}, Identifier: ${identifier}`);
             
-            console.log(`[Webhook SyncPay] Processando pagamento para transação: ${transactionId}`);
-            
+            // CORREÇÃO: Buscar por 'id' OU 'identifier' (SyncPay pode enviar um ou outro)
             const [tx] = await sql`
                 SELECT * FROM pix_transactions 
-                WHERE provider_transaction_id = ${transactionId} AND provider = 'syncpay'
+                WHERE (provider_transaction_id = ${transactionId} OR provider_transaction_id = ${identifier}) 
+                AND provider = 'syncpay'
             `;
 
-            if (tx && tx.status !== 'paid') {
-                console.log(`[Webhook SyncPay] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
-                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
-            } else if (tx) {
-                console.log(`[Webhook SyncPay] Transação ${tx.id} já estava como 'paga'.`);
-            } else {
-                console.warn(`[Webhook SyncPay] AVISO: Transação com ID ${transactionId} não foi encontrada no banco de dados.`);
+            if (!tx) {
+                console.error(`[Webhook SyncPay] ERRO: Transação não encontrada! Tentou buscar id='${transactionId}' ou identifier='${identifier}', provider='syncpay'`);
+                const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'syncpay'`;
+                console.error(`[Webhook SyncPay] Total de transações SyncPay no banco: ${countResult[0].total}`);
+                // Logar todas as transações SyncPay recentes para debug
+                const recentTx = await sql`SELECT provider_transaction_id FROM pix_transactions WHERE provider = 'syncpay' ORDER BY created_at DESC LIMIT 5`;
+                console.error(`[Webhook SyncPay] Últimas 5 transaction IDs no banco:`, recentTx.map(t => t.provider_transaction_id));
+                return res.sendStatus(200);
             }
+            
+            if (tx.status === 'paid') {
+                console.log(`[Webhook SyncPay] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga'. Ignorando webhook duplicado.`);
+                return res.sendStatus(200);
+            }
+            
+            console.log(`[Webhook SyncPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
+            console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+        } else {
+            console.log(`[Webhook SyncPay] Status '${status}' não é considerado pago. Ignorando.`);
         }
         
         res.sendStatus(200);
     
     } catch (error) {
-        console.error("Erro CRÍTICO no webhook da SyncPay:", error);
+        console.error(`[Webhook SyncPay] ERRO CRÍTICO:`, error);
+        console.error(`[Webhook SyncPay] Stack:`, error.stack);
         res.sendStatus(500);
     }
 });
@@ -5229,19 +5269,32 @@ app.post('/api/webhook/brpix', async (req, res) => {
         const customer = data.customer;
 
         try {
+            console.log(`[Webhook BRPix] Processando pagamento para transactionId: ${transactionId}`);
+            
             const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
 
-            if (tx && tx.status !== 'paid') {
-                console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Atualizando para PAGO.`);
-                await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document?.number });
-            } else if (tx) {
-                console.log(`[Webhook BRPix] Transação ${tx.id} já estava como 'paga'.`);
-            } else {
-                 console.warn(`[Webhook BRPix] AVISO: Transação com ID ${transactionId} não foi encontrada no banco de dados.`);
+            if (!tx) {
+                console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
+                const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
+                console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
+                return res.sendStatus(200);
             }
+            
+            if (tx.status === 'paid') {
+                console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga'. Ignorando webhook duplicado.`);
+                return res.sendStatus(200);
+            }
+            
+            console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document?.number });
+            console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            
         } catch (error) {
-            console.error("Erro CRÍTICO no webhook da BRPix:", error);
+            console.error(`[Webhook BRPix] ERRO CRÍTICO:`, error);
+            console.error(`[Webhook BRPix] Stack:`, error.stack);
         }
+    } else {
+        console.log(`[Webhook BRPix] Evento '${event}' com status '${data?.status}' ignorado.`);
     }
 
     res.sendStatus(200);
@@ -6443,7 +6496,7 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
                     } else if (transaction.provider === 'pushinpay') {
                         const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
                         providerStatus = response.data.status;
-                        customerData = { name: response.data.payer_name, document: response.data.payer_document };
+                        customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
                     } else if (transaction.provider === 'oasyfy' || transaction.provider === 'cnpay' || transaction.provider === 'brpix') {
                         // Não consultamos, depende do webhook
                         continue;
