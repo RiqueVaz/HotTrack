@@ -4895,7 +4895,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
 // ==========================================================
 
 app.post('/api/webhook/pushinpay', async (req, res) => {
-    const { id, status } = req.body; 
+    const { id, status, payer_name, payer_national_registration } = req.body; 
     console.log(`[Webhook PushinPay] Recebido webhook - ID: ${id}, Status: ${status}`);
     
     const normalized = String(status || '').toLowerCase();
@@ -4925,24 +4925,6 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
         }
         
         console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) encontrada. Status atual: '${tx.status}'. Processando pagamento...`);
-        
-        const [seller] = await sql`SELECT pushinpay_token FROM sellers WHERE id = ${tx.seller_id}`;
-        if (!seller || !seller.pushinpay_token) {
-            console.error(`[Webhook PushinPay] ERRO: Vendedor ${tx.seller_id} sem token PushinPay configurado.`);
-            return res.sendStatus(200);
-        }
-        
-        const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${id}`, { 
-            headers: { 
-                Authorization: `Bearer ${seller.pushinpay_token}`,
-                Accept: 'application/json', 
-                'Content-Type': 'application/json' 
-            },
-            httpsAgent: httpsAgent
-        });
-        
-        const payer_name = resp.data.payer_name;
-        const payer_national_registration = resp.data.payer_national_registration;
         
         await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
         console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada com sucesso!`);
