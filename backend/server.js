@@ -363,7 +363,6 @@ async function createNetlifySite(accessToken, siteName) {
             }
         });
         
-        console.log('[Netlify] Resposta da API ao criar site:', JSON.stringify(response.data, null, 2));
         
         const siteUrl = `https://${response.data.subdomain || response.data.name}.netlify.app`;
         console.log('[Netlify] URL gerada:', siteUrl);
@@ -4099,10 +4098,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
-                    if (error.response) {
-                        console.error(`${logPrefix} Status HTTP:`, error.response.status);
-                        console.error(`${logPrefix} Resposta da API:`, JSON.stringify(error.response.data, null, 2));
-                    }
                     // Re-lança o erro para que o fluxo seja interrompido
                     throw error;
                 }
@@ -4982,7 +4977,6 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
   });
 
 app.post('/api/webhook/cnpay', async (req, res) => {
-  console.log('[Webhook CNPay] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
 
   const transactionData = req.body.transaction;
   const customer = req.body.client;
@@ -5029,7 +5023,6 @@ app.post('/api/webhook/cnpay', async (req, res) => {
 });
 
 app.post('/api/webhook/oasyfy', async (req, res) => {
-    console.log('[Webhook Oasy.fy] Corpo completo do webhook recebido:', JSON.stringify(req.body, null, 2));
     
     const transactionData = req.body.transaction;
     const customer = req.body.client;
@@ -5095,7 +5088,6 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
             return;
         }
 
-        console.log(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
         const [integration] = await sql`
             SELECT api_token FROM utmify_integrations 
             WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
@@ -5107,7 +5099,6 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         }
 
         const utmifyApiToken = integration.api_token;
-        console.log(`[Utmify] Token encontrado. Montando payload...`);
         
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
@@ -5323,7 +5314,6 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 
 app.post('/api/webhook/brpix', async (req, res) => {
     const { event, data } = req.body;
-    console.log('[Webhook BRPix] Notificação recebida:', JSON.stringify(req.body, null, 2));
 
     if (event === 'transaction.updated' && data?.status === 'paid') {
         const transactionId = data.id;
