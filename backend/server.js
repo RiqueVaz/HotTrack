@@ -4914,7 +4914,7 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
                   SELECT pt.id, pt.status, pt.provider_transaction_id, c.seller_id 
                   FROM pix_transactions pt 
                   JOIN clicks c ON pt.click_id_internal = c.id 
-                  WHERE pt.provider_transaction_id = ${id} AND pt.provider = 'pushinpay'
+                  WHERE LOWER(pt.provider_transaction_id) = LOWER(${id}) AND pt.provider = 'pushinpay'
               `;
         
         if (!tx) {
@@ -4965,7 +4965,7 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
             const [tx] = await sql`
                 UPDATE pix_transactions 
                 SET status = 'expired', updated_at = NOW() 
-                WHERE provider_transaction_id = ${id} AND provider = 'pushinpay' AND status = 'pending'
+                WHERE LOWER(provider_transaction_id) = LOWER(${id}) AND provider = 'pushinpay' AND status = 'pending'
                 RETURNING id, status`;
             
             if (tx) {
