@@ -9,6 +9,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { Client } = require("@upstash/qstash");
+const crypto = require('crypto');
 
 // ==========================================================
 //                     INICIALIZAÇÃO
