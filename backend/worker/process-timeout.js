@@ -701,21 +701,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const ip_address = click.ip_address;
                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
                     
+                    // Gera PIX e salva no banco
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                    console.log(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
                     
-                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmify(
-                        'waiting_payment', 
-                        click, 
-                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
-                        seller, customerDataForUtmify, productDataForUtmify
-                    );
-                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
-
+                    // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
     
-                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables); // Corrigido
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
                     
                     // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
                     if (messageText && messageText.length > 1024) {
@@ -726,17 +719,54 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
+                    // CRÍTICO: Tenta enviar o PIX para o usuário
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
                         reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
                     });
     
-                    if (sentMessage.ok) {
-                        await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                    // Verifica se o envio foi bem-sucedido
+                    if (!sentMessage.ok) {
+                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                        console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        
+                        await sql`
+                            UPDATE pix_transactions 
+                            SET status = 'canceled' 
+                            WHERE provider_transaction_id = ${pixResult.transaction_id}
+                        `;
+                        
+                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
+                    }
+                    
+                    // Salva a mensagem no banco
+                    await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                    console.log(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                    
+                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                    await sendEventToUtmify(
+                        'waiting_payment', 
+                        click, 
+                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
+                        seller, customerDataForUtmify, productDataForUtmify
+                    );
+                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+
+                    // Envia evento Meta se veio de pressel ou checkout
+                    if (click.pressel_id || click.checkout_id) {
+                        await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
+                        console.log(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error);
-                    
+                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                    if (error.response) {
+                        console.error(`${logPrefix} Status HTTP:`, error.response.status);
+                        console.error(`${logPrefix} Resposta da API:`, JSON.stringify(error.response.data, null, 2));
+                    }
+                    // Re-lança o erro para que o fluxo seja interrompido
+                    throw error;
                 }
                 break;
 
