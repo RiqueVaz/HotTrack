@@ -2255,7 +2255,7 @@ app.delete('/api/pixels/:id', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/bots', authenticateJwt, async (req, res) => {
-    const { bot_name } = req.body;
+    const { bot_name, telegram_supergroup_id } = req.body;
     if (!bot_name) {
         return res.status(400).json({ message: 'O nome do bot é obrigatório.' });
     }
@@ -2263,8 +2263,8 @@ app.post('/api/bots', authenticateJwt, async (req, res) => {
         const placeholderToken = uuidv4();
 
         const [newBot] = await sql`
-            INSERT INTO telegram_bots (seller_id, bot_name, bot_token) 
-            VALUES (${req.user.id}, ${bot_name}, ${placeholderToken}) 
+            INSERT INTO telegram_bots (seller_id, bot_name, bot_token, telegram_supergroup_id) 
+            VALUES (${req.user.id}, ${bot_name}, ${placeholderToken}, ${telegram_supergroup_id || null}) 
             RETURNING *;
         `;
         res.status(201).json(newBot);
@@ -2289,7 +2289,7 @@ app.delete('/api/bots/:id', authenticateJwt, async (req, res) => {
 
 app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
     const { id } = req.params;
-    let { bot_token } = req.body;
+    let { bot_token, telegram_supergroup_id } = req.body;
     if (!bot_token) {
         return res.status(400).json({ message: 'O token do bot é obrigatório.' });
     }
@@ -2297,9 +2297,10 @@ app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
     try {
         await sql`
             UPDATE telegram_bots 
-            SET bot_token = ${bot_token} 
+            SET bot_token = ${bot_token},
+                telegram_supergroup_id = ${telegram_supergroup_id || null}
             WHERE id = ${id} AND seller_id = ${req.user.id}`;
-        res.status(200).json({ message: 'Token do bot atualizado com sucesso.' });
+        res.status(200).json({ message: 'Bot atualizado com sucesso.' });
     } catch (error) {
         console.error("Erro ao atualizar token do bot:", error);
         res.status(500).json({ message: 'Erro ao atualizar o token do bot.' });
@@ -4236,6 +4237,174 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 }
                 return 'flow_forwarded';
+                
+            case 'action_create_invite_link':
+                try {
+                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+                    
+                    // Buscar o supergroup_id do bot
+                    const [botInvite] = await sql`
+                        SELECT telegram_supergroup_id 
+                        FROM telegram_bots 
+                        WHERE id = ${botId}
+                    `;
+                    
+                    if (!botInvite?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+                    
+                    const expireDate = actionData.expireMinutes 
+                        ? Math.floor(Date.now() / 1000) + (actionData.expireMinutes * 60)
+                        : undefined;
+                    
+                    const invitePayload = {
+                        chat_id: botInvite.telegram_supergroup_id,
+                        name: actionData.linkName || `Link_${Date.now()}`,
+                        expire_date: expireDate,
+                        member_limit: actionData.memberLimit || undefined,
+                        creates_join_request: actionData.requiresApproval || false
+                    };
+                    
+                    const inviteResponse = await sendTelegramRequest(
+                        botToken, 
+                        'createChatInviteLink', 
+                        invitePayload
+                    );
+                    
+                    if (inviteResponse.ok) {
+                        // Salvar link nas variáveis
+                        variables.invite_link = inviteResponse.result.invite_link;
+                        variables.invite_link_name = inviteResponse.result.name;
+                        
+                        // Enviar mensagem com o link se configurado
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
+                                variables
+                            );
+                            
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                        
+                        console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
+                    } else {
+                        throw new Error(`Falha ao criar link de convite: ${inviteResponse.description}`);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
+                    throw error;
+                }
+                break;
+                
+            case 'action_ban_invite_link':
+                try {
+                    console.log(`${logPrefix} Executando action_ban_invite_link`);
+                    
+                    const [bot] = await sql`
+                        SELECT telegram_supergroup_id 
+                        FROM telegram_bots 
+                        WHERE id = ${botId}
+                    `;
+                    
+                    if (!bot?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+                    
+                    const linkToRevoke = actionData.inviteLink || variables.invite_link;
+                    
+                    if (!linkToRevoke) {
+                        throw new Error('Nenhum link de convite especificado para banir');
+                    }
+                    
+                    const revokeResponse = await sendTelegramRequest(
+                        botToken,
+                        'revokeChatInviteLink',
+                        {
+                            chat_id: bot.telegram_supergroup_id,
+                            invite_link: linkToRevoke
+                        }
+                    );
+                    
+                    if (revokeResponse.ok) {
+                        console.log(`${logPrefix} Link de convite revogado: ${linkToRevoke}`);
+                        
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || 'Link de convite foi revogado com sucesso.',
+                                variables
+                            );
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                    } else {
+                        throw new Error(`Falha ao revogar link: ${revokeResponse.description}`);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} Erro ao banir link de convite:`, error.message);
+                    throw error;
+                }
+                break;
+                
+            case 'action_remove_user_from_group':
+                try {
+                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+                    
+                    const [bot] = await sql`
+                        SELECT telegram_supergroup_id 
+                        FROM telegram_bots 
+                        WHERE id = ${botId}
+                    `;
+                    
+                    if (!bot?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+                    
+                    // Usar o chat_id do usuário atual ou um ID específico
+                    const userToRemove = actionData.userId || chatId;
+                    
+                    const banResponse = await sendTelegramRequest(
+                        botToken,
+                        'banChatMember',
+                        {
+                            chat_id: bot.telegram_supergroup_id,
+                            user_id: userToRemove,
+                            until_date: actionData.banDuration 
+                                ? Math.floor(Date.now() / 1000) + (actionData.banDuration * 60)
+                                : undefined,
+                            revoke_messages: actionData.deleteMessages || false
+                        }
+                    );
+                    
+                    if (banResponse.ok) {
+                        console.log(`${logPrefix} Usuário ${userToRemove} removido do grupo`);
+                        
+                        // Se configurado para apenas remover (não banir), desbanir imediatamente
+                        if (!actionData.permanentBan) {
+                            await sendTelegramRequest(
+                                botToken,
+                                'unbanChatMember',
+                                {
+                                    chat_id: bot.telegram_supergroup_id,
+                                    user_id: userToRemove,
+                                    only_if_banned: true
+                                }
+                            );
+                        }
+                        
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || 'Você foi removido do grupo.',
+                                variables
+                            );
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                    } else {
+                        throw new Error(`Falha ao remover usuário: ${banResponse.description}`);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                    throw error;
+                }
+                break;
 
             default:
                 console.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
@@ -4247,61 +4416,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     return 'completed';
 }
 
-/**
- * Converte nó antigo (com tipo específico) para estrutura nova (type: 'action')
- * Retorna null se já estiver na estrutura correta
- */
-function convertLegacyNode(node) {
-    const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-    
-    if (node.type === 'trigger' || node.type === 'action') {
-        return null; // Já está na estrutura correta
-    }
-    
-    if (legacyTypes.includes(node.type)) {
-        // Se já tem actions no data, o nó pode já estar parcialmente migrado
-        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
-        const existingActions = node.data?.actions || [];
-        
-        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
-        const hasMatchingAction = existingActions.some(a => a.type === node.type);
-        
-        if (!hasMatchingAction) {
-            // Converte nó antigo para estrutura nova
-            const mainAction = {
-                type: node.type,
-                data: { ...node.data }
-            };
-            // Remove propriedades que não devem estar no data da ação, apenas nas ações
-            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
-            mainAction.data = actionData;
-            
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: [mainAction, ...existingActions],
-                    // Preserva waitForReply e replyTimeout se existirem
-                    waitForReply: node.data?.waitForReply,
-                    replyTimeout: node.data?.replyTimeout
-                }
-            };
-        } else {
-            // Já tem a ação, só precisa mudar o tipo
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: existingActions
-                }
-            };
-        }
-    }
-    
-    return null; // Tipo desconhecido
-}
 
 /**
  * [REATORADO] Processa o fluxo principal, navegando entre os nós.
@@ -4434,18 +4548,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
-        // Converte nó antigo para estrutura nova se necessário
-        const convertedNode = convertLegacyNode(currentNode);
-        if (convertedNode) {
-            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova. Ações antes: ${(currentNode.data?.actions || []).length}, depois: ${(convertedNode.data?.actions || []).length}`);
-            currentNode = convertedNode;
-            // Atualiza o nó no array se necessário (para próximas iterações)
-            const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
-            if (nodeIndex >= 0) {
-                nodes[nodeIndex] = currentNode;
-            }
-        }
-
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
@@ -4570,37 +4672,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             continue;
         }
 
-        // Suporte para nós antigos (já convertidos acima, mas mantém compatibilidade adicional)
-        const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-        if (legacyTypes.includes(currentNode.type)) {
-            // Se ainda chegou aqui, converte e processa como nó 'action'
-            const mainAction = {
-                type: currentNode.type,
-                data: { ...currentNode.data }
-            };
-            const actions = [mainAction, ...(currentNode.data?.actions || [])];
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
-            
-            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            
-            // Processa resultado especial para action_check_pix
-            if (actionResult === 'paid') {
-                currentNodeId = findNextNode(currentNode.id, 'a', edges);
-                continue;
-            }
-            if (actionResult === 'pending') {
-                currentNodeId = findNextNode(currentNode.id, 'b', edges);
-                continue;
-            }
-            if (actionResult === 'flow_forwarded') {
-                currentNodeId = null;
-                break;
-            }
-            
-            // Continua pelo handle 'a' para outros tipos
-            currentNodeId = findNextNode(currentNode.id, 'a', edges);
-            continue;
-        }
 
         // Tipo de nó desconhecido
         console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
