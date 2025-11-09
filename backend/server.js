@@ -5484,6 +5484,65 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
     res.sendStatus(200);
 });
 
+app.post('/api/webhook/wiinpay', async (req, res) => {
+    try {
+        const parsed = parseWiinpayPayment(req.body || {});
+        if (!parsed.id) {
+            console.warn('[Webhook WiinPay] Payload sem identificador de pagamento:', JSON.stringify(req.body));
+            return res.sendStatus(200);
+        }
+
+        const normalizedStatus = String(parsed.status || '').toLowerCase();
+        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+        const canceledStatuses = new Set(['canceled', 'cancelled', 'expired', 'failed', 'refused']);
+
+        if (paidStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    SELECT * FROM pix_transactions 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) AND provider = 'wiinpay'
+                `;
+
+                if (!tx) {
+                    console.error(`[Webhook WiinPay] Transação não encontrada para ID ${parsed.id}.`);
+                    return res.sendStatus(200);
+                }
+
+                if (tx.status === 'paid') {
+                    console.log(`[Webhook WiinPay] Transação ${tx.id} já está paga. Ignorando duplicata.`);
+                    return res.sendStatus(200);
+                }
+
+                console.log(`[Webhook WiinPay] Processando transação ${parsed.id} (interna: ${tx.id}) com status '${normalizedStatus}'.`);
+                await handleSuccessfulPayment(tx.id, parsed.customer || {});
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao processar pagamento:', error);
+            }
+        } else if (canceledStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    UPDATE pix_transactions 
+                    SET status = 'expired', updated_at = NOW() 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) 
+                      AND provider = 'wiinpay' 
+                      AND status = 'pending'
+                    RETURNING id
+                `;
+                if (tx) {
+                    console.log(`[Webhook WiinPay] Transação ${parsed.id} marcada como expirada (interna: ${tx.id}).`);
+                }
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao marcar transação como expirada:', error.message);
+            }
+        } else {
+            console.log(`[Webhook WiinPay] Status '${normalizedStatus}' não tratado. Payload:`, JSON.stringify(req.body));
+        }
+    } catch (error) {
+        console.error('[Webhook WiinPay] Erro inesperado ao processar payload:', error);
+    }
+    res.sendStatus(200);
+});
+
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
     console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
