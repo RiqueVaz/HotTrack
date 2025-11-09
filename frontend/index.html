@@ -6782,9 +6782,6 @@ function generatePreviewHTML(data) {
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
                                 <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
-                                <div className="contact-detail"><label>Username</label><p>{selectedChat.username ? `@${selectedChat.username}` : 'Nenhum'}</p></div>
-                                <div className="contact-detail"><label>Chat ID</label><p>{selectedChat.chat_id}</p></div>
-                                <div className="contact-detail"><label>Click ID</label><p>{selectedChat.click_id || 'Nenhum'}</p></div>
                                 <div className="contact-detail">
                                     <label>Tags</label>
                                     <div className="contact-tags">
