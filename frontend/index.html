@@ -1064,6 +1064,8 @@
         .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
         .hotbot-scope .conversation-item.active { background-color: rgba(56, 189, 248, 0.1); border-left: 3px solid var(--accent-primary); }
         .hotbot-scope .conversation-item-name { font-weight: 600; color: var(--text-primary); }
+        .hotbot-scope .conversation-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+        .hotbot-scope .conversation-item-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
@@ -6012,6 +6014,13 @@ function generatePreviewHTML(data) {
             // Fallback: chat_id
             return u.chat_id ? String(u.chat_id) : '';
         };
+
+        const formatLastMessageTime = (timestamp) => {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            if (Number.isNaN(date.getTime())) return '';
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        };
         
         useEffect(() => {
         const activeUsers = showOnlyActive 
@@ -6164,15 +6173,21 @@ function generatePreviewHTML(data) {
                                 />
                             </div>
                             <div className="conversations-list">
-                                {filteredUsers.map(u => (
-                                    <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
-                                        <div className="conversation-item-name">
-                                            {getFirstName(u)}
-                                            <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                {filteredUsers.map(u => {
+                                    const formattedTime = formatLastMessageTime(u.last_message_at);
+                                    return (
+                                        <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                            <div className="conversation-item-header">
+                                                <div className="conversation-item-name">
+                                                    {getFirstName(u)}
+                                                    <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                                </div>
+                                                {formattedTime ? <span className="conversation-item-time">{formattedTime}</span> : null}
+                                            </div>
+                                            <p className="conversation-item-preview">{u.message_text}</p>
                                         </div>
-                                        <p className="conversation-item-preview">{u.message_text}</p>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                         <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
