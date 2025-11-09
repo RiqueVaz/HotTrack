@@ -168,7 +168,12 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, { headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' } });
         pixData = response.data;
         acquirer = "BRPix";
-        return { qr_code_text: pixData.pix.qrcode, qr_code_base64: pixData.pix.qrcode, transaction_id: pixData.id, acquirer, provider };
+
+        const brpixTransactionId = pixData?.transaction_id || pixData?.id;
+        const qrCodeText = pixData?.pix?.qrcode || pixData?.pix?.qrcodeText || pixData?.pix?.qr_code || pixData?.pix?.qrCode;
+        const qrCodeBase64 = pixData?.pix?.qr_code_base64 || pixData?.pix?.qrcode_base64 || pixData?.pix?.qrcode || pixData?.pix?.qr_code;
+
+        return { qr_code_text: qrCodeText, qr_code_base64: qrCodeBase64, transaction_id: brpixTransactionId, acquirer, provider };
     } else if (provider === 'syncpay') {
         const token = await getSyncPayAuthToken(seller);
         const payload = { amount: value_cents / 100, payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/syncpay` };

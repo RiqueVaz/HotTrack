@@ -465,10 +465,21 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         });
         pixData = response.data;
         acquirer = "BRPix";
+        const brpixTransactionId = pixData?.transaction_id || pixData?.id;
+        const qrCodeText =
+            pixData?.pix?.qrcode ||
+            pixData?.pix?.qrcodeText ||
+            pixData?.pix?.qr_code ||
+            pixData?.pix?.qrCode;
+        const qrCodeBase64 =
+            pixData?.pix?.qr_code_base64 ||
+            pixData?.pix?.qrcode_base64 ||
+            pixData?.pix?.qrcode ||
+            pixData?.pix?.qr_code;
         return {
-            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
-            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
-            transaction_id: pixData.id,
+            qr_code_text: qrCodeText, // Alterado de pixData.pix.qrcodeText
+            qr_code_base64: qrCodeBase64, // Mantido para consistência com a resposta atual
+            transaction_id: brpixTransactionId,
             acquirer,
             provider
         };

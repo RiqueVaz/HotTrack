@@ -1191,10 +1191,23 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         });
         pixData = response.data;
         acquirer = "BRPix";
+
+        const brpixTransactionId = pixData?.transaction_id || pixData?.id;
+        const qrCodeText =
+            pixData?.pix?.qrcode ||
+            pixData?.pix?.qrcodeText ||
+            pixData?.pix?.qr_code ||
+            pixData?.pix?.qrCode;
+        const qrCodeBase64 =
+            pixData?.pix?.qr_code_base64 ||
+            pixData?.pix?.qrcode_base64 ||
+            pixData?.pix?.qrcode ||
+            pixData?.pix?.qr_code;
+
         return {
-            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
-            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
-            transaction_id: pixData.id,
+            qr_code_text: qrCodeText,
+            qr_code_base64: qrCodeBase64,
+            transaction_id: brpixTransactionId,
             acquirer,
             provider
         };
@@ -5415,39 +5428,71 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 });
 
 app.post('/api/webhook/brpix', async (req, res) => {
-    const { event, data } = req.body;
+    const payload = req.body || {};
+    const event = payload.event;
+    const data = payload.data || {};
+    const customer = data.customer || {};
+    const transactionId = data.transaction_id || data.id;
 
-    if (event === 'transaction.updated' && data?.status === 'paid') {
-        const transactionId = data.id;
-        const customer = data.customer;
+    console.log('[Webhook BRPix] Notificação recebida:', JSON.stringify({ event, transactionId, status: data.status }, null, 2));
 
-        try {
-            console.log(`[Webhook BRPix] Processando pagamento para transactionId: ${transactionId}`);
-            
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+    if (!event || !transactionId) {
+        console.warn('[Webhook BRPix] Payload inválido: campos "event" ou "transaction_id" ausentes.');
+        return res.sendStatus(200);
+    }
 
-            if (!tx) {
-                console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
-                const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
-                console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
-                return res.sendStatus(200);
-            }
-            
+    const normalizedEvent = String(event).toLowerCase();
+
+    try {
+        const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+
+        if (!tx) {
+            console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
+            const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
+            console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
+            return res.sendStatus(200);
+        }
+
+        if (normalizedEvent === 'transaction.paid') {
             if (tx.status === 'paid') {
                 console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga'. Ignorando webhook duplicado.`);
                 return res.sendStatus(200);
             }
-            
+
+            const customerDocument = customer?.document?.number || customer?.document || customer?.cpf || null;
             console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
-            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document?.number });
+            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customerDocument, email: customer?.email });
             console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
-            
-        } catch (error) {
-            console.error(`[Webhook BRPix] ERRO CRÍTICO:`, error);
-            console.error(`[Webhook BRPix] Stack:`, error.stack);
+        } else if (normalizedEvent === 'transaction.created') {
+            if (tx.status === 'paid') {
+                console.log(`[Webhook BRPix] Evento 'created' ignorado: transação ${transactionId} já está paga.`);
+            } else {
+                const [updated] = await sql`UPDATE pix_transactions SET status = 'pending', updated_at = NOW() WHERE id = ${tx.id} RETURNING id`;
+                if (updated) {
+                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) marcada/confirmada como 'pending'.`);
+                }
+            }
+        } else if (normalizedEvent === 'transaction.failed' || normalizedEvent === 'transaction.expired' || normalizedEvent === 'transaction.refunded') {
+            if (tx.status === 'paid') {
+                console.warn(`[Webhook BRPix] Evento '${event}' ignorado: transação ${transactionId} já está paga.`);
+            } else {
+                const statusMap = {
+                    'transaction.failed': 'failed',
+                    'transaction.expired': 'expired',
+                    'transaction.refunded': 'refunded'
+                };
+                const newStatus = statusMap[normalizedEvent] || 'failed';
+                const [updated] = await sql`UPDATE pix_transactions SET status = ${newStatus}, updated_at = NOW() WHERE id = ${tx.id} RETURNING id, status`;
+                if (updated) {
+                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) atualizada para '${newStatus}'.`);
+                }
+            }
+        } else {
+            console.log(`[Webhook BRPix] Evento '${event}' não tratado. Nenhuma ação executada.`);
         }
-    } else {
-        console.log(`[Webhook BRPix] Evento '${event}' com status '${data?.status}' ignorado.`);
+    } catch (error) {
+        console.error(`[Webhook BRPix] ERRO CRÍTICO ao processar evento '${event}' para transactionId '${transactionId}':`, error);
+        console.error(`[Webhook BRPix] Stack:`, error.stack);
     }
 
     res.sendStatus(200);
