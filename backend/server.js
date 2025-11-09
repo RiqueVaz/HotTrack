@@ -4488,6 +4488,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         }
                     );
                     
+                    const handleOwnerBanRestriction = () => {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    };
+
                     if (banResponse.ok) {
                         console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
                         variables.user_was_banned = true;
@@ -4526,11 +4532,23 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
                         }
                     } else {
-                        throw new Error(`Falha ao remover usuário: ${banResponse.description}`);
+                        const desc = (banResponse.description || '').toLowerCase();
+                        if (desc.includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                        } else {
+                            throw new Error(`Falha ao remover usuário: ${banResponse.description}`);
+                        }
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
-                    throw error;
+                    const message = (error?.message || '').toLowerCase();
+                    if (message.includes("can't remove chat owner")) {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    } else {
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                        throw error;
+                    }
                 }
                 break;
 
