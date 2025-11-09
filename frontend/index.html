@@ -6678,6 +6678,33 @@ function generatePreviewHTML(data) {
         );
     };
 
+    const validateTextForUrls = (text) => {
+        if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+
+        // Remove variáveis do sistema antes de validar
+        const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+
+        // Padrões de URL a detectar
+        const patterns = [
+            /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
+            /www\.[^\s]+/gi,                                        // URLs com www
+            /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
+        ];
+
+        const foundUrls = [];
+        patterns.forEach(pattern => {
+            const matches = textWithoutVariables.match(pattern);
+            if (matches) {
+                foundUrls.push(...matches);
+            }
+        });
+
+        return {
+            valid: foundUrls.length === 0,
+            urls: foundUrls
+        };
+    };
+
     const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
@@ -6695,34 +6722,6 @@ function generatePreviewHTML(data) {
         const [draggedIndex, setDraggedIndex] = useState(null);
         const [dragOverIndex, setDragOverIndex] = useState(null);
         const [urlValidationErrors, setUrlValidationErrors] = useState({});
-        
-        // Função de validação de URLs
-        const validateTextForUrls = (text) => {
-            if (!text || typeof text !== 'string') return { valid: true, urls: [] };
-            
-            // Remove variáveis do sistema antes de validar
-            const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
-            
-            // Padrões de URL a detectar
-            const patterns = [
-                /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
-                /www\.[^\s]+/gi,                                        // URLs com www
-                /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
-            ];
-            
-            const foundUrls = [];
-            patterns.forEach(pattern => {
-                const matches = textWithoutVariables.match(pattern);
-                if (matches) {
-                    foundUrls.push(...matches);
-                }
-            });
-            
-            return {
-                valid: foundUrls.length === 0,
-                urls: foundUrls
-            };
-        };
         
         useEffect(() => { 
             const data = selectedNode.data || {};
