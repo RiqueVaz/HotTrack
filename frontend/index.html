@@ -1071,7 +1071,17 @@
         .hotbot-scope .chat-header-main { display: flex; flex-direction: column; gap: 0.5rem; }
         .hotbot-scope .chat-header-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
         .hotbot-scope .chat-header-actions { display: flex; align-items: center; gap: 0.5rem; }
-        .hotbot-scope .tag-badge { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.2rem 0.55rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; background: rgba(59,130,246,0.1); color: #2563EB; border: 1px solid transparent; text-transform: uppercase; letter-spacing: 0.02em; }
+        .hotbot-scope .tag-badge {     display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.25rem;
+            border-radius: 999px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: rgba(59, 130, 246, 0.1);
+            color: #2563EB;
+            border: 1px solid transparent;
+            text-transform: uppercase; letter-spacing: 0.02em; }
         .hotbot-scope .tag-badge--auto { background: rgba(34, 197, 94, 0.12); color: #15803D; border-color: rgba(34, 197, 94, 0.35); }
         .hotbot-scope .tag-actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-start; }
         .hotbot-scope .tag-filter-container { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
@@ -5368,17 +5378,6 @@ function generatePreviewHTML(data) {
             } catch (e) { console.error("Erro ao buscar fluxos", e); }
         }, [selectedBotId]);
         
-        const getContrastColor = (hexColor) => {
-            if (!hexColor || typeof hexColor !== 'string') return '#ffffff';
-            const sanitized = hexColor.replace('#', '');
-            if (sanitized.length !== 6) return '#ffffff';
-            const r = parseInt(sanitized.substring(0, 2), 16);
-            const g = parseInt(sanitized.substring(2, 4), 16);
-            const b = parseInt(sanitized.substring(4, 6), 16);
-            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-            return brightness > 160 ? '#0f172a' : '#ffffff';
-        };
-
         const updateLeadState = useCallback((chatId, transformer) => {
             setUsers(prev => prev.map(lead => {
                 if (lead.chat_id !== chatId) return lead;
@@ -5505,22 +5504,6 @@ function generatePreviewHTML(data) {
                 setSelectedBotId(bots[0].id);
             }
         }, [bots]);
-
-        useEffect(() => {
-            const handleGlobalClick = () => setTagContextMenu(null);
-            const handleKeyDown = (event) => {
-                if (event.key === 'Escape') setTagContextMenu(null);
-            };
-            const handleScroll = () => setTagContextMenu(null);
-            window.addEventListener('click', handleGlobalClick);
-            window.addEventListener('keydown', handleKeyDown);
-            window.addEventListener('scroll', handleScroll, true);
-            return () => {
-                window.removeEventListener('click', handleGlobalClick);
-                window.removeEventListener('keydown', handleKeyDown);
-                window.removeEventListener('scroll', handleScroll, true);
-            };
-        }, []);
 
         useEffect(() => {
             if (shareableLinkId) {
@@ -6133,6 +6116,48 @@ function generatePreviewHTML(data) {
             return [...automatic, ...custom];
         }, [customTags]);
         
+        const getContrastColor = useCallback((hexColor) => {
+            if (!hexColor || typeof hexColor !== 'string') return '#ffffff';
+            const sanitized = hexColor.replace('#', '');
+            if (sanitized.length !== 6) return '#ffffff';
+            const r = parseInt(sanitized.substring(0, 2), 16);
+            const g = parseInt(sanitized.substring(2, 4), 16);
+            const b = parseInt(sanitized.substring(4, 6), 16);
+            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+            return brightness > 160 ? '#0f172a' : '#ffffff';
+        }, []);
+
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev =>
+                prev.map(lead => {
+                    if (lead.chat_id !== chatId) return lead;
+                    const updated = transformer({ ...lead });
+                    return updated || lead;
+                })
+            );
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
+
+        useEffect(() => {
+            const handleGlobalClick = () => setTagContextMenu(null);
+            const handleKeyDown = (event) => {
+                if (event.key === 'Escape') setTagContextMenu(null);
+            };
+            const handleScroll = () => setTagContextMenu(null);
+            window.addEventListener('click', handleGlobalClick);
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('scroll', handleScroll, true);
+            return () => {
+                window.removeEventListener('click', handleGlobalClick);
+                window.removeEventListener('keydown', handleKeyDown);
+                window.removeEventListener('scroll', handleScroll, true);
+            };
+        }, []);
+        
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
                 setSelectedBotId(bots[0].id);
@@ -6723,14 +6748,6 @@ function generatePreviewHTML(data) {
                                             </div>
                                         </div>
                                         <div className="chat-header-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={handleOpenTagManager}
-                                                disabled={!selectedBotId}
-                                            >
-                                                Gerenciar tags
-                                            </button>
                                             <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button>
                                         </div>
                                     </div>
