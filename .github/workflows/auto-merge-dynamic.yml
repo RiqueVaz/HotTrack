@@ -1,0 +1,63 @@
+name: Auto-merge pushed branch -> homologation
+
+on:
+  push:
+    # dispara em qualquer branch; você pode filtrar se quiser
+    branches:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set variables
+        id: vars
+        run: |
+          echo "SOURCE=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "TARGET=homologation" >> $GITHUB_OUTPUT
+
+      - name: Try merge into homologation
+        id: try-merge
+        run: |
+          set -e
+          SOURCE="${{ steps.vars.outputs.SOURCE }}"
+          TARGET="${{ steps.vars.outputs.TARGET }}"
+
+          echo "Tentando merge: $SOURCE -> $TARGET"
+          git fetch origin
+          git checkout $TARGET
+          git pull origin $TARGET
+
+          # tenta mesclar a versão remota da source
+          if git merge --no-edit origin/${SOURCE}; then
+            git push origin $TARGET
+            echo "merged=true" >> $GITHUB_OUTPUT
+          else
+            echo "merged=false" >> $GITHUB_OUTPUT
+            git merge --abort || true
+          fi
+
+      - name: Create issue if merge failed
+        if: steps.try-merge.outputs.merged == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Auto-merge conflict: ${process.env.GITHUB_REF_NAME} -> homologation`,
+              body: `Tentativa automática de merge de \`${process.env.GITHUB_REF_NAME}\` para \`homologation\` falhou. Resolva conflitos manualmente.`
+            })
