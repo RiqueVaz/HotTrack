@@ -47,6 +47,63 @@ const receiver = new Receiver({
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
   });
 
+// Função de validação de URLs em texto (anti-links externos)
+const validateTextForUrls = (text) => {
+    if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+    
+    // Remove variáveis do sistema antes de validar
+    const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+    
+    // Padrões de URL a detectar
+    const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*)/gi;
+    
+    const foundUrls = [];
+    let match;
+    while ((match = urlPattern.exec(textWithoutVariables)) !== null) {
+        foundUrls.push(match[0]);
+    }
+    
+    return {
+        valid: foundUrls.length === 0,
+        urls: foundUrls
+    };
+};
+
+// Função de validação das ações do fluxo
+const validateFlowActions = (nodes) => {
+    if (!nodes || !Array.isArray(nodes)) return { valid: true };
+    
+    for (const node of nodes) {
+        const actions = node.data?.actions || [];
+        
+        for (const action of actions) {
+            // Validar texto de mensagem
+            if (action.type === 'message' && action.data?.text) {
+                const validation = validateTextForUrls(action.data.text);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+            
+            // Validar legendas
+            if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                const validation = validateTextForUrls(action.data.caption);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos nas legendas. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+        }
+    }
+    
+    return { valid: true };
+};
+
 const app = express();
 
 // Configuração do servidor
@@ -1647,7 +1704,19 @@ app.post('/api/flows', authenticateJwt, async (req, res) => {
 app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
     const { name, nodes } = req.body;
     if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    
     try {
+        // Parse e validar os nodes antes de salvar
+        const parsedNodes = JSON.parse(nodes);
+        const nodesArray = parsedNodes.nodes || [];
+        
+        // Validar se há links em campos de texto
+        const validation = validateFlowActions(nodesArray);
+        if (!validation.valid) {
+            console.log(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            return res.status(400).json({ message: validation.message });
+        }
+        
         // Busca o fluxo para pegar o bot_id
         const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
@@ -1658,7 +1727,10 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW(), is_active = TRUE WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
         if (updated) res.status(200).json(updated);
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
-    } catch (error) { res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); }
+    } catch (error) { 
+        console.error('[Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); 
+    }
 });
 
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
@@ -2165,13 +2237,23 @@ app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
             LEFT JOIN ( SELECT checkout_id, array_agg(pixel_config_id) as pixel_ids FROM checkout_pixels GROUP BY checkout_id ) px ON c.id = px.checkout_id
             WHERE c.seller_id = ${sellerId} ORDER BY c.created_at DESC`;
         const utmifyIntegrationsPromise = sql`SELECT id, account_name FROM utmify_integrations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
+        const thankYouPagesPromise = sql`
+            SELECT id, config->>'page_name' as name
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
+        const hostedCheckoutsPromise = sql`
+            SELECT id, config->'content'->>'main_title' as name
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
 
-        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations] = await Promise.all([
-            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise
+        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts] = await Promise.all([
+            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise, thankYouPagesPromise, hostedCheckoutsPromise
         ]);
         
         const settings = settingsResult[0] || {};
-        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations });
+        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts });
     } catch (error) {
         console.error("Erro ao buscar dados do dashboard:", error);
         res.status(500).json({ message: 'Erro ao buscar dados.' });
@@ -3947,7 +4029,26 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
                         const btnText = await replaceVariables(actionData.buttonText, variables);
-                        const btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && (btnUrl.includes('/oferta/') || btnUrl.includes('/obrigado/'))) {
+                            try {
+                                // Adiciona protocolo se não existir
+                                const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
+                                const urlObj = new URL(urlWithProtocol);
+                                // Remove prefixo '/start ' se existir
+                                const cleanClickId = variables.click_id.replace('/start ', '');
+                                urlObj.searchParams.set('click_id', cleanClickId);
+                                btnUrl = urlObj.toString();
+                                
+                                // Log apropriado baseado no tipo de URL
+                                const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
+                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                            } catch (urlError) {
+                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                            }
+                        }
                         
                         // Envia com botão inline
                         const payload = { 
@@ -6848,20 +6949,48 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             return res.status(400).json({ message: 'API Key não configurada para o vendedor.' });
         }
 
-        // 2) Garantir que há um click_id associado (reutilizando lógica atual)
+        // 2) Garantir que há um click_id associado
         const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
         const user_agent = req.headers['user-agent'];
         let finalClickId = click_id;
-
-        if (!finalClickId) {
+        
+        // Verifica se já existe um clique com este click_id
+        if (finalClickId) {
+            // Remove o prefixo '/start ' se existir
+            const cleanClickId = finalClickId.replace('/start ', '');
+            const dbClickId = cleanClickId.startsWith('/start ') ? cleanClickId : `/start ${cleanClickId}`;
+            
+            // Verifica se o click_id já existe no banco
+            const [existingClick] = await sql`
+                SELECT id FROM clicks 
+                WHERE click_id = ${dbClickId} AND seller_id = ${sellerId}
+            `;
+            
+            if (!existingClick) {
+                // Se não existe, precisa criar um novo registro de click para este checkout
+                console.log(`[Checkout PIX] Click_id ${cleanClickId} não encontrado, criando novo registro para checkout`);
+                const [newClick] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id, is_organic)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${dbClickId}, FALSE)
+                    RETURNING id;
+                `;
+                finalClickId = cleanClickId; // Usa o click_id do fluxo
+            } else {
+                // Click já existe, usa ele
+                finalClickId = cleanClickId;
+                console.log(`[Checkout PIX] Usando click_id existente: ${cleanClickId}`);
+            }
+        } else {
             // Criar clique orgânico e gerar click_id no padrão existente
+            console.log(`[Checkout PIX] Nenhum click_id fornecido, gerando orgânico`);
             const [newClick] = await sql`
-                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
-                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
+                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
                 RETURNING id;
             `;
-            finalClickId = `lead${newClick.id.toString().padStart(6, '0')}`;
+            finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
             await sql`UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}`;
+            console.log(`[Checkout PIX] Click_id orgânico gerado: ${finalClickId}`);
         }
 
         // 3) Delegar geração para o endpoint central usando HOTTRACK_API_URL
