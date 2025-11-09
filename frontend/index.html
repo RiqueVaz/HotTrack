@@ -8008,9 +8008,15 @@ function generatePreviewHTML(data) {
                                 <button
                                     className="node-selector-button"
                                     onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                                 >
-                                    <span className="node-selector-button-icon">👥</span>
-                                    <span>Gerenciar Grupos</span>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span className="node-selector-button-icon">👥</span>
+                                        <span>Gerenciar Grupos</span>
+                                    </span>
+                                    <span style={{ fontSize: '0.9rem' }}>
+                                        {isGroupMenuOpen ? '▾' : '▸'}
+                                    </span>
                                 </button>
                                 {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
                                     <button
