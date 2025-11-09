@@ -5082,6 +5082,30 @@ function generatePreviewHTML(data) {
               } 
           } 
       };
+        const handleConfigureGroup = async (id) => {
+            const currentBot = bots.find(b => b.id === id);
+            const groupId = prompt(
+                "Insira o ID do Supergrupo do Telegram:\n\n" +
+                "Como obter o ID:\n" +
+                "1. Adicione o bot como administrador do grupo\n" +
+                "2. Use bots como @userinfobot ou @getidsbot no grupo\n" +
+                "3. O ID do supergrupo começa com -100\n\n" +
+                "ID atual: " + (currentBot?.telegram_supergroup_id || "Não configurado")
+            );
+            
+            if (groupId !== null) {
+                try {
+                    await api.put(`/api/bots/${id}`, { 
+                        bot_token: currentBot?.bot_token || '',
+                        telegram_supergroup_id: groupId.trim() || null 
+                    });
+                    App.showToast(groupId ? 'Grupo configurado!' : 'Grupo removido!', 'success');
+                    fetchBots();
+                } catch (e) {
+                    App.showToast(e.response?.data?.message || 'Erro ao configurar grupo', 'error');
+                }
+            }
+        };
         const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); App.showToast(res.data.message, 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Falha ao configurar webhook', 'error'); } };
         
       return (
@@ -5101,6 +5125,7 @@ function generatePreviewHTML(data) {
                                 <span className="font-semibold text-white">{bot.bot_name}</span>
                                 <div className="flex items-center gap-2 flex-shrink-0">
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleUpdateToken(bot.id)}>Token</button>
+                                    <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleConfigureGroup(bot.id)}>Grupo</button>
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleSetWebhook(bot.id)}>Webhook</button>
                                     <button className="btn btn-red text-xs py-1 px-2" onClick={() => handleDeleteBot(bot.id)}>Excluir</button>
                                 </div>
@@ -6475,7 +6500,10 @@ function generatePreviewHTML(data) {
             action_pix: '💳',
             action_check_pix: '🔍',
             forward_flow: '↗️',
-            delay: '⏱️'
+            delay: '⏱️',
+            action_create_invite_link: '🔗',
+            action_ban_invite_link: '🚫',
+            action_remove_user_from_group: '👤'
         };
         return icons[actionType] || '❓';
     };
@@ -6490,7 +6518,10 @@ function generatePreviewHTML(data) {
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
             forward_flow: 'Encaminhar',
-            delay: 'Atraso'
+            delay: 'Atraso',
+            action_create_invite_link: 'Criar Convite',
+            action_ban_invite_link: 'Banir Convite',
+            action_remove_user_from_group: 'Remover Usuário'
         };
         return labels[actionType] || actionType;
     };
@@ -6533,6 +6564,9 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+                action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName || 'Configure link.' },
+                action_ban_invite_link: { icon: '🚫', name: 'Banir Convite', content: actionData.inviteLink ? 'Link configurado.' : 'Configure link.' },
+                action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: actionData.permanentBan ? 'Ban permanente.' : 'Removeção simples.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6541,17 +6575,17 @@ function generatePreviewHTML(data) {
         
         return (
             <>
-    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
-    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
-        <div className="action-badge">
-            {actions.length > 0 ? (
-                <>
-                    {getActionIcon(actions[0].type)}
-                    {getActionLabel(actions[0].type)}
-                    {actions.length > 1 && ` +${actions.length - 1}`}
-                </>
-            ) : 'Nó vazio'}
-        </div>
+                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
+                    <div className="action-badge">
+                        {actions.length > 0 ? (
+                            <>
+                                {getActionIcon(actions[0].type)}
+                                {getActionLabel(actions[0].type)}
+                                {actions.length > 1 && ` +${actions.length - 1}`}
+                            </>
+                        ) : 'Nó vazio'}
+                    </div>
                     <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
                         <button 
                             onClick={(e) => {
@@ -6881,7 +6915,10 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-                forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar',
+                action_create_invite_link: '🔗 Criar Convite',
+                action_ban_invite_link: '🚫 Banir Convite',
+                action_remove_user_from_group: '👤 Remover Usuário'
             };
             
             const isDragging = draggedIndex === index;
@@ -7209,6 +7246,189 @@ function generatePreviewHTML(data) {
                             />
                         </div>
                     )}
+                    
+                    {action.type === 'action_create_invite_link' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Nome do Link</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.linkName || ''} 
+                                    onChange={e => updateAction(index, 'linkName', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Nome identificador do link"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Expiração (minutos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.expireMinutes || ''} 
+                                    onChange={e => updateAction(index, 'expireMinutes', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Deixe vazio para link permanente"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Limite de Membros</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.memberLimit || ''} 
+                                    onChange={e => updateAction(index, 'memberLimit', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Deixe vazio para ilimitado"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.requiresApproval}
+                                        onChange={e => updateAction(index, 'requiresApproval', e.target.checked)}
+                                    />
+                                    Requer aprovação para entrar
+                                </label>
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.sendMessage}
+                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
+                                    />
+                                    Enviar mensagem com o link
+                                </label>
+                            </div>
+                            {actionData.sendMessage && (
+                                <div className="form-group">
+                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
+                                    <textarea 
+                                        className="form-textarea" 
+                                        rows="2" 
+                                        maxLength="4096" 
+                                        value={actionData.messageText || ''} 
+                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
+                                        style={{fontSize: '0.85rem'}}
+                                        placeholder="Use {{invite_link}} para incluir o link gerado"
+                                    />
+                                </div>
+                            )}
+                        </>
+                    )}
+                    
+                    {action.type === 'action_ban_invite_link' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Link de Convite para Banir</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.inviteLink || ''} 
+                                    onChange={e => updateAction(index, 'inviteLink', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Deixe vazio para usar {{invite_link}} da variável"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.sendMessage}
+                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
+                                    />
+                                    Enviar mensagem de confirmação
+                                </label>
+                            </div>
+                            {actionData.sendMessage && (
+                                <div className="form-group">
+                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
+                                    <textarea 
+                                        className="form-textarea" 
+                                        rows="2" 
+                                        maxLength="4096" 
+                                        value={actionData.messageText || ''} 
+                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
+                                        style={{fontSize: '0.85rem'}}
+                                        placeholder="Mensagem de confirmação"
+                                    />
+                                </div>
+                            )}
+                        </>
+                    )}
+                    
+                    {action.type === 'action_remove_user_from_group' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>ID do Usuário</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.userId || ''} 
+                                    onChange={e => updateAction(index, 'userId', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Deixe vazio para remover o usuário atual"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Duração do Ban (minutos)</label>
+                                <input 
+                                    type="number" 
+                                    className="form-input" 
+                                    value={actionData.banDuration || ''} 
+                                    onChange={e => updateAction(index, 'banDuration', parseInt(e.target.value, 10))}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Deixe vazio para ban permanente"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.permanentBan}
+                                        onChange={e => updateAction(index, 'permanentBan', e.target.checked)}
+                                    />
+                                    Ban permanente (não apenas remover)
+                                </label>
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.deleteMessages}
+                                        onChange={e => updateAction(index, 'deleteMessages', e.target.checked)}
+                                    />
+                                    Deletar mensagens do usuário
+                                </label>
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.sendMessage}
+                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
+                                    />
+                                    Enviar mensagem ao usuário
+                                </label>
+                            </div>
+                            {actionData.sendMessage && (
+                                <div className="form-group">
+                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
+                                    <textarea 
+                                        className="form-textarea" 
+                                        rows="2" 
+                                        maxLength="4096" 
+                                        value={actionData.messageText || ''} 
+                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
+                                        style={{fontSize: '0.85rem'}}
+                                        placeholder="Mensagem para o usuário removido"
+                                    />
+                                </div>
+                            )}
+                        </>
+                    )}
                 </div>
             );
         };
@@ -7401,6 +7621,7 @@ function generatePreviewHTML(data) {
         const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
+        const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
 
@@ -7483,22 +7704,7 @@ function generatePreviewHTML(data) {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
-                    // Migração: converter nodes antigos (com tipo específico) para nova estrutura (type: 'action')
-                    if (node.type !== 'trigger' && node.type !== 'action') {
-                        // Node antigo: criar estrutura nova com a ação principal no array de ações
-                        const mainAction = {
-                            type: node.type,
-                            data: { ...node.data }
-                        };
-                        return {
-                            ...node,
-                            type: 'action',
-                            data: {
-                                actions: [mainAction, ...(node.data?.actions || [])]
-                            }
-                        };
-                    }
-                    // Node já na nova estrutura ou trigger
+                    // Garantir que todos os nodes tenham o campo actions
                     return {
                         ...node,
                         data: {
@@ -7635,7 +7841,10 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' },
+            { type: 'action_create_invite_link', icon: '🔗', label: 'Criar Link de Convite', category: 'Grupo' },
+            { type: 'action_ban_invite_link', icon: '🚫', label: 'Banir Link de Convite', category: 'Grupo' },
+            { type: 'action_remove_user_from_group', icon: '👤', label: 'Remover Usuário do Grupo', category: 'Grupo' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {
@@ -7683,7 +7892,7 @@ function generatePreviewHTML(data) {
                         ❌
                     </button>
                     </div>
-                )}
+               )}
                 <button 
                     className="add-node-fab" 
                     onClick={() => setIsNodeSelectorOpen(true)}
@@ -7695,6 +7904,7 @@ function generatePreviewHTML(data) {
                     <div className="node-selector-modal-overlay" onClick={(e) => {
                         if (e.target === e.currentTarget) {
                             setIsNodeSelectorOpen(false);
+                            setIsGroupMenuOpen(false);
                         }
                     }}>
                         <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
@@ -7702,18 +7912,36 @@ function generatePreviewHTML(data) {
                                 <h3>Adicionar Node</h3>
                                 <button 
                                     className="node-selector-modal-close"
-                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    onClick={() => { setIsNodeSelectorOpen(false); setIsGroupMenuOpen(false); }}
                                     title="Fechar"
                                 >
                                     ✕
                                 </button>
                             </div>
                             <div className="node-selector-modal-content">
-                                {nodeTypesList.map(nodeType => (
+                                {nodeTypesList.filter(nodeType => nodeType.category !== 'Grupo').map(nodeType => (
                                     <button
                                         key={nodeType.type}
                                         className="node-selector-button"
                                         onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
+                                <button
+                                    className="node-selector-button"
+                                    onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                >
+                                    <span className="node-selector-button-icon">👥</span>
+                                    <span>Gerenciar Grupos</span>
+                                </button>
+                                {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                        style={{ marginLeft: '12px' }}
                                     >
                                         <span className="node-selector-button-icon">{nodeType.icon}</span>
                                         <span>{nodeType.label}</span>
@@ -7728,15 +7956,16 @@ function generatePreviewHTML(data) {
         );
     }
     
+    // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
 
-        // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
-
+    // Renderiza a aplicação React no container
+    const root = window.ReactDOM.createRoot(containerElement);
+    // Certifique-se de que o nome do componente principal foi renomeado
+    root.render(<AppHotBot />); 
+    window.hotBotRoot = root; // Guarda a referência para poder desmontar
+}
         // Renderiza a aplicação React no container
-        const root = window.ReactDOM.createRoot(containerElement);
-        // Certifique-se de que o nome do componente principal foi renomeado
-        root.render(<AppHotBot />); 
-        window.hotBotRoot = root; // Guarda a referência para poder desmontar
-    }
+
     </script>
 </body>
 </html>
