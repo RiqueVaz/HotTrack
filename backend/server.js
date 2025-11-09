@@ -4478,15 +4478,30 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const userToRemove = actionData.userId || chatId;
                     const normalizedUserId = normalizeChatIdentifier(userToRemove);
                     
-                    const banResponse = await sendTelegramRequest(
-                        botToken,
-                        'banChatMember',
-                        {
-                            chat_id: normalizedChatId,
-                            user_id: normalizedUserId,
-                            revoke_messages: actionData.deleteMessages || false
+                    let banResponse;
+                    try {
+                        banResponse = await sendTelegramRequest(
+                            botToken,
+                            'banChatMember',
+                            {
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
+                                revoke_messages: actionData.deleteMessages || false
+                            }
+                        );
+                    } catch (banError) {
+                        const errorDesc =
+                            banError?.response?.data?.description ||
+                            banError?.description ||
+                            banError?.message ||
+                            '';
+                        if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                            break;
                         }
-                    );
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
+                        throw banError;
+                    }
                     
                     const handleOwnerBanRestriction = () => {
                         console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
@@ -4532,7 +4547,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
                         }
                     } else {
-                        const desc = (banResponse.description || '').toLowerCase();
+                        const desc =
+                            (banResponse?.description ||
+                                banResponse?.result?.description ||
+                                '').
+                                toLowerCase();
                         if (desc.includes("can't remove chat owner")) {
                             handleOwnerBanRestriction();
                         } else {
@@ -4540,11 +4559,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         }
                     }
                 } catch (error) {
-                    const message = (error?.message || '').toLowerCase();
+                    const message = (error?.response?.data?.description ||
+                        error?.description ||
+                        error?.message ||
+                        '').toLowerCase();
                     if (message.includes("can't remove chat owner")) {
-                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
-                        variables.user_was_banned = false;
-                        variables.banned_user_id = undefined;
+                        handleOwnerBanRestriction();
                     } else {
                         console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
                         throw error;
