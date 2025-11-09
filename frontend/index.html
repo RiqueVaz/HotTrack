@@ -6660,6 +6660,35 @@ function generatePreviewHTML(data) {
         const autoScrollHandlerRef = useRef(null);
         const [draggedIndex, setDraggedIndex] = useState(null);
         const [dragOverIndex, setDragOverIndex] = useState(null);
+        const [urlValidationErrors, setUrlValidationErrors] = useState({});
+        
+        // Função de validação de URLs
+        const validateTextForUrls = (text) => {
+            if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+            
+            // Remove variáveis do sistema antes de validar
+            const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+            
+            // Padrões de URL a detectar
+            const patterns = [
+                /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
+                /www\.[^\s]+/gi,                                        // URLs com www
+                /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
+            ];
+            
+            const foundUrls = [];
+            patterns.forEach(pattern => {
+                const matches = textWithoutVariables.match(pattern);
+                if (matches) {
+                    foundUrls.push(...matches);
+                }
+            });
+            
+            return {
+                valid: foundUrls.length === 0,
+                urls: foundUrls
+            };
+        };
         
         useEffect(() => { 
             const data = selectedNode.data || {};
@@ -6933,9 +6962,34 @@ function generatePreviewHTML(data) {
                                     rows="3" 
                                     maxLength="4096" 
                                     value={actionData.text || ''} 
-                                    onChange={e => updateAction(index, 'text', e.target.value)} 
+                                    onChange={e => {
+                                        const text = e.target.value;
+                                        updateAction(index, 'text', text);
+                                        
+                                        // Validar em tempo real
+                                        const validation = validateTextForUrls(text);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`message-${index}`]: validation
+                                        }));
+                                    }} 
                                     placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
+                                {urlValidationErrors[`message-${index}`] && !urlValidationErrors[`message-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`message-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use o botão oficial para adicionar links.</span>
+                                    </div>
+                                )}
                             </div>
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
@@ -7104,10 +7158,35 @@ function generatePreviewHTML(data) {
                                     rows="2" 
                                     maxLength="1024" 
                                     value={actionData.caption || ''} 
-                                    onChange={e => updateAction(index, 'caption', e.target.value)}
+                                    onChange={e => {
+                                        const caption = e.target.value;
+                                        updateAction(index, 'caption', caption);
+                                        
+                                        // Validar em tempo real
+                                        const validation = validateTextForUrls(caption);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`caption-${index}`]: validation
+                                        }));
+                                    }}
                                     style={{fontSize: '0.85rem'}}
                                     placeholder="Legenda (máx: 1024 caracteres)"
                                 />
+                                {urlValidationErrors[`caption-${index}`] && !urlValidationErrors[`caption-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`caption-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use o botão oficial para adicionar links.</span>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}
@@ -7658,7 +7737,42 @@ function generatePreviewHTML(data) {
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
-        const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
+        const handleSave = async () => { 
+            // Validar todos os campos de texto antes de salvar
+            for (const node of nodes) {
+                const actions = node.data?.actions || [];
+                
+                for (let i = 0; i < actions.length; i++) {
+                    const action = actions[i];
+                    
+                    // Validar texto de mensagem
+                    if (action.type === 'message' && action.data?.text) {
+                        const validation = validateTextForUrls(action.data.text);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos no texto da mensagem!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
+                            return; // Impede salvamento
+                        }
+                    }
+                    
+                    // Validar legendas de mídia
+                    if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                        const validation = validateTextForUrls(action.data.caption);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos na legenda!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
+                            return; // Impede salvamento
+                        }
+                    }
+                }
+            }
+            
+            // Se passou todas as validações, salvar normalmente
+            try { 
+                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); 
+                alert("Salvo!"); 
+            } catch (e) { 
+                alert("Erro ao salvar."); 
+            } 
+        };
         const addNode = (actionType, position = null) => {
             if (!reactFlowInstance) return;
             

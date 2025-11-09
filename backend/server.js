@@ -47,6 +47,63 @@ const receiver = new Receiver({
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
   });
 
+// Função de validação de URLs em texto (anti-links externos)
+const validateTextForUrls = (text) => {
+    if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+    
+    // Remove variáveis do sistema antes de validar
+    const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+    
+    // Padrões de URL a detectar
+    const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*)/gi;
+    
+    const foundUrls = [];
+    let match;
+    while ((match = urlPattern.exec(textWithoutVariables)) !== null) {
+        foundUrls.push(match[0]);
+    }
+    
+    return {
+        valid: foundUrls.length === 0,
+        urls: foundUrls
+    };
+};
+
+// Função de validação das ações do fluxo
+const validateFlowActions = (nodes) => {
+    if (!nodes || !Array.isArray(nodes)) return { valid: true };
+    
+    for (const node of nodes) {
+        const actions = node.data?.actions || [];
+        
+        for (const action of actions) {
+            // Validar texto de mensagem
+            if (action.type === 'message' && action.data?.text) {
+                const validation = validateTextForUrls(action.data.text);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+            
+            // Validar legendas
+            if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                const validation = validateTextForUrls(action.data.caption);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos nas legendas. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+        }
+    }
+    
+    return { valid: true };
+};
+
 const app = express();
 
 // Configuração do servidor
@@ -1647,7 +1704,19 @@ app.post('/api/flows', authenticateJwt, async (req, res) => {
 app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
     const { name, nodes } = req.body;
     if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    
     try {
+        // Parse e validar os nodes antes de salvar
+        const parsedNodes = JSON.parse(nodes);
+        const nodesArray = parsedNodes.nodes || [];
+        
+        // Validar se há links em campos de texto
+        const validation = validateFlowActions(nodesArray);
+        if (!validation.valid) {
+            console.log(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            return res.status(400).json({ message: validation.message });
+        }
+        
         // Busca o fluxo para pegar o bot_id
         const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
@@ -1658,7 +1727,10 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW(), is_active = TRUE WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
         if (updated) res.status(200).json(updated);
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
-    } catch (error) { res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); }
+    } catch (error) { 
+        console.error('[Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); 
+    }
 });
 
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
