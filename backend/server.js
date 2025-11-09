@@ -4010,6 +4010,19 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
+    const normalizeChatIdentifier = (value) => {
+        if (value === null || value === undefined) return null;
+        const trimmed = String(value).trim();
+        if (!trimmed) return null;
+        if (/^-?\d+$/.test(trimmed)) {
+            const numericId = Number(trimmed);
+            if (Number.isSafeInteger(numericId)) {
+                return numericId;
+            }
+        }
+        return trimmed;
+    };
+
     for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
@@ -4354,14 +4367,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error('Supergrupo não configurado para este bot');
                     }
                     
+                    const normalizedChatId = normalizeChatIdentifier(botInvite.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para criação de convite');
+                    }
+                    
                     const userToUnban = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToUnban);
                     try {
                         const unbanResponse = await sendTelegramRequest(
                             botToken,
                             'unbanChatMember',
                             {
-                                chat_id: botInvite.telegram_supergroup_id,
-                                user_id: userToUnban,
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
                                 only_if_banned: true
                             }
                         );
@@ -4378,13 +4397,19 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         ? Math.floor(Date.now() / 1000) + (actionData.expireMinutes * 60)
                         : undefined;
                     
+                    const inviteNameRaw = (actionData.linkName || `Convite_${chatId}_${Date.now()}`).toString().trim();
+                    const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
+
                     const invitePayload = {
-                        chat_id: botInvite.telegram_supergroup_id,
-                        name: actionData.linkName || `Convite_${chatId}_${Date.now()}`,
-                        expire_date: expireDate,
+                        chat_id: normalizedChatId,
+                        name: inviteName,
                         member_limit: 1,
                         creates_join_request: false
                     };
+                    
+                    if (expireDate) {
+                        invitePayload.expire_date = expireDate;
+                    }
                     
                     const inviteResponse = await sendTelegramRequest(
                         botToken, 
@@ -4434,15 +4459,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error('Supergrupo não configurado para este bot');
                     }
                     
+                    const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para banimento');
+                    }
+                    
                     // Usar o chat_id do usuário atual ou um ID específico
                     const userToRemove = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToRemove);
                     
                     const banResponse = await sendTelegramRequest(
                         botToken,
                         'banChatMember',
                         {
-                            chat_id: bot.telegram_supergroup_id,
-                            user_id: userToRemove,
+                            chat_id: normalizedChatId,
+                            user_id: normalizedUserId,
                             revoke_messages: actionData.deleteMessages || false
                         }
                     );
@@ -4460,7 +4491,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                     botToken,
                                     'revokeChatInviteLink',
                                     {
-                                        chat_id: bot.telegram_supergroup_id,
+                                        chat_id: normalizedChatId,
                                         invite_link: linkToRevoke
                                     }
                                 );
