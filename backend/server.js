@@ -4473,6 +4473,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (!normalizedChatId) {
                         throw new Error('ID do supergrupo inválido para banimento');
                     }
+
+                                        
+                    const handleOwnerBanRestriction = () => {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    };
                     
                     // Usar o chat_id do usuário atual ou um ID específico
                     const userToRemove = actionData.userId || chatId;
@@ -4502,12 +4509,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
                         throw banError;
                     }
-                    
-                    const handleOwnerBanRestriction = () => {
-                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
-                        variables.user_was_banned = false;
-                        variables.banned_user_id = undefined;
-                    };
+
 
                     if (banResponse.ok) {
                         console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
