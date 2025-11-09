@@ -6510,7 +6510,6 @@ function generatePreviewHTML(data) {
             forward_flow: '↗️',
             delay: '⏱️',
             action_create_invite_link: '🔗',
-            action_ban_invite_link: '🚫',
             action_remove_user_from_group: '👤'
         };
         return icons[actionType] || '❓';
@@ -6528,7 +6527,6 @@ function generatePreviewHTML(data) {
             forward_flow: 'Encaminhar',
             delay: 'Atraso',
             action_create_invite_link: 'Criar Convite',
-            action_ban_invite_link: 'Banir Convite',
             action_remove_user_from_group: 'Remover Usuário'
         };
         return labels[actionType] || actionType;
@@ -6572,9 +6570,8 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
-                action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName || 'Configure link.' },
-                action_ban_invite_link: { icon: '🚫', name: 'Banir Convite', content: actionData.inviteLink ? 'Link configurado.' : 'Configure link.' },
-                action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: actionData.permanentBan ? 'Ban permanente.' : 'Removeção simples.' },
+            action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName ? `${actionData.linkName} (uso único)` : 'Link descartável.' },
+            action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6953,7 +6950,6 @@ function generatePreviewHTML(data) {
                 action_check_pix: '🔍 Verificar PIX',
                 forward_flow: '↪️ Encaminhar',
                 action_create_invite_link: '🔗 Criar Convite',
-                action_ban_invite_link: '🚫 Banir Convite',
                 action_remove_user_from_group: '👤 Remover Usuário'
             };
             
@@ -7380,38 +7376,9 @@ function generatePreviewHTML(data) {
                                     placeholder="Nome identificador do link"
                                 />
                             </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Expiração (minutos)</label>
-                                <input 
-                                    type="number" 
-                                    className="form-input" 
-                                    value={actionData.expireMinutes || ''} 
-                                    onChange={e => updateAction(index, 'expireMinutes', parseInt(e.target.value, 10))}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para link permanente"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Limite de Membros</label>
-                                <input 
-                                    type="number" 
-                                    className="form-input" 
-                                    value={actionData.memberLimit || ''} 
-                                    onChange={e => updateAction(index, 'memberLimit', parseInt(e.target.value, 10))}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para ilimitado"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.requiresApproval}
-                                        onChange={e => updateAction(index, 'requiresApproval', e.target.checked)}
-                                    />
-                                    Requer aprovação para entrar
-                                </label>
-                            </div>
+                            <p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
+                                O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
+                            </p>
                             <div className="form-group">
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
@@ -7426,6 +7393,7 @@ function generatePreviewHTML(data) {
                                 <div className="form-group">
                                     <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
                                     <textarea 
+                                        id={`invite-message-textarea-${index}`}
                                         className="form-textarea" 
                                         rows="2" 
                                         maxLength="4096" 
@@ -7434,120 +7402,41 @@ function generatePreviewHTML(data) {
                                         style={{fontSize: '0.85rem'}}
                                         placeholder="Use {{invite_link}} para incluir o link gerado"
                                     />
-                                </div>
-                            )}
-                        </>
-                    )}
-                    
-                    {action.type === 'action_ban_invite_link' && (
-                        <>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Link de Convite para Banir</label>
-                                <input 
-                                    type="text" 
-                                    className="form-input" 
-                                    value={actionData.inviteLink || ''} 
-                                    onChange={e => updateAction(index, 'inviteLink', e.target.value)}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para usar {{invite_link}} da variável"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.sendMessage}
-                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
-                                    />
-                                    Enviar mensagem de confirmação
-                                </label>
-                            </div>
-                            {actionData.sendMessage && (
-                                <div className="form-group">
-                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
-                                    <textarea 
-                                        className="form-textarea" 
-                                        rows="2" 
-                                        maxLength="4096" 
-                                        value={actionData.messageText || ''} 
-                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
-                                        style={{fontSize: '0.85rem'}}
-                                        placeholder="Mensagem de confirmação"
-                                    />
+                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                        <button 
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => {
+                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
+                                                if (textarea) {
+                                                    const cursorPos = textarea.selectionStart;
+                                                    const currentText = actionData.messageText || '';
+                                                    const textBefore = currentText.substring(0, cursorPos);
+                                                    const textAfter = currentText.substring(cursorPos);
+                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
+                                                    updateAction(index, 'messageText', newValue);
+                                                    setTimeout(() => {
+                                                        textarea.focus();
+                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
+                                                        textarea.setSelectionRange(newCursor, newCursor);
+                                                    }, 0);
+                                                }
+                                            }}
+                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                        >
+                                            + Link de Convite
+                                        </button>
+                                    </div>
                                 </div>
                             )}
                         </>
                     )}
                     
                     {action.type === 'action_remove_user_from_group' && (
-                        <>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>ID do Usuário</label>
-                                <input 
-                                    type="text" 
-                                    className="form-input" 
-                                    value={actionData.userId || ''} 
-                                    onChange={e => updateAction(index, 'userId', e.target.value)}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para remover o usuário atual"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Duração do Ban (minutos)</label>
-                                <input 
-                                    type="number" 
-                                    className="form-input" 
-                                    value={actionData.banDuration || ''} 
-                                    onChange={e => updateAction(index, 'banDuration', parseInt(e.target.value, 10))}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para ban permanente"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.permanentBan}
-                                        onChange={e => updateAction(index, 'permanentBan', e.target.checked)}
-                                    />
-                                    Ban permanente (não apenas remover)
-                                </label>
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.deleteMessages}
-                                        onChange={e => updateAction(index, 'deleteMessages', e.target.checked)}
-                                    />
-                                    Deletar mensagens do usuário
-                                </label>
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.sendMessage}
-                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
-                                    />
-                                    Enviar mensagem ao usuário
-                                </label>
-                            </div>
-                            {actionData.sendMessage && (
-                                <div className="form-group">
-                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
-                                    <textarea 
-                                        className="form-textarea" 
-                                        rows="2" 
-                                        maxLength="4096" 
-                                        value={actionData.messageText || ''} 
-                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
-                                        style={{fontSize: '0.85rem'}}
-                                        placeholder="Mensagem para o usuário removido"
-                                    />
-                                </div>
-                            )}
-                        </>
+                        <p style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.75rem'}}>
+                            Esta ação remove e bane automaticamente o usuário atual do grupo, revogando o último convite ativo.
+                            Se um novo link descartável for criado no fluxo, o usuário será desbanido antes do envio.
+                        </p>
                     )}
                 </div>
             );
@@ -8031,7 +7920,6 @@ function generatePreviewHTML(data) {
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
             { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' },
             { type: 'action_create_invite_link', icon: '🔗', label: 'Criar Link de Convite', category: 'Grupo' },
-            { type: 'action_ban_invite_link', icon: '🚫', label: 'Banir Link de Convite', category: 'Grupo' },
             { type: 'action_remove_user_from_group', icon: '👤', label: 'Remover Usuário do Grupo', category: 'Grupo' }
         ];
         

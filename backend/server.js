@@ -4354,16 +4354,36 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error('Supergrupo não configurado para este bot');
                     }
                     
+                    const userToUnban = actionData.userId || chatId;
+                    try {
+                        const unbanResponse = await sendTelegramRequest(
+                            botToken,
+                            'unbanChatMember',
+                            {
+                                chat_id: botInvite.telegram_supergroup_id,
+                                user_id: userToUnban,
+                                only_if_banned: true
+                            }
+                        );
+                        if (unbanResponse?.ok) {
+                            console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                        } else if (unbanResponse && !unbanResponse.ok) {
+                            console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                        }
+                    } catch (unbanError) {
+                        console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                    }
+                    
                     const expireDate = actionData.expireMinutes 
                         ? Math.floor(Date.now() / 1000) + (actionData.expireMinutes * 60)
                         : undefined;
                     
                     const invitePayload = {
                         chat_id: botInvite.telegram_supergroup_id,
-                        name: actionData.linkName || `Link_${Date.now()}`,
+                        name: actionData.linkName || `Convite_${chatId}_${Date.now()}`,
                         expire_date: expireDate,
-                        member_limit: actionData.memberLimit || undefined,
-                        creates_join_request: actionData.requiresApproval || false
+                        member_limit: 1,
+                        creates_join_request: false
                     };
                     
                     const inviteResponse = await sendTelegramRequest(
@@ -4376,6 +4396,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         // Salvar link nas variáveis
                         variables.invite_link = inviteResponse.result.invite_link;
                         variables.invite_link_name = inviteResponse.result.name;
+                        variables.invite_link_single_use = true;
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
                         
                         // Enviar mensagem com o link se configurado
                         if (actionData.sendMessage) {
@@ -4393,54 +4416,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
-                    throw error;
-                }
-                break;
-                
-            case 'action_ban_invite_link':
-                try {
-                    console.log(`${logPrefix} Executando action_ban_invite_link`);
-                    
-                    const [bot] = await sql`
-                        SELECT telegram_supergroup_id 
-                        FROM telegram_bots 
-                        WHERE id = ${botId}
-                    `;
-                    
-                    if (!bot?.telegram_supergroup_id) {
-                        throw new Error('Supergrupo não configurado para este bot');
-                    }
-                    
-                    const linkToRevoke = actionData.inviteLink || variables.invite_link;
-                    
-                    if (!linkToRevoke) {
-                        throw new Error('Nenhum link de convite especificado para banir');
-                    }
-                    
-                    const revokeResponse = await sendTelegramRequest(
-                        botToken,
-                        'revokeChatInviteLink',
-                        {
-                            chat_id: bot.telegram_supergroup_id,
-                            invite_link: linkToRevoke
-                        }
-                    );
-                    
-                    if (revokeResponse.ok) {
-                        console.log(`${logPrefix} Link de convite revogado: ${linkToRevoke}`);
-                        
-                        if (actionData.sendMessage) {
-                            const messageText = await replaceVariables(
-                                actionData.messageText || 'Link de convite foi revogado com sucesso.',
-                                variables
-                            );
-                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
-                        }
-                    } else {
-                        throw new Error(`Falha ao revogar link: ${revokeResponse.description}`);
-                    }
-                } catch (error) {
-                    console.error(`${logPrefix} Erro ao banir link de convite:`, error.message);
                     throw error;
                 }
                 break;
@@ -4468,27 +4443,38 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         {
                             chat_id: bot.telegram_supergroup_id,
                             user_id: userToRemove,
-                            until_date: actionData.banDuration 
-                                ? Math.floor(Date.now() / 1000) + (actionData.banDuration * 60)
-                                : undefined,
                             revoke_messages: actionData.deleteMessages || false
                         }
                     );
                     
                     if (banResponse.ok) {
-                        console.log(`${logPrefix} Usuário ${userToRemove} removido do grupo`);
-                        
-                        // Se configurado para apenas remover (não banir), desbanir imediatamente
-                        if (!actionData.permanentBan) {
-                            await sendTelegramRequest(
-                                botToken,
-                                'unbanChatMember',
-                                {
-                                    chat_id: bot.telegram_supergroup_id,
-                                    user_id: userToRemove,
-                                    only_if_banned: true
+                        console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
+                        variables.user_was_banned = true;
+                        variables.banned_user_id = userToRemove;
+                        variables.last_ban_at = new Date().toISOString();
+
+                        const linkToRevoke = actionData.inviteLink || variables.invite_link;
+                        if (linkToRevoke) {
+                            try {
+                                const revokeResponse = await sendTelegramRequest(
+                                    botToken,
+                                    'revokeChatInviteLink',
+                                    {
+                                        chat_id: bot.telegram_supergroup_id,
+                                        invite_link: linkToRevoke
+                                    }
+                                );
+                                if (revokeResponse.ok) {
+                                    console.log(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
+                                    variables.invite_link_revoked = true;
+                                    delete variables.invite_link;
+                                    delete variables.invite_link_name;
+                                } else {
+                                    console.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
                                 }
-                            );
+                            } catch (revokeError) {
+                                console.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
+                            }
                         }
                         
                         if (actionData.sendMessage) {
