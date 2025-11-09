@@ -3958,8 +3958,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         const btnText = await replaceVariables(actionData.buttonText, variables);
                         let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
                         
-                        // Se a URL for um checkout e tivermos click_id, adiciona como parâmetro
-                        if (variables.click_id && btnUrl.includes('/checkout/')) {
+                        // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && (btnUrl.includes('/oferta/') || btnUrl.includes('/obrigado/'))) {
                             try {
                                 // Adiciona protocolo se não existir
                                 const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
@@ -3968,9 +3968,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 const cleanClickId = variables.click_id.replace('/start ', '');
                                 urlObj.searchParams.set('click_id', cleanClickId);
                                 btnUrl = urlObj.toString();
-                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de checkout`);
+                                
+                                // Log apropriado baseado no tipo de URL
+                                const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
+                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
                             } catch (urlError) {
-                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL do checkout: ${urlError.message}`);
+                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
                             }
                         }
                         
