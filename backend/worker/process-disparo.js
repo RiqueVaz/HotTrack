@@ -9,6 +9,7 @@ const { neon } = require('@neondatabase/serverless');
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const { createPixService } = require('../shared/pix');
 
 // ==========================================================
 //                   INICIALIZAÇÃO
@@ -22,6 +23,26 @@ const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
+
+const {
+    getSyncPayAuthToken,
+    generatePixForProvider,
+    generatePixWithFallback
+} = createPixService({
+    sql,
+    sqlWithRetry,
+    axios,
+    uuidv4,
+    syncPayTokenCache,
+    adminApiKey: ADMIN_API_KEY,
+    synPayBaseUrl: SYNCPAY_API_BASE_URL,
+    pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
+    cnpaySplitProducerId: CNPAY_SPLIT_PRODUCER_ID,
+    oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
+    brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
+    wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    hottrackApiUrl: process.env.HOTTRACK_API_URL,
+});
 
 // ==========================================================
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
@@ -156,151 +177,6 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 }
 
 // Funções de PIX (necessárias para o passo 'pix')
-async function getSyncPayAuthToken(seller) {
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
-    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) { throw new Error('Credenciais da SyncPay não configuradas.'); }
-    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, { client_id: seller.syncpay_client_id, client_secret: seller.syncpay_client_secret });
-    const { access_token, expires_in } = response.data;
-    const expiresAt = Date.now() + (expires_in * 1000);
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
-    return access_token;
-}
-
-async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    let pixData;
-    let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0500;
-    const clientPayload = { document: { number: "21376710773", type: "CPF" }, name: "Cliente Padrão", email: "gabriel@email.com", phone: "27995310379" };
-    
-    if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) { throw new Error('Credenciais da BR PIX não configuradas.'); }
-        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        const payload = { customer: clientPayload, items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }], paymentMethod: "PIX", amount: parseInt(value_cents, 10), pix: { expiresInDays: 1 }, ip: ip_address };
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) { payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }]; }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, { headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' } });
-        pixData = response.data;
-        acquirer = "BRPix";
-
-        const brpixTransactionId = pixData?.transaction_id || pixData?.id;
-        const qrCodeText = pixData?.pix?.qrcode || pixData?.pix?.qrcodeText || pixData?.pix?.qr_code || pixData?.pix?.qrCode;
-        const qrCodeBase64 = pixData?.pix?.qr_code_base64 || pixData?.pix?.qrcode_base64 || pixData?.pix?.qrcode || pixData?.pix?.qr_code;
-
-        return { qr_code_text: qrCodeText, qr_code_base64: qrCodeBase64, transaction_id: brpixTransactionId, acquirer, provider };
-    } else if (provider === 'syncpay') {
-        const token = await getSyncPayAuthToken(seller);
-        const payload = { amount: value_cents / 100, payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/syncpay` };
-        const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) { payload.split = [{ percentage: Math.round(commission_percentage), user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID }]; }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
-        pixData = response.data;
-        acquirer = "SyncPay";
-        return { qr_code_text: pixData.pix_code, qr_code_base64: null, transaction_id: pixData.identifier, acquirer, provider };
-    } else if (provider === 'wiinpay') {
-        const wiinpayApiKey = seller.wiinpay_api_key || seller.wiinpay_token || seller.wiinpay_key;
-        if (!wiinpayApiKey) { throw new Error('Credenciais da WiinPay não configuradas para este vendedor.'); }
-        const amount = parseFloat((value_cents / 100).toFixed(2));
-        const commissionValue = parseFloat((amount * commission_rate).toFixed(2));
-
-        const payload = {
-            api_key: wiinpayApiKey,
-            value: amount,
-            name: "Cliente Padrão",
-            email: "gabriel@email.com",
-            description: `PIX HotTrack #${uuidv4()}`,
-            webhook_url: `https://${host}/api/webhook/wiinpay`,
-            metadata: { origin: 'HotTrack', seller_id: seller.id }
-        };
-
-        if (apiKey !== ADMIN_API_KEY && commissionValue > 0 && WIINPAY_SPLIT_USER_ID) {
-            payload.split = {
-                value: commissionValue,
-                percentage: parseFloat((commission_rate * 100).toFixed(4)),
-                user_id: WIINPAY_SPLIT_USER_ID
-            };
-        }
-
-        const response = await axios.post('https://api.wiinpay.com.br/payment/create', payload, {
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' }
-        });
-
-        pixData = response.data;
-        acquirer = "WiinPay";
-
-        const transactionId = pixData?.id || pixData?.payment_id || pixData?.paymentId || pixData?.transaction_id || pixData?.transactionId;
-        const qrCodeText =
-            pixData?.pix?.copy_paste ||
-            pixData?.pix?.copyAndPaste ||
-            pixData?.pix?.code ||
-            pixData?.pix?.qrcode ||
-            pixData?.pix_code ||
-            pixData?.qr_code ||
-            pixData?.qrCode ||
-            pixData?.copy_paste;
-        const qrCodeBase64 =
-            pixData?.pix?.base64 ||
-            pixData?.pix?.qrcode_base64 ||
-            pixData?.pix?.qr_code_base64 ||
-            pixData?.qr_code_base64 ||
-            pixData?.qrcode_base64;
-
-        if (!transactionId || !qrCodeText) {
-            console.error('[WiinPay Worker] Resposta inesperada:', pixData);
-            throw new Error('Resposta inesperada da WiinPay ao gerar PIX.');
-        }
-
-        return { qr_code_text: qrCodeText, qr_code_base64: qrCodeBase64 || null, transaction_id: transactionId, acquirer, provider };
-    } else if (provider === 'cnpay' || provider === 'oasyfy') {
-        const isCnpay = provider === 'cnpay';
-        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
-        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
-        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
-        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
-        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = { identifier: uuidv4(), amount: value_cents / 100, client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/${provider}` };
-        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) { payload.splits = [{ producerId: splitId, amount: commission }]; }
-        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
-        pixData = response.data;
-        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
-    } else { // Padrão é PushinPay
-        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = { value: value_cents, webhook_url: `https://${host}/api/webhook/pushinpay` };
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) { payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }]; }
-        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = pushinpayResponse.data;
-        acquirer = "Woovi";
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
-    }
-}
-
-async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
-    const providerOrder = [seller.pix_provider_primary, seller.pix_provider_secondary, seller.pix_provider_tertiary].filter(Boolean);
-    if (providerOrder.length === 0) { throw new Error('Nenhum provedor de PIX configurado.'); }
-    let lastError = null;
-    for (const provider of providerOrder) {
-        try {
-            // Log removido por segurança
-            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            
-            const [transaction] = await sql`
-                INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
-                VALUES (${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
-                RETURNING id`;
-            // Log removido por segurança
-            pixResult.internal_transaction_id = transaction.id;
-            return pixResult;
-        } catch (error) {
-            console.error(`[WORKER-DISPARO - PIX Fallback] FALHA com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
-            lastError = error;
-        }
-    }
-    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
-    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
-}
 
 
 // ==========================================================
