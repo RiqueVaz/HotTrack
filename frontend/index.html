@@ -1064,6 +1064,8 @@
         .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
         .hotbot-scope .conversation-item.active { background-color: rgba(56, 189, 248, 0.1); border-left: 3px solid var(--accent-primary); }
         .hotbot-scope .conversation-item-name { font-weight: 600; color: var(--text-primary); }
+        .hotbot-scope .conversation-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+        .hotbot-scope .conversation-item-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
@@ -1234,6 +1236,8 @@
             editingCheckoutId: null,
             editingThankYouPageId: null,
             pixPollingIntervalId: null,
+            sectionPolling: {},
+            sectionFetchInProgress: {},
             dateFilter: {
                 period: 'all',
                 startDate: null,
@@ -2286,22 +2290,7 @@
                 const botOptions = bots ? bots.map(bot => 
                     `<option value="${bot.id}">${bot.bot_name}</option>`
                 ).join('') : '<option value="">Nenhum bot disponível</option>';
-                const presselList = pressels.map(pr => {
-                    const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
-                    const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
-                    return `<div class="p-3 card flex justify-between items-center text-sm">
-                        <div class="flex items-center">
-                            <div>
-                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
-                            </div>
-                        </div>
-                        <div class="space-x-2">
-                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
-                            ${copyLinkButton}
-                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                        </div>
-                    </div>`;
-                }).join('');
+                const presselList = App.generatePresselListHTML(pressels);
                 
             return `
             <div class="animate-fade-in">
@@ -2388,7 +2377,7 @@
                                                     </button>
                                                 </div>
                                                 <p class="text-xs text-gray-400 mt-1">ATENÇÃO: Lembre-se de cadastrar o domínio da pressel senão ela não irá funcionar. Obs: Pressels configuradas com o deploy pelo Netlify já ficam com o domínio cadastrado.</p>
-                                                <div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div>
+                                                <div id="pressel-list" class="space-y-3">${presselList}</div>
                                             </div>
                                         </div>
                                     </div>`;
@@ -3381,6 +3370,7 @@
     App.state.currentPage = page;
     // Salvar a página atual no localStorage para restaurar após F5
     localStorage.setItem('app-currentPage', page);
+    this.clearAllSectionPolling();
     
     const contentContainer = document.getElementById('content');
     if (!contentContainer) { console.error("Container #content não encontrado."); return; }
@@ -4220,12 +4210,16 @@
         async fetchAndRenderCheckouts() {
             const tableBody = document.getElementById('checkouts-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('checkouts')) return;
+            this.setSectionFetching('checkouts', true);
             try {
                 const checkouts = await this.apiRequest('/api/checkouts');
-                this.state.data.checkouts = checkouts || []; // Garante que seja um array
-                if (checkouts && checkouts.length > 0) {
-                    tableBody.innerHTML = checkouts.map(c => `
+                this.state.data.checkouts = Array.isArray(checkouts) ? checkouts : [];
+                if (this.state.data.checkouts.length > 0) {
+                    tableBody.innerHTML = this.state.data.checkouts.map(c => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${c.name || 'Checkout Sem Título'}</td>
                             <td>${new Date(c.created_at).toLocaleString('pt-BR')}</td>
@@ -4239,20 +4233,28 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhum checkout criado ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar checkouts:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar checkouts.</td></tr>';
+            } finally {
+                this.setSectionFetching('checkouts', false);
             }
         },
 
         async fetchAndRenderThankYouPages() {
             const tableBody = document.getElementById('thankyou-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('thankYouPages')) return;
+            this.setSectionFetching('thankYouPages', true);
             try {
                 const pages = await this.apiRequest('/api/thank-you-pages');
-                if (pages && pages.length > 0) {
-                    tableBody.innerHTML = pages.map(p => `
+                const list = Array.isArray(pages) ? pages : [];
+                if (list.length > 0) {
+                    tableBody.innerHTML = list.map(p => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${p.name || 'Página Sem Nome'}</td>
                             <td>${new Date(p.created_at).toLocaleString('pt-BR')}</td>
@@ -4266,9 +4268,62 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhuma página de obrigado criada ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar páginas de obrigado:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar páginas.</td></tr>';
+            } finally {
+                this.setSectionFetching('thankYouPages', false);
+            }
+        },
+
+        generatePresselListHTML(pressels = []) {
+            if (!Array.isArray(pressels) || pressels.length === 0) {
+                return '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>';
+            }
+            return pressels.map(pr => {
+                const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
+                const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
+                return `<div class="p-3 card flex justify-between items-center text-sm">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
+                            </div>
+                        </div>
+                        <div class="space-x-2">
+                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
+                            ${copyLinkButton}
+                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                        </div>
+                    </div>`;
+            }).join('');
+        },
+
+        renderPresselList() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            const pressels = this.state.data.pressels || [];
+            listContainer.innerHTML = this.generatePresselListHTML(pressels);
+            listContainer.dataset.loaded = 'true';
+        },
+
+        async fetchAndRenderPressels() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            if (!listContainer.dataset.loaded) {
+                listContainer.innerHTML = '<p class="text-gray-500 text-sm">Carregando pressels...</p>';
+            }
+            if (this.isSectionFetching('pressels')) return;
+            this.setSectionFetching('pressels', true);
+            try {
+                const pressels = await this.apiRequest('/api/pressels');
+                this.state.data.pressels = Array.isArray(pressels) ? pressels : (pressels?.pressels || []);
+                this.renderPresselList();
+            } catch (error) {
+                console.error('Erro ao carregar pressels:', error);
+                listContainer.innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar pressels.</p>';
+            } finally {
+                this.setSectionFetching('pressels', false);
             }
         },
         
@@ -4890,6 +4945,46 @@ function generatePreviewHTML(data) {
             const days = Math.floor(hours / 24);
             return `há ${days}d`;
         },
+
+        isSectionFetching(section) {
+            return !!(this.state.sectionFetchInProgress && this.state.sectionFetchInProgress[section]);
+        },
+
+        setSectionFetching(section, isFetching) {
+            if (!this.state.sectionFetchInProgress) {
+                this.state.sectionFetchInProgress = {};
+            }
+            this.state.sectionFetchInProgress[section] = isFetching;
+        },
+
+        clearSectionPolling(section) {
+            if (!this.state.sectionPolling) return;
+            if (this.state.sectionPolling[section]) {
+                clearInterval(this.state.sectionPolling[section]);
+                delete this.state.sectionPolling[section];
+            }
+        },
+
+        clearAllSectionPolling() {
+            if (!this.state.sectionPolling) return;
+            Object.values(this.state.sectionPolling).forEach(intervalId => {
+                if (intervalId) clearInterval(intervalId);
+            });
+            this.state.sectionPolling = {};
+        },
+
+        startSectionPolling(section, handler, intervalMs = 15000) {
+            if (typeof handler !== 'function') return;
+            this.clearSectionPolling(section);
+            if (!this.state.sectionPolling) {
+                this.state.sectionPolling = {};
+            }
+            this.state.sectionPolling[section] = setInterval(() => {
+                Promise.resolve()
+                    .then(() => handler())
+                    .catch(error => console.error(`[Polling] Erro ao atualizar ${section}:`, error));
+            }, intervalMs);
+        },
         
         showToast(message, type = 'success') {
             const toast = document.createElement('div');
@@ -5090,6 +5185,30 @@ function generatePreviewHTML(data) {
               } 
           } 
       };
+        const handleConfigureGroup = async (id) => {
+            const currentBot = bots.find(b => b.id === id);
+            const groupId = prompt(
+                "Insira o ID do Supergrupo do Telegram:\n\n" +
+                "Como obter o ID:\n" +
+                "1. Adicione o bot como administrador do grupo\n" +
+                "2. Use bots como @userinfobot ou @getidsbot no grupo\n" +
+                "3. O ID do supergrupo começa com -100\n\n" +
+                "ID atual: " + (currentBot?.telegram_supergroup_id || "Não configurado")
+            );
+            
+            if (groupId !== null) {
+                try {
+                    await api.put(`/api/bots/${id}`, { 
+                        bot_token: currentBot?.bot_token || '',
+                        telegram_supergroup_id: groupId.trim() || null 
+                    });
+                    App.showToast(groupId ? 'Grupo configurado!' : 'Grupo removido!', 'success');
+                    fetchBots();
+                } catch (e) {
+                    App.showToast(e.response?.data?.message || 'Erro ao configurar grupo', 'error');
+                }
+            }
+        };
         const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); App.showToast(res.data.message, 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Falha ao configurar webhook', 'error'); } };
         
       return (
@@ -5109,6 +5228,7 @@ function generatePreviewHTML(data) {
                                 <span className="font-semibold text-white">{bot.bot_name}</span>
                                 <div className="flex items-center gap-2 flex-shrink-0">
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleUpdateToken(bot.id)}>Token</button>
+                                    <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleConfigureGroup(bot.id)}>Grupo</button>
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleSetWebhook(bot.id)}>Webhook</button>
                                     <button className="btn btn-red text-xs py-1 px-2" onClick={() => handleDeleteBot(bot.id)}>Excluir</button>
                                 </div>
@@ -5987,6 +6107,13 @@ function generatePreviewHTML(data) {
             // Fallback: chat_id
             return u.chat_id ? String(u.chat_id) : '';
         };
+
+        const formatLastMessageTime = (timestamp) => {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            if (Number.isNaN(date.getTime())) return '';
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        };
         
         useEffect(() => {
         const activeUsers = showOnlyActive 
@@ -6139,15 +6266,21 @@ function generatePreviewHTML(data) {
                                 />
                             </div>
                             <div className="conversations-list">
-                                {filteredUsers.map(u => (
-                                    <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
-                                        <div className="conversation-item-name">
-                                            {getFirstName(u)}
-                                            <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                {filteredUsers.map(u => {
+                                    const formattedTime = formatLastMessageTime(u.last_message_at);
+                                    return (
+                                        <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                            <div className="conversation-item-header">
+                                                <div className="conversation-item-name">
+                                                    {getFirstName(u)}
+                                                    <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                                </div>
+                                                {formattedTime ? <span className="conversation-item-time">{formattedTime}</span> : null}
+                                            </div>
+                                            <p className="conversation-item-preview">{u.message_text}</p>
                                         </div>
-                                        <p className="conversation-item-preview">{u.message_text}</p>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                         <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
@@ -6483,7 +6616,9 @@ function generatePreviewHTML(data) {
             action_pix: '💳',
             action_check_pix: '🔍',
             forward_flow: '↗️',
-            delay: '⏱️'
+            delay: '⏱️',
+            action_create_invite_link: '🔗',
+            action_remove_user_from_group: '👤'
         };
         return icons[actionType] || '❓';
     };
@@ -6498,7 +6633,9 @@ function generatePreviewHTML(data) {
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
             forward_flow: 'Encaminhar',
-            delay: 'Atraso'
+            delay: 'Atraso',
+            action_create_invite_link: 'Criar Convite',
+            action_remove_user_from_group: 'Remover Usuário'
         };
         return labels[actionType] || actionType;
     };
@@ -6541,6 +6678,8 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+            action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName ? `${actionData.linkName} (uso único)` : 'Link descartável.' },
+            action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6549,17 +6688,17 @@ function generatePreviewHTML(data) {
         
         return (
             <>
-    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
-    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
-        <div className="action-badge">
-            {actions.length > 0 ? (
-                <>
-                    {getActionIcon(actions[0].type)}
-                    {getActionLabel(actions[0].type)}
-                    {actions.length > 1 && ` +${actions.length - 1}`}
-                </>
-            ) : 'Nó vazio'}
-        </div>
+                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
+                    <div className="action-badge">
+                        {actions.length > 0 ? (
+                            <>
+                                {getActionIcon(actions[0].type)}
+                                {getActionLabel(actions[0].type)}
+                                {actions.length > 1 && ` +${actions.length - 1}`}
+                            </>
+                        ) : 'Nó vazio'}
+                    </div>
                     <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
                         <button 
                             onClick={(e) => {
@@ -6644,6 +6783,33 @@ function generatePreviewHTML(data) {
         );
     };
 
+    const validateTextForUrls = (text) => {
+        if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+
+        // Remove variáveis do sistema antes de validar
+        const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+
+        // Padrões de URL a detectar
+        const patterns = [
+            /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
+            /www\.[^\s]+/gi,                                        // URLs com www
+            /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
+        ];
+
+        const foundUrls = [];
+        patterns.forEach(pattern => {
+            const matches = textWithoutVariables.match(pattern);
+            if (matches) {
+                foundUrls.push(...matches);
+            }
+        });
+
+        return {
+            valid: foundUrls.length === 0,
+            urls: foundUrls
+        };
+    };
+
     const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
@@ -6661,34 +6827,6 @@ function generatePreviewHTML(data) {
         const [draggedIndex, setDraggedIndex] = useState(null);
         const [dragOverIndex, setDragOverIndex] = useState(null);
         const [urlValidationErrors, setUrlValidationErrors] = useState({});
-        
-        // Função de validação de URLs
-        const validateTextForUrls = (text) => {
-            if (!text || typeof text !== 'string') return { valid: true, urls: [] };
-            
-            // Remove variáveis do sistema antes de validar
-            const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
-            
-            // Padrões de URL a detectar
-            const patterns = [
-                /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
-                /www\.[^\s]+/gi,                                        // URLs com www
-                /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
-            ];
-            
-            const foundUrls = [];
-            patterns.forEach(pattern => {
-                const matches = textWithoutVariables.match(pattern);
-                if (matches) {
-                    foundUrls.push(...matches);
-                }
-            });
-            
-            return {
-                valid: foundUrls.length === 0,
-                urls: foundUrls
-            };
-        };
         
         useEffect(() => { 
             const data = selectedNode.data || {};
@@ -6918,7 +7056,9 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-                forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar',
+                action_create_invite_link: '🔗 Criar Convite',
+                action_remove_user_from_group: '👤 Remover Usuário'
             };
             
             const isDragging = draggedIndex === index;
@@ -7023,7 +7163,7 @@ function generatePreviewHTML(data) {
                                     )}
                                     
                                     {thankYouPages && thankYouPages.length > 0 && (
-                                        <optgroup label="✅ Thank You Pages">
+                                        <optgroup label="✅ Páginas de Obrigado">
                                             {thankYouPages.map(ty => (
                                                 <option key={ty.id} value={`${window.location.origin}/obrigado/${ty.id}`}>
                                                     {ty.name || ty.id}
@@ -7330,6 +7470,82 @@ function generatePreviewHTML(data) {
                             />
                         </div>
                     )}
+                    
+                    {action.type === 'action_create_invite_link' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Nome do Link</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.linkName || ''} 
+                                    onChange={e => updateAction(index, 'linkName', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Nome identificador do link"
+                                />
+                            </div>
+                            <p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
+                                O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
+                            </p>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.sendMessage}
+                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
+                                    />
+                                    Enviar mensagem com o link
+                                </label>
+                            </div>
+                            {actionData.sendMessage && (
+                                <div className="form-group">
+                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
+                                    <textarea 
+                                        id={`invite-message-textarea-${index}`}
+                                        className="form-textarea" 
+                                        rows="2" 
+                                        maxLength="4096" 
+                                        value={actionData.messageText || ''} 
+                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
+                                        style={{fontSize: '0.85rem'}}
+                                        placeholder="Use {{invite_link}} para incluir o link gerado"
+                                    />
+                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                        <button 
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => {
+                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
+                                                if (textarea) {
+                                                    const cursorPos = textarea.selectionStart;
+                                                    const currentText = actionData.messageText || '';
+                                                    const textBefore = currentText.substring(0, cursorPos);
+                                                    const textAfter = currentText.substring(cursorPos);
+                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
+                                                    updateAction(index, 'messageText', newValue);
+                                                    setTimeout(() => {
+                                                        textarea.focus();
+                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
+                                                        textarea.setSelectionRange(newCursor, newCursor);
+                                                    }, 0);
+                                                }
+                                            }}
+                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                        >
+                                            + Link de Convite
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    
+                    {action.type === 'action_remove_user_from_group' && (
+                        <p style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.75rem'}}>
+                            Esta ação remove e bane automaticamente o usuário atual do grupo, revogando o último convite ativo.
+                            Se um novo link descartável for criado no fluxo, o usuário será desbanido antes do envio.
+                        </p>
+                    )}
                 </div>
             );
         };
@@ -7523,6 +7739,7 @@ function generatePreviewHTML(data) {
         const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
+        const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
 
@@ -7605,22 +7822,7 @@ function generatePreviewHTML(data) {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
-                    // Migração: converter nodes antigos (com tipo específico) para nova estrutura (type: 'action')
-                    if (node.type !== 'trigger' && node.type !== 'action') {
-                        // Node antigo: criar estrutura nova com a ação principal no array de ações
-                        const mainAction = {
-                            type: node.type,
-                            data: { ...node.data }
-                        };
-                        return {
-                            ...node,
-                            type: 'action',
-                            data: {
-                                actions: [mainAction, ...(node.data?.actions || [])]
-                            }
-                        };
-                    }
-                    // Node já na nova estrutura ou trigger
+                    // Garantir que todos os nodes tenham o campo actions
                     return {
                         ...node,
                         data: {
@@ -7824,7 +8026,9 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' },
+            { type: 'action_create_invite_link', icon: '🔗', label: 'Criar Link de Convite', category: 'Grupo' },
+            { type: 'action_remove_user_from_group', icon: '👤', label: 'Remover Usuário do Grupo', category: 'Grupo' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {
@@ -7872,7 +8076,7 @@ function generatePreviewHTML(data) {
                         ❌
                     </button>
                     </div>
-                )}
+               )}
                 <button 
                     className="add-node-fab" 
                     onClick={() => setIsNodeSelectorOpen(true)}
@@ -7884,6 +8088,7 @@ function generatePreviewHTML(data) {
                     <div className="node-selector-modal-overlay" onClick={(e) => {
                         if (e.target === e.currentTarget) {
                             setIsNodeSelectorOpen(false);
+                            setIsGroupMenuOpen(false);
                         }
                     }}>
                         <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
@@ -7891,18 +8096,42 @@ function generatePreviewHTML(data) {
                                 <h3>Adicionar Node</h3>
                                 <button 
                                     className="node-selector-modal-close"
-                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    onClick={() => { setIsNodeSelectorOpen(false); setIsGroupMenuOpen(false); }}
                                     title="Fechar"
                                 >
                                     ✕
                                 </button>
                             </div>
                             <div className="node-selector-modal-content">
-                                {nodeTypesList.map(nodeType => (
+                                {nodeTypesList.filter(nodeType => nodeType.category !== 'Grupo').map(nodeType => (
                                     <button
                                         key={nodeType.type}
                                         className="node-selector-button"
                                         onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
+                                <button
+                                    className="node-selector-button"
+                                    onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                                >
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span className="node-selector-button-icon">👥</span>
+                                        <span>Gerenciar Grupos</span>
+                                    </span>
+                                    <span style={{ fontSize: '0.9rem' }}>
+                                        {isGroupMenuOpen ? '▾' : '▸'}
+                                    </span>
+                                </button>
+                                {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                        style={{ marginLeft: '12px' }}
                                     >
                                         <span className="node-selector-button-icon">{nodeType.icon}</span>
                                         <span>{nodeType.label}</span>
@@ -7917,15 +8146,16 @@ function generatePreviewHTML(data) {
         );
     }
     
+    // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
 
-        // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
-
+    // Renderiza a aplicação React no container
+    const root = window.ReactDOM.createRoot(containerElement);
+    // Certifique-se de que o nome do componente principal foi renomeado
+    root.render(<AppHotBot />); 
+    window.hotBotRoot = root; // Guarda a referência para poder desmontar
+}
         // Renderiza a aplicação React no container
-        const root = window.ReactDOM.createRoot(containerElement);
-        // Certifique-se de que o nome do componente principal foi renomeado
-        root.render(<AppHotBot />); 
-        window.hotBotRoot = root; // Guarda a referência para poder desmontar
-    }
+
     </script>
 </body>
 </html>

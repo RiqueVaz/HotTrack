@@ -48,6 +48,19 @@ async function replaceVariables(text, variables) {
     return processedText;
 }
 
+const normalizeChatIdentifier = (value) => {
+    if (value === null || value === undefined) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    if (/^-?\d+$/.test(trimmed)) {
+        const numericId = Number(trimmed);
+        if (Number.isSafeInteger(numericId)) {
+            return numericId;
+        }
+    }
+    return trimmed;
+};
+
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
@@ -251,7 +264,7 @@ async function handler(req, res) {
       let lastTransactionId = null;
     
       try {
-        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
           throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
         }
@@ -321,6 +334,199 @@ async function handler(req, res) {
             const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
             response = await sendTelegramRequest(bot.bot_token, method, payload);
           }
+        } else if (step.type === 'action_create_invite_link') {
+            if (!bot.telegram_supergroup_id) {
+                throw new Error('Supergrupo não configurado para este bot.');
+            }
+
+            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+            if (!normalizedChatId) {
+                throw new Error('ID do supergrupo inválido para criação de convite.');
+            }
+
+            const userToUnban = step.userId || chat_id;
+            const normalizedUserId = normalizeChatIdentifier(userToUnban);
+
+            try {
+                const unbanResponse = await sendTelegramRequest(
+                    bot.bot_token,
+                    'unbanChatMember',
+                    {
+                        chat_id: normalizedChatId,
+                        user_id: normalizedUserId,
+                        only_if_banned: true
+                    }
+                );
+                if (unbanResponse?.ok) {
+                    console.log(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                } else if (unbanResponse && !unbanResponse.ok) {
+                    const desc = (unbanResponse.description || '').toLowerCase();
+                    if (desc.includes("can't remove chat owner")) {
+                        console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                    } else {
+                        console.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                    }
+                }
+            } catch (unbanError) {
+                const message = (unbanError?.message || '').toLowerCase();
+                if (message.includes("can't remove chat owner")) {
+                    console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                } else {
+                    console.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                }
+            }
+
+            const inviteNameRaw = (step.linkName || `Convite_${chat_id}_${Date.now()}`).toString().trim();
+            const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
+
+            const invitePayload = {
+                chat_id: normalizedChatId,
+                name: inviteName,
+                member_limit: 1,
+                creates_join_request: false
+            };
+
+            if (step.expireMinutes) {
+                invitePayload.expire_date = Math.floor(Date.now() / 1000) + (parseInt(step.expireMinutes, 10) * 60);
+            }
+
+            const inviteResponse = await sendTelegramRequest(bot.bot_token, 'createChatInviteLink', invitePayload);
+            if (!inviteResponse.ok) {
+                throw new Error(inviteResponse.description || 'Falha ao criar link de convite.');
+            }
+
+            userVariables.invite_link = inviteResponse.result.invite_link;
+            userVariables.invite_link_name = inviteResponse.result.name;
+            userVariables.invite_link_single_use = true;
+            userVariables.user_was_banned = false;
+            userVariables.banned_user_id = undefined;
+
+            if (step.sendMessage) {
+                const messageText = await replaceVariables(
+                    step.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
+                    userVariables
+                );
+                const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                    chat_id: chat_id,
+                    text: messageText,
+                    parse_mode: 'HTML'
+                });
+                if (messageResponse.ok) {
+                    await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
+                    response = messageResponse;
+                } else {
+                    throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
+                }
+            } else {
+                response = null;
+            }
+
+            console.log(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
+
+        } else if (step.type === 'action_remove_user_from_group') {
+            if (!bot.telegram_supergroup_id) {
+                throw new Error('Supergrupo não configurado para este bot.');
+            }
+
+            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+            if (!normalizedChatId) {
+                throw new Error('ID do supergrupo inválido para banimento.');
+            }
+
+            const handleOwnerBanRestriction = () => {
+                console.info(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
+                userVariables.user_was_banned = false;
+                userVariables.banned_user_id = undefined;
+            };
+
+            const userToRemove = step.userId || chat_id;
+            const normalizedUserId = normalizeChatIdentifier(userToRemove);
+
+            let banResponse;
+            try {
+                banResponse = await sendTelegramRequest(
+                    bot.bot_token,
+                    'banChatMember',
+                    {
+                        chat_id: normalizedChatId,
+                        user_id: normalizedUserId,
+                        revoke_messages: step.deleteMessages || false
+                    }
+                );
+            } catch (banError) {
+                const errorDesc =
+                    banError?.response?.data?.description ||
+                    banError?.description ||
+                    banError?.message ||
+                    '';
+                if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
+                    handleOwnerBanRestriction();
+                    response = null;
+                } else {
+                    throw banError;
+                }
+            }
+
+            if (banResponse?.ok) {
+                console.log(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
+                userVariables.user_was_banned = true;
+                userVariables.banned_user_id = userToRemove;
+                userVariables.last_ban_at = new Date().toISOString();
+
+                const linkToRevoke = step.inviteLink || userVariables.invite_link;
+                if (linkToRevoke) {
+                    try {
+                        const revokeResponse = await sendTelegramRequest(
+                            bot.bot_token,
+                            'revokeChatInviteLink',
+                            {
+                                chat_id: normalizedChatId,
+                                invite_link: linkToRevoke
+                            }
+                        );
+                        if (revokeResponse.ok) {
+                            console.log(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
+                            userVariables.invite_link_revoked = true;
+                            delete userVariables.invite_link;
+                            delete userVariables.invite_link_name;
+                        } else {
+                            console.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                        }
+                    } catch (revokeError) {
+                        console.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
+                    }
+                }
+
+                if (step.sendMessage) {
+                    const messageText = await replaceVariables(
+                        step.messageText || 'Você foi removido do grupo.',
+                        userVariables
+                    );
+                    const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                        chat_id: chat_id,
+                        text: messageText,
+                        parse_mode: 'HTML'
+                    });
+                    if (messageResponse.ok) {
+                        await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
+                        response = messageResponse;
+                    } else {
+                        throw new Error(messageResponse.description || 'Falha ao enviar mensagem pós-banimento.');
+                    }
+                } else {
+                    response = null;
+                }
+            } else if (banResponse) {
+                const desc =
+                    (banResponse.description || '').toLowerCase();
+                if (desc.includes("can't remove chat owner")) {
+                    handleOwnerBanRestriction();
+                    response = null;
+                } else {
+                    throw new Error(banResponse.description || 'Falha ao remover usuário.');
+                }
+            }
+
             } else if (step.type === 'pix') {
                 // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
                 if (!userVariables.click_id) {
