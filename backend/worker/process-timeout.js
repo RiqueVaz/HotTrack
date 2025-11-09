@@ -543,6 +543,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         if (apiKey !== ADMIN_API_KEY && commissionValue > 0 && WIINPAY_SPLIT_USER_ID) {
             payload.split = {
                 value: commissionValue,
+                percentage: parseFloat((commission_rate * 100).toFixed(4)),
                 user_id: WIINPAY_SPLIT_USER_ID
             };
         }
