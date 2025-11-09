@@ -1236,6 +1236,8 @@
             editingCheckoutId: null,
             editingThankYouPageId: null,
             pixPollingIntervalId: null,
+            sectionPolling: {},
+            sectionFetchInProgress: {},
             dateFilter: {
                 period: 'all',
                 startDate: null,
@@ -2288,22 +2290,7 @@
                 const botOptions = bots ? bots.map(bot => 
                     `<option value="${bot.id}">${bot.bot_name}</option>`
                 ).join('') : '<option value="">Nenhum bot disponível</option>';
-                const presselList = pressels.map(pr => {
-                    const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
-                    const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
-                    return `<div class="p-3 card flex justify-between items-center text-sm">
-                        <div class="flex items-center">
-                            <div>
-                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
-                            </div>
-                        </div>
-                        <div class="space-x-2">
-                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
-                            ${copyLinkButton}
-                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                        </div>
-                    </div>`;
-                }).join('');
+                const presselList = App.generatePresselListHTML(pressels);
                 
             return `
             <div class="animate-fade-in">
@@ -2390,7 +2377,7 @@
                                                     </button>
                                                 </div>
                                                 <p class="text-xs text-gray-400 mt-1">ATENÇÃO: Lembre-se de cadastrar o domínio da pressel senão ela não irá funcionar. Obs: Pressels configuradas com o deploy pelo Netlify já ficam com o domínio cadastrado.</p>
-                                                <div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div>
+                                                <div id="pressel-list" class="space-y-3">${presselList}</div>
                                             </div>
                                         </div>
                                     </div>`;
@@ -3383,6 +3370,7 @@
     App.state.currentPage = page;
     // Salvar a página atual no localStorage para restaurar após F5
     localStorage.setItem('app-currentPage', page);
+    this.clearAllSectionPolling();
     
     const contentContainer = document.getElementById('content');
     if (!contentContainer) { console.error("Container #content não encontrado."); return; }
@@ -4222,12 +4210,16 @@
         async fetchAndRenderCheckouts() {
             const tableBody = document.getElementById('checkouts-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('checkouts')) return;
+            this.setSectionFetching('checkouts', true);
             try {
                 const checkouts = await this.apiRequest('/api/checkouts');
-                this.state.data.checkouts = checkouts || []; // Garante que seja um array
-                if (checkouts && checkouts.length > 0) {
-                    tableBody.innerHTML = checkouts.map(c => `
+                this.state.data.checkouts = Array.isArray(checkouts) ? checkouts : [];
+                if (this.state.data.checkouts.length > 0) {
+                    tableBody.innerHTML = this.state.data.checkouts.map(c => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${c.name || 'Checkout Sem Título'}</td>
                             <td>${new Date(c.created_at).toLocaleString('pt-BR')}</td>
@@ -4241,20 +4233,28 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhum checkout criado ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar checkouts:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar checkouts.</td></tr>';
+            } finally {
+                this.setSectionFetching('checkouts', false);
             }
         },
 
         async fetchAndRenderThankYouPages() {
             const tableBody = document.getElementById('thankyou-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('thankYouPages')) return;
+            this.setSectionFetching('thankYouPages', true);
             try {
                 const pages = await this.apiRequest('/api/thank-you-pages');
-                if (pages && pages.length > 0) {
-                    tableBody.innerHTML = pages.map(p => `
+                const list = Array.isArray(pages) ? pages : [];
+                if (list.length > 0) {
+                    tableBody.innerHTML = list.map(p => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${p.name || 'Página Sem Nome'}</td>
                             <td>${new Date(p.created_at).toLocaleString('pt-BR')}</td>
@@ -4268,9 +4268,62 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhuma página de obrigado criada ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar páginas de obrigado:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar páginas.</td></tr>';
+            } finally {
+                this.setSectionFetching('thankYouPages', false);
+            }
+        },
+
+        generatePresselListHTML(pressels = []) {
+            if (!Array.isArray(pressels) || pressels.length === 0) {
+                return '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>';
+            }
+            return pressels.map(pr => {
+                const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
+                const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
+                return `<div class="p-3 card flex justify-between items-center text-sm">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
+                            </div>
+                        </div>
+                        <div class="space-x-2">
+                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
+                            ${copyLinkButton}
+                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                        </div>
+                    </div>`;
+            }).join('');
+        },
+
+        renderPresselList() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            const pressels = this.state.data.pressels || [];
+            listContainer.innerHTML = this.generatePresselListHTML(pressels);
+            listContainer.dataset.loaded = 'true';
+        },
+
+        async fetchAndRenderPressels() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            if (!listContainer.dataset.loaded) {
+                listContainer.innerHTML = '<p class="text-gray-500 text-sm">Carregando pressels...</p>';
+            }
+            if (this.isSectionFetching('pressels')) return;
+            this.setSectionFetching('pressels', true);
+            try {
+                const pressels = await this.apiRequest('/api/pressels');
+                this.state.data.pressels = Array.isArray(pressels) ? pressels : (pressels?.pressels || []);
+                this.renderPresselList();
+            } catch (error) {
+                console.error('Erro ao carregar pressels:', error);
+                listContainer.innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar pressels.</p>';
+            } finally {
+                this.setSectionFetching('pressels', false);
             }
         },
         
@@ -4891,6 +4944,46 @@ function generatePreviewHTML(data) {
             if (hours < 24) return `há ${hours}h`;
             const days = Math.floor(hours / 24);
             return `há ${days}d`;
+        },
+
+        isSectionFetching(section) {
+            return !!(this.state.sectionFetchInProgress && this.state.sectionFetchInProgress[section]);
+        },
+
+        setSectionFetching(section, isFetching) {
+            if (!this.state.sectionFetchInProgress) {
+                this.state.sectionFetchInProgress = {};
+            }
+            this.state.sectionFetchInProgress[section] = isFetching;
+        },
+
+        clearSectionPolling(section) {
+            if (!this.state.sectionPolling) return;
+            if (this.state.sectionPolling[section]) {
+                clearInterval(this.state.sectionPolling[section]);
+                delete this.state.sectionPolling[section];
+            }
+        },
+
+        clearAllSectionPolling() {
+            if (!this.state.sectionPolling) return;
+            Object.values(this.state.sectionPolling).forEach(intervalId => {
+                if (intervalId) clearInterval(intervalId);
+            });
+            this.state.sectionPolling = {};
+        },
+
+        startSectionPolling(section, handler, intervalMs = 15000) {
+            if (typeof handler !== 'function') return;
+            this.clearSectionPolling(section);
+            if (!this.state.sectionPolling) {
+                this.state.sectionPolling = {};
+            }
+            this.state.sectionPolling[section] = setInterval(() => {
+                Promise.resolve()
+                    .then(() => handler())
+                    .catch(error => console.error(`[Polling] Erro ao atualizar ${section}:`, error));
+            }, intervalMs);
         },
         
         showToast(message, type = 'success') {
