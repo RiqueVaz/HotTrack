@@ -7380,17 +7380,6 @@ function generatePreviewHTML(data) {
                                 O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
                             </p>
                             <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Expiração (minutos)</label>
-                                <input 
-                                    type="number" 
-                                    className="form-input" 
-                                    value={actionData.expireMinutes || ''} 
-                                    onChange={e => updateAction(index, 'expireMinutes', parseInt(e.target.value, 10))}
-                                    style={{fontSize: '0.85rem'}}
-                                    placeholder="Deixe vazio para link permanente"
-                                />
-                            </div>
-                            <div className="form-group">
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
@@ -7404,6 +7393,7 @@ function generatePreviewHTML(data) {
                                 <div className="form-group">
                                     <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
                                     <textarea 
+                                        id={`invite-message-textarea-${index}`}
                                         className="form-textarea" 
                                         rows="2" 
                                         maxLength="4096" 
@@ -7412,6 +7402,31 @@ function generatePreviewHTML(data) {
                                         style={{fontSize: '0.85rem'}}
                                         placeholder="Use {{invite_link}} para incluir o link gerado"
                                     />
+                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                        <button 
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => {
+                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
+                                                if (textarea) {
+                                                    const cursorPos = textarea.selectionStart;
+                                                    const currentText = actionData.messageText || '';
+                                                    const textBefore = currentText.substring(0, cursorPos);
+                                                    const textAfter = currentText.substring(cursorPos);
+                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
+                                                    updateAction(index, 'messageText', newValue);
+                                                    setTimeout(() => {
+                                                        textarea.focus();
+                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
+                                                        textarea.setSelectionRange(newCursor, newCursor);
+                                                    }, 0);
+                                                }
+                                            }}
+                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                        >
+                                            + Link de Convite
+                                        </button>
+                                    </div>
                                 </div>
                             )}
                         </>
