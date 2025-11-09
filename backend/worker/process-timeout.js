@@ -19,11 +19,13 @@ const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
 // Cache para respeitar rate limit da PushinPay (1/min por transação)
 const pushinpayLastCheckAt = new Map();
+const wiinpayLastCheckAt = new Map();
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 
 
 const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
@@ -522,6 +524,58 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
             acquirer, 
             provider 
         };
+    } else if (provider === 'wiinpay') {
+        const wiinpayApiKey = seller.wiinpay_api_key || seller.wiinpay_api_token || seller.wiinpay_key;
+        if (!wiinpayApiKey) { throw new Error('Credenciais da WiinPay não configuradas para este vendedor.'); }
+        const amount = parseFloat((value_cents / 100).toFixed(2));
+        const commissionValue = parseFloat((amount * commission_rate).toFixed(2));
+
+        const payload = {
+            api_key: wiinpayApiKey,
+            value: amount,
+            name: clientPayload.name,
+            email: clientPayload.email,
+            description: `PIX HotTrack #${uuidv4()}`,
+            webhook_url: `https://${host}/api/webhook/wiinpay`,
+            metadata: { origin: 'HotTrack', seller_id: seller.id }
+        };
+
+        if (apiKey !== ADMIN_API_KEY && commissionValue > 0 && WIINPAY_SPLIT_USER_ID) {
+            payload.split = {
+                value: commissionValue,
+                user_id: WIINPAY_SPLIT_USER_ID
+            };
+        }
+
+        const response = await axios.post('https://api.wiinpay.com.br/payment/create', payload, {
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' }
+        });
+        pixData = response.data;
+        acquirer = "WiinPay";
+
+        const transactionId = pixData?.id || pixData?.payment_id || pixData?.paymentId || pixData?.transaction_id || pixData?.transactionId;
+        const qrCodeText =
+            pixData?.pix?.copy_paste ||
+            pixData?.pix?.copyAndPaste ||
+            pixData?.pix?.code ||
+            pixData?.pix?.qrcode ||
+            pixData?.pix_code ||
+            pixData?.qr_code ||
+            pixData?.qrCode ||
+            pixData?.copy_paste;
+        const qrCodeBase64 =
+            pixData?.pix?.base64 ||
+            pixData?.pix?.qrcode_base64 ||
+            pixData?.pix?.qr_code_base64 ||
+            pixData?.qr_code_base64 ||
+            pixData?.qrcode_base64;
+
+        if (!transactionId || !qrCodeText) {
+            console.error('[WiinPay Worker Timeout] Resposta inesperada:', pixData);
+            throw new Error('Resposta inesperada da WiinPay ao gerar PIX.');
+        }
+
+        return { qr_code_text: qrCodeText, qr_code_base64: qrCodeBase64 || null, transaction_id: transactionId, acquirer, provider };
     } else if (provider === 'cnpay' || provider === 'oasyfy') {
         const isCnpay = provider === 'cnpay';
         const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;

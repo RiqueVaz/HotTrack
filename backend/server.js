@@ -393,11 +393,13 @@ const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
 // Cache simples para evitar ultrapassar rate limit em consultas PushinPay (min. 1/min).
 const pushinpayLastCheckAt = new Map(); // key: provider_transaction_id, value: timestamp (ms)
+const wiinpayLastCheckAt = new Map();
 
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
@@ -1237,6 +1239,80 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
             acquirer, 
             provider 
         };
+    } else if (provider === 'wiinpay') {
+        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+        if (!wiinpayApiKey) {
+            throw new Error('Credenciais da WiinPay não configuradas para este vendedor.');
+        }
+        const amount = parseFloat((value_cents / 100).toFixed(2));
+        const commissionValue = parseFloat((amount * commission_rate).toFixed(2));
+
+        const payload = {
+            api_key: wiinpayApiKey,
+            value: amount,
+            name: clientPayload.name,
+            email: clientPayload.email,
+            description: `PIX HotTrack #${uuidv4()}`,
+            webhook_url: `https://${preferredHost}/api/webhook/wiinpay`,
+            metadata: {
+                origin: 'HotTrack',
+                seller_id: seller.id
+            }
+        };
+
+        if (apiKey !== ADMIN_API_KEY && commissionValue > 0 && WIINPAY_SPLIT_USER_ID) {
+            payload.split = {
+                value: commissionValue,
+                user_id: WIINPAY_SPLIT_USER_ID
+            };
+        }
+
+        const response = await axios.post('https://api.wiinpay.com.br/payment/create', payload, {
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json'
+            }
+        });
+
+        pixData = response.data;
+        acquirer = "WiinPay";
+
+        const transactionId =
+            pixData?.id ||
+            pixData?.payment_id ||
+            pixData?.paymentId ||
+            pixData?.transaction_id ||
+            pixData?.transactionId;
+
+        const qrCodeText =
+            pixData?.pix?.copy_paste ||
+            pixData?.pix?.copyAndPaste ||
+            pixData?.pix?.code ||
+            pixData?.pix?.qrcode ||
+            pixData?.pix_code ||
+            pixData?.qr_code ||
+            pixData?.qrCode ||
+            pixData?.copy_paste;
+
+        const qrCodeBase64 =
+            pixData?.pix?.base64 ||
+            pixData?.pix?.qrcode_base64 ||
+            pixData?.pix?.qr_code_base64 ||
+            pixData?.qr_code_base64 ||
+            pixData?.qrcode_base64;
+
+        if (!transactionId || !qrCodeText) {
+            console.error('[WiinPay] Resposta inesperada:', pixData);
+            throw new Error('Resposta inesperada da WiinPay ao gerar PIX.');
+        }
+
+        return {
+            qr_code_text: qrCodeText,
+            qr_code_base64: qrCodeBase64 || null,
+            transaction_id: transactionId,
+            acquirer,
+            provider
+        };
     } else if (provider === 'cnpay' || provider === 'oasyfy') {
         const isCnpay = provider === 'cnpay';
         const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
@@ -1274,6 +1350,79 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         acquirer = "Woovi";
         return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
     }
+}
+
+function extractWiinpayCustomer(rawData) {
+    if (!rawData) return {};
+    const container = rawData.customer || rawData.payer || rawData.cliente || rawData?.data?.customer || rawData?.payment?.customer || {};
+    const name = container?.name || container?.full_name || container?.nome;
+    const document =
+        container?.document ||
+        container?.document_number ||
+        container?.documento ||
+        container?.cpf ||
+        container?.cnpj ||
+        container?.tax_id;
+    return {
+        name: name || null,
+        document: document || null
+    };
+}
+
+function getSellerWiinpayApiKey(seller) {
+    if (!seller) return null;
+    return seller.wiinpay_api_key || seller.wiinpay_token || seller.wiinpay_key || null;
+}
+
+function parseWiinpayPayment(rawData) {
+    if (!rawData) {
+        return { id: null, status: null, customer: {} };
+    }
+    const payment =
+        rawData.payment ||
+        rawData.data ||
+        rawData.payload ||
+        rawData.transaction ||
+        rawData;
+
+    const id =
+        payment?.id ||
+        payment?.payment_id ||
+        payment?.paymentId ||
+        payment?.transaction_id ||
+        payment?.transactionId ||
+        rawData.payment_id ||
+        rawData.paymentId ||
+        rawData.id;
+
+    const status = String(
+        payment?.status ||
+        rawData.status ||
+        rawData.payment_status ||
+        payment?.payment_status ||
+        ''
+    ).toLowerCase();
+
+    return {
+        id: id || null,
+        status,
+        customer: extractWiinpayCustomer(payment || rawData || {})
+    };
+}
+
+async function getWiinpayPaymentStatus(paymentId, apiKey) {
+    if (!apiKey) {
+        throw new Error('Credenciais da WiinPay não configuradas.');
+    }
+    const response = await axios.get(`https://api.wiinpay.com.br/payment/list/${paymentId}`, {
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+
+    const data = Array.isArray(response.data) ? response.data[0] : response.data;
+    return parseWiinpayPayment(data);
 }
 
 async function handleSuccessfulPayment(transaction_id, customerData) {
@@ -1615,11 +1764,11 @@ app.put('/api/admin/sellers/:id/password', authenticateAdmin, async (req, res) =
 });
 app.put('/api/admin/sellers/:id/credentials', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    const { pushinpay_token, cnpay_public_key, cnpay_secret_key } = req.body;
+    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key } = req.body;
     try {
         await sql`
             UPDATE sellers 
-            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}
+            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}
             WHERE id = ${id};`;
         res.status(200).json({ message: 'Credenciais alteradas com sucesso.' });
     } catch (error) {
@@ -2235,7 +2384,7 @@ app.post('/api/auth/google/callback', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sql`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sql`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -3309,6 +3458,7 @@ app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     const { 
         pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key,
+        wiinpay_api_key,
         syncpay_client_id, syncpay_client_secret,
         brpix_secret_key, brpix_company_id,
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
@@ -3320,6 +3470,7 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
             cnpay_secret_key = ${cnpay_secret_key || null}, 
             oasyfy_public_key = ${oasyfy_public_key || null}, 
             oasyfy_secret_key = ${oasyfy_secret_key || null},
+            wiinpay_api_key = ${wiinpay_api_key || null},
             syncpay_client_id = ${syncpay_client_id || null},
             syncpay_client_secret = ${syncpay_client_secret || null},
             brpix_secret_key = ${brpix_secret_key || null},
@@ -3824,9 +3975,26 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (transaction.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[PIX Status] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
 
-                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus)) {
                     await handleSuccessfulPayment(transaction.id, customerData);
                     currentStatus = 'paid';
                 }
@@ -4244,7 +4412,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
 
                     // Tenta consultar o provedor
-                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
                     let providerStatus = null;
                     let customerData = {};
                     const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
@@ -4265,6 +4433,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
                         providerStatus = String(resp.data.status || '').toLowerCase();
                         customerData = resp.data.payer || {};
+                    } else if (transaction.provider === 'wiinpay') {
+                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                        if (wiinpayApiKey) {
+                            const now = Date.now();
+                            const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        } else {
+                            console.warn(`${logPrefix} Seller ${sellerId} sem chave WiinPay configurada.`);
+                        }
                     }
                     
                     if (providerStatus && paidStatuses.has(providerStatus)) {
@@ -5483,9 +5665,26 @@ async function checkPendingTransactions() {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (tx.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(tx.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(tx.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(tx.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
                 
-                if ((providerStatus === 'paid' || providerStatus === 'COMPLETED') && tx.status !== 'paid') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus) && tx.status !== 'paid') {
                      await handleSuccessfulPayment(tx.id, customerData);
                 }
             } catch (error) {
