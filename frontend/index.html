@@ -1048,7 +1048,7 @@
         /* Estilos do Live Chat */
         .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: auto; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
-        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.75rem; }
         .hotbot-scope .conversations-list { 
             overflow-y: auto; 
             flex: 1; 
@@ -1067,9 +1067,52 @@
         .hotbot-scope .conversation-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
         .hotbot-scope .conversation-item-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hotbot-scope .conversation-item-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+        .hotbot-scope .chat-header-main { display: flex; flex-direction: column; gap: 0.5rem; }
+        .hotbot-scope .chat-header-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+        .hotbot-scope .chat-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+        .hotbot-scope .tag-badge {     display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.25rem;
+            border-radius: 999px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: rgba(59, 130, 246, 0.1);
+            color: #2563EB;
+            border: 1px solid transparent;
+            text-transform: uppercase; letter-spacing: 0.02em; }
+        .hotbot-scope .tag-badge--auto { background: rgba(34, 197, 94, 0.12); color: #15803D; border-color: rgba(34, 197, 94, 0.35); }
+        .hotbot-scope .tag-actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-start; }
+        .hotbot-scope .tag-filter-container { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .hotbot-scope .tag-filter-label { font-size: 0.75rem; color: var(--text-secondary); }
+        .hotbot-scope .tag-filter-chip { border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.7rem; cursor: pointer; transition: all 0.2s ease; }
+        .hotbot-scope .tag-filter-chip.auto { border-color: rgba(34, 197, 94, 0.35); color: #15803D; }
+        .hotbot-scope .tag-filter-chip.active { background: var(--accent-primary); color: #ffffff !important; border-color: var(--accent-primary); }
+        .hotbot-scope .tag-manager-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1100; }
+        .hotbot-scope .tag-manager-modal { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.5rem; width: min(420px, 90%); box-shadow: 0 20px 40px rgba(15,23,42,0.35); display: flex; flex-direction: column; gap: 1rem; }
+        .hotbot-scope .tag-manager-header { display: flex; align-items: center; justify-content: space-between; }
+        .hotbot-scope .tag-manager-header h3 { margin: 0; font-size: 1.1rem; }
+        .hotbot-scope .tag-manager-header button { background: none; border: none; font-size: 1.5rem; color: var(--text-secondary); cursor: pointer; line-height: 1; }
+        .hotbot-scope .tag-manager-form { display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker { display: flex; align-items: center; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker input[type="color"] { width: 42px; height: 32px; border: none; padding: 0; background: transparent; cursor: pointer; }
+        .hotbot-scope .tag-error { color: #f87171; font-size: 0.8rem; margin: 0; }
+        .hotbot-scope .tag-manager-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-manager-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+        .hotbot-scope .tag-loading, .hotbot-scope .tag-empty { font-size: 0.85rem; color: var(--text-secondary); margin: 0; }
+        .hotbot-scope .tag-context-menu { position: fixed; z-index: 1200; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.5rem; box-shadow: 0 20px 40px rgba(15,23,42,0.35); padding: 0.5rem 0; width: 220px; }
+        .hotbot-scope .tag-context-title { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); padding: 0.5rem 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .tag-context-item { width: 100%; background: none; border: none; display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 1rem; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; text-align: left; }
+        .hotbot-scope .tag-context-item:hover { background: var(--bg-primary); }
+        .hotbot-scope .tag-context-item.active { background: rgba(56, 189, 248, 0.1); }
+        .hotbot-scope .tag-color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .hotbot-scope .tag-context-check { margin-left: auto; color: var(--accent-primary); font-weight: 700; }
+        .hotbot-scope .tag-context-empty { font-size: 0.8rem; color: var(--text-secondary); padding: 0.75rem 1rem; margin: 0; }
+        .hotbot-scope .contact-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
         
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
-        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
         .hotbot-scope .chat-header h3 { font-size: 1.1rem; font-weight: 700; margin:0; }
         .hotbot-scope .message-list { 
             flex: 1; 
@@ -1086,7 +1129,7 @@
         .hotbot-scope .message-list::-webkit-scrollbar-track { background: transparent; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
-        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
+        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; overflow-wrap: anywhere; word-break: break-word; }
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
 
@@ -5037,7 +5080,7 @@ function generatePreviewHTML(data) {
 // == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
     // ==========================================================
     function launchHotBot(containerElement) {
-        const { useState, useCallback, useEffect, useRef } = window.React;
+        const { useState, useCallback, useEffect, useRef, useMemo } = window.React;
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
@@ -5334,6 +5377,19 @@ function generatePreviewHTML(data) {
                 setFlows(res.data.filter(f => f.bot_id == selectedBotId));
             } catch (e) { console.error("Erro ao buscar fluxos", e); }
         }, [selectedBotId]);
+        
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev => prev.map(lead => {
+                if (lead.chat_id !== chatId) return lead;
+                const updated = transformer({ ...lead });
+                return updated || lead;
+            }));
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
@@ -6023,9 +6079,84 @@ function generatePreviewHTML(data) {
         const [inactiveChatIds, setInactiveChatIds] = useState([]);
         const [isValidating, setIsValidating] = useState(false);
         
+        const [customTags, setCustomTags] = useState([]);
+        const [tagFilters, setTagFilters] = useState([]);
+        const [isTagManagerOpen, setIsTagManagerOpen] = useState(false);
+        const [tagContextMenu, setTagContextMenu] = useState(null);
+        const [newTagTitle, setNewTagTitle] = useState('');
+        const [newTagColor, setNewTagColor] = useState('#2563EB');
+        const [isSavingTag, setIsSavingTag] = useState(false);
+        const [tagError, setTagError] = useState('');
+        const [isLoadingTags, setIsLoadingTags] = useState(false);
+        
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
+        const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
+        const contextMenuPosition = useMemo(() => {
+            if (!tagContextMenu) return null;
+            if (typeof window === 'undefined') {
+                return { top: tagContextMenu.y, left: tagContextMenu.x };
+            }
+            const maxTop = Math.max(0, window.innerHeight - 220);
+            const maxLeft = Math.max(0, window.innerWidth - 220);
+            return {
+                top: Math.max(0, Math.min(tagContextMenu.y, maxTop)),
+                left: Math.max(0, Math.min(tagContextMenu.x, maxLeft))
+            };
+        }, [tagContextMenu]);
+        const tagFilterOptions = useMemo(() => {
+            const automatic = [{ key: 'auto:Pagante', label: 'Pagante', variant: 'auto' }];
+            const custom = customTags.map(tag => ({
+                key: `custom:${tag.id}`,
+                label: tag.title,
+                variant: 'custom',
+                color: tag.color
+            }));
+            return [...automatic, ...custom];
+        }, [customTags]);
+        
+        const getContrastColor = useCallback((hexColor) => {
+            if (!hexColor || typeof hexColor !== 'string') return '#ffffff';
+            const sanitized = hexColor.replace('#', '');
+            if (sanitized.length !== 6) return '#ffffff';
+            const r = parseInt(sanitized.substring(0, 2), 16);
+            const g = parseInt(sanitized.substring(2, 4), 16);
+            const b = parseInt(sanitized.substring(4, 6), 16);
+            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+            return brightness > 160 ? '#0f172a' : '#ffffff';
+        }, []);
+
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev =>
+                prev.map(lead => {
+                    if (lead.chat_id !== chatId) return lead;
+                    const updated = transformer({ ...lead });
+                    return updated || lead;
+                })
+            );
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
+
+        useEffect(() => {
+            const handleGlobalClick = () => setTagContextMenu(null);
+            const handleKeyDown = (event) => {
+                if (event.key === 'Escape') setTagContextMenu(null);
+            };
+            const handleScroll = () => setTagContextMenu(null);
+            window.addEventListener('click', handleGlobalClick);
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('scroll', handleScroll, true);
+            return () => {
+                window.removeEventListener('click', handleGlobalClick);
+                window.removeEventListener('keydown', handleKeyDown);
+                window.removeEventListener('scroll', handleScroll, true);
+            };
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -6045,19 +6176,156 @@ function generatePreviewHTML(data) {
         }, [messages]);
         
         useEffect(() => {
+            setTagContextMenu(null);
+            setTagFilters([]);
+        }, [selectedBotId]);
+        
+        useEffect(() => {
             api.get('/api/flows').then(({data}) => setAllFlows(data || []));
         }, []);
 
+        const fetchTags = useCallback(async () => {
+            if (!selectedBotId) {
+                setCustomTags([]);
+                return;
+            }
+            setIsLoadingTags(true);
+            try {
+                const { data } = await api.get('/api/tags', { params: { botId: selectedBotId } });
+                const safeData = Array.isArray(data) ? data : [];
+                setCustomTags(safeData);
+                setTagFilters(prev => prev.filter(key => {
+                    if (!key.startsWith('custom:')) return true;
+                    const tagId = Number(key.split(':')[1]);
+                    return safeData.some(tag => tag.id === tagId);
+                }));
+            } catch (e) {
+                console.error("Erro ao carregar tags personalizadas", e);
+                alert('Não foi possível carregar as tags personalizadas.');
+            } finally {
+                setIsLoadingTags(false);
+            }
+        }, [selectedBotId]);
+
+        useEffect(() => { fetchTags(); }, [fetchTags]);
+
         const fetchUsers = useCallback(async () => {
-            if (!selectedBotId) return;
+            if (!selectedBotId) {
+                setUsers([]);
+                return;
+            }
             try {
                 const { data } = await api.get(`/api/chats/${selectedBotId}`);
-                setUsers(data);
+                const normalized = (data || []).map(lead => ({
+                    ...lead,
+                    custom_tags: Array.isArray(lead.custom_tags) ? lead.custom_tags : [],
+                    automatic_tags: Array.isArray(lead.automatic_tags) ? lead.automatic_tags : []
+                }));
+                setUsers(normalized);
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
             }
         }, [selectedBotId]);
         
+        const handleConversationContextMenu = (event, user) => {
+            event.preventDefault();
+            setTagContextMenu({ x: event.clientX, y: event.clientY, chatId: user.chat_id });
+        };
+
+        const toggleLeadTag = async (tag, lead) => {
+            if (!tag || !lead) return;
+            const isAssigned = (lead.custom_tags || []).some(t => t.id === tag.id);
+            try {
+                if (isAssigned) {
+                    await api.delete(`/api/leads/${selectedBotId}/${lead.chat_id}/tags/${tag.id}`);
+                    updateLeadState(lead.chat_id, current => ({
+                        ...current,
+                        custom_tags: (current.custom_tags || []).filter(t => t.id !== tag.id)
+                    }));
+                } else {
+                    await api.post(`/api/leads/${selectedBotId}/${lead.chat_id}/tags`, { tagId: tag.id });
+                    updateLeadState(lead.chat_id, current => {
+                        const currentTags = Array.isArray(current.custom_tags) ? current.custom_tags : [];
+                        if (currentTags.some(t => t.id === tag.id)) return current;
+                        return {
+                            ...current,
+                            custom_tags: [...currentTags, { id: tag.id, title: tag.title, color: tag.color }]
+                        };
+                    });
+                }
+            } catch (error) {
+                console.error("Erro ao atualizar tags do lead:", error);
+                alert('Erro ao atualizar tags do lead.');
+            }
+        };
+
+        const handleTagFilterToggle = (key) => {
+            setTagFilters(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
+        };
+
+        const handleOpenTagManager = () => {
+            setTagError('');
+            setTagContextMenu(null);
+            setIsTagManagerOpen(true);
+        };
+
+        const handleCreateTag = async (event) => {
+            event.preventDefault();
+            if (!selectedBotId) {
+                setTagError('Selecione um bot para criar tags.');
+                return;
+            }
+            const trimmedTitle = newTagTitle.trim();
+            if (!trimmedTitle) {
+                setTagError('Informe um título.');
+                return;
+            }
+            if (trimmedTitle.length > 12) {
+                setTagError('O título deve ter no máximo 12 caracteres.');
+                return;
+            }
+            setIsSavingTag(true);
+            setTagError('');
+            try {
+                const payload = {
+                    title: trimmedTitle,
+                    color: newTagColor.toUpperCase(),
+                    botId: selectedBotId
+                };
+                const { data } = await api.post('/api/tags', payload);
+                setCustomTags(prev => {
+                    const next = [...prev, data];
+                    return next.sort((a, b) => a.title.localeCompare(b.title));
+                });
+                setNewTagTitle('');
+            } catch (error) {
+                const message = error.response?.data?.message || 'Erro ao criar tag.';
+                setTagError(message);
+            } finally {
+                setIsSavingTag(false);
+            }
+        };
+
+        const handleDeleteTag = async (tagId) => {
+            if (!confirm('Deseja realmente excluir esta tag?')) return;
+            try {
+                await api.delete(`/api/tags/${tagId}`);
+                setCustomTags(prev => prev.filter(tag => tag.id !== tagId));
+                setTagFilters(prev => prev.filter(key => key !== `custom:${tagId}`));
+                setUsers(prev => prev.map(lead => ({
+                    ...lead,
+                    custom_tags: (lead.custom_tags || []).filter(tag => tag.id !== tagId)
+                })));
+                setSelectedChat(prev => prev ? {
+                    ...prev,
+                    custom_tags: (prev.custom_tags || []).filter(tag => tag.id !== tagId)
+                } : prev);
+            } catch (error) {
+                console.error("Erro ao excluir tag:", error);
+                alert('Erro ao excluir tag.');
+            }
+        };
+
         useEffect(() => {
             if (!selectedBotId) return;
             fetchUsers();
@@ -6125,20 +6393,39 @@ function generatePreviewHTML(data) {
         };
         
         useEffect(() => {
-        const activeUsers = showOnlyActive 
-            ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
-            : users;
+            const activeUsers = showOnlyActive 
+                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+                : users;
 
-        setFilteredUsers(
-            activeUsers.filter(u => {
-                const term = searchTerm.toLowerCase();
-                const firstName = (u.first_name || '').toLowerCase();
-                const leadId = getLeadId(u).toLowerCase();
-                
-                return firstName.includes(term) || leadId.includes(term);
-            })
-        );
-    }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
+            const normalizedTerm = searchTerm.toLowerCase();
+
+            setFilteredUsers(
+                activeUsers.filter(u => {
+                    const firstName = (u.first_name || '').toLowerCase();
+                    const leadId = getLeadId(u).toLowerCase();
+                    const matchesSearch = !normalizedTerm || firstName.includes(normalizedTerm) || leadId.includes(normalizedTerm);
+                    if (!matchesSearch) return false;
+
+                    if (tagFilters.length === 0) return true;
+                    const leadTagKeys = [
+                        ...(Array.isArray(u.automatic_tags) ? u.automatic_tags.map(name => `auto:${name}`) : []),
+                        ...(Array.isArray(u.custom_tags) ? u.custom_tags.map(tag => `custom:${tag.id}`) : [])
+                    ];
+                    return tagFilters.every(tagKey => leadTagKeys.includes(tagKey));
+                })
+            );
+        }, [searchTerm, users, showOnlyActive, inactiveChatIds, tagFilters]);
+
+        useEffect(() => {
+            if (!selectedChat) return;
+            const updated = users.find(u => u.chat_id === selectedChat.chat_id);
+            if (!updated) return;
+            const customChanged = JSON.stringify(updated.custom_tags || []) !== JSON.stringify(selectedChat.custom_tags || []);
+            const autoChanged = JSON.stringify(updated.automatic_tags || []) !== JSON.stringify(selectedChat.automatic_tags || []);
+            if (customChanged || autoChanged || updated.first_name !== selectedChat.first_name || updated.last_message_at !== selectedChat.last_message_at) {
+                setSelectedChat(prev => prev ? { ...prev, ...updated } : prev);
+            }
+        }, [users, selectedChat]);
 
     const handleFilterActiveToggle = async () => {
         const nextState = !showOnlyActive;
@@ -6255,12 +6542,137 @@ function generatePreviewHTML(data) {
         return (
             <div className="chat-page-layout">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSendFromLibrary} onClose={() => setIsMediaModalOpen(false)} />}
+                {isTagManagerOpen && (
+                    <div className="tag-manager-backdrop" onClick={() => setIsTagManagerOpen(false)}>
+                        <div className="tag-manager-modal" onClick={e => e.stopPropagation()}>
+                            <div className="tag-manager-header">
+                                <h3>Gerenciar tags</h3>
+                                <button type="button" onClick={() => setIsTagManagerOpen(false)} aria-label="Fechar">
+                                    <span aria-hidden="true">&times;</span>
+                                </button>
+                            </div>
+                            <form className="tag-manager-form" onSubmit={handleCreateTag}>
+                                <div className="form-group">
+                                    <label>Título (até 12 caracteres)</label>
+                                    <input
+                                        className="form-input"
+                                        maxLength={12}
+                                        value={newTagTitle}
+                                        onChange={e => setNewTagTitle(e.target.value)}
+                                        placeholder="Ex: VIP"
+                                        required
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label>Cor</label>
+                                    <div className="tag-color-picker">
+                                        <input
+                                            type="color"
+                                            value={newTagColor}
+                                            onChange={e => setNewTagColor(e.target.value.toUpperCase())}
+                                            aria-label="Selecionar cor da tag"
+                                        />
+                                        <span>{newTagColor}</span>
+                                    </div>
+                                </div>
+                                {tagError && <p className="tag-error">{tagError}</p>}
+                                <button className="btn btn-primary" type="submit" disabled={isSavingTag}>
+                                    {isSavingTag ? 'Salvando...' : 'Criar tag'}
+                                </button>
+                            </form>
+                            <div className="tag-manager-list">
+                                {isLoadingTags ? (
+                                    <p className="tag-loading">Carregando tags...</p>
+                                ) : customTags.length === 0 ? (
+                                    <p className="tag-empty">Nenhuma tag criada ainda.</p>
+                                ) : (
+                                    customTags.map(tag => (
+                                        <div key={`manager-${tag.id}`} className="tag-manager-item">
+                                            <span
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                            <button type="button" className="btn btn-red btn-sm" onClick={() => handleDeleteTag(tag.id)}>
+                                                Excluir
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {tagContextMenu && contextMenuPosition && leadForContextMenu && (
+                    <div
+                        className="tag-context-menu"
+                        style={{ top: contextMenuPosition.top, left: contextMenuPosition.left }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="tag-context-title">Tags personalizadas</div>
+                        {customTags.length === 0 ? (
+                            <p className="tag-context-empty">Crie tags para atribuí-las aos seus leads.</p>
+                        ) : (
+                            customTags.map(tag => {
+                                const isAssigned = (leadForContextMenu.custom_tags || []).some(t => t.id === tag.id);
+                                return (
+                                    <button
+                                        key={`context-${tag.id}`}
+                                        type="button"
+                                        className={`tag-context-item ${isAssigned ? 'active' : ''}`}
+                                        onClick={() => toggleLeadTag(tag, leadForContextMenu)}
+                                    >
+                                        <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
+                                        <span>{tag.title}</span>
+                                        {isAssigned && <span className="tag-context-check">✓</span>}
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                )}
                 <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
                     <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
                     <div className="chat-container" style={{height: 'calc(100vh - 8.5rem)', margin: '0 3rem 2rem 3rem'}} >
                         <div className="conversations-panel">
                             <div className="conversations-header">
                                 <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <div className="tag-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={handleOpenTagManager}
+                                        disabled={!selectedBotId}
+                                    >
+                                        Gerenciar tags
+                                    </button>
+                                    <div className="tag-filter-container">
+                                        <span className="tag-filter-label">Filtrar por tags:</span>
+                                        {tagFilterOptions.map(option => {
+                                            const isActive = tagFilters.includes(option.key);
+                                            const style = option.variant === 'custom'
+                                                ? {
+                                                    borderColor: option.color,
+                                                    backgroundColor: isActive ? option.color : 'transparent',
+                                                    color: isActive ? getContrastColor(option.color) : option.color
+                                                  }
+                                                : undefined;
+                                            const className = `tag-filter-chip ${option.variant === 'auto' ? 'auto' : ''} ${isActive ? 'active' : ''}`;
+                                            return (
+                                                <button
+                                                    key={option.key}
+                                                    type="button"
+                                                    className={className}
+                                                    style={style}
+                                                    onClick={() => handleTagFilterToggle(option.key)}
+                                                >
+                                                    {option.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                             </div>
                             <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                 <label htmlFor="activeFilter" style={{ cursor: 'pointer', flexGrow: 1, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -6278,7 +6690,12 @@ function generatePreviewHTML(data) {
                                 {filteredUsers.map(u => {
                                     const formattedTime = formatLastMessageTime(u.last_message_at);
                                     return (
-                                        <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                        <div
+                                            key={u.chat_id}
+                                            className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`}
+                                            onClick={() => handleSelectChat(u)}
+                                            onContextMenu={(e) => handleConversationContextMenu(e, u)}
+                                        >
                                             <div className="conversation-item-header">
                                                 <div className="conversation-item-name">
                                                     {getFirstName(u)}
@@ -6287,19 +6704,105 @@ function generatePreviewHTML(data) {
                                                 {formattedTime ? <span className="conversation-item-time">{formattedTime}</span> : null}
                                             </div>
                                             <p className="conversation-item-preview">{u.message_text}</p>
+                                            <div className="conversation-item-tags">
+                                                {(u.automatic_tags || []).map(tagName => (
+                                                    <span key={`auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(u.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
                                     );
                                 })}
                             </div>
                         </div>
-                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="chat-window">
+                            {selectedChat ? (
+                                <>
+                                    <div className="chat-header">
+                                        <div className="chat-header-main">
+                                            <h3>
+                                                {getFirstName(selectedChat)}
+                                                <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span>
+                                            </h3>
+                                            <div className="chat-header-tags">
+                                                {(selectedChat.automatic_tags || []).map(tagName => (
+                                                    <span key={`header-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(selectedChat.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`header-custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="chat-header-actions">
+                                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button>
+                                        </div>
+                                    </div>
+                                    <div className="message-list" ref={chatWindowRef}>
+                                        {messages.map((m, i) => (
+                                            <div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}>
+                                                <strong>{getMessageSender(m)}</strong>
+                                                {renderMessageContent(m)}
+                                                <div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="chat-input-area">
+                                        <form onSubmit={handleSend} className="chat-input-form">
+                                            <input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" />
+                                            <button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button>
+                                            <button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button>
+                                            <input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." />
+                                            <button className="btn btn-primary" type="submit">{Icons.send}</button>
+                                        </form>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="centered-placeholder">
+                                    {Icons.chat}
+                                    <h3>Selecione uma conversa</h3>
+                                    <p>Escolha um contato à esquerda.</p>
+                                </div>
+                            )}
+                        </div>
                         <div className="contact-panel">
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
                                 <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
-                                <div className="contact-detail"><label>Username</label><p>{selectedChat.username ? `@${selectedChat.username}` : 'Nenhum'}</p></div>
-                                <div className="contact-detail"><label>Chat ID</label><p>{selectedChat.chat_id}</p></div>
-                                <div className="contact-detail"><label>Click ID</label><p>{selectedChat.click_id || 'Nenhum'}</p></div>
+                                <div className="contact-detail">
+                                    <label>Tags</label>
+                                    <div className="contact-tags">
+                                        {(selectedChat.automatic_tags || []).map(tagName => (
+                                            <span key={`panel-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                        ))}
+                                        {(selectedChat.custom_tags || []).map(tag => (
+                                            <span
+                                                key={`panel-custom-${tag.id}`}
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                        ))}
+                                        {(!selectedChat.automatic_tags || selectedChat.automatic_tags.length === 0) && (!selectedChat.custom_tags || selectedChat.custom_tags.length === 0) && (
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Sem tags atribuídas.</span>
+                                        )}
+                                    </div>
+                                    <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>Use o clique direito na lista para atribuir tags.</small>
+                                </div>
                                 <ChatActionsPanel botId={selectedBotId} chat={selectedChat} flows={botFlows} onAction={fetchMessages}/>
                             </>) : (<div className="centered-placeholder"><h3>Informações</h3><p>Detalhes do contato aqui.</p></div>)}
                         </div>
