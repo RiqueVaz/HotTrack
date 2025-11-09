@@ -288,6 +288,10 @@ async function isDomainAllowedForPressel(presselId, origin) {
   }
 }
 
+const sanitizeTagTitle = (title = '') => title.trim();
+const normalizeHexColor = (color = '') => color.trim().toUpperCase();
+const isValidTagColor = (color) => TAG_COLOR_REGEX.test(color);
+
 // Middleware CORS seletivo baseado na rota
 const corsOptions = async (req, callback) => {
   const origin = req.header('Origin');
@@ -397,6 +401,8 @@ const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+const TAG_TITLE_MAX_LENGTH = 12;
+const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Cache simples para evitar ultrapassar rate limit em consultas PushinPay (min. 1/min).
 const pushinpayLastCheckAt = new Map(); // key: provider_transaction_id, value: timestamp (ms)
 const wiinpayLastCheckAt = new Map();
@@ -1945,20 +1951,75 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
         const users = await sqlWithRetry(`
-            SELECT 
-                t.chat_id,
-                (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
-                (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
-                (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
-                (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
-                MAX(t.created_at) as last_message_at
-            FROM telegram_chats t
-            WHERE t.bot_id = $1 AND t.seller_id = $2
-            GROUP BY t.chat_id
-            ORDER BY last_message_at DESC;
+            WITH base_chats AS (
+                SELECT 
+                    t.chat_id,
+                    (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
+                    (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
+                    (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
+                    (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
+                    MAX(t.created_at) as last_message_at
+                FROM telegram_chats t
+                WHERE t.bot_id = $1 AND t.seller_id = $2
+                GROUP BY t.chat_id
+            ),
+            latest_messages AS (
+                SELECT DISTINCT ON (chat_id)
+                    chat_id,
+                    message_text,
+                    sender_type,
+                    created_at
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+                ORDER BY chat_id, created_at DESC
+            ),
+            paid_leads AS (
+                SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                JOIN clicks c ON c.click_id = tc.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc.bot_id = $1
+                  AND tc.seller_id = $2
+                  AND pt.status = 'paid'
+            ),
+            custom_tags AS (
+                SELECT
+                    lcta.chat_id,
+                    json_agg(
+                        json_build_object(
+                            'id', lct.id,
+                            'title', lct.title,
+                            'color', lct.color,
+                            'bot_id', lct.bot_id
+                        )
+                        ORDER BY LOWER(lct.title)
+                    ) AS tags
+                FROM lead_custom_tag_assignments lcta
+                JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
+                WHERE lcta.bot_id = $1
+                  AND lcta.seller_id = $2
+                GROUP BY lcta.chat_id
+            )
+            SELECT
+                bc.chat_id,
+                bc.first_name,
+                bc.last_name,
+                bc.username,
+                bc.click_id,
+                bc.last_message_at,
+                lm.message_text,
+                lm.sender_type AS last_sender_type,
+                COALESCE(ct.tags, '[]'::json) AS custom_tags,
+                CASE WHEN pl.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
+            FROM base_chats bc
+            LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
+            LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
+            LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
+            ORDER BY bc.last_message_at DESC NULLS LAST;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
+        console.error('Erro ao buscar usuários do chat:', error);
         res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
     }
 });
@@ -2007,6 +2068,189 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
         }
     } catch (error) {
         res.status(500).json({ message: 'Não foi possível enviar a mídia: ' + error.message });
+    }
+});
+
+// --- ROTAS DE TAGS PERSONALIZADAS ---
+app.get('/api/tags', authenticateJwt, async (req, res) => {
+    const { botId } = req.query;
+
+    try {
+        let query = `
+            SELECT id, title, color, bot_id, created_at
+            FROM lead_custom_tags
+            WHERE seller_id = $1
+        `;
+        const params = [req.user.id];
+
+        if (botId !== undefined) {
+            const parsedBotId = parseInt(botId, 10);
+            if (Number.isNaN(parsedBotId)) {
+                return res.status(400).json({ message: 'botId inválido.' });
+            }
+            query += ' AND bot_id = $2';
+            params.push(parsedBotId);
+        }
+
+        query += ' ORDER BY LOWER(title)';
+
+        const tags = await sqlWithRetry(query, params);
+        res.status(200).json(tags);
+    } catch (error) {
+        console.error('Erro ao listar tags personalizadas:', error);
+        res.status(500).json({ message: 'Erro ao listar tags.' });
+    }
+});
+
+app.post('/api/tags', authenticateJwt, async (req, res) => {
+    const { title, color, botId } = req.body || {};
+    const trimmedTitle = sanitizeTagTitle(title || '');
+    const normalizedColor = normalizeHexColor(color || '');
+
+    if (!trimmedTitle) {
+        return res.status(400).json({ message: 'Título da tag é obrigatório.' });
+    }
+
+    if (trimmedTitle.length > TAG_TITLE_MAX_LENGTH) {
+        return res.status(400).json({ message: `Título deve ter no máximo ${TAG_TITLE_MAX_LENGTH} caracteres.` });
+    }
+
+    if (!normalizedColor || !isValidTagColor(normalizedColor)) {
+        return res.status(400).json({ message: 'Cor inválida. Utilize o formato HEX (#RRGGBB).' });
+    }
+
+    const parsedBotId = parseInt(botId, 10);
+    if (Number.isNaN(parsedBotId)) {
+        return res.status(400).json({ message: 'botId inválido.' });
+    }
+
+    try {
+        const [bot] = await sqlWithRetry(
+            'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
+            [parsedBotId, req.user.id]
+        );
+
+        if (!bot) {
+            return res.status(404).json({ message: 'Bot não encontrado.' });
+        }
+
+        const [tag] = await sqlWithRetry(
+            `INSERT INTO lead_custom_tags (seller_id, bot_id, title, color)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, title, color, bot_id, created_at`,
+            [req.user.id, parsedBotId, trimmedTitle, normalizedColor]
+        );
+
+        res.status(201).json(tag);
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ message: 'Já existe uma tag com esse título para este bot.' });
+        }
+        console.error('Erro ao criar tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao criar tag.' });
+    }
+});
+
+app.delete('/api/tags/:id', authenticateJwt, async (req, res) => {
+    const tagId = parseInt(req.params.id, 10);
+    if (Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'ID de tag inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [tagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        await sqlWithRetry('DELETE FROM lead_custom_tags WHERE id = $1', [tagId]);
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao excluir tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao excluir tag.' });
+    }
+});
+
+app.post('/api/leads/:botId/:chatId/tags', authenticateJwt, async (req, res) => {
+    const { tagId } = req.body || {};
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const parsedTagId = parseInt(tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId) {
+        return res.status(400).json({ message: 'Parâmetros do lead inválidos.' });
+    }
+
+    if (Number.isNaN(parsedTagId)) {
+        return res.status(400).json({ message: 'tagId inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id, bot_id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [parsedTagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        if (tag.bot_id !== botId) {
+            return res.status(400).json({ message: 'Tag não pertence a este bot.' });
+        }
+
+        const [chatExists] = await sqlWithRetry(
+            'SELECT 1 FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 LIMIT 1',
+            [botId, chatId, req.user.id]
+        );
+
+        if (!chatExists) {
+            return res.status(404).json({ message: 'Lead não encontrado.' });
+        }
+
+        await sqlWithRetry(
+            `INSERT INTO lead_custom_tag_assignments (tag_id, seller_id, bot_id, chat_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT DO NOTHING`,
+            [parsedTagId, req.user.id, botId, chatId]
+        );
+
+        res.status(201).json({ message: 'Tag adicionada ao lead.' });
+    } catch (error) {
+        console.error('Erro ao adicionar tag ao lead:', error);
+        res.status(500).json({ message: 'Erro ao adicionar tag ao lead.' });
+    }
+});
+
+app.delete('/api/leads/:botId/:chatId/tags/:tagId', authenticateJwt, async (req, res) => {
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const tagId = parseInt(req.params.tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId || Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'Parâmetros inválidos.' });
+    }
+
+    try {
+        const deleted = await sqlWithRetry(
+            `DELETE FROM lead_custom_tag_assignments
+             WHERE tag_id = $1 AND seller_id = $2 AND bot_id = $3 AND chat_id = $4
+             RETURNING tag_id`,
+            [tagId, req.user.id, botId, chatId]
+        );
+
+        if (deleted.length === 0) {
+            return res.status(404).json({ message: 'Tag não vinculada a este lead.' });
+        }
+
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao remover tag do lead:', error);
+        res.status(500).json({ message: 'Erro ao remover tag do lead.' });
     }
 });
 
