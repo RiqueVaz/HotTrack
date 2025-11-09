@@ -5279,7 +5279,26 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
         if (clickData.pressel_id) {
             presselPixels = await sql`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
         } else if (clickData.checkout_id) {
-            presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
+            // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
+            const checkoutId = clickData.checkout_id;
+            
+            // Se começa com 'cko_', é um hosted_checkout (UUID)
+            if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
+                // Buscar pixel_id do config do hosted_checkout
+                const [hostedCheckout] = await sql`
+                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
+                    FROM hosted_checkouts 
+                    WHERE id = ${checkoutId}
+                `;
+                
+                if (hostedCheckout?.pixel_id) {
+                    // Converter pixel_id para o formato esperado
+                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
+                }
+            } else {
+                // É um checkout antigo (integer), usar a tabela checkout_pixels
+                presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+            }
         }
 
         if (presselPixels.length === 0) {
