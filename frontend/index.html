@@ -4976,6 +4976,9 @@ function generatePreviewHTML(data) {
             const [editingFlow, setEditingFlow] = useState(null);
             const [bots, setBots] = useState([]);
             const [importingFlowLink, setImportingFlowLink] = useState(null);
+            const [pressels, setPressels] = useState([]);
+            const [thankYouPages, setThankYouPages] = useState([]);
+            const [hostedCheckouts, setHostedCheckouts] = useState([]);
 
             // Salvar a página atual no localStorage sempre que mudar
             // Mas não salvar estados temporários como flow-editor ou import-flow
@@ -4989,7 +4992,12 @@ function generatePreviewHTML(data) {
             const fetchInitialData = useCallback(() => {
                 setIsLoading(true);
             api.get('/api/dashboard/data')
-                .then((res) => setBots(res.data.bots || []))
+                .then((res) => {
+                    setBots(res.data.bots || []);
+                    setPressels(res.data.pressels || []);
+                    setThankYouPages(res.data.thankYouPages || []);
+                    setHostedCheckouts(res.data.hostedCheckouts || []);
+                })
                 .catch((err) => { console.error("Error fetching HotBot data:", err); App.logout(); })
                     .finally(() => setIsLoading(false));
             }, []);
@@ -5023,7 +5031,7 @@ function generatePreviewHTML(data) {
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
                 'disparos-history': <DisparosHistoryPage />,
-                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} /> : null,
+                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} pressels={pressels} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} /> : null,
                 'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
             }[currentPage];
 
@@ -6638,7 +6646,7 @@ function generatePreviewHTML(data) {
 
     const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
-    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
+    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
             if (!value) return null;
@@ -6929,7 +6937,8 @@ function generatePreviewHTML(data) {
                                     placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
                             </div>
-                            <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
                                 <input 
                                     type="text" 
                                     className="form-input" 
@@ -6938,14 +6947,47 @@ function generatePreviewHTML(data) {
                                     placeholder="Texto do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
-                                <input 
-                                    type="url" 
-                                    className="form-input" 
-                                    value={actionData.buttonUrl || ''} 
-                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)} 
-                                    placeholder="URL do Botão"
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>URL do Botão</label>
+                                <select
+                                    className="form-input"
+                                    value={actionData.buttonUrl || ''}
+                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
-                                />
+                                >
+                                    <option value="">Selecione uma opção...</option>
+                                    
+                                    {presselDomains && presselDomains.length > 0 && (
+                                        <optgroup label="🔗 Pressels">
+                                            {presselDomains.map((domain, i) => (
+                                                <option key={`pressel-${i}`} value={domain.value}>
+                                                    {domain.label}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    
+                                    {thankYouPages && thankYouPages.length > 0 && (
+                                        <optgroup label="✅ Thank You Pages">
+                                            {thankYouPages.map(ty => (
+                                                <option key={ty.id} value={`${window.location.origin}/obrigado/${ty.id}`}>
+                                                    {ty.name || ty.id}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    
+                                    {hostedCheckouts && hostedCheckouts.length > 0 && (
+                                        <optgroup label="💳 Checkouts">
+                                            {hostedCheckouts.map(checkout => (
+                                                <option key={checkout.id} value={`${window.location.origin}/oferta/${checkout.id}`}>
+                                                    {checkout.name || checkout.id}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                </select>
                             </div>
                             
                             <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
@@ -7330,12 +7372,13 @@ function generatePreviewHTML(data) {
         );
     }
     
-    function FlowEditorPage({ flow, onBack }) {
+    function FlowEditorPage({ flow, onBack, pressels, thankYouPages, hostedCheckouts }) {
         const reactFlowWrapper = useRef(null);
         const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
         const [edges, setEdges, onEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
+        const [presselDomains, setPresselDomains] = useState([]);
         
         // Handle node copy
         useEffect(() => {
@@ -7544,6 +7587,38 @@ function generatePreviewHTML(data) {
             }
         }, [flow, reactFlowInstance]);
         
+        // Carregar domínios das pressels
+        useEffect(() => {
+            const loadPresselDomains = async () => {
+                if (!pressels || pressels.length === 0) {
+                    setPresselDomains([]);
+                    return;
+                }
+                
+                try {
+                    const allDomains = [];
+                    for (const pressel of pressels) {
+                        const domains = await api.get(`/api/pressels/${pressel.id}/domains`);
+                        if (domains.data && domains.data.length > 0) {
+                            domains.data.forEach(d => {
+                                allDomains.push({
+                                    label: `${pressel.name} - ${d.domain}`,
+                                    value: d.domain,
+                                    type: 'pressel'
+                                });
+                            });
+                        }
+                    }
+                    setPresselDomains(allDomains);
+                } catch (error) {
+                    console.error('Erro ao carregar domínios das pressels:', error);
+                    setPresselDomains([]);
+                }
+            };
+            
+            loadPresselDomains();
+        }, [pressels]);
+        
         // Center view after first render and when nodes are loaded
         useEffect(() => {
             if (!isInitialized && nodes.length > 0 && reactFlowInstance) {
@@ -7723,7 +7798,7 @@ function generatePreviewHTML(data) {
                         </div>
                     </div>
                 )}
-                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
+                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} presselDomains={presselDomains} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} />}
             </div>
         );
     }

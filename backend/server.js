@@ -2165,13 +2165,23 @@ app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
             LEFT JOIN ( SELECT checkout_id, array_agg(pixel_config_id) as pixel_ids FROM checkout_pixels GROUP BY checkout_id ) px ON c.id = px.checkout_id
             WHERE c.seller_id = ${sellerId} ORDER BY c.created_at DESC`;
         const utmifyIntegrationsPromise = sql`SELECT id, account_name FROM utmify_integrations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
+        const thankYouPagesPromise = sql`
+            SELECT id, config->>'page_name' as name
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
+        const hostedCheckoutsPromise = sql`
+            SELECT id, config->'content'->>'main_title' as name
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
 
-        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations] = await Promise.all([
-            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise
+        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts] = await Promise.all([
+            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise, thankYouPagesPromise, hostedCheckoutsPromise
         ]);
         
         const settings = settingsResult[0] || {};
-        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations });
+        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts });
     } catch (error) {
         console.error("Erro ao buscar dados do dashboard:", error);
         res.status(500).json({ message: 'Erro ao buscar dados.' });
