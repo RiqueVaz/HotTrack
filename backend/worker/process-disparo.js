@@ -221,7 +221,7 @@ async function generatePixForProvider(provider, seller, value_cents, host, apiKe
         }
 
         const response = await axios.post('https://api.wiinpay.com.br/payment/create', payload, {
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${wiinpayApiKey}` }
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' }
         });
 
         pixData = response.data;
