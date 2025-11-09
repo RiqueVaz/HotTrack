@@ -6926,12 +6926,12 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
                 RETURNING id;
             `;
 
-            // Gera um click_id único e amigável
+            // Gera um click_id único e amigável no formato /start
             finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
 
-            // Atualiza o registro com o novo click_id gerado
+            // Atualiza o registro com o novo click_id gerado (com prefixo /start para consistência)
             await sql`
-                UPDATE clicks SET click_id = ${finalClickId} WHERE id = ${newClick.id}
+                UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}
             `;
              console.log(`[Organic Traffic] Novo click_id gerado e associado: ${finalClickId}`);
         }
@@ -6968,10 +6968,11 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             return res.status(400).json({ message: 'API Key não configurada para o vendedor.' });
         }
 
-        // 2) Garantir que há um click_id associado
+        // 2) Garantir que há um click_id associado e buscar dados do click
         const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
         const user_agent = req.headers['user-agent'];
         let finalClickId = click_id;
+        let clickRecord = null;
         
         // Verifica se já existe um clique com este click_id
         if (finalClickId) {
@@ -6981,7 +6982,7 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             
             // Verifica se o click_id já existe no banco
             const [existingClick] = await sql`
-                SELECT id FROM clicks 
+                SELECT * FROM clicks 
                 WHERE click_id = ${dbClickId} AND seller_id = ${sellerId}
             `;
             
@@ -6991,12 +6992,14 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
                 const [newClick] = await sql`
                     INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id, is_organic)
                     VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${dbClickId}, FALSE)
-                    RETURNING id;
+                    RETURNING *;
                 `;
                 finalClickId = cleanClickId; // Usa o click_id do fluxo
+                clickRecord = newClick;
             } else {
                 // Click já existe, usa ele
                 finalClickId = cleanClickId;
+                clickRecord = existingClick;
                 console.log(`[Checkout PIX] Usando click_id existente: ${cleanClickId}`);
             }
         } else {
@@ -7005,10 +7008,11 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             const [newClick] = await sql`
                 INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
                 VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
-                RETURNING id;
+                RETURNING *;
             `;
             finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
             await sql`UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}`;
+            clickRecord = { ...newClick, click_id: `/start ${finalClickId}` };
             console.log(`[Checkout PIX] Click_id orgânico gerado: ${finalClickId}`);
         }
 
@@ -7025,7 +7029,31 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             headers: { 'x-api-key': seller.api_key }
         });
 
-        // 4) Retornar a resposta da API central
+        // 4) Enviar evento InitiateCheckout para Meta
+        if (clickRecord && response.data) {
+            try {
+                // Buscar a transação recém-criada do banco para obter o internal_transaction_id
+                const [pixTransaction] = await sql`
+                    SELECT id FROM pix_transactions 
+                    WHERE provider_transaction_id = ${response.data.transaction_id}
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                `;
+                
+                if (pixTransaction) {
+                    await sendMetaEvent('InitiateCheckout', clickRecord, { 
+                        id: pixTransaction.id, 
+                        pix_value: value_cents / 100 
+                    }, null);
+                    console.log(`[Checkout PIX] Evento InitiateCheckout enviado para Meta para o clique ${clickRecord.id}`);
+                }
+            } catch (metaError) {
+                console.error(`[Checkout PIX] Erro ao enviar evento Meta:`, metaError.message);
+                // Não bloqueia a resposta se o evento Meta falhar
+            }
+        }
+
+        // 5) Retornar a resposta da API central
         return res.status(200).json(response.data);
     } catch (error) {
         const status = error.response?.status || 500;
