@@ -4381,7 +4381,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             {
                                 chat_id: normalizedChatId,
                                 user_id: normalizedUserId,
-                                only_if_banned: false
+                                only_if_banned: true
                             }
                         );
                         if (unbanResponse?.ok) {
