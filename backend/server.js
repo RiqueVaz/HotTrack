@@ -3946,7 +3946,23 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
                         const btnText = await replaceVariables(actionData.buttonText, variables);
-                        const btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Se a URL for um checkout e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && btnUrl.includes('/checkout/')) {
+                            try {
+                                // Adiciona protocolo se não existir
+                                const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
+                                const urlObj = new URL(urlWithProtocol);
+                                // Remove prefixo '/start ' se existir
+                                const cleanClickId = variables.click_id.replace('/start ', '');
+                                urlObj.searchParams.set('click_id', cleanClickId);
+                                btnUrl = urlObj.toString();
+                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de checkout`);
+                            } catch (urlError) {
+                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL do checkout: ${urlError.message}`);
+                            }
+                        }
                         
                         // Envia com botão inline
                         const payload = { 
@@ -6777,20 +6793,48 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             return res.status(400).json({ message: 'API Key não configurada para o vendedor.' });
         }
 
-        // 2) Garantir que há um click_id associado (reutilizando lógica atual)
+        // 2) Garantir que há um click_id associado
         const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
         const user_agent = req.headers['user-agent'];
         let finalClickId = click_id;
-
-        if (!finalClickId) {
+        
+        // Verifica se já existe um clique com este click_id
+        if (finalClickId) {
+            // Remove o prefixo '/start ' se existir
+            const cleanClickId = finalClickId.replace('/start ', '');
+            const dbClickId = cleanClickId.startsWith('/start ') ? cleanClickId : `/start ${cleanClickId}`;
+            
+            // Verifica se o click_id já existe no banco
+            const [existingClick] = await sql`
+                SELECT id FROM clicks 
+                WHERE click_id = ${dbClickId} AND seller_id = ${sellerId}
+            `;
+            
+            if (!existingClick) {
+                // Se não existe, precisa criar um novo registro de click para este checkout
+                console.log(`[Checkout PIX] Click_id ${cleanClickId} não encontrado, criando novo registro para checkout`);
+                const [newClick] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id, is_organic)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${dbClickId}, FALSE)
+                    RETURNING id;
+                `;
+                finalClickId = cleanClickId; // Usa o click_id do fluxo
+            } else {
+                // Click já existe, usa ele
+                finalClickId = cleanClickId;
+                console.log(`[Checkout PIX] Usando click_id existente: ${cleanClickId}`);
+            }
+        } else {
             // Criar clique orgânico e gerar click_id no padrão existente
+            console.log(`[Checkout PIX] Nenhum click_id fornecido, gerando orgânico`);
             const [newClick] = await sql`
-                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
-                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
+                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
                 RETURNING id;
             `;
-            finalClickId = `lead${newClick.id.toString().padStart(6, '0')}`;
+            finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
             await sql`UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}`;
+            console.log(`[Checkout PIX] Click_id orgânico gerado: ${finalClickId}`);
         }
 
         // 3) Delegar geração para o endpoint central usando HOTTRACK_API_URL
