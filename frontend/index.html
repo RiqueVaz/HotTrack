@@ -7621,6 +7621,7 @@ function generatePreviewHTML(data) {
         const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
+        const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
 
@@ -7891,7 +7892,7 @@ function generatePreviewHTML(data) {
                         ❌
                     </button>
                     </div>
-                )}
+               )}
                 <button 
                     className="add-node-fab" 
                     onClick={() => setIsNodeSelectorOpen(true)}
@@ -7903,6 +7904,7 @@ function generatePreviewHTML(data) {
                     <div className="node-selector-modal-overlay" onClick={(e) => {
                         if (e.target === e.currentTarget) {
                             setIsNodeSelectorOpen(false);
+                            setIsGroupMenuOpen(false);
                         }
                     }}>
                         <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
@@ -7910,18 +7912,36 @@ function generatePreviewHTML(data) {
                                 <h3>Adicionar Node</h3>
                                 <button 
                                     className="node-selector-modal-close"
-                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    onClick={() => { setIsNodeSelectorOpen(false); setIsGroupMenuOpen(false); }}
                                     title="Fechar"
                                 >
                                     ✕
                                 </button>
                             </div>
                             <div className="node-selector-modal-content">
-                                {nodeTypesList.map(nodeType => (
+                                {nodeTypesList.filter(nodeType => nodeType.category !== 'Grupo').map(nodeType => (
                                     <button
                                         key={nodeType.type}
                                         className="node-selector-button"
                                         onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
+                                <button
+                                    className="node-selector-button"
+                                    onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                >
+                                    <span className="node-selector-button-icon">👥</span>
+                                    <span>Gerenciar Grupos</span>
+                                </button>
+                                {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                        style={{ marginLeft: '12px' }}
                                     >
                                         <span className="node-selector-button-icon">{nodeType.icon}</span>
                                         <span>{nodeType.label}</span>
@@ -7936,15 +7956,16 @@ function generatePreviewHTML(data) {
         );
     }
     
+    // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
 
-        // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
-
+    // Renderiza a aplicação React no container
+    const root = window.ReactDOM.createRoot(containerElement);
+    // Certifique-se de que o nome do componente principal foi renomeado
+    root.render(<AppHotBot />); 
+    window.hotBotRoot = root; // Guarda a referência para poder desmontar
+}
         // Renderiza a aplicação React no container
-        const root = window.ReactDOM.createRoot(containerElement);
-        // Certifique-se de que o nome do componente principal foi renomeado
-        root.render(<AppHotBot />); 
-        window.hotBotRoot = root; // Guarda a referência para poder desmontar
-    }
+
     </script>
 </body>
 </html>
