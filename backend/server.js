@@ -4387,10 +4387,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         if (unbanResponse?.ok) {
                             console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
                         } else if (unbanResponse && !unbanResponse.ok) {
-                            console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                            const desc = (unbanResponse.description || '').toLowerCase();
+                            if (desc.includes("can't remove chat owner")) {
+                                console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                            } else {
+                                console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                            }
                         }
                     } catch (unbanError) {
-                        console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                        const message = (unbanError?.message || '').toLowerCase();
+                        if (message.includes("can't remove chat owner")) {
+                            console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                        } else {
+                            console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                        }
                     }
                     
                     const expireDate = actionData.expireMinutes 
