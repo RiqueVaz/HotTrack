@@ -482,6 +482,26 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 // --- OTIMIZAÇÃO CRÍTICA: A conexão com o banco é inicializada UMA VEZ e reutilizada ---
 const sql = neon(process.env.DATABASE_URL);
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET não configurado.');
+}
+
+if (!process.env.JWT_REFRESH_SECRET) {
+    console.warn('[Auth] JWT_REFRESH_SECRET não definido. Usando JWT_SECRET como fallback.');
+}
+
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET;
+
+const ACCESS_TOKEN_TTL_SECONDS = resolvePositiveInt(
+    process.env.JWT_ACCESS_TOKEN_TTL_SECONDS || process.env.JWT_ACCESS_TTL_SECONDS,
+    900
+);
+const REFRESH_TOKEN_TTL_SECONDS = resolvePositiveInt(
+    process.env.JWT_REFRESH_TOKEN_TTL_SECONDS || process.env.JWT_REFRESH_TTL_SECONDS,
+    60 * 60 * 24 * 30 // 30 dias
+);
+
 // ==========================================================
 //          VARIÁVEIS DE AMBIENTE E CONFIGURAÇÕES
 // ==========================================================
@@ -492,6 +512,18 @@ const DOCUMENTATION_URL = process.env.DOCUMENTATION_URL || 'https://documentacao
 // ==========================================================
 //          LÓGICA DE RETRY PARA O BANCO DE DADOS
 // ==========================================================
+function resolvePositiveInt(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+    }
+
+    if (value !== undefined && value !== null) {
+        console.warn(`[Auth] Valor inválido "${value}" para configuração numérica. Usando fallback ${fallback}.`);
+    }
+    return fallback;
+}
+
 async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
@@ -1201,14 +1233,105 @@ async function handleMediaNode(node, botToken, chatId, caption) {
     return response;
 }
 
+// --- FUNÇÕES DE SUPORTE A TOKENS ---
+function hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getRequestFingerprint(req) {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    let ipAddress = null;
+
+    if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+        ipAddress = forwardedFor[0];
+    } else if (typeof forwardedFor === 'string') {
+        ipAddress = forwardedFor.split(',')[0].trim();
+    } else if (req.ip) {
+        ipAddress = req.ip;
+    }
+
+    const userAgentHeader = req.headers['user-agent'];
+    const userAgent = userAgentHeader ? String(userAgentHeader).slice(0, 512) : null;
+
+    return { ipAddress, userAgent };
+}
+
+async function persistRefreshToken({ sellerId, refreshToken, tokenId, userAgent, ipAddress }) {
+    const tokenHash = hashToken(refreshToken);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);
+
+    await sql`
+        INSERT INTO seller_refresh_tokens (seller_id, token_id, token_hash, user_agent, ip_address, expires_at)
+        VALUES (${sellerId}, ${tokenId}::uuid, ${tokenHash}, ${userAgent}, ${ipAddress}, ${expiresAt})
+    `;
+
+    return { tokenHash, expiresAt };
+}
+
+async function findRefreshTokenByHash(tokenHash) {
+    if (!tokenHash) {
+        return null;
+    }
+
+    const rows = await sql`
+        SELECT id, seller_id, token_id, token_hash, user_agent, ip_address, created_at, expires_at, last_used_at
+        FROM seller_refresh_tokens
+        WHERE token_hash = ${tokenHash}
+        LIMIT 1
+    `;
+
+    return rows[0] || null;
+}
+
+async function revokeRefreshTokenByHash(tokenHash) {
+    if (!tokenHash) {
+        return;
+    }
+
+    await sql`
+        DELETE FROM seller_refresh_tokens
+        WHERE token_hash = ${tokenHash}
+    `;
+}
+
+async function issueAuthTokensForSeller(seller, req) {
+    const tokenPayload = { id: seller.id, email: seller.email };
+    const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
+
+    const tokenId = uuidv4();
+    const refreshPayload = { sub: seller.id, tokenId };
+    const refreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, { expiresIn: REFRESH_TOKEN_TTL_SECONDS });
+
+    const { ipAddress, userAgent } = getRequestFingerprint(req);
+    await persistRefreshToken({
+        sellerId: seller.id,
+        refreshToken,
+        tokenId,
+        userAgent,
+        ipAddress,
+    });
+
+    return {
+        accessToken,
+        refreshToken,
+        accessTokenExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+        refreshTokenExpiresIn: REFRESH_TOKEN_TTL_SECONDS,
+    };
+}
+
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
 async function authenticateJwt(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ message: 'Token não fornecido.' });
     
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: 'Token inválido ou expirado.' });
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            if (err.name === 'TokenExpiredError') {
+                return res.status(401).json({ message: 'Token expirado.', code: 'ACCESS_TOKEN_EXPIRED' });
+            }
+            return res.status(403).json({ message: 'Token inválido.', code: 'ACCESS_TOKEN_INVALID' });
+        }
         req.user = user;
         next();
     });
@@ -2390,11 +2513,18 @@ app.post('/api/sellers/login', async (req, res) => {
         const isPasswordCorrect = await bcrypt.compare(password, seller.password_hash);
         if (!isPasswordCorrect) return res.status(401).json({ message: 'Senha incorreta.' });
         
-        const tokenPayload = { id: seller.id, email: seller.email };
-        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        const authTokens = await issueAuthTokensForSeller(seller, req);
         
         const { password_hash, ...sellerData } = seller;
-        res.status(200).json({ message: 'Login bem-sucedido!', token, seller: sellerData });
+        res.status(200).json({
+            message: 'Login bem-sucedido!',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+            seller: sellerData
+        });
 
     } catch (error) {
         console.error("ERRO DETALHADO NO LOGIN:", error); 
@@ -2479,20 +2609,120 @@ app.post('/api/auth/google/callback', async (req, res) => {
             return res.status(403).json({ message: 'Este usuário está bloqueado.' });
         }
 
-        // Gerar JWT
-        const tokenPayload = { id: seller.id, email: seller.email };
-        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        const authTokens = await issueAuthTokensForSeller(seller, req);
         
         const { password_hash, ...sellerData } = seller;
-        res.status(200).json({ 
-            message: 'Login com Google bem-sucedido!', 
-            token, 
-            seller: sellerData 
+        res.status(200).json({
+            message: 'Login com Google bem-sucedido!',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+            seller: sellerData
         });
 
     } catch (error) {
         console.error('Erro no callback do Google:', error);
         res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+});
+
+app.post('/api/auth/refresh', async (req, res) => {
+    const refreshToken = req.body?.refreshToken;
+
+    if (!refreshToken) {
+        return res.status(400).json({ message: 'Refresh token é obrigatório.', code: 'REFRESH_TOKEN_REQUIRED' });
+    }
+
+    const tokenHash = hashToken(refreshToken);
+    let decoded;
+
+    try {
+        decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    } catch (error) {
+        console.warn('[Auth] Falha ao verificar refresh token:', error.message);
+        await revokeRefreshTokenByHash(tokenHash);
+
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Refresh token expirado.', code: 'REFRESH_TOKEN_EXPIRED' });
+        }
+
+        return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_INVALID' });
+    }
+
+    try {
+        const storedToken = await findRefreshTokenByHash(tokenHash);
+        if (!storedToken) {
+            return res.status(401).json({ message: 'Refresh token não reconhecido.', code: 'REFRESH_TOKEN_NOT_FOUND' });
+        }
+
+        if (decoded.tokenId && decoded.tokenId !== storedToken.token_id) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_MISMATCH' });
+        }
+
+        if (decoded.sub && Number.parseInt(decoded.sub, 10) !== storedToken.seller_id) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_SUBJECT_MISMATCH' });
+        }
+
+        if (new Date(storedToken.expires_at).getTime() <= Date.now()) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token expirado.', code: 'REFRESH_TOKEN_EXPIRED' });
+        }
+
+        await sql`
+            UPDATE seller_refresh_tokens
+            SET last_used_at = now()
+            WHERE token_hash = ${tokenHash}
+        `;
+
+        const sellerResult = await sql`
+            SELECT * FROM sellers WHERE id = ${storedToken.seller_id} LIMIT 1
+        `;
+
+        if (sellerResult.length === 0) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(403).json({ message: 'Usuário não encontrado.' });
+        }
+
+        const seller = sellerResult[0];
+
+        if (!seller.is_active) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(403).json({ message: 'Este usuário está bloqueado.' });
+        }
+
+        await revokeRefreshTokenByHash(tokenHash);
+
+        const authTokens = await issueAuthTokensForSeller(seller, req);
+
+        return res.status(200).json({
+            message: 'Tokens renovados com sucesso.',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+        });
+    } catch (error) {
+        console.error('[Auth] Erro ao renovar tokens:', error);
+        return res.status(500).json({ message: 'Erro ao renovar tokens.' });
+    }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+    try {
+        const refreshToken = req.body?.refreshToken;
+        if (refreshToken) {
+            const tokenHash = hashToken(refreshToken);
+            await revokeRefreshTokenByHash(tokenHash);
+        }
+        res.status(200).json({ message: 'Logout realizado com sucesso.' });
+    } catch (error) {
+        console.error('[Auth] Erro ao realizar logout:', error);
+        res.status(500).json({ message: 'Erro ao realizar logout.' });
     }
 });
 

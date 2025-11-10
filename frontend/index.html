@@ -1261,10 +1261,14 @@
     // ============================================
     // == LÓGICA DO HOTTRACK (APLICAÇÃO PRINCIPAL) ==
     // ============================================
+    const ACCESS_TOKEN_KEY = 'hottrack_token';
+    const REFRESH_TOKEN_KEY = 'hottrack_refresh_token';
+
     const App = {
         state: {
             API_BASE_URL: '', // Será carregado dinamicamente
             token: null,
+            refreshToken: null,
             data: { 
                 pixels: [],
                 bots: [],
@@ -1291,30 +1295,56 @@
 
         // --- SEGURANÇA: Função para obter token de forma segura ---
         getToken() {
-            // Primeiro tenta sessionStorage (mais seguro, expira ao fechar)
-            let token = sessionStorage.getItem('hottrack_token');
-            // Fallback para localStorage (migração gradual, será removido)
+            let token = sessionStorage.getItem(ACCESS_TOKEN_KEY);
             if (!token) {
-                token = localStorage.getItem('hottrack_token');
+                token = localStorage.getItem(ACCESS_TOKEN_KEY);
                 if (token) {
-                    // Migrar para sessionStorage e remover do localStorage
-                    sessionStorage.setItem('hottrack_token', token);
-                    localStorage.removeItem('hottrack_token');
+                    sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+                    localStorage.removeItem(ACCESS_TOKEN_KEY);
                 }
             }
+            this.state.token = token;
             return token;
         },
 
+        getRefreshToken() {
+            let refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
+            if (!refreshToken) {
+                refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+                if (refreshToken) {
+                    sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+                    localStorage.removeItem(REFRESH_TOKEN_KEY);
+                }
+            }
+            this.state.refreshToken = refreshToken;
+            return refreshToken;
+        },
+
         setToken(token) {
-            // Armazenar em sessionStorage (mais seguro)
             if (token) {
-                sessionStorage.setItem('hottrack_token', token);
-                localStorage.removeItem('hottrack_token'); // Remover do localStorage
+                sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+                localStorage.removeItem(ACCESS_TOKEN_KEY);
             } else {
-                sessionStorage.removeItem('hottrack_token');
-                localStorage.removeItem('hottrack_token');
+                sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+                localStorage.removeItem(ACCESS_TOKEN_KEY);
             }
             this.state.token = token;
+        },
+
+        setRefreshToken(refreshToken) {
+            if (refreshToken) {
+                sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+                localStorage.removeItem(REFRESH_TOKEN_KEY);
+            } else {
+                sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+                localStorage.removeItem(REFRESH_TOKEN_KEY);
+            }
+            this.state.refreshToken = refreshToken;
+        },
+
+        clearAuthTokens() {
+            this.setToken(null);
+            this.setRefreshToken(null);
         },
 
         async init() {
@@ -1352,6 +1382,7 @@
             }
 
             this.state.token = this.getToken();
+            this.state.refreshToken = this.getRefreshToken();
             if (this.state.token) {
                 try {
                     const [staticData] = await Promise.all([
@@ -3165,7 +3196,8 @@
 
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
+            const { skipAuthRetry = false } = options;
             try {
                 const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
                 if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
@@ -3180,10 +3212,10 @@
                     headers['x-api-key'] = this.state.data.settings.api_key;
                 }
 
-                const options = { method, headers };
-                if (body) { options.body = JSON.stringify(body); }
+                const requestOptions = { method, headers };
+                if (body) { requestOptions.body = JSON.stringify(body); }
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
 
                 if (response.status === 204) return null; // No Content
 
@@ -3192,18 +3224,14 @@
                 try {
                     data = JSON.parse(responseBody); // Tenta parsear como JSON
                 } catch (jsonError) {
-                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
                     if (!response.ok) {
                         console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
-                        // ****** MUDANÇA 1: ANEXA O STATUS AO ERRO ******
                         const err = new Error(responseBody || `Erro ${response.status}`);
                         err.status = response.status;
                         throw err;
                     }
-                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
                     data = responseBody;
                 }
-
 
                 if (!response.ok) {
                     console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
@@ -3213,29 +3241,50 @@
                     } else if (typeof data === 'string') {
                        errorMsg = data; // Usa o texto da resposta como mensagem de erro
                     }
-                    // ****** MUDANÇA 1 (Cont.): ANEXA O STATUS AO ERRO ******
-                    const err = new Error(errorMsg);
+                    const err = new Error(errorMsg);
                     err.status = response.status;
+                    if (data && data.code) {
+                        err.code = data.code;
+                    }
                     throw err;
                 }
                 return data;
             } catch (error) {
                  if (error instanceof Error) {
-                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+                    const statusCode = error.status;
+                    const errorCode = error.code;
+                    const isAuthError = statusCode === 401 || statusCode === 403;
+                    const isPublicRoute =
+                        endpoint.includes('/sellers/login') ||
+                        endpoint.startsWith('/oferta/') ||
+                        endpoint.startsWith('/obrigado/') ||
+                        endpoint.includes('/api/auth/refresh') ||
+                        endpoint.includes('/api/auth/logout');
 
-                    // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
-                    const statusCode = error.status; // Pega o status que anexamos
-                    const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
-                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+                    const canRetryAuth =
+                        !skipAuthRetry &&
+                        statusCode === 401 &&
+                        !endpoint.includes('/api/auth/refresh') &&
+                        !endpoint.includes('/api/auth/logout') &&
+                        !endpoint.includes('/api/sellers/login');
+
+                    const looksExpired =
+                        errorCode === 'ACCESS_TOKEN_EXPIRED' ||
+                        (typeof error.message === 'string' && error.message.toLowerCase().includes('expirado'));
+
+                    if (canRetryAuth && looksExpired) {
+                        const refreshed = await this.tryRefreshToken();
+                        if (refreshed) {
+                            return this.apiRequest(endpoint, method, body, customHeaders, { ...options, skipAuthRetry: true });
+                        }
+                    }
+
+                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
                     
                     if (isAuthError && !isPublicRoute) {
                         console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
-                        // Limpar token do armazenamento antes de fazer logout
-                        sessionStorage.removeItem('hottrack_token');
-                        localStorage.removeItem('hottrack_token');
-                        this.logout();
+                        await this.logout();
                     }
-                    // Se for status 400 (Bad Request), ele não vai mais deslogar.
                  } else {
                     console.error(`Network Error on ${method} ${endpoint}:`, error);
                     this.showToast('Falha na conexão com o servidor.', 'error');
@@ -3243,11 +3292,59 @@
                  throw error; // Re-throw para quem chamou poder tratar
             }
         },
+
+        async tryRefreshToken() {
+            const refreshToken = this.state.refreshToken || this.getRefreshToken();
+            if (!refreshToken) {
+                console.warn('[Auth] Nenhum refresh token disponível para renovar.');
+                return false;
+            }
+
+            const apiBaseUrl = this.state.API_BASE_URL || window.location.origin;
+
+            try {
+                const response = await fetch(`${apiBaseUrl}/api/auth/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refreshToken }),
+                });
+
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (parseErr) {
+                    console.warn('[Auth] Resposta inesperada ao renovar token.', parseErr);
+                }
+
+                if (!response.ok) {
+                    console.warn('[Auth] Falha ao renovar token:', data);
+                    if (data?.code === 'REFRESH_TOKEN_EXPIRED' || data?.code === 'REFRESH_TOKEN_INVALID') {
+                        this.clearAuthTokens();
+                    }
+                    return false;
+                }
+
+                if (data?.token) {
+                    this.setToken(data.token);
+                }
+                if (data?.refreshToken) {
+                    this.setRefreshToken(data.refreshToken);
+                }
+
+                return true;
+            } catch (error) {
+                console.error('[Auth] Erro ao tentar renovar token:', error);
+                return false;
+            }
+        },
         
         async login(email, password) {
             try {
                 const data = await this.apiRequest('/api/sellers/login', 'POST', { email, password });
                 this.setToken(data.token); // Usa função segura para armazenar token
+                if (data.refreshToken) {
+                    this.setRefreshToken(data.refreshToken);
+                }
                 window.location.href = window.location.pathname; 
             } catch (e) {
                 if (e.response && e.response.status === 403 && e.response.data && e.response.data.requiresVerification) {
@@ -3348,21 +3445,36 @@
             }
         },
 
-        logout() {
-            this.state.token = null;
+        async logout(shouldReload = true) {
+            const apiBaseUrl = this.state.API_BASE_URL || window.location.origin;
+            const refreshToken = this.state.refreshToken || this.getRefreshToken();
+
+            if (refreshToken) {
+                try {
+                    await fetch(`${apiBaseUrl}/api/auth/logout`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ refreshToken })
+                    });
+                } catch (error) {
+                    console.warn('[Auth] Falha ao informar logout ao servidor:', error);
+                }
+            }
+
+            this.clearAuthTokens();
             this.state.editingCheckoutId = null;
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
-            // Limpar ambos para garantir
-            sessionStorage.removeItem('hottrack_token');
-            localStorage.removeItem('hottrack_token');
-            // Limpa cache de status de PIX (opcional)
+
             const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
             });
-            window.location.reload();
+
+            if (shouldReload) {
+                window.location.reload();
+            }
         },
 
         showAddUtmifyModal() {
@@ -5089,17 +5201,42 @@ function generatePreviewHTML(data) {
         api.interceptors.request.use(
             config => {
             // Usar função helper segura para obter token
-            const token = App.getToken ? App.getToken() : (sessionStorage.getItem('hottrack_token') || localStorage.getItem('hottrack_token'));
+            const token = App.getToken ? App.getToken() : App.state.token;
                 if (token) {
                     config.headers['Authorization'] = `Bearer ${token}`;
-                } else {
-                    // Token não encontrado - limpar qualquer resquício
-                    sessionStorage.removeItem('hottrack_token');
-                    localStorage.removeItem('hottrack_token');
                 }
                 return config;
             },
             error => Promise.reject(error)
+        );
+
+        api.interceptors.response.use(
+            response => response,
+            async error => {
+                const status = error?.response?.status;
+                const originalRequest = error?.config;
+
+                if (status === 401 && originalRequest && !originalRequest._retry) {
+                    originalRequest._retry = true;
+                    const refreshed = await App.tryRefreshToken();
+                    if (refreshed) {
+                        const token = App.state.token || App.getToken();
+                        if (token) {
+                            originalRequest.headers = originalRequest.headers || {};
+                            originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                        }
+                        return api(originalRequest);
+                    }
+                    await App.logout();
+                    return Promise.reject(error);
+                }
+
+                if (status === 403) {
+                    await App.logout();
+                }
+
+                return Promise.reject(error);
+            }
         );
 
     const Icons = {
