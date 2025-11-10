@@ -9,6 +9,13 @@ const { neon } = require('@neondatabase/serverless');
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const { createPixService } = require('../shared/pix');
+const {
+    metrics: prometheusMetrics,
+    isEnabled: isPrometheusEnabled,
+} = require('../metrics');
+
+const METRICS_SOURCE = 'worker_process_disparo';
 
 // ==========================================================
 //                   INICIALIZAÇÃO
@@ -21,6 +28,27 @@ const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
+
+const {
+    getSyncPayAuthToken,
+    generatePixForProvider,
+    generatePixWithFallback
+} = createPixService({
+    sql,
+    sqlWithRetry,
+    axios,
+    uuidv4,
+    syncPayTokenCache,
+    adminApiKey: ADMIN_API_KEY,
+    synPayBaseUrl: SYNCPAY_API_BASE_URL,
+    pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
+    cnpaySplitProducerId: CNPAY_SPLIT_PRODUCER_ID,
+    oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
+    brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
+    wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    hottrackApiUrl: process.env.HOTTRACK_API_URL,
+});
 
 // ==========================================================
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
@@ -47,6 +75,19 @@ async function replaceVariables(text, variables) {
     }
     return processedText;
 }
+
+const normalizeChatIdentifier = (value) => {
+    if (value === null || value === undefined) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    if (/^-?\d+$/.test(trimmed)) {
+        const numericId = Number(trimmed);
+        if (Number.isSafeInteger(numericId)) {
+            return numericId;
+        }
+    }
+    return trimmed;
+};
 
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
@@ -122,13 +163,6 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
     if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
     const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
-        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
-    }
     const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
     const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
     const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
@@ -137,97 +171,80 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const fileName = fileNameMap[fileType];
     const timeout = fileType === 'video' ? 60000 : 30000;
     if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+    const recordRequest = (status) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                source: METRICS_SOURCE,
+                type: fileType,
+                status,
+            });
+        }
+    };
+
+    const recordBytes = (direction, bytes) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && bytes > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                {
+                    source: METRICS_SOURCE,
+                    type: fileType,
+                    direction,
+                },
+                bytes
+            );
+        }
+    };
+
+    try {
+        const directPayload = {
+            chat_id: chatId,
+            [field]: fileUrl,
+        };
+        if (caption) {
+            directPayload.caption = caption;
+            directPayload.parse_mode = 'HTML';
+        }
+        const directResponse = await sendTelegramRequest(destinationBotToken, method, directPayload, { timeout });
+        if (directResponse?.ok) {
+            recordRequest('success_direct');
+            return directResponse;
+        }
+        recordRequest('retry_upload');
+    } catch (error) {
+        recordRequest('retry_upload');
+    }
+
+    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    recordBytes('download', fileBuffer.length);
+
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
+    }
     formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
+
+    recordBytes('upload', fileBuffer.length);
+
+    try {
+        const uploadResponse = await sendTelegramRequest(destinationBotToken, method, formData, {
+            headers: formData.getHeaders(),
+            timeout,
+        });
+        if (uploadResponse?.ok) {
+            recordRequest('success_upload');
+        } else {
+            recordRequest('failure');
+        }
+        return uploadResponse;
+    } catch (error) {
+        recordRequest('failure');
+        throw error;
+    }
 }
 
 // Funções de PIX (necessárias para o passo 'pix')
-async function getSyncPayAuthToken(seller) {
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
-    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) { throw new Error('Credenciais da SyncPay não configuradas.'); }
-    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, { client_id: seller.syncpay_client_id, client_secret: seller.syncpay_client_secret });
-    const { access_token, expires_in } = response.data;
-    const expiresAt = Date.now() + (expires_in * 1000);
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
-    return access_token;
-}
-
-async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    let pixData;
-    let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0500;
-    const clientPayload = { document: { number: "21376710773", type: "CPF" }, name: "Cliente Padrão", email: "gabriel@email.com", phone: "27995310379" };
-    
-    if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) { throw new Error('Credenciais da BR PIX não configuradas.'); }
-        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        const payload = { customer: clientPayload, items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }], paymentMethod: "PIX", amount: parseInt(value_cents, 10), pix: { expiresInDays: 1 }, ip: ip_address };
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) { payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }]; }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, { headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' } });
-        pixData = response.data;
-        acquirer = "BRPix";
-        return { qr_code_text: pixData.pix.qrcode, qr_code_base64: pixData.pix.qrcode, transaction_id: pixData.id, acquirer, provider };
-    } else if (provider === 'syncpay') {
-        const token = await getSyncPayAuthToken(seller);
-        const payload = { amount: value_cents / 100, payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/syncpay` };
-        const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) { payload.split = [{ percentage: Math.round(commission_percentage), user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID }]; }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
-        pixData = response.data;
-        acquirer = "SyncPay";
-        return { qr_code_text: pixData.pix_code, qr_code_base64: null, transaction_id: pixData.identifier, acquirer, provider };
-    } else if (provider === 'cnpay' || provider === 'oasyfy') {
-        const isCnpay = provider === 'cnpay';
-        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
-        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
-        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
-        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
-        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = { identifier: uuidv4(), amount: value_cents / 100, client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" }, callbackUrl: `https://${host}/api/webhook/${provider}` };
-        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) { payload.splits = [{ producerId: splitId, amount: commission }]; }
-        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
-        pixData = response.data;
-        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
-    } else { // Padrão é PushinPay
-        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = { value: value_cents, webhook_url: `https://${host}/api/webhook/pushinpay` };
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) { payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }]; }
-        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = pushinpayResponse.data;
-        acquirer = "Woovi";
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
-    }
-}
-
-async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
-    const providerOrder = [seller.pix_provider_primary, seller.pix_provider_secondary, seller.pix_provider_tertiary].filter(Boolean);
-    if (providerOrder.length === 0) { throw new Error('Nenhum provedor de PIX configurado.'); }
-    let lastError = null;
-    for (const provider of providerOrder) {
-        try {
-            // Log removido por segurança
-            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            
-            const [transaction] = await sql`
-                INSERT INTO pix_transactions (click_id_internal, pix_value, qr_code_text, qr_code_base64, provider, provider_transaction_id, pix_id)
-                VALUES (${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text}, ${pixResult.qr_code_base64}, ${pixResult.provider}, ${pixResult.transaction_id}, ${pixResult.transaction_id})
-                RETURNING id`;
-            // Log removido por segurança
-            pixResult.internal_transaction_id = transaction.id;
-            return pixResult;
-        } catch (error) {
-            console.error(`[WORKER-DISPARO - PIX Fallback] FALHA com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
-            lastError = error;
-        }
-    }
-    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
-    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
-}
 
 
 // ==========================================================
@@ -246,7 +263,7 @@ async function handler(req, res) {
       let lastTransactionId = null;
     
       try {
-        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
           throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
         }
@@ -316,6 +333,199 @@ async function handler(req, res) {
             const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
             response = await sendTelegramRequest(bot.bot_token, method, payload);
           }
+        } else if (step.type === 'action_create_invite_link') {
+            if (!bot.telegram_supergroup_id) {
+                throw new Error('Supergrupo não configurado para este bot.');
+            }
+
+            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+            if (!normalizedChatId) {
+                throw new Error('ID do supergrupo inválido para criação de convite.');
+            }
+
+            const userToUnban = step.userId || chat_id;
+            const normalizedUserId = normalizeChatIdentifier(userToUnban);
+
+            try {
+                const unbanResponse = await sendTelegramRequest(
+                    bot.bot_token,
+                    'unbanChatMember',
+                    {
+                        chat_id: normalizedChatId,
+                        user_id: normalizedUserId,
+                        only_if_banned: true
+                    }
+                );
+                if (unbanResponse?.ok) {
+                    console.log(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                } else if (unbanResponse && !unbanResponse.ok) {
+                    const desc = (unbanResponse.description || '').toLowerCase();
+                    if (desc.includes("can't remove chat owner")) {
+                        console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                    } else {
+                        console.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                    }
+                }
+            } catch (unbanError) {
+                const message = (unbanError?.message || '').toLowerCase();
+                if (message.includes("can't remove chat owner")) {
+                    console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                } else {
+                    console.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                }
+            }
+
+            const inviteNameRaw = (step.linkName || `Convite_${chat_id}_${Date.now()}`).toString().trim();
+            const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
+
+            const invitePayload = {
+                chat_id: normalizedChatId,
+                name: inviteName,
+                member_limit: 1,
+                creates_join_request: false
+            };
+
+            if (step.expireMinutes) {
+                invitePayload.expire_date = Math.floor(Date.now() / 1000) + (parseInt(step.expireMinutes, 10) * 60);
+            }
+
+            const inviteResponse = await sendTelegramRequest(bot.bot_token, 'createChatInviteLink', invitePayload);
+            if (!inviteResponse.ok) {
+                throw new Error(inviteResponse.description || 'Falha ao criar link de convite.');
+            }
+
+            userVariables.invite_link = inviteResponse.result.invite_link;
+            userVariables.invite_link_name = inviteResponse.result.name;
+            userVariables.invite_link_single_use = true;
+            userVariables.user_was_banned = false;
+            userVariables.banned_user_id = undefined;
+
+            if (step.sendMessage) {
+                const messageText = await replaceVariables(
+                    step.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
+                    userVariables
+                );
+                const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                    chat_id: chat_id,
+                    text: messageText,
+                    parse_mode: 'HTML'
+                });
+                if (messageResponse.ok) {
+                    await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
+                    response = messageResponse;
+                } else {
+                    throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
+                }
+            } else {
+                response = null;
+            }
+
+            console.log(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
+
+        } else if (step.type === 'action_remove_user_from_group') {
+            if (!bot.telegram_supergroup_id) {
+                throw new Error('Supergrupo não configurado para este bot.');
+            }
+
+            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+            if (!normalizedChatId) {
+                throw new Error('ID do supergrupo inválido para banimento.');
+            }
+
+            const handleOwnerBanRestriction = () => {
+                console.info(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
+                userVariables.user_was_banned = false;
+                userVariables.banned_user_id = undefined;
+            };
+
+            const userToRemove = step.userId || chat_id;
+            const normalizedUserId = normalizeChatIdentifier(userToRemove);
+
+            let banResponse;
+            try {
+                banResponse = await sendTelegramRequest(
+                    bot.bot_token,
+                    'banChatMember',
+                    {
+                        chat_id: normalizedChatId,
+                        user_id: normalizedUserId,
+                        revoke_messages: step.deleteMessages || false
+                    }
+                );
+            } catch (banError) {
+                const errorDesc =
+                    banError?.response?.data?.description ||
+                    banError?.description ||
+                    banError?.message ||
+                    '';
+                if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
+                    handleOwnerBanRestriction();
+                    response = null;
+                } else {
+                    throw banError;
+                }
+            }
+
+            if (banResponse?.ok) {
+                console.log(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
+                userVariables.user_was_banned = true;
+                userVariables.banned_user_id = userToRemove;
+                userVariables.last_ban_at = new Date().toISOString();
+
+                const linkToRevoke = step.inviteLink || userVariables.invite_link;
+                if (linkToRevoke) {
+                    try {
+                        const revokeResponse = await sendTelegramRequest(
+                            bot.bot_token,
+                            'revokeChatInviteLink',
+                            {
+                                chat_id: normalizedChatId,
+                                invite_link: linkToRevoke
+                            }
+                        );
+                        if (revokeResponse.ok) {
+                            console.log(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
+                            userVariables.invite_link_revoked = true;
+                            delete userVariables.invite_link;
+                            delete userVariables.invite_link_name;
+                        } else {
+                            console.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                        }
+                    } catch (revokeError) {
+                        console.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
+                    }
+                }
+
+                if (step.sendMessage) {
+                    const messageText = await replaceVariables(
+                        step.messageText || 'Você foi removido do grupo.',
+                        userVariables
+                    );
+                    const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+                        chat_id: chat_id,
+                        text: messageText,
+                        parse_mode: 'HTML'
+                    });
+                    if (messageResponse.ok) {
+                        await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
+                        response = messageResponse;
+                    } else {
+                        throw new Error(messageResponse.description || 'Falha ao enviar mensagem pós-banimento.');
+                    }
+                } else {
+                    response = null;
+                }
+            } else if (banResponse) {
+                const desc =
+                    (banResponse.description || '').toLowerCase();
+                if (desc.includes("can't remove chat owner")) {
+                    handleOwnerBanRestriction();
+                    response = null;
+                } else {
+                    throw new Error(banResponse.description || 'Falha ao remover usuário.');
+                }
+            }
+
             } else if (step.type === 'pix') {
                 // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
                 if (!userVariables.click_id) {

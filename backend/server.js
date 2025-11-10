@@ -22,6 +22,13 @@ const { OAuth2Client } = require('google-auth-library');
 const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+const { createPixService } = require('./shared/pix');
+const {
+    register: prometheusRegister,
+    isEnabled: isPrometheusEnabled,
+    metrics: prometheusMetrics,
+} = require('./metrics');
+const METRICS_TOKEN = process.env.METRICS_TOKEN;
 
 // Configuração do Google OAuth
 const googleClient = new OAuth2Client(
@@ -47,7 +54,180 @@ const receiver = new Receiver({
     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
   });
 
+// Função de validação de URLs em texto (anti-links externos)
+const validateTextForUrls = (text) => {
+    if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+    
+    // Remove variáveis do sistema antes de validar
+    const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+    
+    // Padrões de URL a detectar
+    const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*)/gi;
+    
+    const foundUrls = [];
+    let match;
+    while ((match = urlPattern.exec(textWithoutVariables)) !== null) {
+        foundUrls.push(match[0]);
+    }
+    
+    return {
+        valid: foundUrls.length === 0,
+        urls: foundUrls
+    };
+};
+
+// Função de validação das ações do fluxo
+const validateFlowActions = (nodes) => {
+    if (!nodes || !Array.isArray(nodes)) return { valid: true };
+    
+    for (const node of nodes) {
+        const actions = node.data?.actions || [];
+        
+        for (const action of actions) {
+            // Validar texto de mensagem
+            if (action.type === 'message' && action.data?.text) {
+                const validation = validateTextForUrls(action.data.text);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+            
+            // Validar legendas
+            if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                const validation = validateTextForUrls(action.data.caption);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos nas legendas. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+        }
+    }
+    
+    return { valid: true };
+};
+
 const app = express();
+
+const METRICS_IGNORED_PATHS = new Set(['/metrics']);
+
+const resolveRouteLabel = (req, statusCode) => {
+    if (req.route?.path) {
+        const base = req.baseUrl && req.baseUrl !== '/' ? req.baseUrl : '';
+        return `${base}${req.route.path}` || req.route.path;
+    }
+
+    if (!req.route && statusCode === 404) {
+        return 'unmatched';
+    }
+
+    if (req.baseUrl) {
+        return req.baseUrl;
+    }
+
+    if (req.path) {
+        return req.path;
+    }
+
+    if (req.originalUrl) {
+        const withoutQuery = req.originalUrl.split('?')[0];
+        return withoutQuery || 'unknown';
+    }
+
+    return 'unknown';
+};
+
+const parseContentLength = (value) => {
+    if (Array.isArray(value)) {
+        return parseContentLength(value[0]);
+    }
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+};
+
+if (isPrometheusEnabled) {
+    app.get(
+        '/metrics',
+        (req, res, next) => {
+            if (!METRICS_TOKEN) {
+                console.warn('[Prometheus] METRICS_TOKEN não configurado. Recusando acesso ao /metrics.');
+                return res.status(500).send('Metrics token not configured.');
+            }
+
+            const authHeader = req.headers.authorization || '';
+            if (authHeader !== `Bearer ${METRICS_TOKEN}`) {
+                res.setHeader('WWW-Authenticate', 'Bearer');
+                return res.status(401).send('Unauthorized');
+            }
+            next();
+        },
+        async (_req, res) => {
+            try {
+                const metrics = await prometheusRegister.metrics();
+                res.setHeader('Content-Type', prometheusRegister.contentType);
+                res.send(metrics);
+            } catch (error) {
+                console.error('[Prometheus] Falha ao coletar métricas:', error);
+                res.status(500).send('Erro ao coletar métricas.');
+            }
+        }
+    );
+
+    app.use((req, res, next) => {
+        if (METRICS_IGNORED_PATHS.has(req.path)) {
+            return next();
+        }
+
+        const requestBytes = Number.parseInt(req.headers['content-length'] || '0', 10) || 0;
+        const endTimer = prometheusMetrics.httpRequestDuration
+            ? prometheusMetrics.httpRequestDuration.startTimer()
+            : null;
+
+        res.on('finish', () => {
+            const routeLabel = resolveRouteLabel(req, res.statusCode);
+            const labels = {
+                method: req.method,
+                route: routeLabel,
+                status_code: String(res.statusCode),
+            };
+
+            if (prometheusMetrics.httpRequestsTotal) {
+                prometheusMetrics.httpRequestsTotal.inc(labels);
+            }
+
+            if (endTimer) {
+                endTimer(labels);
+            }
+
+            if (prometheusMetrics.httpRequestBytes && requestBytes > 0) {
+                prometheusMetrics.httpRequestBytes.observe(
+                    { method: req.method, route: routeLabel },
+                    requestBytes
+                );
+            }
+
+            if (prometheusMetrics.httpResponseBytes) {
+                const headerValue = res.getHeader('Content-Length') ?? res.getHeader('content-length');
+                const responseBytes = parseContentLength(headerValue);
+                if (responseBytes > 0) {
+                    prometheusMetrics.httpResponseBytes.observe(labels, responseBytes);
+                }
+            }
+        });
+
+        next();
+    });
+}
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
@@ -231,6 +411,10 @@ async function isDomainAllowedForPressel(presselId, origin) {
   }
 }
 
+const sanitizeTagTitle = (title = '') => title.trim();
+const normalizeHexColor = (color = '') => color.trim().toUpperCase();
+const isValidTagColor = (color) => TAG_COLOR_REGEX.test(color);
+
 // Middleware CORS seletivo baseado na rota
 const corsOptions = async (req, callback) => {
   const origin = req.header('Origin');
@@ -336,11 +520,35 @@ const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+const TAG_TITLE_MAX_LENGTH = 12;
+const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Cache simples para evitar ultrapassar rate limit em consultas PushinPay (min. 1/min).
 const pushinpayLastCheckAt = new Map(); // key: provider_transaction_id, value: timestamp (ms)
+const wiinpayLastCheckAt = new Map();
+
+const {
+    getSyncPayAuthToken,
+    generatePixForProvider,
+    generatePixWithFallback
+} = createPixService({
+    sql,
+    sqlWithRetry,
+    axios,
+    uuidv4,
+    syncPayTokenCache,
+    adminApiKey: ADMIN_API_KEY,
+    synPayBaseUrl: SYNCPAY_API_BASE_URL,
+    pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
+    cnpaySplitProducerId: CNPAY_SPLIT_PRODUCER_ID,
+    oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
+    brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
+    wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    hottrackApiUrl: process.env.HOTTRACK_API_URL,
+});
 
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
@@ -380,7 +588,6 @@ async function createNetlifySite(accessToken, siteName) {
         };
     }
 }
-
 async function deployToNetlify(accessToken, siteId, htmlContent, fileName = 'index.html') {
     try {
         // 1. Calcular hash SHA1 do conteúdo
@@ -873,7 +1080,6 @@ async function replaceVariables(text, variables) {
     }
     return processedText;
 }
-
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
@@ -914,7 +1120,7 @@ async function processStepForQStash(step, sellerId) {
         return step;
     }
     
-    const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
     const fileUrl = step[urlMap[step.type]];
     
     if (!fileUrl) {
@@ -1023,189 +1229,80 @@ async function logApiRequest(req, res, next) {
 }
 
 // --- FUNÇÕES DE LÓGICA DE NEGÓCIO ---
-async function getSyncPayAuthToken(seller) {
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
-        return cachedToken.accessToken;
-    }
-    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) {
-        throw new Error('Credenciais da SyncPay não configuradas para este vendedor.');
-    }
-    console.log(`[SyncPay] Solicitando novo token para o vendedor ID: ${seller.id}`);
-    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, {
-        client_id: seller.syncpay_client_id,
-        client_secret: seller.syncpay_client_secret,
-    });
-    const { access_token, expires_in } = response.data;
-    const expiresAt = Date.now() + (expires_in * 1000);
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
-    return access_token;
-}
+// Funções de geração de PIX movidas para backend/shared/pix.js
 
-// NOVA FUNÇÃO REUTILIZÁVEL PARA GERAR PIX COM FALLBACK
-async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
-    const providerOrder = [
-        seller.pix_provider_primary,
-        seller.pix_provider_secondary,
-        seller.pix_provider_tertiary
-    ].filter(Boolean); // Remove nulos ou vazios
-
-    if (providerOrder.length === 0) {
-        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
-    }
-
-    let lastError = null;
-
-    for (const provider of providerOrder) {
-        try {
-            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
-            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            
-
-            // Salvar a transação no banco AQUI DENTRO da função de fallback
-            // Isso garante que a transação só é salva se a geração for bem-sucedida
-            const [transaction] = await sql`
-                INSERT INTO pix_transactions (
-                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
-                    provider, provider_transaction_id, pix_id
-                ) VALUES (
-                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
-                    ${pixResult.qr_code_base64}, ${pixResult.provider},
-                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
-                ) RETURNING id`;
-                console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
-             // Adiciona o ID interno da transação salva ao resultado para uso posterior
-            pixResult.internal_transaction_id = transaction.id;
-
-            return pixResult; // Retorna o resultado SUCESSO
-
-        } catch (error) {
-            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
-            lastError = error; // Guarda o erro para o caso de todos falharem
-        }
-    }
-
-    // Se o loop terminar sem sucesso, lança o último erro ocorrido
-    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
-    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
-    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
-    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
-}
-
-async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    let pixData;
-    let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0500;
-    
-    // Preferir domínio do HOTTRACK_API_URL para webhooks; alerta se ausente
-    const preferredHost = process.env.HOTTRACK_API_URL ? (() => { try { return new URL(process.env.HOTTRACK_API_URL).host; } catch { return host; } })() : host;
-    if (!process.env.HOTTRACK_API_URL) {
-        console.warn('[PIX] HOTTRACK_API_URL não definido. Usando host do request para callbackUrl:', host);
-    }
-
-    const clientPayload = {
-        document: { number: "21376710773", type: "CPF" },
-        name: "Cliente Padrão",
-        email: "gabriel@email.com",
-        phone: "27995310379"
+function extractWiinpayCustomer(rawData) {
+    if (!rawData) return {};
+    const container = rawData.customer || rawData.payer || rawData.cliente || rawData?.data?.customer || rawData?.payment?.customer || {};
+    const name = container?.name || container?.full_name || container?.nome;
+    const document =
+        container?.document ||
+        container?.document_number ||
+        container?.documento ||
+        container?.cpf ||
+        container?.cnpj ||
+        container?.tax_id;
+    return {
+        name: name || null,
+        document: document || null
     };
-    
-    if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) {
-            throw new Error('Credenciais da BR PIX não configuradas para este vendedor.');
-        }
-        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        
-        const payload = {
-            customer: clientPayload,
-            items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }],
-            paymentMethod: "PIX",
-            amount: parseInt(value_cents, 10),
-            pix: { expiresInDays: 1 },
-            ip: ip_address
-        };
-
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) {
-            payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }];
-        }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
-            headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' }
-        });
-        pixData = response.data;
-        acquirer = "BRPix";
-        return {
-            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
-            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
-            transaction_id: pixData.id,
-            acquirer,
-            provider
-        };
-    } else if (provider === 'syncpay') {
-        const token = await getSyncPayAuthToken(seller);
-        const payload = { 
-            amount: value_cents / 100, 
-            payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            webhook_url: `https://${preferredHost}/api/webhook/syncpay`
-        };
-        const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
-            payload.split = [{
-                percentage: Math.round(commission_percentage), 
-                user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID 
-            }];
-        }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        pixData = response.data;
-        acquirer = "SyncPay";
-        return { 
-            qr_code_text: pixData.pix_code, 
-            qr_code_base64: null, 
-            transaction_id: pixData.identifier, 
-            acquirer, 
-            provider 
-        };
-    } else if (provider === 'cnpay' || provider === 'oasyfy') {
-        const isCnpay = provider === 'cnpay';
-        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
-        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
-        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
-        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
-        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = {
-            identifier: uuidv4(),
-            amount: value_cents / 100,
-            client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${preferredHost}/api/webhook/${provider}`
-        };
-        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
-            payload.splits = [{ producerId: splitId, amount: commission }];
-        }
-        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
-        pixData = response.data;
-        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
-    } else { // Padrão é PushinPay
-        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = {
-            value: value_cents,
-            webhook_url: `https://${preferredHost}/api/webhook/pushinpay`,
-        };
-        console.log(`[PushinPay] Criando PIX com webhook_url: ${payload.webhook_url}`);
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
-            payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
-        }
-        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = pushinpayResponse.data;
-        acquirer = "Woovi";
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
-    }
 }
 
+function getSellerWiinpayApiKey(seller) {
+    if (!seller) return null;
+    return seller.wiinpay_api_key || seller.wiinpay_token || seller.wiinpay_key || null;
+}
+
+function parseWiinpayPayment(rawData) {
+    if (!rawData) {
+        return { id: null, status: null, customer: {} };
+    }
+    const payment =
+        rawData.payment ||
+        rawData.data ||
+        rawData.payload ||
+        rawData.transaction ||
+        rawData;
+
+    const id =
+        payment?.id ||
+        payment?.payment_id ||
+        payment?.paymentId ||
+        payment?.transaction_id ||
+        payment?.transactionId ||
+        rawData.payment_id ||
+        rawData.paymentId ||
+        rawData.id;
+
+    const status = String(
+        payment?.status ||
+        rawData.status ||
+        rawData.payment_status ||
+        payment?.payment_status ||
+        ''
+    ).toLowerCase();
+
+    return {
+        id: id || null,
+        status,
+        customer: extractWiinpayCustomer(payment || rawData || {})
+    };
+}
+
+async function getWiinpayPaymentStatus(paymentId, apiKey) {
+    if (!apiKey) {
+        throw new Error('Credenciais da WiinPay não configuradas.');
+    }
+    const response = await axios.get(`https://api.wiinpay.com.br/payment/list/${paymentId}`, {
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+
+    const data = Array.isArray(response.data) ? response.data[0] : response.data;
+    return parseWiinpayPayment(data);
+}
 async function handleSuccessfulPayment(transaction_id, customerData) {
     try {
         const [transaction] = await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
@@ -1545,11 +1642,11 @@ app.put('/api/admin/sellers/:id/password', authenticateAdmin, async (req, res) =
 });
 app.put('/api/admin/sellers/:id/credentials', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    const { pushinpay_token, cnpay_public_key, cnpay_secret_key } = req.body;
+    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key } = req.body;
     try {
         await sql`
             UPDATE sellers 
-            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}
+            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}
             WHERE id = ${id};`;
         res.status(200).json({ message: 'Credenciais alteradas com sucesso.' });
     } catch (error) {
@@ -1647,7 +1744,19 @@ app.post('/api/flows', authenticateJwt, async (req, res) => {
 app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
     const { name, nodes } = req.body;
     if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    
     try {
+        // Parse e validar os nodes antes de salvar
+        const parsedNodes = JSON.parse(nodes);
+        const nodesArray = parsedNodes.nodes || [];
+        
+        // Validar se há links em campos de texto
+        const validation = validateFlowActions(nodesArray);
+        if (!validation.valid) {
+            console.log(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            return res.status(400).json({ message: validation.message });
+        }
+        
         // Busca o fluxo para pegar o bot_id
         const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
@@ -1658,7 +1767,10 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW(), is_active = TRUE WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
         if (updated) res.status(200).json(updated);
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
-    } catch (error) { res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); }
+    } catch (error) { 
+        console.error('[Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo.' }); 
+    }
 });
 
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
@@ -1681,7 +1793,6 @@ app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
     } catch (error) { res.status(500).json({ message: 'Erro ao atualizar status do fluxo.' }); }
 });
-
 app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
     try {
 
@@ -1710,20 +1821,75 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
         const users = await sqlWithRetry(`
-            SELECT 
-                t.chat_id,
-                (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
-                (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
-                (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
-                (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
-                MAX(t.created_at) as last_message_at
-            FROM telegram_chats t
-            WHERE t.bot_id = $1 AND t.seller_id = $2
-            GROUP BY t.chat_id
-            ORDER BY last_message_at DESC;
+            WITH base_chats AS (
+                SELECT 
+                    t.chat_id,
+                    (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
+                    (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
+                    (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
+                    (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
+                    MAX(t.created_at) as last_message_at
+                FROM telegram_chats t
+                WHERE t.bot_id = $1 AND t.seller_id = $2
+                GROUP BY t.chat_id
+            ),
+            latest_messages AS (
+                SELECT DISTINCT ON (chat_id)
+                    chat_id,
+                    message_text,
+                    sender_type,
+                    created_at
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+                ORDER BY chat_id, created_at DESC
+            ),
+            paid_leads AS (
+                SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                JOIN clicks c ON c.click_id = tc.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc.bot_id = $1
+                  AND tc.seller_id = $2
+                  AND pt.status = 'paid'
+            ),
+            custom_tags AS (
+                SELECT
+                    lcta.chat_id,
+                    json_agg(
+                        json_build_object(
+                            'id', lct.id,
+                            'title', lct.title,
+                            'color', lct.color,
+                            'bot_id', lct.bot_id
+                        )
+                        ORDER BY LOWER(lct.title)
+                    ) AS tags
+                FROM lead_custom_tag_assignments lcta
+                JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
+                WHERE lcta.bot_id = $1
+                  AND lcta.seller_id = $2
+                GROUP BY lcta.chat_id
+            )
+            SELECT
+                bc.chat_id,
+                bc.first_name,
+                bc.last_name,
+                bc.username,
+                bc.click_id,
+                bc.last_message_at,
+                lm.message_text,
+                lm.sender_type AS last_sender_type,
+                COALESCE(ct.tags, '[]'::json) AS custom_tags,
+                CASE WHEN pl.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
+            FROM base_chats bc
+            LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
+            LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
+            LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
+            ORDER BY bc.last_message_at DESC NULLS LAST;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
+        console.error('Erro ao buscar usuários do chat:', error);
         res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
     }
 });
@@ -1772,6 +1938,189 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
         }
     } catch (error) {
         res.status(500).json({ message: 'Não foi possível enviar a mídia: ' + error.message });
+    }
+});
+
+// --- ROTAS DE TAGS PERSONALIZADAS ---
+app.get('/api/tags', authenticateJwt, async (req, res) => {
+    const { botId } = req.query;
+
+    try {
+        let query = `
+            SELECT id, title, color, bot_id, created_at
+            FROM lead_custom_tags
+            WHERE seller_id = $1
+        `;
+        const params = [req.user.id];
+
+        if (botId !== undefined) {
+            const parsedBotId = parseInt(botId, 10);
+            if (Number.isNaN(parsedBotId)) {
+                return res.status(400).json({ message: 'botId inválido.' });
+            }
+            query += ' AND bot_id = $2';
+            params.push(parsedBotId);
+        }
+
+        query += ' ORDER BY LOWER(title)';
+
+        const tags = await sqlWithRetry(query, params);
+        res.status(200).json(tags);
+    } catch (error) {
+        console.error('Erro ao listar tags personalizadas:', error);
+        res.status(500).json({ message: 'Erro ao listar tags.' });
+    }
+});
+
+app.post('/api/tags', authenticateJwt, async (req, res) => {
+    const { title, color, botId } = req.body || {};
+    const trimmedTitle = sanitizeTagTitle(title || '');
+    const normalizedColor = normalizeHexColor(color || '');
+
+    if (!trimmedTitle) {
+        return res.status(400).json({ message: 'Título da tag é obrigatório.' });
+    }
+
+    if (trimmedTitle.length > TAG_TITLE_MAX_LENGTH) {
+        return res.status(400).json({ message: `Título deve ter no máximo ${TAG_TITLE_MAX_LENGTH} caracteres.` });
+    }
+
+    if (!normalizedColor || !isValidTagColor(normalizedColor)) {
+        return res.status(400).json({ message: 'Cor inválida. Utilize o formato HEX (#RRGGBB).' });
+    }
+
+    const parsedBotId = parseInt(botId, 10);
+    if (Number.isNaN(parsedBotId)) {
+        return res.status(400).json({ message: 'botId inválido.' });
+    }
+
+    try {
+        const [bot] = await sqlWithRetry(
+            'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
+            [parsedBotId, req.user.id]
+        );
+
+        if (!bot) {
+            return res.status(404).json({ message: 'Bot não encontrado.' });
+        }
+
+        const [tag] = await sqlWithRetry(
+            `INSERT INTO lead_custom_tags (seller_id, bot_id, title, color)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, title, color, bot_id, created_at`,
+            [req.user.id, parsedBotId, trimmedTitle, normalizedColor]
+        );
+
+        res.status(201).json(tag);
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ message: 'Já existe uma tag com esse título para este bot.' });
+        }
+        console.error('Erro ao criar tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao criar tag.' });
+    }
+});
+
+app.delete('/api/tags/:id', authenticateJwt, async (req, res) => {
+    const tagId = parseInt(req.params.id, 10);
+    if (Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'ID de tag inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [tagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        await sqlWithRetry('DELETE FROM lead_custom_tags WHERE id = $1', [tagId]);
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao excluir tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao excluir tag.' });
+    }
+});
+
+app.post('/api/leads/:botId/:chatId/tags', authenticateJwt, async (req, res) => {
+    const { tagId } = req.body || {};
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const parsedTagId = parseInt(tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId) {
+        return res.status(400).json({ message: 'Parâmetros do lead inválidos.' });
+    }
+
+    if (Number.isNaN(parsedTagId)) {
+        return res.status(400).json({ message: 'tagId inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id, bot_id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [parsedTagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        if (tag.bot_id !== botId) {
+            return res.status(400).json({ message: 'Tag não pertence a este bot.' });
+        }
+
+        const [chatExists] = await sqlWithRetry(
+            'SELECT 1 FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 LIMIT 1',
+            [botId, chatId, req.user.id]
+        );
+
+        if (!chatExists) {
+            return res.status(404).json({ message: 'Lead não encontrado.' });
+        }
+
+        await sqlWithRetry(
+            `INSERT INTO lead_custom_tag_assignments (tag_id, seller_id, bot_id, chat_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT DO NOTHING`,
+            [parsedTagId, req.user.id, botId, chatId]
+        );
+
+        res.status(201).json({ message: 'Tag adicionada ao lead.' });
+    } catch (error) {
+        console.error('Erro ao adicionar tag ao lead:', error);
+        res.status(500).json({ message: 'Erro ao adicionar tag ao lead.' });
+    }
+});
+
+app.delete('/api/leads/:botId/:chatId/tags/:tagId', authenticateJwt, async (req, res) => {
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const tagId = parseInt(req.params.tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId || Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'Parâmetros inválidos.' });
+    }
+
+    try {
+        const deleted = await sqlWithRetry(
+            `DELETE FROM lead_custom_tag_assignments
+             WHERE tag_id = $1 AND seller_id = $2 AND bot_id = $3 AND chat_id = $4
+             RETURNING tag_id`,
+            [tagId, req.user.id, botId, chatId]
+        );
+
+        if (deleted.length === 0) {
+            return res.status(404).json({ message: 'Tag não vinculada a este lead.' });
+        }
+
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao remover tag do lead:', error);
+        res.status(500).json({ message: 'Erro ao remover tag do lead.' });
     }
 });
 
@@ -1923,7 +2272,6 @@ app.post('/api/sellers/verify-email', async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 // Endpoint para reenviar email de verificação
 app.post('/api/sellers/resend-verification', async (req, res) => {
     const { email } = req.body;
@@ -2150,7 +2498,7 @@ app.post('/api/auth/google/callback', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sql`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sql`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -2165,13 +2513,23 @@ app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
             LEFT JOIN ( SELECT checkout_id, array_agg(pixel_config_id) as pixel_ids FROM checkout_pixels GROUP BY checkout_id ) px ON c.id = px.checkout_id
             WHERE c.seller_id = ${sellerId} ORDER BY c.created_at DESC`;
         const utmifyIntegrationsPromise = sql`SELECT id, account_name FROM utmify_integrations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
+        const thankYouPagesPromise = sql`
+            SELECT id, config->>'page_name' as name
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
+        const hostedCheckoutsPromise = sql`
+            SELECT id, config->'content'->>'main_title' as name
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC`;
 
-        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations] = await Promise.all([
-            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise
+        const [settingsResult, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts] = await Promise.all([
+            settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise, thankYouPagesPromise, hostedCheckoutsPromise
         ]);
         
         const settings = settingsResult[0] || {};
-        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations });
+        res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts });
     } catch (error) {
         console.error("Erro ao buscar dados do dashboard:", error);
         res.status(500).json({ message: 'Erro ao buscar dados.' });
@@ -2255,7 +2613,7 @@ app.delete('/api/pixels/:id', authenticateJwt, async (req, res) => {
 });
 
 app.post('/api/bots', authenticateJwt, async (req, res) => {
-    const { bot_name } = req.body;
+    const { bot_name, telegram_supergroup_id } = req.body;
     if (!bot_name) {
         return res.status(400).json({ message: 'O nome do bot é obrigatório.' });
     }
@@ -2263,8 +2621,8 @@ app.post('/api/bots', authenticateJwt, async (req, res) => {
         const placeholderToken = uuidv4();
 
         const [newBot] = await sql`
-            INSERT INTO telegram_bots (seller_id, bot_name, bot_token) 
-            VALUES (${req.user.id}, ${bot_name}, ${placeholderToken}) 
+            INSERT INTO telegram_bots (seller_id, bot_name, bot_token, telegram_supergroup_id) 
+            VALUES (${req.user.id}, ${bot_name}, ${placeholderToken}, ${telegram_supergroup_id || null}) 
             RETURNING *;
         `;
         res.status(201).json(newBot);
@@ -2289,7 +2647,7 @@ app.delete('/api/bots/:id', authenticateJwt, async (req, res) => {
 
 app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
     const { id } = req.params;
-    let { bot_token } = req.body;
+    let { bot_token, telegram_supergroup_id } = req.body;
     if (!bot_token) {
         return res.status(400).json({ message: 'O token do bot é obrigatório.' });
     }
@@ -2297,9 +2655,10 @@ app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
     try {
         await sql`
             UPDATE telegram_bots 
-            SET bot_token = ${bot_token} 
+            SET bot_token = ${bot_token},
+                telegram_supergroup_id = ${telegram_supergroup_id || null}
             WHERE id = ${id} AND seller_id = ${req.user.id}`;
-        res.status(200).json({ message: 'Token do bot atualizado com sucesso.' });
+        res.status(200).json({ message: 'Bot atualizado com sucesso.' });
     } catch (error) {
         console.error("Erro ao atualizar token do bot:", error);
         res.status(500).json({ message: 'Erro ao atualizar o token do bot.' });
@@ -3213,6 +3572,7 @@ app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     const { 
         pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key,
+        wiinpay_api_key,
         syncpay_client_id, syncpay_client_secret,
         brpix_secret_key, brpix_company_id,
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
@@ -3224,6 +3584,7 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
             cnpay_secret_key = ${cnpay_secret_key || null}, 
             oasyfy_public_key = ${oasyfy_public_key || null}, 
             oasyfy_secret_key = ${oasyfy_secret_key || null},
+            wiinpay_api_key = ${wiinpay_api_key || null},
             syncpay_client_id = ${syncpay_client_id || null},
             syncpay_client_secret = ${syncpay_client_secret || null},
             brpix_secret_key = ${brpix_secret_key || null},
@@ -3293,7 +3654,6 @@ app.get('/api/netlify/sites', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 app.post('/api/netlify/create-site', authenticateJwt, async (req, res) => {
     const { site_name } = req.body;
     
@@ -3728,9 +4088,26 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (transaction.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[PIX Status] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
 
-                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus)) {
                     await handleSuccessfulPayment(transaction.id, customerData);
                     currentStatus = 'paid';
                 }
@@ -3927,6 +4304,19 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
+    const normalizeChatIdentifier = (value) => {
+        if (value === null || value === undefined) return null;
+        const trimmed = String(value).trim();
+        if (!trimmed) return null;
+        if (/^-?\d+$/.test(trimmed)) {
+            const numericId = Number(trimmed);
+            if (Number.isSafeInteger(numericId)) {
+                return numericId;
+            }
+        }
+        return trimmed;
+    };
+
     for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
@@ -3946,7 +4336,26 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
                         const btnText = await replaceVariables(actionData.buttonText, variables);
-                        const btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && (btnUrl.includes('/oferta/') || btnUrl.includes('/obrigado/'))) {
+                            try {
+                                // Adiciona protocolo se não existir
+                                const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
+                                const urlObj = new URL(urlWithProtocol);
+                                // Remove prefixo '/start ' se existir
+                                const cleanClickId = variables.click_id.replace('/start ', '');
+                                urlObj.searchParams.set('click_id', cleanClickId);
+                                btnUrl = urlObj.toString();
+                                
+                                // Log apropriado baseado no tipo de URL
+                                const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
+                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                            } catch (urlError) {
+                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                            }
+                        }
                         
                         // Envia com botão inline
                         const payload = { 
@@ -4116,7 +4525,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
 
                     // Tenta consultar o provedor
-                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
                     let providerStatus = null;
                     let customerData = {};
                     const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
@@ -4137,6 +4546,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
                         providerStatus = String(resp.data.status || '').toLowerCase();
                         customerData = resp.data.payer || {};
+                    } else if (transaction.provider === 'wiinpay') {
+                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                        if (wiinpayApiKey) {
+                            const now = Date.now();
+                            const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        } else {
+                            console.warn(`${logPrefix} Seller ${sellerId} sem chave WiinPay configurada.`);
+                        }
                     }
                     
                     if (providerStatus && paidStatuses.has(providerStatus)) {
@@ -4149,7 +4572,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     console.error(`${logPrefix} Erro ao consultar PIX:`, error);
                     return 'pending'; // Em caso de erro, assume pendente e segue pelo handle 'b'
                 }
-            
             case 'forward_flow':
                 const targetFlowId = actionData.targetFlowId;
                 if (!targetFlowId) {
@@ -4236,6 +4658,228 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 }
                 return 'flow_forwarded';
+                
+            case 'action_create_invite_link':
+                try {
+                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+                    
+                    // Buscar o supergroup_id do bot
+                    const [botInvite] = await sql`
+                        SELECT telegram_supergroup_id 
+                        FROM telegram_bots 
+                        WHERE id = ${botId}
+                    `;
+                    
+                    if (!botInvite?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+                    
+                    const normalizedChatId = normalizeChatIdentifier(botInvite.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para criação de convite');
+                    }
+                    
+                    const userToUnban = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToUnban);
+                    try {
+                        const unbanResponse = await sendTelegramRequest(
+                            botToken,
+                            'unbanChatMember',
+                            {
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
+                                only_if_banned: true
+                            }
+                        );
+                        if (unbanResponse?.ok) {
+                            console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                        } else if (unbanResponse && !unbanResponse.ok) {
+                            const desc = (unbanResponse.description || '').toLowerCase();
+                            if (desc.includes("can't remove chat owner")) {
+                                console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                            } else {
+                                console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                            }
+                        }
+                    } catch (unbanError) {
+                        const message = (unbanError?.message || '').toLowerCase();
+                        if (message.includes("can't remove chat owner")) {
+                            console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                        } else {
+                            console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                        }
+                    }
+                    
+                    const expireDate = actionData.expireMinutes 
+                        ? Math.floor(Date.now() / 1000) + (actionData.expireMinutes * 60)
+                        : undefined;
+                    
+                    const inviteNameRaw = (actionData.linkName || `Convite_${chatId}_${Date.now()}`).toString().trim();
+                    const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
+
+                    const invitePayload = {
+                        chat_id: normalizedChatId,
+                        name: inviteName,
+                        member_limit: 1,
+                        creates_join_request: false
+                    };
+                    
+                    if (expireDate) {
+                        invitePayload.expire_date = expireDate;
+                    }
+                    
+                    const inviteResponse = await sendTelegramRequest(
+                        botToken, 
+                        'createChatInviteLink', 
+                        invitePayload
+                    );
+                    
+                    if (inviteResponse.ok) {
+                        // Salvar link nas variáveis
+                        variables.invite_link = inviteResponse.result.invite_link;
+                        variables.invite_link_name = inviteResponse.result.name;
+                        variables.invite_link_single_use = true;
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                        
+                        // Enviar mensagem com o link se configurado
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
+                                variables
+                            );
+                            
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                        
+                        console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
+                    } else {
+                        throw new Error(`Falha ao criar link de convite: ${inviteResponse.description}`);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
+                    throw error;
+                }
+                break;
+                
+            case 'action_remove_user_from_group':
+                try {
+                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+                    
+                    const [bot] = await sql`
+                        SELECT telegram_supergroup_id 
+                        FROM telegram_bots 
+                        WHERE id = ${botId}
+                    `;
+                    
+                    if (!bot?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+                    
+                    const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para banimento');
+                    }
+
+                                        
+                    const handleOwnerBanRestriction = () => {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    };
+                    
+                    // Usar o chat_id do usuário atual ou um ID específico
+                    const userToRemove = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToRemove);
+                    
+                    let banResponse;
+                    try {
+                        banResponse = await sendTelegramRequest(
+                            botToken,
+                            'banChatMember',
+                            {
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
+                                revoke_messages: actionData.deleteMessages || false
+                            }
+                        );
+                    } catch (banError) {
+                        const errorDesc =
+                            banError?.response?.data?.description ||
+                            banError?.description ||
+                            banError?.message ||
+                            '';
+                        if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                            break;
+                        }
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
+                        throw banError;
+                    }
+
+
+                    if (banResponse.ok) {
+                        console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
+                        variables.user_was_banned = true;
+                        variables.banned_user_id = userToRemove;
+                        variables.last_ban_at = new Date().toISOString();
+
+                        const linkToRevoke = actionData.inviteLink || variables.invite_link;
+                        if (linkToRevoke) {
+                            try {
+                                const revokeResponse = await sendTelegramRequest(
+                                    botToken,
+                                    'revokeChatInviteLink',
+                                    {
+                                        chat_id: normalizedChatId,
+                                        invite_link: linkToRevoke
+                                    }
+                                );
+                                if (revokeResponse.ok) {
+                                    console.log(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
+                                    variables.invite_link_revoked = true;
+                                    delete variables.invite_link;
+                                    delete variables.invite_link_name;
+                                } else {
+                                    console.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                                }
+                            } catch (revokeError) {
+                                console.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
+                            }
+                        }
+                        
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || 'Você foi removido do grupo.',
+                                variables
+                            );
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                    } else {
+                        const desc =
+                            (banResponse?.description ||
+                                banResponse?.result?.description ||
+                                '').
+                                toLowerCase();
+                        if (desc.includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                        } else {
+                            throw new Error(`Falha ao remover usuário: ${banResponse.description}`);
+                        }
+                    }
+                } catch (error) {
+                    const message = (error?.response?.data?.description ||
+                        error?.description ||
+                        error?.message ||
+                        '').toLowerCase();
+                    if (message.includes("can't remove chat owner")) {
+                        handleOwnerBanRestriction();
+                    } else {
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                        throw error;
+                    }
+                }
+                break;
 
             default:
                 console.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
@@ -4246,63 +4890,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     // Se o loop terminar normalmente (sem 'return' condicional)
     return 'completed';
 }
-
-/**
- * Converte nó antigo (com tipo específico) para estrutura nova (type: 'action')
- * Retorna null se já estiver na estrutura correta
- */
-function convertLegacyNode(node) {
-    const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-    
-    if (node.type === 'trigger' || node.type === 'action') {
-        return null; // Já está na estrutura correta
-    }
-    
-    if (legacyTypes.includes(node.type)) {
-        // Se já tem actions no data, o nó pode já estar parcialmente migrado
-        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
-        const existingActions = node.data?.actions || [];
-        
-        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
-        const hasMatchingAction = existingActions.some(a => a.type === node.type);
-        
-        if (!hasMatchingAction) {
-            // Converte nó antigo para estrutura nova
-            const mainAction = {
-                type: node.type,
-                data: { ...node.data }
-            };
-            // Remove propriedades que não devem estar no data da ação, apenas nas ações
-            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
-            mainAction.data = actionData;
-            
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: [mainAction, ...existingActions],
-                    // Preserva waitForReply e replyTimeout se existirem
-                    waitForReply: node.data?.waitForReply,
-                    replyTimeout: node.data?.replyTimeout
-                }
-            };
-        } else {
-            // Já tem a ação, só precisa mudar o tipo
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: existingActions
-                }
-            };
-        }
-    }
-    
-    return null; // Tipo desconhecido
-}
-
 /**
  * [REATORADO] Processa o fluxo principal, navegando entre os nós.
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
@@ -4434,18 +5021,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
-        // Converte nó antigo para estrutura nova se necessário
-        const convertedNode = convertLegacyNode(currentNode);
-        if (convertedNode) {
-            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova. Ações antes: ${(currentNode.data?.actions || []).length}, depois: ${(convertedNode.data?.actions || []).length}`);
-            currentNode = convertedNode;
-            // Atualiza o nó no array se necessário (para próximas iterações)
-            const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
-            if (nodeIndex >= 0) {
-                nodes[nodeIndex] = currentNode;
-            }
-        }
-
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
@@ -4570,37 +5145,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             continue;
         }
 
-        // Suporte para nós antigos (já convertidos acima, mas mantém compatibilidade adicional)
-        const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-        if (legacyTypes.includes(currentNode.type)) {
-            // Se ainda chegou aqui, converte e processa como nó 'action'
-            const mainAction = {
-                type: currentNode.type,
-                data: { ...currentNode.data }
-            };
-            const actions = [mainAction, ...(currentNode.data?.actions || [])];
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
-            
-            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            
-            // Processa resultado especial para action_check_pix
-            if (actionResult === 'paid') {
-                currentNodeId = findNextNode(currentNode.id, 'a', edges);
-                continue;
-            }
-            if (actionResult === 'pending') {
-                currentNodeId = findNextNode(currentNode.id, 'b', edges);
-                continue;
-            }
-            if (actionResult === 'flow_forwarded') {
-                currentNodeId = null;
-                break;
-            }
-            
-            // Continua pelo handle 'a' para outros tipos
-            currentNodeId = findNextNode(currentNode.id, 'a', edges);
-            continue;
-        }
 
         // Tipo de nó desconhecido
         console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
@@ -4733,7 +5277,6 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
-// ... (restante do código permanece igual a partir daqui)
     }
 });
 
@@ -4763,7 +5306,6 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar detalhes.' });
     }
 });
-
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
       const { botIds, flowSteps, campaignName } = req.body;
@@ -5050,6 +5592,65 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
     res.sendStatus(200);
 });
 
+app.post('/api/webhook/wiinpay', async (req, res) => {
+    try {
+        const parsed = parseWiinpayPayment(req.body || {});
+        if (!parsed.id) {
+            console.warn('[Webhook WiinPay] Payload sem identificador de pagamento:', JSON.stringify(req.body));
+            return res.sendStatus(200);
+        }
+
+        const normalizedStatus = String(parsed.status || '').toLowerCase();
+        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+        const canceledStatuses = new Set(['canceled', 'cancelled', 'expired', 'failed', 'refused']);
+
+        if (paidStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    SELECT * FROM pix_transactions 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) AND provider = 'wiinpay'
+                `;
+
+                if (!tx) {
+                    console.error(`[Webhook WiinPay] Transação não encontrada para ID ${parsed.id}.`);
+                    return res.sendStatus(200);
+                }
+
+                if (tx.status === 'paid') {
+                    console.log(`[Webhook WiinPay] Transação ${tx.id} já está paga. Ignorando duplicata.`);
+                    return res.sendStatus(200);
+                }
+
+                console.log(`[Webhook WiinPay] Processando transação ${parsed.id} (interna: ${tx.id}) com status '${normalizedStatus}'.`);
+                await handleSuccessfulPayment(tx.id, parsed.customer || {});
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao processar pagamento:', error);
+            }
+        } else if (canceledStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    UPDATE pix_transactions 
+                    SET status = 'expired', updated_at = NOW() 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) 
+                      AND provider = 'wiinpay' 
+                      AND status = 'pending'
+                    RETURNING id
+                `;
+                if (tx) {
+                    console.log(`[Webhook WiinPay] Transação ${parsed.id} marcada como expirada (interna: ${tx.id}).`);
+                }
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao marcar transação como expirada:', error.message);
+            }
+        } else {
+            console.log(`[Webhook WiinPay] Status '${normalizedStatus}' não tratado. Payload:`, JSON.stringify(req.body));
+        }
+    } catch (error) {
+        console.error('[Webhook WiinPay] Erro inesperado ao processar payload:', error);
+    }
+    res.sendStatus(200);
+});
+
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
     console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
@@ -5107,7 +5708,26 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
         if (clickData.pressel_id) {
             presselPixels = await sql`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
         } else if (clickData.checkout_id) {
-            presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
+            // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
+            const checkoutId = clickData.checkout_id;
+            
+            // Se começa com 'cko_', é um hosted_checkout (UUID)
+            if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
+                // Buscar pixel_id do config do hosted_checkout
+                const [hostedCheckout] = await sql`
+                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
+                    FROM hosted_checkouts 
+                    WHERE id = ${checkoutId}
+                `;
+                
+                if (hostedCheckout?.pixel_id) {
+                    // Converter pixel_id para o formato esperado
+                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
+                }
+            } else {
+                // É um checkout antigo (integer), usar a tabela checkout_pixels
+                presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+            }
         }
 
         if (presselPixels.length === 0) {
@@ -5212,9 +5832,26 @@ async function checkPendingTransactions() {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (tx.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(tx.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(tx.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(tx.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
                 
-                if ((providerStatus === 'paid' || providerStatus === 'COMPLETED') && tx.status !== 'paid') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus) && tx.status !== 'paid') {
                      await handleSuccessfulPayment(tx.id, customerData);
                 }
             } catch (error) {
@@ -5295,39 +5932,71 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 });
 
 app.post('/api/webhook/brpix', async (req, res) => {
-    const { event, data } = req.body;
+    const payload = req.body || {};
+    const event = payload.event;
+    const data = payload.data || {};
+    const customer = data.customer || {};
+    const transactionId = data.transaction_id || data.id;
 
-    if (event === 'transaction.updated' && data?.status === 'paid') {
-        const transactionId = data.id;
-        const customer = data.customer;
+    console.log('[Webhook BRPix] Notificação recebida:', JSON.stringify({ event, transactionId, status: data.status }, null, 2));
 
-        try {
-            console.log(`[Webhook BRPix] Processando pagamento para transactionId: ${transactionId}`);
-            
-            const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+    if (!event || !transactionId) {
+        console.warn('[Webhook BRPix] Payload inválido: campos "event" ou "transaction_id" ausentes.');
+        return res.sendStatus(200);
+    }
 
-            if (!tx) {
-                console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
-                const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
-                console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
-                return res.sendStatus(200);
-            }
-            
+    const normalizedEvent = String(event).toLowerCase();
+
+    try {
+        const [tx] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+
+        if (!tx) {
+            console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
+            const countResult = await sql`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
+            console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
+            return res.sendStatus(200);
+        }
+
+        if (normalizedEvent === 'transaction.paid') {
             if (tx.status === 'paid') {
                 console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga'. Ignorando webhook duplicado.`);
                 return res.sendStatus(200);
             }
-            
+
+            const customerDocument = customer?.document?.number || customer?.document || customer?.cpf || null;
             console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
-            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document?.number });
+            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customerDocument, email: customer?.email });
             console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
-            
-        } catch (error) {
-            console.error(`[Webhook BRPix] ERRO CRÍTICO:`, error);
-            console.error(`[Webhook BRPix] Stack:`, error.stack);
+        } else if (normalizedEvent === 'transaction.created') {
+            if (tx.status === 'paid') {
+                console.log(`[Webhook BRPix] Evento 'created' ignorado: transação ${transactionId} já está paga.`);
+            } else {
+                const [updated] = await sql`UPDATE pix_transactions SET status = 'pending', updated_at = NOW() WHERE id = ${tx.id} RETURNING id`;
+                if (updated) {
+                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) marcada/confirmada como 'pending'.`);
+                }
+            }
+        } else if (normalizedEvent === 'transaction.failed' || normalizedEvent === 'transaction.expired' || normalizedEvent === 'transaction.refunded') {
+            if (tx.status === 'paid') {
+                console.warn(`[Webhook BRPix] Evento '${event}' ignorado: transação ${transactionId} já está paga.`);
+            } else {
+                const statusMap = {
+                    'transaction.failed': 'failed',
+                    'transaction.expired': 'expired',
+                    'transaction.refunded': 'refunded'
+                };
+                const newStatus = statusMap[normalizedEvent] || 'failed';
+                const [updated] = await sql`UPDATE pix_transactions SET status = ${newStatus}, updated_at = NOW() WHERE id = ${tx.id} RETURNING id, status`;
+                if (updated) {
+                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) atualizada para '${newStatus}'.`);
+                }
+            }
+        } else {
+            console.log(`[Webhook BRPix] Evento '${event}' não tratado. Nenhuma ação executada.`);
         }
-    } else {
-        console.log(`[Webhook BRPix] Evento '${event}' com status '${data?.status}' ignorado.`);
+    } catch (error) {
+        console.error(`[Webhook BRPix] ERRO CRÍTICO ao processar evento '${event}' para transactionId '${transactionId}':`, error);
+        console.error(`[Webhook BRPix] Stack:`, error.stack);
     }
 
     res.sendStatus(200);
@@ -5443,11 +6112,30 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
     }
+    const mediaType =
+        fileType?.startsWith('image/') ? 'image'
+        : fileType?.startsWith('video/') ? 'video'
+        : fileType?.startsWith('audio/') ? 'audio'
+        : 'unknown';
+    const prometheusLabels = { source: 'api_send_media', type: mediaType };
+    let prometheusStatus = 'success';
+
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
-        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
+        try {
+            validateTelegramSize(buffer, fileType);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -5461,17 +6149,27 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
             method = 'sendVoice';
             field = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de arquivo não suportado.' });
         }
         formData.append(field, buffer, { filename: fileName });
         const response = await sendTelegramRequest(bot.bot_token, method, formData, { headers: formData.getHeaders() });
+        prometheusStatus = response?.ok ? 'success' : 'telegram_error';
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
         res.status(500).json({ message: msg });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
@@ -5606,7 +6304,6 @@ app.get('/api/chats/check-pix/:botId/:chatId', authenticateJwt, async (req, res)
         return res.status(status).json(payload);
     }
 });
-
 // Endpoint 9: Iniciar fluxo manualmente
 app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const { botId, chatId, flowId } = req.body;
@@ -5708,15 +6405,31 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
 app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
+    const prometheusLabels = { source: 'api_media_upload', type: fileType };
+    let prometheusStatus = 'success';
     try {
         const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
         // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
         const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
-        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
-        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (!mimeHint) {
+            prometheusStatus = 'unsupported_type';
+            return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        }
+        try {
+            validateTelegramSize(buffer, mimeHint);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
@@ -5730,11 +6443,13 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             telegramMethod = 'sendVoice';
             fieldName = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
         if (!response?.ok || !response.result) {
+            prometheusStatus = 'telegram_error';
             throw new Error('Resposta inválida do Telegram ao enviar mídia.');
         }
         const result = response.result; // Mensagem retornada pelo Telegram
@@ -5763,7 +6478,15 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
@@ -6084,7 +6807,6 @@ function updateNodeReferences(nodes, flowIdMapping) {
         return updated ? { ...node, data: updatedData } : node;
     });
 }
-
 /**
  * Remove referências de mídia dos nós
  */
@@ -6530,7 +7252,6 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar histórico de disparos.' });
     }
 });
-
 // Endpoint 23: Verificar conversões de disparos (modificado)
 app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (req, res) => {
     const { historyId } = req.params;
@@ -6735,12 +7456,12 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
                 RETURNING id;
             `;
 
-            // Gera um click_id único e amigável
+            // Gera um click_id único e amigável no formato /start
             finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
 
-            // Atualiza o registro com o novo click_id gerado
+            // Atualiza o registro com o novo click_id gerado (com prefixo /start para consistência)
             await sql`
-                UPDATE clicks SET click_id = ${finalClickId} WHERE id = ${newClick.id}
+                UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}
             `;
              console.log(`[Organic Traffic] Novo click_id gerado e associado: ${finalClickId}`);
         }
@@ -6777,20 +7498,52 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             return res.status(400).json({ message: 'API Key não configurada para o vendedor.' });
         }
 
-        // 2) Garantir que há um click_id associado (reutilizando lógica atual)
+        // 2) Garantir que há um click_id associado e buscar dados do click
         const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
         const user_agent = req.headers['user-agent'];
         let finalClickId = click_id;
-
-        if (!finalClickId) {
-            // Criar clique orgânico e gerar click_id no padrão existente
-            const [newClick] = await sql`
-                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent)
-                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent})
-                RETURNING id;
+        let clickRecord = null;
+        
+        // Verifica se já existe um clique com este click_id
+        if (finalClickId) {
+            // Remove o prefixo '/start ' se existir
+            const cleanClickId = finalClickId.replace('/start ', '');
+            const dbClickId = cleanClickId.startsWith('/start ') ? cleanClickId : `/start ${cleanClickId}`;
+            
+            // Verifica se o click_id já existe no banco
+            const [existingClick] = await sql`
+                SELECT * FROM clicks 
+                WHERE click_id = ${dbClickId} AND seller_id = ${sellerId}
             `;
-            finalClickId = `lead${newClick.id.toString().padStart(6, '0')}`;
+            
+            if (!existingClick) {
+                // Se não existe, precisa criar um novo registro de click para este checkout
+                console.log(`[Checkout PIX] Click_id ${cleanClickId} não encontrado, criando novo registro para checkout`);
+                const [newClick] = await sql`
+                    INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id, is_organic)
+                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${dbClickId}, FALSE)
+                    RETURNING *;
+                `;
+                finalClickId = cleanClickId; // Usa o click_id do fluxo
+                clickRecord = newClick;
+            } else {
+                // Click já existe, usa ele
+                finalClickId = cleanClickId;
+                clickRecord = existingClick;
+                console.log(`[Checkout PIX] Usando click_id existente: ${cleanClickId}`);
+            }
+        } else {
+            // Criar clique orgânico e gerar click_id no padrão existente
+            console.log(`[Checkout PIX] Nenhum click_id fornecido, gerando orgânico`);
+            const [newClick] = await sql`
+                INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
+                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
+                RETURNING *;
+            `;
+            finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
             await sql`UPDATE clicks SET click_id = ${`/start ${finalClickId}`} WHERE id = ${newClick.id}`;
+            clickRecord = { ...newClick, click_id: `/start ${finalClickId}` };
+            console.log(`[Checkout PIX] Click_id orgânico gerado: ${finalClickId}`);
         }
 
         // 3) Delegar geração para o endpoint central usando HOTTRACK_API_URL
@@ -6806,7 +7559,31 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             headers: { 'x-api-key': seller.api_key }
         });
 
-        // 4) Retornar a resposta da API central
+        // 4) Enviar evento InitiateCheckout para Meta
+        if (clickRecord && response.data) {
+            try {
+                // Buscar a transação recém-criada do banco para obter o internal_transaction_id
+                const [pixTransaction] = await sql`
+                    SELECT id FROM pix_transactions 
+                    WHERE provider_transaction_id = ${response.data.transaction_id}
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                `;
+                
+                if (pixTransaction) {
+                    await sendMetaEvent('InitiateCheckout', clickRecord, { 
+                        id: pixTransaction.id, 
+                        pix_value: value_cents / 100 
+                    }, null);
+                    console.log(`[Checkout PIX] Evento InitiateCheckout enviado para Meta para o clique ${clickRecord.id}`);
+                }
+            } catch (metaError) {
+                console.error(`[Checkout PIX] Erro ao enviar evento Meta:`, metaError.message);
+                // Não bloqueia a resposta se o evento Meta falhar
+            }
+        }
+
+        // 5) Retornar a resposta da API central
         return res.status(200).json(response.data);
     } catch (error) {
         const status = error.response?.status || 500;
@@ -6931,7 +7708,6 @@ app.get('/api/obrigado/:pageId', async (req, res) => {
         res.status(500).json({ message: 'Erro interno no servidor.' });
     }
 });
-
 // Trigger Utmify event from the Thank You Page frontend
 app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
     const { pageId, trackingParameters, customerData } = req.body;

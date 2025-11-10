@@ -10,6 +10,13 @@ const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
+const { createPixService } = require('../shared/pix');
+const {
+    metrics: prometheusMetrics,
+    isEnabled: isPrometheusEnabled,
+} = require('../metrics');
+
+const METRICS_SOURCE = 'worker_process_timeout';
 
 // ==========================================================
 //                     INICIALIZAÇÃO
@@ -19,16 +26,38 @@ const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
 // Cache para respeitar rate limit da PushinPay (1/min por transação)
 const pushinpayLastCheckAt = new Map();
+const wiinpayLastCheckAt = new Map();
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 
 
 const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
      token: process.env.QSTASH_TOKEN,
     });
+
+const {
+    getSyncPayAuthToken,
+    generatePixForProvider,
+    generatePixWithFallback
+} = createPixService({
+    sql,
+    sqlWithRetry,
+    axios,
+    uuidv4,
+    syncPayTokenCache,
+    adminApiKey: ADMIN_API_KEY,
+    synPayBaseUrl: SYNCPAY_API_BASE_URL,
+    pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
+    cnpaySplitProducerId: CNPAY_SPLIT_PRODUCER_ID,
+    oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
+    brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
+    wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    hottrackApiUrl: process.env.HOTTRACK_API_URL,
+});
 // ==========================================================
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
 // ==========================================================
@@ -55,6 +84,19 @@ async function replaceVariables(text, variables) {
     return processedText;
 }
 
+const normalizeChatIdentifier = (value) => {
+    if (value === null || value === undefined) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    if (/^-?\d+$/.test(trimmed)) {
+        const numericId = Number(trimmed);
+        if (Number.isSafeInteger(numericId)) {
+            return numericId;
+        }
+    }
+    return trimmed;
+};
+
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
@@ -78,79 +120,86 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
     const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
 
+    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
+    const method = methodMap[fileType];
+    const field = fieldMap[fileType];
+    const timeout = fileType === 'video' ? 60000 : 30000;
+
+    if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+    const recordRequest = (status) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                source: METRICS_SOURCE,
+                type: fileType,
+                status,
+            });
+        }
+    };
+
+    const recordBytes = (direction, bytes) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && bytes > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                {
+                    source: METRICS_SOURCE,
+                    type: fileType,
+                    direction,
+                },
+                bytes
+            );
+        }
+    };
+
+    try {
+        const directPayload = {
+            chat_id: chatId,
+            [field]: fileUrl,
+        };
+        if (caption) {
+            directPayload.caption = caption;
+        }
+        const directResponse = await sendTelegramRequest(destinationBotToken, method, directPayload, { timeout });
+        if (directResponse?.ok) {
+            recordRequest('success_direct');
+            return directResponse;
+        }
+        recordRequest('retry_upload');
+    } catch (error) {
+        recordRequest('retry_upload');
+    }
+
     const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    
+    recordBytes('download', fileBuffer.length);
+
     const formData = new FormData();
     formData.append('chat_id', chatId);
     if (caption) {
         formData.append('caption', caption);
     }
 
-    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
-
-    const method = methodMap[fileType];
-    const field = fieldMap[fileType];
     const fileName = fileNameMap[fileType];
-    const timeout = fileType === 'video' ? 60000 : 30000;
-
-    if (!method) throw new Error('Tipo de arquivo não suportado.');
-
     formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
 
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
-}
+    recordBytes('upload', fileBuffer.length);
 
-async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
-    const providerOrder = [
-        seller.pix_provider_primary,
-        seller.pix_provider_secondary,
-        seller.pix_provider_tertiary
-    ].filter(Boolean); // Remove nulos ou vazios
-
-    if (providerOrder.length === 0) {
-        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
-    }
-
-    let lastError = null;
-
-    for (const provider of providerOrder) {
-        try {
-            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
-            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            
-
-            // Salvar a transação no banco AQUI DENTRO da função de fallback
-            // Isso garante que a transação só é salva se a geração for bem-sucedida
-            const [transaction] = await sql`
-                INSERT INTO pix_transactions (
-                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
-                    provider, provider_transaction_id, pix_id
-                ) VALUES (
-                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
-                    ${pixResult.qr_code_base64}, ${pixResult.provider},
-                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
-                ) RETURNING id`;
-                console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
-             // Adiciona o ID interno da transação salva ao resultado para uso posterior
-            pixResult.internal_transaction_id = transaction.id;
-
-            return pixResult; // Retorna o resultado SUCESSO
-
-        } catch (error) {
-            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
-            lastError = error; // Guarda o erro para o caso de todos falharem
+    try {
+        const uploadResponse = await sendTelegramRequest(destinationBotToken, method, formData, {
+            headers: formData.getHeaders(),
+            timeout,
+        });
+        if (uploadResponse?.ok) {
+            recordRequest('success_upload');
+        } else {
+            recordRequest('failure');
         }
+        return uploadResponse;
+    } catch (error) {
+        recordRequest('failure');
+        throw error;
     }
-
-    // Se o loop terminar sem sucesso, lança o último erro ocorrido
-    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
-    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
-    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
-    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
 }
-
 
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
@@ -240,17 +289,6 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
             [newClickId, chat.id, botId]
         );
     }
-}
-
-async function getSyncPayAuthToken(seller) {
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) { return cachedToken.accessToken; }
-    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) { throw new Error('Credenciais da SyncPay não configuradas.'); }
-    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, { client_id: seller.syncpay_client_id, client_secret: seller.syncpay_client_secret });
-    const { access_token, expires_in } = response.data;
-    const expiresAt = Date.now() + (expires_in * 1000);
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
-    return access_token;
 }
 
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
@@ -429,113 +467,6 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
     }
 }
 
-async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    let pixData;
-    let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0500;
-    
-    const clientPayload = {
-        document: { number: "21376710773", type: "CPF" },
-        name: "Cliente Padrão",
-        email: "gabriel@email.com",
-        phone: "27995310379"
-    };
-    
-    if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) {
-            throw new Error('Credenciais da BR PIX não configuradas para este vendedor.');
-        }
-        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        
-        const payload = {
-            customer: clientPayload,
-            items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }],
-            paymentMethod: "PIX",
-            amount: parseInt(value_cents, 10),
-            pix: { expiresInDays: 1 },
-            ip: ip_address
-        };
-
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) {
-            payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }];
-        }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
-            headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' }
-        });
-        pixData = response.data;
-        acquirer = "BRPix";
-        return {
-            qr_code_text: pixData.pix.qrcode, // Alterado de pixData.pix.qrcodeText
-            qr_code_base64: pixData.pix.qrcode, // Mantido para consistência com a resposta atual
-            transaction_id: pixData.id,
-            acquirer,
-            provider
-        };
-    } else if (provider === 'syncpay') {
-        const token = await getSyncPayAuthToken(seller);
-        const payload = { 
-            amount: value_cents / 100, 
-            payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${host}/api/webhook/syncpay`
-        };
-        const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
-            payload.split = [{
-                percentage: Math.round(commission_percentage), 
-                user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID 
-            }];
-        }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        pixData = response.data;
-        acquirer = "SyncPay";
-        return { 
-            qr_code_text: pixData.pix_code, 
-            qr_code_base64: null, 
-            transaction_id: pixData.identifier, 
-            acquirer, 
-            provider 
-        };
-    } else if (provider === 'cnpay' || provider === 'oasyfy') {
-        const isCnpay = provider === 'cnpay';
-        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
-        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
-        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
-        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
-        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = {
-            identifier: uuidv4(),
-            amount: value_cents / 100,
-            client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${host}/api/webhook/${provider}`
-        };
-        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
-            payload.splits = [{ producerId: splitId, amount: commission }];
-        }
-        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
-        pixData = response.data;
-        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
-    } else { // Padrão é PushinPay
-        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = {
-            value: value_cents,
-            webhook_url: `https://${host}/api/webhook/pushinpay`,
-        };
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
-            payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
-        }
-        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = pushinpayResponse.data;
-        acquirer = "Woovi";
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
-    }
-}
-
 function findNextNode(currentNodeId, handleId, edges) {
     const edge = edges.find(edge => edge.source === currentNodeId && (edge.sourceHandle === handleId || !edge.sourceHandle || handleId === null));
     return edge ? edge.target : null;
@@ -668,6 +599,223 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'typing_action':
                 if (actionData.durationInSeconds && actionData.durationInSeconds > 0) {
                     await showTypingForDuration(chatId, botToken, actionData.durationInSeconds * 1000);
+                }
+                break;
+
+            case 'action_create_invite_link':
+                try {
+                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+
+                    const [botInvite] = await sql`
+                        SELECT telegram_supergroup_id
+                        FROM telegram_bots
+                        WHERE id = ${botId}
+                    `;
+
+                    if (!botInvite?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+
+                    const normalizedChatId = normalizeChatIdentifier(botInvite.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para criação de convite');
+                    }
+
+                    const userToUnban = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToUnban);
+                    try {
+                        const unbanResponse = await sendTelegramRequest(
+                            botToken,
+                            'unbanChatMember',
+                            {
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
+                                only_if_banned: true
+                            }
+                        );
+                        if (unbanResponse?.ok) {
+                            console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                        } else if (unbanResponse && !unbanResponse.ok) {
+                            const desc = (unbanResponse.description || '').toLowerCase();
+                            if (desc.includes("can't remove chat owner")) {
+                                console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                            } else {
+                                console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                            }
+                        }
+                    } catch (unbanError) {
+                        const message = (unbanError?.message || '').toLowerCase();
+                        if (message.includes("can't remove chat owner")) {
+                            console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                        } else {
+                            console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                        }
+                    }
+
+                    const expireDate = actionData.expireMinutes
+                        ? Math.floor(Date.now() / 1000) + (actionData.expireMinutes * 60)
+                        : undefined;
+
+                    const inviteNameRaw = (actionData.linkName || `Convite_${chatId}_${Date.now()}`).toString().trim();
+                    const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
+
+                    const invitePayload = {
+                        chat_id: normalizedChatId,
+                        name: inviteName,
+                        member_limit: 1,
+                        creates_join_request: false
+                    };
+
+                    if (expireDate) {
+                        invitePayload.expire_date = expireDate;
+                    }
+
+                    const inviteResponse = await sendTelegramRequest(
+                        botToken,
+                        'createChatInviteLink',
+                        invitePayload
+                    );
+
+                    if (inviteResponse.ok) {
+                        variables.invite_link = inviteResponse.result.invite_link;
+                        variables.invite_link_name = inviteResponse.result.name;
+                        variables.invite_link_single_use = true;
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
+                                variables
+                            );
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+
+                        console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
+                    } else {
+                        throw new Error(`Falha ao criar link de convite: ${inviteResponse.description}`);
+                    }
+                } catch (error) {
+                    console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
+                    throw error;
+                }
+                break;
+
+            case 'action_remove_user_from_group':
+                try {
+                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+
+                    const [bot] = await sql`
+                        SELECT telegram_supergroup_id
+                        FROM telegram_bots
+                        WHERE id = ${botId}
+                    `;
+
+                    if (!bot?.telegram_supergroup_id) {
+                        throw new Error('Supergrupo não configurado para este bot');
+                    }
+
+                    const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
+                    if (!normalizedChatId) {
+                        throw new Error('ID do supergrupo inválido para banimento');
+                    }
+
+                    const handleOwnerBanRestriction = () => {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    };
+
+                    const userToRemove = actionData.userId || chatId;
+                    const normalizedUserId = normalizeChatIdentifier(userToRemove);
+
+                    let banResponse;
+                    try {
+                        banResponse = await sendTelegramRequest(
+                            botToken,
+                            'banChatMember',
+                            {
+                                chat_id: normalizedChatId,
+                                user_id: normalizedUserId,
+                                revoke_messages: actionData.deleteMessages || false
+                            }
+                        );
+                    } catch (banError) {
+                        const errorDesc =
+                            banError?.response?.data?.description ||
+                            banError?.description ||
+                            banError?.message ||
+                            '';
+                        if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                            break;
+                        }
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
+                        throw banError;
+                    }
+
+                    if (banResponse.ok) {
+                        console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
+                        variables.user_was_banned = true;
+                        variables.banned_user_id = userToRemove;
+                        variables.last_ban_at = new Date().toISOString();
+
+                        const linkToRevoke = actionData.inviteLink || variables.invite_link;
+                        if (linkToRevoke) {
+                            try {
+                                const revokeResponse = await sendTelegramRequest(
+                                    botToken,
+                                    'revokeChatInviteLink',
+                                    {
+                                        chat_id: normalizedChatId,
+                                        invite_link: linkToRevoke
+                                    }
+                                );
+                                if (revokeResponse.ok) {
+                                    console.log(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
+                                    variables.invite_link_revoked = true;
+                                    delete variables.invite_link;
+                                    delete variables.invite_link_name;
+                                } else {
+                                    console.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                                }
+                            } catch (revokeError) {
+                                console.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
+                            }
+                        }
+
+                        if (actionData.sendMessage) {
+                            const messageText = await replaceVariables(
+                                actionData.messageText || 'Você foi removido do grupo.',
+                                variables
+                            );
+                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        }
+                    } else {
+                        const desc =
+                            (banResponse?.description ||
+                                banResponse?.result?.description ||
+                                '').
+                                toLowerCase();
+                        if (desc.includes("can't remove chat owner")) {
+                            handleOwnerBanRestriction();
+                        } else {
+                            throw new Error(`Falha ao remover usuário: ${banResponse.description}`);
+                        }
+                    }
+                } catch (error) {
+                    const message = (error?.response?.data?.description ||
+                        error?.description ||
+                        error?.message ||
+                        '').toLowerCase();
+                    if (message.includes("can't remove chat owner")) {
+                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        variables.user_was_banned = false;
+                        variables.banned_user_id = undefined;
+                    } else {
+                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                        throw error;
+                    }
                 }
                 break;
             
@@ -921,62 +1069,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  * =================================================================
  * (Colada da sua resposta anterior)
  */
-/**
- * Converte nó antigo (com tipo específico) para estrutura nova (type: 'action')
- * Retorna null se já estiver na estrutura correta
- */
-function convertLegacyNode(node) {
-    const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-    
-    if (node.type === 'trigger' || node.type === 'action') {
-        return null; // Já está na estrutura correta
-    }
-    
-    if (legacyTypes.includes(node.type)) {
-        // Se já tem actions no data, o nó pode já estar parcialmente migrado
-        // Mas ainda tem o tipo antigo, então cria a ação principal se não existir
-        const existingActions = node.data?.actions || [];
-        
-        // Verifica se já existe uma ação do mesmo tipo (para evitar duplicação)
-        const hasMatchingAction = existingActions.some(a => a.type === node.type);
-        
-        if (!hasMatchingAction) {
-            // Converte nó antigo para estrutura nova
-            const mainAction = {
-                type: node.type,
-                data: { ...node.data }
-            };
-            // Remove propriedades que não devem estar no data da ação, apenas nas ações
-            const { actions, waitForReply, replyTimeout, ...actionData } = mainAction.data;
-            mainAction.data = actionData;
-            
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: [mainAction, ...existingActions],
-                    // Preserva waitForReply e replyTimeout se existirem
-                    waitForReply: node.data?.waitForReply,
-                    replyTimeout: node.data?.replyTimeout
-                }
-            };
-        } else {
-            // Já tem a ação, só precisa mudar o tipo
-            return {
-                ...node,
-                type: 'action',
-                data: {
-                    ...node.data,
-                    actions: existingActions
-                }
-            };
-        }
-    }
-    
-    return null; // Tipo desconhecido
-}
-
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
@@ -1118,18 +1210,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
-        // Converte nó antigo para estrutura nova se necessário
-        const convertedNode = convertLegacyNode(currentNode);
-        if (convertedNode) {
-            console.log(`${logPrefix} [Flow Engine] Convertendo nó antigo '${currentNode.type}' para estrutura nova`);
-            currentNode = convertedNode;
-            // Atualiza o nó no array se necessário (para próximas iterações)
-            const nodeIndex = nodes.findIndex(n => n.id === currentNodeId);
-            if (nodeIndex >= 0) {
-                nodes[nodeIndex] = currentNode;
-            }
-        }
-
         await sql`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
             VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL)
@@ -1207,38 +1287,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 continue;
             }
             
-            currentNodeId = findNextNode(currentNode.id, 'a', edges);
-            continue;
-        }
-
-        // Suporte para nós antigos (já convertidos acima, mas mantém compatibilidade adicional)
-        const legacyTypes = ['message', 'image', 'video', 'audio', 'delay', 'typing_action', 'action_pix', 'action_check_pix', 'forward_flow'];
-        if (legacyTypes.includes(currentNode.type)) {
-            // Se ainda chegou aqui, converte e processa como nó 'action'
-            const mainAction = {
-                type: currentNode.type,
-                data: { ...currentNode.data }
-            };
-            const actions = [mainAction, ...(currentNode.data?.actions || [])];
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
-            
-            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            
-            // Processa resultado especial para action_check_pix
-            if (actionResult === 'paid') {
-                currentNodeId = findNextNode(currentNode.id, 'a', edges);
-                continue;
-            }
-            if (actionResult === 'pending') {
-                currentNodeId = findNextNode(currentNode.id, 'b', edges);
-                continue;
-            }
-            if (actionResult === 'flow_forwarded') {
-                currentNodeId = null;
-                break;
-            }
-            
-            // Continua pelo handle 'a' para outros tipos
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
             continue;
         }

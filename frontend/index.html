@@ -1048,7 +1048,7 @@
         /* Estilos do Live Chat */
         .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: auto; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
-        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.75rem; }
         .hotbot-scope .conversations-list { 
             overflow-y: auto; 
             flex: 1; 
@@ -1064,10 +1064,55 @@
         .hotbot-scope .conversation-item:hover { background-color: var(--bg-primary); }
         .hotbot-scope .conversation-item.active { background-color: rgba(56, 189, 248, 0.1); border-left: 3px solid var(--accent-primary); }
         .hotbot-scope .conversation-item-name { font-weight: 600; color: var(--text-primary); }
+        .hotbot-scope .conversation-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+        .hotbot-scope .conversation-item-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hotbot-scope .conversation-item-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+        .hotbot-scope .chat-header-main { display: flex; flex-direction: column; gap: 0.5rem; }
+        .hotbot-scope .chat-header-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+        .hotbot-scope .chat-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+        .hotbot-scope .tag-badge {     display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.25rem;
+            border-radius: 999px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: rgba(59, 130, 246, 0.1);
+            color: #2563EB;
+            border: 1px solid transparent;
+            text-transform: uppercase; letter-spacing: 0.02em; }
+        .hotbot-scope .tag-badge--auto { background: rgba(34, 197, 94, 0.12); color: #15803D; border-color: rgba(34, 197, 94, 0.35); }
+        .hotbot-scope .tag-actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-start; }
+        .hotbot-scope .tag-filter-container { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .hotbot-scope .tag-filter-label { font-size: 0.75rem; color: var(--text-secondary); }
+        .hotbot-scope .tag-filter-chip { border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.7rem; cursor: pointer; transition: all 0.2s ease; }
+        .hotbot-scope .tag-filter-chip.auto { border-color: rgba(34, 197, 94, 0.35); color: #15803D; }
+        .hotbot-scope .tag-filter-chip.active { background: var(--accent-primary); color: #ffffff !important; border-color: var(--accent-primary); }
+        .hotbot-scope .tag-manager-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1100; }
+        .hotbot-scope .tag-manager-modal { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.5rem; width: min(420px, 90%); box-shadow: 0 20px 40px rgba(15,23,42,0.35); display: flex; flex-direction: column; gap: 1rem; }
+        .hotbot-scope .tag-manager-header { display: flex; align-items: center; justify-content: space-between; }
+        .hotbot-scope .tag-manager-header h3 { margin: 0; font-size: 1.1rem; }
+        .hotbot-scope .tag-manager-header button { background: none; border: none; font-size: 1.5rem; color: var(--text-secondary); cursor: pointer; line-height: 1; }
+        .hotbot-scope .tag-manager-form { display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker { display: flex; align-items: center; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker input[type="color"] { width: 42px; height: 32px; border: none; padding: 0; background: transparent; cursor: pointer; }
+        .hotbot-scope .tag-error { color: #f87171; font-size: 0.8rem; margin: 0; }
+        .hotbot-scope .tag-manager-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-manager-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+        .hotbot-scope .tag-loading, .hotbot-scope .tag-empty { font-size: 0.85rem; color: var(--text-secondary); margin: 0; }
+        .hotbot-scope .tag-context-menu { position: fixed; z-index: 1200; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.5rem; box-shadow: 0 20px 40px rgba(15,23,42,0.35); padding: 0.5rem 0; width: 220px; }
+        .hotbot-scope .tag-context-title { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); padding: 0.5rem 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .tag-context-item { width: 100%; background: none; border: none; display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 1rem; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; text-align: left; }
+        .hotbot-scope .tag-context-item:hover { background: var(--bg-primary); }
+        .hotbot-scope .tag-context-item.active { background: rgba(56, 189, 248, 0.1); }
+        .hotbot-scope .tag-color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .hotbot-scope .tag-context-check { margin-left: auto; color: var(--accent-primary); font-weight: 700; }
+        .hotbot-scope .tag-context-empty { font-size: 0.8rem; color: var(--text-secondary); padding: 0.75rem 1rem; margin: 0; }
+        .hotbot-scope .contact-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
         
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
-        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
         .hotbot-scope .chat-header h3 { font-size: 1.1rem; font-weight: 700; margin:0; }
         .hotbot-scope .message-list { 
             flex: 1; 
@@ -1084,7 +1129,7 @@
         .hotbot-scope .message-list::-webkit-scrollbar-track { background: transparent; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
-        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
+        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; overflow-wrap: anywhere; word-break: break-word; }
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
 
@@ -1234,6 +1279,8 @@
             editingCheckoutId: null,
             editingThankYouPageId: null,
             pixPollingIntervalId: null,
+            sectionPolling: {},
+            sectionFetchInProgress: {},
             dateFilter: {
                 period: 'all',
                 startDate: null,
@@ -2286,22 +2333,7 @@
                 const botOptions = bots ? bots.map(bot => 
                     `<option value="${bot.id}">${bot.bot_name}</option>`
                 ).join('') : '<option value="">Nenhum bot disponível</option>';
-                const presselList = pressels.map(pr => {
-                    const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
-                    const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
-                    return `<div class="p-3 card flex justify-between items-center text-sm">
-                        <div class="flex items-center">
-                            <div>
-                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
-                            </div>
-                        </div>
-                        <div class="space-x-2">
-                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
-                            ${copyLinkButton}
-                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
-                        </div>
-                    </div>`;
-                }).join('');
+                const presselList = App.generatePresselListHTML(pressels);
                 
             return `
             <div class="animate-fade-in">
@@ -2388,7 +2420,7 @@
                                                     </button>
                                                 </div>
                                                 <p class="text-xs text-gray-400 mt-1">ATENÇÃO: Lembre-se de cadastrar o domínio da pressel senão ela não irá funcionar. Obs: Pressels configuradas com o deploy pelo Netlify já ficam com o domínio cadastrado.</p>
-                                                <div id="pressel-list" class="space-y-3">${presselList.length ? presselList : '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>'}</div>
+                                                <div id="pressel-list" class="space-y-3">${presselList}</div>
                                             </div>
                                         </div>
                                     </div>`;
@@ -2408,7 +2440,8 @@
                     { value: 'cnpay', text: 'CN Pay' },
                     { value: 'oasyfy', text: 'Oasy.fy' },
                     { value: 'syncpay', text: 'SyncPay' },
-                    { value: 'brpix', text: 'BR PIX' }
+                    { value: 'brpix', text: 'BR PIX' },
+                    { value: 'wiinpay', text: 'WiinPay' }
                 ];
                 const createSelect = (name, selectedValue) => {
                     const options = providers.map(p => `<option value="${p.value}" ${p.value === selectedValue ? 'selected' : ''}>${p.text}</option>`).join('');
@@ -2459,6 +2492,14 @@
                                     <button type="button" data-provider="pushinpay" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
                                 </div>
                                 <label class="block mb-2 text-sm text-gray-400">Bearer Token</label><input name="pushinpay_token" type="password" value="${settings.pushinpay_token || ''}" class="form-input w-full p-2">
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">WiinPay</h3><span id="status-indicator-wiinpay"></span></div>
+                                    <button type="button" data-provider="wiinpay" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">API Key</label><input name="wiinpay_api_key" type="password" value="${settings.wiinpay_api_key || ''}" class="form-input w-full p-2">
+                                <p class="text-xs text-gray-500 mt-2">Use a chave fornecida pela WiinPay para gerar cobranças PIX.</p>
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
@@ -3316,7 +3357,7 @@
             sessionStorage.removeItem('hottrack_token');
             localStorage.removeItem('hottrack_token');
             // Limpa cache de status de PIX (opcional)
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
@@ -3381,6 +3422,7 @@
     App.state.currentPage = page;
     // Salvar a página atual no localStorage para restaurar após F5
     localStorage.setItem('app-currentPage', page);
+    this.clearAllSectionPolling();
     
     const contentContainer = document.getElementById('content');
     if (!contentContainer) { console.error("Container #content não encontrado."); return; }
@@ -4220,12 +4262,16 @@
         async fetchAndRenderCheckouts() {
             const tableBody = document.getElementById('checkouts-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('checkouts')) return;
+            this.setSectionFetching('checkouts', true);
             try {
                 const checkouts = await this.apiRequest('/api/checkouts');
-                this.state.data.checkouts = checkouts || []; // Garante que seja um array
-                if (checkouts && checkouts.length > 0) {
-                    tableBody.innerHTML = checkouts.map(c => `
+                this.state.data.checkouts = Array.isArray(checkouts) ? checkouts : [];
+                if (this.state.data.checkouts.length > 0) {
+                    tableBody.innerHTML = this.state.data.checkouts.map(c => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${c.name || 'Checkout Sem Título'}</td>
                             <td>${new Date(c.created_at).toLocaleString('pt-BR')}</td>
@@ -4239,20 +4285,28 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhum checkout criado ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar checkouts:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar checkouts.</td></tr>';
+            } finally {
+                this.setSectionFetching('checkouts', false);
             }
         },
 
         async fetchAndRenderThankYouPages() {
             const tableBody = document.getElementById('thankyou-table-body');
             if (!tableBody) return;
-            tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            if (!tableBody.dataset.loaded) {
+                tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Carregando...</td></tr>';
+            }
+            if (this.isSectionFetching('thankYouPages')) return;
+            this.setSectionFetching('thankYouPages', true);
             try {
                 const pages = await this.apiRequest('/api/thank-you-pages');
-                if (pages && pages.length > 0) {
-                    tableBody.innerHTML = pages.map(p => `
+                const list = Array.isArray(pages) ? pages : [];
+                if (list.length > 0) {
+                    tableBody.innerHTML = list.map(p => `
                         <tr class="hover:bg-slate-800/50">
                             <td class="font-medium">${p.name || 'Página Sem Nome'}</td>
                             <td>${new Date(p.created_at).toLocaleString('pt-BR')}</td>
@@ -4266,9 +4320,62 @@
                 } else {
                     tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-500 py-8">Nenhuma página de obrigado criada ainda.</td></tr>';
                 }
+                tableBody.dataset.loaded = 'true';
             } catch (e) {
                 console.error("Erro ao buscar páginas de obrigado:", e);
                 tableBody.innerHTML = '<tr><td colspan="3" class="text-center text-red-400 py-8">Erro ao carregar páginas.</td></tr>';
+            } finally {
+                this.setSectionFetching('thankYouPages', false);
+            }
+        },
+
+        generatePresselListHTML(pressels = []) {
+            if (!Array.isArray(pressels) || pressels.length === 0) {
+                return '<p class="text-gray-500 text-sm">Nenhuma pressel criada.</p>';
+            }
+            return pressels.map(pr => {
+                const netlifyIcon = pr.netlify_url ? '<span class="inline-flex items-center text-green-400 text-xs ml-2" title="Deploy no Netlify"><svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>Netlify</span>' : '';
+                const copyLinkButton = pr.netlify_url ? `<button data-url="${pr.netlify_url}" class="copy-netlify-link-btn btn text-xs py-1 px-2 bg-green-600 hover:bg-green-700">Copiar Link</button>` : '';
+                return `<div class="p-3 card flex justify-between items-center text-sm">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="font-semibold">${pr.name}${netlifyIcon}</p>
+                            </div>
+                        </div>
+                        <div class="space-x-2">
+                            <button data-id="${pr.id}" class="generate-pressel-code-btn btn text-xs py-1 px-2">Ver Código</button>
+                            ${copyLinkButton}
+                            <button data-id="${pr.id}" class="delete-pressel-btn btn btn-red text-xs py-1 px-2">Excluir</button>
+                        </div>
+                    </div>`;
+            }).join('');
+        },
+
+        renderPresselList() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            const pressels = this.state.data.pressels || [];
+            listContainer.innerHTML = this.generatePresselListHTML(pressels);
+            listContainer.dataset.loaded = 'true';
+        },
+
+        async fetchAndRenderPressels() {
+            const listContainer = document.getElementById('pressel-list');
+            if (!listContainer) return;
+            if (!listContainer.dataset.loaded) {
+                listContainer.innerHTML = '<p class="text-gray-500 text-sm">Carregando pressels...</p>';
+            }
+            if (this.isSectionFetching('pressels')) return;
+            this.setSectionFetching('pressels', true);
+            try {
+                const pressels = await this.apiRequest('/api/pressels');
+                this.state.data.pressels = Array.isArray(pressels) ? pressels : (pressels?.pressels || []);
+                this.renderPresselList();
+            } catch (error) {
+                console.error('Erro ao carregar pressels:', error);
+                listContainer.innerHTML = '<p class="text-red-400 text-sm">Erro ao carregar pressels.</p>';
+            } finally {
+                this.setSectionFetching('pressels', false);
             }
         },
         
@@ -4851,7 +4958,7 @@ function generatePreviewHTML(data) {
         },
 
         updateAllPixStatusIndicators() {
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(provider => this.updatePixStatusIndicator(provider));
         },
 
@@ -4889,6 +4996,46 @@ function generatePreviewHTML(data) {
             if (hours < 24) return `há ${hours}h`;
             const days = Math.floor(hours / 24);
             return `há ${days}d`;
+        },
+
+        isSectionFetching(section) {
+            return !!(this.state.sectionFetchInProgress && this.state.sectionFetchInProgress[section]);
+        },
+
+        setSectionFetching(section, isFetching) {
+            if (!this.state.sectionFetchInProgress) {
+                this.state.sectionFetchInProgress = {};
+            }
+            this.state.sectionFetchInProgress[section] = isFetching;
+        },
+
+        clearSectionPolling(section) {
+            if (!this.state.sectionPolling) return;
+            if (this.state.sectionPolling[section]) {
+                clearInterval(this.state.sectionPolling[section]);
+                delete this.state.sectionPolling[section];
+            }
+        },
+
+        clearAllSectionPolling() {
+            if (!this.state.sectionPolling) return;
+            Object.values(this.state.sectionPolling).forEach(intervalId => {
+                if (intervalId) clearInterval(intervalId);
+            });
+            this.state.sectionPolling = {};
+        },
+
+        startSectionPolling(section, handler, intervalMs = 15000) {
+            if (typeof handler !== 'function') return;
+            this.clearSectionPolling(section);
+            if (!this.state.sectionPolling) {
+                this.state.sectionPolling = {};
+            }
+            this.state.sectionPolling[section] = setInterval(() => {
+                Promise.resolve()
+                    .then(() => handler())
+                    .catch(error => console.error(`[Polling] Erro ao atualizar ${section}:`, error));
+            }, intervalMs);
         },
         
         showToast(message, type = 'success') {
@@ -4933,7 +5080,7 @@ function generatePreviewHTML(data) {
 // == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
     // ==========================================================
     function launchHotBot(containerElement) {
-        const { useState, useCallback, useEffect, useRef } = window.React;
+        const { useState, useCallback, useEffect, useRef, useMemo } = window.React;
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
@@ -4976,6 +5123,9 @@ function generatePreviewHTML(data) {
             const [editingFlow, setEditingFlow] = useState(null);
             const [bots, setBots] = useState([]);
             const [importingFlowLink, setImportingFlowLink] = useState(null);
+            const [pressels, setPressels] = useState([]);
+            const [thankYouPages, setThankYouPages] = useState([]);
+            const [hostedCheckouts, setHostedCheckouts] = useState([]);
 
             // Salvar a página atual no localStorage sempre que mudar
             // Mas não salvar estados temporários como flow-editor ou import-flow
@@ -4989,7 +5139,12 @@ function generatePreviewHTML(data) {
             const fetchInitialData = useCallback(() => {
                 setIsLoading(true);
             api.get('/api/dashboard/data')
-                .then((res) => setBots(res.data.bots || []))
+                .then((res) => {
+                    setBots(res.data.bots || []);
+                    setPressels(res.data.pressels || []);
+                    setThankYouPages(res.data.thankYouPages || []);
+                    setHostedCheckouts(res.data.hostedCheckouts || []);
+                })
                 .catch((err) => { console.error("Error fetching HotBot data:", err); App.logout(); })
                     .finally(() => setIsLoading(false));
             }, []);
@@ -5023,7 +5178,7 @@ function generatePreviewHTML(data) {
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
                 'disparos-history': <DisparosHistoryPage />,
-                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} /> : null,
+                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} pressels={pressels} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} /> : null,
                 'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
             }[currentPage];
 
@@ -5082,6 +5237,30 @@ function generatePreviewHTML(data) {
               } 
           } 
       };
+        const handleConfigureGroup = async (id) => {
+            const currentBot = bots.find(b => b.id === id);
+            const groupId = prompt(
+                "Insira o ID do Supergrupo do Telegram:\n\n" +
+                "Como obter o ID:\n" +
+                "1. Adicione o bot como administrador do grupo\n" +
+                "2. Use bots como @userinfobot ou @getidsbot no grupo\n" +
+                "3. O ID do supergrupo começa com -100\n\n" +
+                "ID atual: " + (currentBot?.telegram_supergroup_id || "Não configurado")
+            );
+            
+            if (groupId !== null) {
+                try {
+                    await api.put(`/api/bots/${id}`, { 
+                        bot_token: currentBot?.bot_token || '',
+                        telegram_supergroup_id: groupId.trim() || null 
+                    });
+                    App.showToast(groupId ? 'Grupo configurado!' : 'Grupo removido!', 'success');
+                    fetchBots();
+                } catch (e) {
+                    App.showToast(e.response?.data?.message || 'Erro ao configurar grupo', 'error');
+                }
+            }
+        };
         const handleSetWebhook = async (id) => { try { const res = await api.post(`/api/bots/${id}/set-webhook`); App.showToast(res.data.message, 'success'); } catch (e) { App.showToast(e.response?.data?.message || 'Falha ao configurar webhook', 'error'); } };
         
       return (
@@ -5101,6 +5280,7 @@ function generatePreviewHTML(data) {
                                 <span className="font-semibold text-white">{bot.bot_name}</span>
                                 <div className="flex items-center gap-2 flex-shrink-0">
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleUpdateToken(bot.id)}>Token</button>
+                                    <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleConfigureGroup(bot.id)}>Grupo</button>
                                     <button className="btn btn-secondary text-xs py-1 px-3" onClick={() => handleSetWebhook(bot.id)}>Webhook</button>
                                     <button className="btn btn-red text-xs py-1 px-2" onClick={() => handleDeleteBot(bot.id)}>Excluir</button>
                                 </div>
@@ -5197,6 +5377,19 @@ function generatePreviewHTML(data) {
                 setFlows(res.data.filter(f => f.bot_id == selectedBotId));
             } catch (e) { console.error("Erro ao buscar fluxos", e); }
         }, [selectedBotId]);
+        
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev => prev.map(lead => {
+                if (lead.chat_id !== chatId) return lead;
+                const updated = transformer({ ...lead });
+                return updated || lead;
+            }));
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
@@ -5886,9 +6079,84 @@ function generatePreviewHTML(data) {
         const [inactiveChatIds, setInactiveChatIds] = useState([]);
         const [isValidating, setIsValidating] = useState(false);
         
+        const [customTags, setCustomTags] = useState([]);
+        const [tagFilters, setTagFilters] = useState([]);
+        const [isTagManagerOpen, setIsTagManagerOpen] = useState(false);
+        const [tagContextMenu, setTagContextMenu] = useState(null);
+        const [newTagTitle, setNewTagTitle] = useState('');
+        const [newTagColor, setNewTagColor] = useState('#2563EB');
+        const [isSavingTag, setIsSavingTag] = useState(false);
+        const [tagError, setTagError] = useState('');
+        const [isLoadingTags, setIsLoadingTags] = useState(false);
+        
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
+        const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
+        const contextMenuPosition = useMemo(() => {
+            if (!tagContextMenu) return null;
+            if (typeof window === 'undefined') {
+                return { top: tagContextMenu.y, left: tagContextMenu.x };
+            }
+            const maxTop = Math.max(0, window.innerHeight - 220);
+            const maxLeft = Math.max(0, window.innerWidth - 220);
+            return {
+                top: Math.max(0, Math.min(tagContextMenu.y, maxTop)),
+                left: Math.max(0, Math.min(tagContextMenu.x, maxLeft))
+            };
+        }, [tagContextMenu]);
+        const tagFilterOptions = useMemo(() => {
+            const automatic = [{ key: 'auto:Pagante', label: 'Pagante', variant: 'auto' }];
+            const custom = customTags.map(tag => ({
+                key: `custom:${tag.id}`,
+                label: tag.title,
+                variant: 'custom',
+                color: tag.color
+            }));
+            return [...automatic, ...custom];
+        }, [customTags]);
+        
+        const getContrastColor = useCallback((hexColor) => {
+            if (!hexColor || typeof hexColor !== 'string') return '#ffffff';
+            const sanitized = hexColor.replace('#', '');
+            if (sanitized.length !== 6) return '#ffffff';
+            const r = parseInt(sanitized.substring(0, 2), 16);
+            const g = parseInt(sanitized.substring(2, 4), 16);
+            const b = parseInt(sanitized.substring(4, 6), 16);
+            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+            return brightness > 160 ? '#0f172a' : '#ffffff';
+        }, []);
+
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev =>
+                prev.map(lead => {
+                    if (lead.chat_id !== chatId) return lead;
+                    const updated = transformer({ ...lead });
+                    return updated || lead;
+                })
+            );
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
+
+        useEffect(() => {
+            const handleGlobalClick = () => setTagContextMenu(null);
+            const handleKeyDown = (event) => {
+                if (event.key === 'Escape') setTagContextMenu(null);
+            };
+            const handleScroll = () => setTagContextMenu(null);
+            window.addEventListener('click', handleGlobalClick);
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('scroll', handleScroll, true);
+            return () => {
+                window.removeEventListener('click', handleGlobalClick);
+                window.removeEventListener('keydown', handleKeyDown);
+                window.removeEventListener('scroll', handleScroll, true);
+            };
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -5908,19 +6176,156 @@ function generatePreviewHTML(data) {
         }, [messages]);
         
         useEffect(() => {
+            setTagContextMenu(null);
+            setTagFilters([]);
+        }, [selectedBotId]);
+        
+        useEffect(() => {
             api.get('/api/flows').then(({data}) => setAllFlows(data || []));
         }, []);
 
+        const fetchTags = useCallback(async () => {
+            if (!selectedBotId) {
+                setCustomTags([]);
+                return;
+            }
+            setIsLoadingTags(true);
+            try {
+                const { data } = await api.get('/api/tags', { params: { botId: selectedBotId } });
+                const safeData = Array.isArray(data) ? data : [];
+                setCustomTags(safeData);
+                setTagFilters(prev => prev.filter(key => {
+                    if (!key.startsWith('custom:')) return true;
+                    const tagId = Number(key.split(':')[1]);
+                    return safeData.some(tag => tag.id === tagId);
+                }));
+            } catch (e) {
+                console.error("Erro ao carregar tags personalizadas", e);
+                alert('Não foi possível carregar as tags personalizadas.');
+            } finally {
+                setIsLoadingTags(false);
+            }
+        }, [selectedBotId]);
+
+        useEffect(() => { fetchTags(); }, [fetchTags]);
+
         const fetchUsers = useCallback(async () => {
-            if (!selectedBotId) return;
+            if (!selectedBotId) {
+                setUsers([]);
+                return;
+            }
             try {
                 const { data } = await api.get(`/api/chats/${selectedBotId}`);
-                setUsers(data);
+                const normalized = (data || []).map(lead => ({
+                    ...lead,
+                    custom_tags: Array.isArray(lead.custom_tags) ? lead.custom_tags : [],
+                    automatic_tags: Array.isArray(lead.automatic_tags) ? lead.automatic_tags : []
+                }));
+                setUsers(normalized);
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
             }
         }, [selectedBotId]);
         
+        const handleConversationContextMenu = (event, user) => {
+            event.preventDefault();
+            setTagContextMenu({ x: event.clientX, y: event.clientY, chatId: user.chat_id });
+        };
+
+        const toggleLeadTag = async (tag, lead) => {
+            if (!tag || !lead) return;
+            const isAssigned = (lead.custom_tags || []).some(t => t.id === tag.id);
+            try {
+                if (isAssigned) {
+                    await api.delete(`/api/leads/${selectedBotId}/${lead.chat_id}/tags/${tag.id}`);
+                    updateLeadState(lead.chat_id, current => ({
+                        ...current,
+                        custom_tags: (current.custom_tags || []).filter(t => t.id !== tag.id)
+                    }));
+                } else {
+                    await api.post(`/api/leads/${selectedBotId}/${lead.chat_id}/tags`, { tagId: tag.id });
+                    updateLeadState(lead.chat_id, current => {
+                        const currentTags = Array.isArray(current.custom_tags) ? current.custom_tags : [];
+                        if (currentTags.some(t => t.id === tag.id)) return current;
+                        return {
+                            ...current,
+                            custom_tags: [...currentTags, { id: tag.id, title: tag.title, color: tag.color }]
+                        };
+                    });
+                }
+            } catch (error) {
+                console.error("Erro ao atualizar tags do lead:", error);
+                alert('Erro ao atualizar tags do lead.');
+            }
+        };
+
+        const handleTagFilterToggle = (key) => {
+            setTagFilters(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
+        };
+
+        const handleOpenTagManager = () => {
+            setTagError('');
+            setTagContextMenu(null);
+            setIsTagManagerOpen(true);
+        };
+
+        const handleCreateTag = async (event) => {
+            event.preventDefault();
+            if (!selectedBotId) {
+                setTagError('Selecione um bot para criar tags.');
+                return;
+            }
+            const trimmedTitle = newTagTitle.trim();
+            if (!trimmedTitle) {
+                setTagError('Informe um título.');
+                return;
+            }
+            if (trimmedTitle.length > 12) {
+                setTagError('O título deve ter no máximo 12 caracteres.');
+                return;
+            }
+            setIsSavingTag(true);
+            setTagError('');
+            try {
+                const payload = {
+                    title: trimmedTitle,
+                    color: newTagColor.toUpperCase(),
+                    botId: selectedBotId
+                };
+                const { data } = await api.post('/api/tags', payload);
+                setCustomTags(prev => {
+                    const next = [...prev, data];
+                    return next.sort((a, b) => a.title.localeCompare(b.title));
+                });
+                setNewTagTitle('');
+            } catch (error) {
+                const message = error.response?.data?.message || 'Erro ao criar tag.';
+                setTagError(message);
+            } finally {
+                setIsSavingTag(false);
+            }
+        };
+
+        const handleDeleteTag = async (tagId) => {
+            if (!confirm('Deseja realmente excluir esta tag?')) return;
+            try {
+                await api.delete(`/api/tags/${tagId}`);
+                setCustomTags(prev => prev.filter(tag => tag.id !== tagId));
+                setTagFilters(prev => prev.filter(key => key !== `custom:${tagId}`));
+                setUsers(prev => prev.map(lead => ({
+                    ...lead,
+                    custom_tags: (lead.custom_tags || []).filter(tag => tag.id !== tagId)
+                })));
+                setSelectedChat(prev => prev ? {
+                    ...prev,
+                    custom_tags: (prev.custom_tags || []).filter(tag => tag.id !== tagId)
+                } : prev);
+            } catch (error) {
+                console.error("Erro ao excluir tag:", error);
+                alert('Erro ao excluir tag.');
+            }
+        };
+
         useEffect(() => {
             if (!selectedBotId) return;
             fetchUsers();
@@ -5979,22 +6384,48 @@ function generatePreviewHTML(data) {
             // Fallback: chat_id
             return u.chat_id ? String(u.chat_id) : '';
         };
+
+        const formatLastMessageTime = (timestamp) => {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            if (Number.isNaN(date.getTime())) return '';
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        };
         
         useEffect(() => {
-        const activeUsers = showOnlyActive 
-            ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
-            : users;
+            const activeUsers = showOnlyActive 
+                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+                : users;
 
-        setFilteredUsers(
-            activeUsers.filter(u => {
-                const term = searchTerm.toLowerCase();
-                const firstName = (u.first_name || '').toLowerCase();
-                const leadId = getLeadId(u).toLowerCase();
-                
-                return firstName.includes(term) || leadId.includes(term);
-            })
-        );
-    }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
+            const normalizedTerm = searchTerm.toLowerCase();
+
+            setFilteredUsers(
+                activeUsers.filter(u => {
+                    const firstName = (u.first_name || '').toLowerCase();
+                    const leadId = getLeadId(u).toLowerCase();
+                    const matchesSearch = !normalizedTerm || firstName.includes(normalizedTerm) || leadId.includes(normalizedTerm);
+                    if (!matchesSearch) return false;
+
+                    if (tagFilters.length === 0) return true;
+                    const leadTagKeys = [
+                        ...(Array.isArray(u.automatic_tags) ? u.automatic_tags.map(name => `auto:${name}`) : []),
+                        ...(Array.isArray(u.custom_tags) ? u.custom_tags.map(tag => `custom:${tag.id}`) : [])
+                    ];
+                    return tagFilters.every(tagKey => leadTagKeys.includes(tagKey));
+                })
+            );
+        }, [searchTerm, users, showOnlyActive, inactiveChatIds, tagFilters]);
+
+        useEffect(() => {
+            if (!selectedChat) return;
+            const updated = users.find(u => u.chat_id === selectedChat.chat_id);
+            if (!updated) return;
+            const customChanged = JSON.stringify(updated.custom_tags || []) !== JSON.stringify(selectedChat.custom_tags || []);
+            const autoChanged = JSON.stringify(updated.automatic_tags || []) !== JSON.stringify(selectedChat.automatic_tags || []);
+            if (customChanged || autoChanged || updated.first_name !== selectedChat.first_name || updated.last_message_at !== selectedChat.last_message_at) {
+                setSelectedChat(prev => prev ? { ...prev, ...updated } : prev);
+            }
+        }, [users, selectedChat]);
 
     const handleFilterActiveToggle = async () => {
         const nextState = !showOnlyActive;
@@ -6111,12 +6542,137 @@ function generatePreviewHTML(data) {
         return (
             <div className="chat-page-layout">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSendFromLibrary} onClose={() => setIsMediaModalOpen(false)} />}
+                {isTagManagerOpen && (
+                    <div className="tag-manager-backdrop" onClick={() => setIsTagManagerOpen(false)}>
+                        <div className="tag-manager-modal" onClick={e => e.stopPropagation()}>
+                            <div className="tag-manager-header">
+                                <h3>Gerenciar tags</h3>
+                                <button type="button" onClick={() => setIsTagManagerOpen(false)} aria-label="Fechar">
+                                    <span aria-hidden="true">&times;</span>
+                                </button>
+                            </div>
+                            <form className="tag-manager-form" onSubmit={handleCreateTag}>
+                                <div className="form-group">
+                                    <label>Título (até 12 caracteres)</label>
+                                    <input
+                                        className="form-input"
+                                        maxLength={12}
+                                        value={newTagTitle}
+                                        onChange={e => setNewTagTitle(e.target.value)}
+                                        placeholder="Ex: VIP"
+                                        required
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label>Cor</label>
+                                    <div className="tag-color-picker">
+                                        <input
+                                            type="color"
+                                            value={newTagColor}
+                                            onChange={e => setNewTagColor(e.target.value.toUpperCase())}
+                                            aria-label="Selecionar cor da tag"
+                                        />
+                                        <span>{newTagColor}</span>
+                                    </div>
+                                </div>
+                                {tagError && <p className="tag-error">{tagError}</p>}
+                                <button className="btn btn-primary" type="submit" disabled={isSavingTag}>
+                                    {isSavingTag ? 'Salvando...' : 'Criar tag'}
+                                </button>
+                            </form>
+                            <div className="tag-manager-list">
+                                {isLoadingTags ? (
+                                    <p className="tag-loading">Carregando tags...</p>
+                                ) : customTags.length === 0 ? (
+                                    <p className="tag-empty">Nenhuma tag criada ainda.</p>
+                                ) : (
+                                    customTags.map(tag => (
+                                        <div key={`manager-${tag.id}`} className="tag-manager-item">
+                                            <span
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                            <button type="button" className="btn btn-red btn-sm" onClick={() => handleDeleteTag(tag.id)}>
+                                                Excluir
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {tagContextMenu && contextMenuPosition && leadForContextMenu && (
+                    <div
+                        className="tag-context-menu"
+                        style={{ top: contextMenuPosition.top, left: contextMenuPosition.left }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="tag-context-title">Tags personalizadas</div>
+                        {customTags.length === 0 ? (
+                            <p className="tag-context-empty">Crie tags para atribuí-las aos seus leads.</p>
+                        ) : (
+                            customTags.map(tag => {
+                                const isAssigned = (leadForContextMenu.custom_tags || []).some(t => t.id === tag.id);
+                                return (
+                                    <button
+                                        key={`context-${tag.id}`}
+                                        type="button"
+                                        className={`tag-context-item ${isAssigned ? 'active' : ''}`}
+                                        onClick={() => toggleLeadTag(tag, leadForContextMenu)}
+                                    >
+                                        <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
+                                        <span>{tag.title}</span>
+                                        {isAssigned && <span className="tag-context-check">✓</span>}
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                )}
                 <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
                     <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
                     <div className="chat-container" style={{height: 'calc(100vh - 8.5rem)', margin: '0 3rem 2rem 3rem'}} >
                         <div className="conversations-panel">
                             <div className="conversations-header">
                                 <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <div className="tag-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={handleOpenTagManager}
+                                        disabled={!selectedBotId}
+                                    >
+                                        Gerenciar tags
+                                    </button>
+                                    <div className="tag-filter-container">
+                                        <span className="tag-filter-label">Filtrar por tags:</span>
+                                        {tagFilterOptions.map(option => {
+                                            const isActive = tagFilters.includes(option.key);
+                                            const style = option.variant === 'custom'
+                                                ? {
+                                                    borderColor: option.color,
+                                                    backgroundColor: isActive ? option.color : 'transparent',
+                                                    color: isActive ? getContrastColor(option.color) : option.color
+                                                  }
+                                                : undefined;
+                                            const className = `tag-filter-chip ${option.variant === 'auto' ? 'auto' : ''} ${isActive ? 'active' : ''}`;
+                                            return (
+                                                <button
+                                                    key={option.key}
+                                                    type="button"
+                                                    className={className}
+                                                    style={style}
+                                                    onClick={() => handleTagFilterToggle(option.key)}
+                                                >
+                                                    {option.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                             </div>
                             <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                 <label htmlFor="activeFilter" style={{ cursor: 'pointer', flexGrow: 1, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -6131,25 +6687,122 @@ function generatePreviewHTML(data) {
                                 />
                             </div>
                             <div className="conversations-list">
-                                {filteredUsers.map(u => (
-                                    <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
-                                        <div className="conversation-item-name">
-                                            {getFirstName(u)}
-                                            <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                {filteredUsers.map(u => {
+                                    const formattedTime = formatLastMessageTime(u.last_message_at);
+                                    return (
+                                        <div
+                                            key={u.chat_id}
+                                            className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`}
+                                            onClick={() => handleSelectChat(u)}
+                                            onContextMenu={(e) => handleConversationContextMenu(e, u)}
+                                        >
+                                            <div className="conversation-item-header">
+                                                <div className="conversation-item-name">
+                                                    {getFirstName(u)}
+                                                    <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>#{getLeadId(u)}</span>
+                                                </div>
+                                                {formattedTime ? <span className="conversation-item-time">{formattedTime}</span> : null}
+                                            </div>
+                                            <p className="conversation-item-preview">{u.message_text}</p>
+                                            <div className="conversation-item-tags">
+                                                {(u.automatic_tags || []).map(tagName => (
+                                                    <span key={`auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(u.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-                                        <p className="conversation-item-preview">{u.message_text}</p>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
-                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="chat-window">
+                            {selectedChat ? (
+                                <>
+                                    <div className="chat-header">
+                                        <div className="chat-header-main">
+                                            <h3>
+                                                {getFirstName(selectedChat)}
+                                                <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span>
+                                            </h3>
+                                            <div className="chat-header-tags">
+                                                {(selectedChat.automatic_tags || []).map(tagName => (
+                                                    <span key={`header-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(selectedChat.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`header-custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="chat-header-actions">
+                                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button>
+                                        </div>
+                                    </div>
+                                    <div className="message-list" ref={chatWindowRef}>
+                                        {messages.map((m, i) => (
+                                            <div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}>
+                                                <strong>{getMessageSender(m)}</strong>
+                                                {renderMessageContent(m)}
+                                                <div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="chat-input-area">
+                                        <form onSubmit={handleSend} className="chat-input-form">
+                                            <input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" />
+                                            <button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button>
+                                            <button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button>
+                                            <input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." />
+                                            <button className="btn btn-primary" type="submit">{Icons.send}</button>
+                                        </form>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="centered-placeholder">
+                                    {Icons.chat}
+                                    <h3>Selecione uma conversa</h3>
+                                    <p>Escolha um contato à esquerda.</p>
+                                </div>
+                            )}
+                        </div>
                         <div className="contact-panel">
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
                                 <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
-                                <div className="contact-detail"><label>Username</label><p>{selectedChat.username ? `@${selectedChat.username}` : 'Nenhum'}</p></div>
-                                <div className="contact-detail"><label>Chat ID</label><p>{selectedChat.chat_id}</p></div>
-                                <div className="contact-detail"><label>Click ID</label><p>{selectedChat.click_id || 'Nenhum'}</p></div>
+                                <div className="contact-detail">
+                                    <label>Tags</label>
+                                    <div className="contact-tags">
+                                        {(selectedChat.automatic_tags || []).map(tagName => (
+                                            <span key={`panel-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                        ))}
+                                        {(selectedChat.custom_tags || []).map(tag => (
+                                            <span
+                                                key={`panel-custom-${tag.id}`}
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                        ))}
+                                        {(!selectedChat.automatic_tags || selectedChat.automatic_tags.length === 0) && (!selectedChat.custom_tags || selectedChat.custom_tags.length === 0) && (
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Sem tags atribuídas.</span>
+                                        )}
+                                    </div>
+                                    <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>Use o clique direito na lista para atribuir tags.</small>
+                                </div>
                                 <ChatActionsPanel botId={selectedBotId} chat={selectedChat} flows={botFlows} onAction={fetchMessages}/>
                             </>) : (<div className="centered-placeholder"><h3>Informações</h3><p>Detalhes do contato aqui.</p></div>)}
                         </div>
@@ -6475,7 +7128,9 @@ function generatePreviewHTML(data) {
             action_pix: '💳',
             action_check_pix: '🔍',
             forward_flow: '↗️',
-            delay: '⏱️'
+            delay: '⏱️',
+            action_create_invite_link: '🔗',
+            action_remove_user_from_group: '👤'
         };
         return icons[actionType] || '❓';
     };
@@ -6490,7 +7145,9 @@ function generatePreviewHTML(data) {
             action_pix: 'PIX',
             action_check_pix: 'Verificar PIX',
             forward_flow: 'Encaminhar',
-            delay: 'Atraso'
+            delay: 'Atraso',
+            action_create_invite_link: 'Criar Convite',
+            action_remove_user_from_group: 'Remover Usuário'
         };
         return labels[actionType] || actionType;
     };
@@ -6533,6 +7190,8 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+            action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName ? `${actionData.linkName} (uso único)` : 'Link descartável.' },
+            action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
         };
@@ -6541,17 +7200,17 @@ function generatePreviewHTML(data) {
         
         return (
             <>
-    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
-    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
-        <div className="action-badge">
-            {actions.length > 0 ? (
-                <>
-                    {getActionIcon(actions[0].type)}
-                    {getActionLabel(actions[0].type)}
-                    {actions.length > 1 && ` +${actions.length - 1}`}
-                </>
-            ) : 'Nó vazio'}
-        </div>
+                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
+                    <div className="action-badge">
+                        {actions.length > 0 ? (
+                            <>
+                                {getActionIcon(actions[0].type)}
+                                {getActionLabel(actions[0].type)}
+                                {actions.length > 1 && ` +${actions.length - 1}`}
+                            </>
+                        ) : 'Nó vazio'}
+                    </div>
                     <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
                         <button 
                             onClick={(e) => {
@@ -6636,9 +7295,36 @@ function generatePreviewHTML(data) {
         );
     };
 
+    const validateTextForUrls = (text) => {
+        if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+
+        // Remove variáveis do sistema antes de validar
+        const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+
+        // Padrões de URL a detectar
+        const patterns = [
+            /(?:https?|ftp):\/\/[^\s]+/gi,                          // URLs com protocolo
+            /www\.[^\s]+/gi,                                        // URLs com www
+            /[a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*/gi  // Domínios comuns
+        ];
+
+        const foundUrls = [];
+        patterns.forEach(pattern => {
+            const matches = textWithoutVariables.match(pattern);
+            if (matches) {
+                foundUrls.push(...matches);
+            }
+        });
+
+        return {
+            valid: foundUrls.length === 0,
+            urls: foundUrls
+        };
+    };
+
     const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
-    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary }) {
+    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
             if (!value) return null;
@@ -6652,6 +7338,7 @@ function generatePreviewHTML(data) {
         const autoScrollHandlerRef = useRef(null);
         const [draggedIndex, setDraggedIndex] = useState(null);
         const [dragOverIndex, setDragOverIndex] = useState(null);
+        const [urlValidationErrors, setUrlValidationErrors] = useState({});
         
         useEffect(() => { 
             const data = selectedNode.data || {};
@@ -6881,7 +7568,9 @@ function generatePreviewHTML(data) {
                 typing_action: '✍️ Digitando',
                 action_pix: '💳 PIX',
                 action_check_pix: '🔍 Verificar PIX',
-                forward_flow: '↪️ Encaminhar'
+                forward_flow: '↪️ Encaminhar',
+                action_create_invite_link: '🔗 Criar Convite',
+                action_remove_user_from_group: '👤 Remover Usuário'
             };
             
             const isDragging = draggedIndex === index;
@@ -6925,11 +7614,37 @@ function generatePreviewHTML(data) {
                                     rows="3" 
                                     maxLength="4096" 
                                     value={actionData.text || ''} 
-                                    onChange={e => updateAction(index, 'text', e.target.value)} 
+                                    onChange={e => {
+                                        const text = e.target.value;
+                                        updateAction(index, 'text', text);
+                                        
+                                        // Validar em tempo real
+                                        const validation = validateTextForUrls(text);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`message-${index}`]: validation
+                                        }));
+                                    }} 
                                     placeholder="Use {{primeiro_nome}}, {{nome_completo}} ou {{cidade}} (máx: 4096 caracteres)"
                                 />
+                                {urlValidationErrors[`message-${index}`] && !urlValidationErrors[`message-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`message-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use o botão oficial para adicionar links.</span>
+                                    </div>
+                                )}
                             </div>
-                            <div className="form-group" style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem'}}>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
                                 <input 
                                     type="text" 
                                     className="form-input" 
@@ -6938,14 +7653,47 @@ function generatePreviewHTML(data) {
                                     placeholder="Texto do Botão"
                                     style={{fontSize: '0.85rem'}}
                                 />
-                                <input 
-                                    type="url" 
-                                    className="form-input" 
-                                    value={actionData.buttonUrl || ''} 
-                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)} 
-                                    placeholder="URL do Botão"
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>URL do Botão</label>
+                                <select
+                                    className="form-input"
+                                    value={actionData.buttonUrl || ''}
+                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)}
                                     style={{fontSize: '0.85rem'}}
-                                />
+                                >
+                                    <option value="">Selecione uma opção...</option>
+                                    
+                                    {presselDomains && presselDomains.length > 0 && (
+                                        <optgroup label="🔗 Pressels">
+                                            {presselDomains.map((domain, i) => (
+                                                <option key={`pressel-${i}`} value={domain.value}>
+                                                    {domain.label}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    
+                                    {thankYouPages && thankYouPages.length > 0 && (
+                                        <optgroup label="✅ Páginas de Obrigado">
+                                            {thankYouPages.map(ty => (
+                                                <option key={ty.id} value={`${window.location.origin}/obrigado/${ty.id}`}>
+                                                    {ty.name || ty.id}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    
+                                    {hostedCheckouts && hostedCheckouts.length > 0 && (
+                                        <optgroup label="💳 Checkouts">
+                                            {hostedCheckouts.map(checkout => (
+                                                <option key={checkout.id} value={`${window.location.origin}/oferta/${checkout.id}`}>
+                                                    {checkout.name || checkout.id}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                </select>
                             </div>
                             
                             <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
@@ -7062,10 +7810,35 @@ function generatePreviewHTML(data) {
                                     rows="2" 
                                     maxLength="1024" 
                                     value={actionData.caption || ''} 
-                                    onChange={e => updateAction(index, 'caption', e.target.value)}
+                                    onChange={e => {
+                                        const caption = e.target.value;
+                                        updateAction(index, 'caption', caption);
+                                        
+                                        // Validar em tempo real
+                                        const validation = validateTextForUrls(caption);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`caption-${index}`]: validation
+                                        }));
+                                    }}
                                     style={{fontSize: '0.85rem'}}
                                     placeholder="Legenda (máx: 1024 caracteres)"
                                 />
+                                {urlValidationErrors[`caption-${index}`] && !urlValidationErrors[`caption-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`caption-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use o botão oficial para adicionar links.</span>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}
@@ -7209,6 +7982,82 @@ function generatePreviewHTML(data) {
                             />
                         </div>
                     )}
+                    
+                    {action.type === 'action_create_invite_link' && (
+                        <>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Nome do Link</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={actionData.linkName || ''} 
+                                    onChange={e => updateAction(index, 'linkName', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Nome identificador do link"
+                                />
+                            </div>
+                            <p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
+                                O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
+                            </p>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={!!actionData.sendMessage}
+                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
+                                    />
+                                    Enviar mensagem com o link
+                                </label>
+                            </div>
+                            {actionData.sendMessage && (
+                                <div className="form-group">
+                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
+                                    <textarea 
+                                        id={`invite-message-textarea-${index}`}
+                                        className="form-textarea" 
+                                        rows="2" 
+                                        maxLength="4096" 
+                                        value={actionData.messageText || ''} 
+                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
+                                        style={{fontSize: '0.85rem'}}
+                                        placeholder="Use {{invite_link}} para incluir o link gerado"
+                                    />
+                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                        <button 
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => {
+                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
+                                                if (textarea) {
+                                                    const cursorPos = textarea.selectionStart;
+                                                    const currentText = actionData.messageText || '';
+                                                    const textBefore = currentText.substring(0, cursorPos);
+                                                    const textAfter = currentText.substring(cursorPos);
+                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
+                                                    updateAction(index, 'messageText', newValue);
+                                                    setTimeout(() => {
+                                                        textarea.focus();
+                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
+                                                        textarea.setSelectionRange(newCursor, newCursor);
+                                                    }, 0);
+                                                }
+                                            }}
+                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                                        >
+                                            + Link de Convite
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    
+                    {action.type === 'action_remove_user_from_group' && (
+                        <p style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.75rem'}}>
+                            Esta ação remove e bane automaticamente o usuário atual do grupo, revogando o último convite ativo.
+                            Se um novo link descartável for criado no fluxo, o usuário será desbanido antes do envio.
+                        </p>
+                    )}
                 </div>
             );
         };
@@ -7330,12 +8179,13 @@ function generatePreviewHTML(data) {
         );
     }
     
-    function FlowEditorPage({ flow, onBack }) {
+    function FlowEditorPage({ flow, onBack, pressels, thankYouPages, hostedCheckouts }) {
         const reactFlowWrapper = useRef(null);
         const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
         const [edges, setEdges, onEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
+        const [presselDomains, setPresselDomains] = useState([]);
         
         // Handle node copy
         useEffect(() => {
@@ -7401,6 +8251,7 @@ function generatePreviewHTML(data) {
         const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
         const [isInitialized, setIsInitialized] = useState(false);
         const [isNodeSelectorOpen, setIsNodeSelectorOpen] = useState(false);
+        const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
 
@@ -7483,22 +8334,7 @@ function generatePreviewHTML(data) {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
-                    // Migração: converter nodes antigos (com tipo específico) para nova estrutura (type: 'action')
-                    if (node.type !== 'trigger' && node.type !== 'action') {
-                        // Node antigo: criar estrutura nova com a ação principal no array de ações
-                        const mainAction = {
-                            type: node.type,
-                            data: { ...node.data }
-                        };
-                        return {
-                            ...node,
-                            type: 'action',
-                            data: {
-                                actions: [mainAction, ...(node.data?.actions || [])]
-                            }
-                        };
-                    }
-                    // Node já na nova estrutura ou trigger
+                    // Garantir que todos os nodes tenham o campo actions
                     return {
                         ...node,
                         data: {
@@ -7544,6 +8380,38 @@ function generatePreviewHTML(data) {
             }
         }, [flow, reactFlowInstance]);
         
+        // Carregar domínios das pressels
+        useEffect(() => {
+            const loadPresselDomains = async () => {
+                if (!pressels || pressels.length === 0) {
+                    setPresselDomains([]);
+                    return;
+                }
+                
+                try {
+                    const allDomains = [];
+                    for (const pressel of pressels) {
+                        const domains = await api.get(`/api/pressels/${pressel.id}/domains`);
+                        if (domains.data && domains.data.length > 0) {
+                            domains.data.forEach(d => {
+                                allDomains.push({
+                                    label: `${pressel.name} - ${d.domain}`,
+                                    value: d.domain,
+                                    type: 'pressel'
+                                });
+                            });
+                        }
+                    }
+                    setPresselDomains(allDomains);
+                } catch (error) {
+                    console.error('Erro ao carregar domínios das pressels:', error);
+                    setPresselDomains([]);
+                }
+            };
+            
+            loadPresselDomains();
+        }, [pressels]);
+        
         // Center view after first render and when nodes are loaded
         useEffect(() => {
             if (!isInitialized && nodes.length > 0 && reactFlowInstance) {
@@ -7583,7 +8451,42 @@ function generatePreviewHTML(data) {
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance] );
-        const handleSave = async () => { try { await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); alert("Salvo!"); } catch (e) { alert("Erro ao salvar."); } };
+        const handleSave = async () => { 
+            // Validar todos os campos de texto antes de salvar
+            for (const node of nodes) {
+                const actions = node.data?.actions || [];
+                
+                for (let i = 0; i < actions.length; i++) {
+                    const action = actions[i];
+                    
+                    // Validar texto de mensagem
+                    if (action.type === 'message' && action.data?.text) {
+                        const validation = validateTextForUrls(action.data.text);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos no texto da mensagem!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
+                            return; // Impede salvamento
+                        }
+                    }
+                    
+                    // Validar legendas de mídia
+                    if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                        const validation = validateTextForUrls(action.data.caption);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos na legenda!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
+                            return; // Impede salvamento
+                        }
+                    }
+                }
+            }
+            
+            // Se passou todas as validações, salvar normalmente
+            try { 
+                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); 
+                alert("Salvo!"); 
+            } catch (e) { 
+                alert("Erro ao salvar."); 
+            } 
+        };
         const addNode = (actionType, position = null) => {
             if (!reactFlowInstance) return;
             
@@ -7635,7 +8538,9 @@ function generatePreviewHTML(data) {
             { type: 'delay', icon: '⏱️', label: 'Atraso', category: 'Componentes' },
             { type: 'action_pix', icon: '💳', label: 'Gerar PIX', category: 'Ações' },
             { type: 'action_check_pix', icon: '🔍', label: 'Consultar PIX', category: 'Ações' },
-            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' }
+            { type: 'forward_flow', icon: '↪️', label: 'Encaminhar Fluxo', category: 'Ações' },
+            { type: 'action_create_invite_link', icon: '🔗', label: 'Criar Link de Convite', category: 'Grupo' },
+            { type: 'action_remove_user_from_group', icon: '👤', label: 'Remover Usuário do Grupo', category: 'Grupo' }
         ];
         
         const handleNodeTypeSelect = (nodeType) => {
@@ -7683,7 +8588,7 @@ function generatePreviewHTML(data) {
                         ❌
                     </button>
                     </div>
-                )}
+               )}
                 <button 
                     className="add-node-fab" 
                     onClick={() => setIsNodeSelectorOpen(true)}
@@ -7695,6 +8600,7 @@ function generatePreviewHTML(data) {
                     <div className="node-selector-modal-overlay" onClick={(e) => {
                         if (e.target === e.currentTarget) {
                             setIsNodeSelectorOpen(false);
+                            setIsGroupMenuOpen(false);
                         }
                     }}>
                         <div className="node-selector-modal" onClick={(e) => e.stopPropagation()}>
@@ -7702,14 +8608,14 @@ function generatePreviewHTML(data) {
                                 <h3>Adicionar Node</h3>
                                 <button 
                                     className="node-selector-modal-close"
-                                    onClick={() => setIsNodeSelectorOpen(false)}
+                                    onClick={() => { setIsNodeSelectorOpen(false); setIsGroupMenuOpen(false); }}
                                     title="Fechar"
                                 >
                                     ✕
                                 </button>
                             </div>
                             <div className="node-selector-modal-content">
-                                {nodeTypesList.map(nodeType => (
+                                {nodeTypesList.filter(nodeType => nodeType.category !== 'Grupo').map(nodeType => (
                                     <button
                                         key={nodeType.type}
                                         className="node-selector-button"
@@ -7719,24 +8625,49 @@ function generatePreviewHTML(data) {
                                         <span>{nodeType.label}</span>
                                     </button>
                                 ))}
+                                <button
+                                    className="node-selector-button"
+                                    onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                                >
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span className="node-selector-button-icon">👥</span>
+                                        <span>Gerenciar Grupos</span>
+                                    </span>
+                                    <span style={{ fontSize: '0.9rem' }}>
+                                        {isGroupMenuOpen ? '▾' : '▸'}
+                                    </span>
+                                </button>
+                                {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
+                                    <button
+                                        key={nodeType.type}
+                                        className="node-selector-button"
+                                        onClick={() => handleNodeTypeSelect(nodeType.type)}
+                                        style={{ marginLeft: '12px' }}
+                                    >
+                                        <span className="node-selector-button-icon">{nodeType.icon}</span>
+                                        <span>{nodeType.label}</span>
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     </div>
                 )}
-                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} />}
+                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} presselDomains={presselDomains} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} />}
             </div>
         );
     }
     
+    // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
 
-        // --- FIM DO CÓDIGO DO HOTBOT PARA COLAR ---
-
+    // Renderiza a aplicação React no container
+    const root = window.ReactDOM.createRoot(containerElement);
+    // Certifique-se de que o nome do componente principal foi renomeado
+    root.render(<AppHotBot />); 
+    window.hotBotRoot = root; // Guarda a referência para poder desmontar
+}
         // Renderiza a aplicação React no container
-        const root = window.ReactDOM.createRoot(containerElement);
-        // Certifique-se de que o nome do componente principal foi renomeado
-        root.render(<AppHotBot />); 
-        window.hotBotRoot = root; // Guarda a referência para poder desmontar
-    }
+
     </script>
 </body>
 </html>
