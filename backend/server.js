@@ -4070,17 +4070,6 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
                 logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
-                // Envia InitiateCheckout apenas se originado de um checkout hosted
-                if (checkoutId) {
-                     const [checkoutDetails] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`;
-                     // Tenta pegar um valor representativo, pode ser o primeiro pacote ou um valor fixo
-                     const representativeValueCents = checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents || checkoutDetails?.config?.pricing?.fixed_value_cents || 0;
-                     const eventValue = representativeValueCents > 0 ? (representativeValueCents / 100) : 0.01; // Envia 0.01 se não encontrar valor
-
-                     // Passa o click_id LIMPO para o evento Meta
-                     await sendMetaEvent('InitiateCheckout', { ...newClick, click_id: clean_click_id }, { pix_value: eventValue, id: click_record_id });
-                     logger.debug(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
-                }
             } catch (backgroundError) {
                 logger.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
             }
@@ -4731,11 +4720,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     );
                     logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                    // Envia evento Meta se veio de pressel ou checkout
-                    if (click.pressel_id || click.checkout_id) {
-                        await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-                        logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
-                    }
+                    logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
                 } catch (error) {
                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido
@@ -6485,11 +6470,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
             productDataForUtmify
         );
 
-        if (click.pressel_id || click.checkout_id) {
-            await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-        }
-
-        console.log(`[Manual PIX] Eventos enviados para Utmify e Meta para transação ${pixResult.transaction_id}`);
+        console.log(`[Manual PIX] Evento 'waiting_payment' enviado para Utmify para transação ${pixResult.transaction_id}`);
 
         res.status(200).json({ message: 'PIX enviado ao usuário com sucesso.' });
     } catch (error) {
@@ -7789,31 +7770,7 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             headers: { 'x-api-key': seller.api_key }
         });
 
-        // 4) Enviar evento InitiateCheckout para Meta
-        if (clickRecord && response.data) {
-            try {
-                // Buscar a transação recém-criada do banco para obter o internal_transaction_id
-                const [pixTransaction] = await sql`
-                    SELECT id FROM pix_transactions 
-                    WHERE provider_transaction_id = ${response.data.transaction_id}
-                    ORDER BY created_at DESC 
-                    LIMIT 1
-                `;
-                
-                if (pixTransaction) {
-                    await sendMetaEvent('InitiateCheckout', clickRecord, { 
-                        id: pixTransaction.id, 
-                        pix_value: value_cents / 100 
-                    }, null);
-                    console.log(`[Checkout PIX] Evento InitiateCheckout enviado para Meta para o clique ${clickRecord.id}`);
-                }
-            } catch (metaError) {
-                console.error(`[Checkout PIX] Erro ao enviar evento Meta:`, metaError.message);
-                // Não bloqueia a resposta se o evento Meta falhar
-            }
-        }
-
-        // 5) Retornar a resposta da API central
+        // 4) Retornar a resposta da API central
         return res.status(200).json(response.data);
     } catch (error) {
         const status = error.response?.status || 500;

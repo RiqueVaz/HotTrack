@@ -903,11 +903,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     );
                     console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                    // Envia evento Meta se veio de pressel ou checkout
-                    if (click.pressel_id || click.checkout_id) {
-                        await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-                        console.log(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
-                    }
+                    console.log(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     if (error.response) {
