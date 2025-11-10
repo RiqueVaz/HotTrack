@@ -5263,6 +5263,91 @@ function generatePreviewHTML(data) {
             const [pressels, setPressels] = useState([]);
             const [thankYouPages, setThankYouPages] = useState([]);
             const [hostedCheckouts, setHostedCheckouts] = useState([]);
+            const [flowEditorDirty, setFlowEditorDirty] = useState(false);
+            const [flowEditorSaveHandler, setFlowEditorSaveHandler] = useState(null);
+            const [discardChangesToken, setDiscardChangesToken] = useState(0);
+            const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false);
+            const [pendingNavigation, setPendingNavigation] = useState(null);
+            const [isProcessingNavigation, setIsProcessingNavigation] = useState(false);
+
+            const registerFlowEditorSaveHandler = useCallback((handler) => {
+                setFlowEditorSaveHandler(() => handler || null);
+            }, []);
+
+            const handleFlowEditorDirtyChange = useCallback((value) => {
+                setFlowEditorDirty(Boolean(value));
+            }, []);
+
+            const attemptPageChange = useCallback((nextPage, options = {}) => {
+                const performNavigation = () => {
+                    options.onNavigate?.();
+                    setCurrentPage(nextPage);
+                    options.afterNavigate?.();
+                };
+
+                if (
+                    !options.force &&
+                    currentPage === 'flow-editor' &&
+                    nextPage !== 'flow-editor' &&
+                    flowEditorDirty
+                ) {
+                    setPendingNavigation(() => performNavigation);
+                    setShowUnsavedPrompt(true);
+                    return false;
+                }
+
+                performNavigation();
+                return true;
+            }, [currentPage, flowEditorDirty]);
+
+            const closeUnsavedPrompt = useCallback(() => {
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+            }, []);
+
+            const handleLeaveWithoutSaving = useCallback(() => {
+                const next = pendingNavigation;
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+                setFlowEditorDirty(false);
+                setDiscardChangesToken((token) => token + 1);
+                if (next) {
+                    next();
+                }
+            }, [pendingNavigation]);
+
+            const handleSaveAndLeave = useCallback(async () => {
+                if (!flowEditorSaveHandler) {
+                    handleLeaveWithoutSaving();
+                    return;
+                }
+
+                setIsProcessingNavigation(true);
+                try {
+                    const saved = await flowEditorSaveHandler();
+                    if (saved) {
+                        const next = pendingNavigation;
+                        setShowUnsavedPrompt(false);
+                        setPendingNavigation(null);
+                        setFlowEditorDirty(false);
+                        setIsProcessingNavigation(false);
+                        if (next) {
+                            next();
+                        }
+                    } else {
+                        setIsProcessingNavigation(false);
+                    }
+                } catch (error) {
+                    console.error('Erro ao salvar antes de sair do editor:', error);
+                    setIsProcessingNavigation(false);
+                }
+            }, [flowEditorSaveHandler, pendingNavigation, handleLeaveWithoutSaving]);
+
+            const handlePromptCancel = useCallback(() => {
+                closeUnsavedPrompt();
+            }, [closeUnsavedPrompt]);
 
             // Salvar a página atual no localStorage sempre que mudar
             // Mas não salvar estados temporários como flow-editor ou import-flow
@@ -5299,11 +5384,31 @@ function generatePreviewHTML(data) {
             // Se tentar acessar flow-editor sem um fluxo válido, redirecionar para flows
             useEffect(() => {
                 if (currentPage === 'flow-editor' && !editingFlow) {
-                    setCurrentPage('flows');
+                    attemptPageChange('flows', { force: true });
                 }
-            }, [currentPage, editingFlow]);
+            }, [attemptPageChange, currentPage, editingFlow]);
 
-            const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+            const navigateToFlowEditor = useCallback((flow) => {
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+                setEditingFlow(flow);
+                setFlowEditorDirty(false);
+                setCurrentPage('flow-editor');
+            }, []);
+
+            const handleNavigationRequest = useCallback((page) => {
+                attemptPageChange(page, {
+                    onNavigate: () => {
+                        if (page !== 'flow-editor') {
+                            setEditingFlow(null);
+                        }
+                        if (page !== 'flow-editor') {
+                            setFlowEditorDirty(false);
+                        }
+                    }
+                });
+            }, [attemptPageChange]);
             
         if (isLoading) return <div className="flex items-center justify-center h-full text-white">Carregando dados do HotBot...</div>;
 
@@ -5315,13 +5420,93 @@ function generatePreviewHTML(data) {
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
                 'disparos-history': <DisparosHistoryPage />,
-                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} pressels={pressels} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} /> : null,
-                'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+                'flow-editor': editingFlow ? (
+                    <FlowEditorPage
+                        flow={editingFlow}
+                        onRequestClose={() => attemptPageChange('flows', { onNavigate: () => setEditingFlow(null) })}
+                        pressels={pressels}
+                        thankYouPages={thankYouPages}
+                        hostedCheckouts={hostedCheckouts}
+                        onDirtyChange={handleFlowEditorDirtyChange}
+                        registerSaveHandler={registerFlowEditorSaveHandler}
+                        discardChangesToken={discardChangesToken}
+                    />
+                ) : null,
+                'import-flow': (
+                    <ImportFlowPage
+                        shareableLinkId={importingFlowLink}
+                        bots={bots}
+                        onImported={() => {
+                            attemptPageChange('flows', {
+                                force: true,
+                                onNavigate: () => {
+                                    window.history.pushState({}, '', window.location.pathname);
+                                    setImportingFlowLink(null);
+                                }
+                            });
+                        }}
+                    />
+                )
             }[currentPage];
 
             return (
             <>
-                <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+                {showUnsavedPrompt && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 2000
+                        }}
+                    >
+                        <div
+                            style={{
+                                backgroundColor: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '12px',
+                                padding: '24px',
+                                maxWidth: '420px',
+                                width: '90%',
+                                boxShadow: '0 20px 40px rgba(15, 23, 42, 0.4)'
+                            }}
+                        >
+                            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>
+                                Alterações não salvas
+                            </h3>
+                            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                Você possui mudanças no fluxo que ainda não foram salvas. Deseja salvar antes de sair do editor?
+                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.5rem' }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={handlePromptCancel}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    Continuar editando
+                                </button>
+                                <button
+                                    className="btn btn-danger"
+                                    onClick={handleLeaveWithoutSaving}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    Sair sem salvar
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleSaveAndLeave}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    {isProcessingNavigation ? 'Salvando...' : 'Salvar e sair'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <HotBotNav currentPage={currentPage} onNavigate={handleNavigationRequest} disabled={isProcessingNavigation || showUnsavedPrompt} />
                 <main className="hotbot-content">
                         <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
                             {PageComponent}
@@ -5331,7 +5516,7 @@ function generatePreviewHTML(data) {
             );
         }
     
-    function HotBotNav({ currentPage, setCurrentPage }) {
+    function HotBotNav({ currentPage, onNavigate, disabled }) {
         const pages = { 
             bots: { name: 'Bots', icon: Icons.bots },
             flows: { name: 'Fluxos', icon: Icons.flows },
@@ -5347,7 +5532,8 @@ function generatePreviewHTML(data) {
                     <button 
                         key={key} 
                         className={`tab-button nav-button ${currentPage === key ? 'active' : ''}`} 
-                        onClick={() => setCurrentPage(key)} 
+                        onClick={() => onNavigate(key)} 
+                        disabled={disabled}
                         title={name}
                     >
                         {React.cloneElement(icon, { className: 'h-5 w-5' })}
@@ -8316,13 +8502,23 @@ function generatePreviewHTML(data) {
         );
     }
     
-    function FlowEditorPage({ flow, onBack, pressels, thankYouPages, hostedCheckouts }) {
+function FlowEditorPage({
+        flow,
+        onRequestClose,
+        pressels,
+        thankYouPages,
+        hostedCheckouts,
+        onDirtyChange,
+        registerSaveHandler,
+        discardChangesToken = 0
+    }) {
         const reactFlowWrapper = useRef(null);
-        const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-        const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+        const [nodes, setNodesState, rawOnNodesChange] = useNodesState(initialNodes);
+        const [edges, setEdgesState, rawOnEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
         const [presselDomains, setPresselDomains] = useState([]);
+        const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
         
         // Handle node copy
         useEffect(() => {
@@ -8391,6 +8587,63 @@ function generatePreviewHTML(data) {
         const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
+
+        const setNodes = useCallback((updater, options = {}) => {
+            setNodesState(updater);
+            if (!options.skipDirty) {
+                setHasUnsavedChanges(true);
+            }
+        }, [setNodesState]);
+
+        const setEdges = useCallback((updater, options = {}) => {
+            setEdgesState(updater);
+            if (!options.skipDirty) {
+                setHasUnsavedChanges(true);
+            }
+        }, [setEdgesState]);
+
+        const handleNodesChange = useCallback((changes) => {
+            if (changes && changes.length > 0) {
+                setHasUnsavedChanges(true);
+            }
+            rawOnNodesChange(changes);
+        }, [rawOnNodesChange]);
+
+        const handleEdgesChange = useCallback((changes) => {
+            if (changes && changes.length > 0) {
+                setHasUnsavedChanges(true);
+            }
+            rawOnEdgesChange(changes);
+        }, [rawOnEdgesChange]);
+
+        useEffect(() => {
+            if (typeof onDirtyChange === 'function') {
+                onDirtyChange(hasUnsavedChanges);
+            }
+        }, [hasUnsavedChanges, onDirtyChange]);
+
+        useEffect(() => {
+            const beforeUnloadHandler = (event) => {
+                if (!hasUnsavedChanges) return;
+                event.preventDefault();
+                event.returnValue = '';
+                return '';
+            };
+
+            if (hasUnsavedChanges) {
+                window.addEventListener('beforeunload', beforeUnloadHandler);
+            }
+
+            return () => {
+                window.removeEventListener('beforeunload', beforeUnloadHandler);
+            };
+        }, [hasUnsavedChanges]);
+
+        useEffect(() => {
+            if (discardChangesToken > 0) {
+                setHasUnsavedChanges(false);
+            }
+        }, [discardChangesToken]);
 
         useEffect(() => {
             if (!selectedEdge) {
@@ -8480,8 +8733,9 @@ function generatePreviewHTML(data) {
                         }
                     };
                 });
-                setNodes(nodesToSet);
-                setEdges(flowContent.edges || []);
+                setNodes(nodesToSet, { skipDirty: true });
+                setEdges(flowContent.edges || [], { skipDirty: true });
+                setHasUnsavedChanges(false);
                 
                 // Find the initial node (trigger node)
                 const initialNode = nodesToSet.find(node => node.type === 'trigger');
@@ -8515,7 +8769,7 @@ function generatePreviewHTML(data) {
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
             }
-        }, [flow, reactFlowInstance]);
+        }, [flow, reactFlowInstance, setEdges, setNodes]);
         
         // Carregar domínios das pressels
         useEffect(() => {
@@ -8562,7 +8816,12 @@ function generatePreviewHTML(data) {
             }
         }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
-        const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
+        const onNodesDelete = useCallback((deleted) => {
+            setEdges((prevEdges) => {
+                const connectedEdges = getConnectedEdges(deleted, prevEdges);
+                return prevEdges.filter((edge) => !connectedEdges.includes(edge));
+            });
+        }, [setEdges]);
         const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, eds)), [setEdges]);
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => { setSelectedNode(null); setSelectedEdge(null); }, []);
@@ -8587,43 +8846,59 @@ function generatePreviewHTML(data) {
                 data: { actions: [{ type: actionType, data: {} }] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
-        }, [reactFlowInstance] );
-        const handleSave = async () => { 
-            // Validar todos os campos de texto antes de salvar
+        }, [reactFlowInstance, setNodes, reactFlowWrapper] );
+        const handleSave = useCallback(async () => {
+            if (!flow?.id) {
+                alert('Fluxo inválido. Atualize a página e tente novamente.');
+                return false;
+            }
+
             for (const node of nodes) {
                 const actions = node.data?.actions || [];
-                
+
                 for (let i = 0; i < actions.length; i++) {
                     const action = actions[i];
-                    
-                    // Validar texto de mensagem
+
                     if (action.type === 'message' && action.data?.text) {
                         const validation = validateTextForUrls(action.data.text);
                         if (!validation.valid) {
                             alert(`❌ Links não são permitidos no texto da mensagem!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
-                            return; // Impede salvamento
+                            return false;
                         }
                     }
-                    
-                    // Validar legendas de mídia
+
                     if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
                         const validation = validateTextForUrls(action.data.caption);
                         if (!validation.valid) {
                             alert(`❌ Links não são permitidos na legenda!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
-                            return; // Impede salvamento
+                            return false;
                         }
                     }
                 }
             }
-            
-            // Se passou todas as validações, salvar normalmente
-            try { 
-                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); 
-                alert("Salvo!"); 
-            } catch (e) { 
-                alert("Erro ao salvar."); 
-            } 
-        };
+
+            try {
+                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) });
+                alert("Salvo!");
+                setHasUnsavedChanges(false);
+                return true;
+            } catch (error) {
+                console.error('Erro ao salvar fluxo:', error);
+                alert("Erro ao salvar.");
+                return false;
+            }
+        }, [api, edges, flow, nodes]);
+        useEffect(() => {
+            if (typeof registerSaveHandler !== 'function') {
+                return;
+            }
+
+            registerSaveHandler(handleSave);
+
+            return () => {
+                registerSaveHandler(null);
+            };
+        }, [registerSaveHandler, handleSave]);
         const addNode = (actionType, position = null) => {
             if (!reactFlowInstance) return;
             
@@ -8688,11 +8963,11 @@ function generatePreviewHTML(data) {
         return (
             <div className="flow-editor-page">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} allowedTypes={mediaAllowedTypes} />}
-                <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
+                <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={() => onRequestClose && onRequestClose()}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
                                 <Background />
                                 <Controls />
                 </ReactFlow>
