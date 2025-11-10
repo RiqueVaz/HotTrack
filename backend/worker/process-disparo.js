@@ -10,6 +10,12 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { createPixService } = require('../shared/pix');
+const {
+    metrics: prometheusMetrics,
+    isEnabled: isPrometheusEnabled,
+} = require('../metrics');
+
+const METRICS_SOURCE = 'worker_process_disparo';
 
 // ==========================================================
 //                   INICIALIZAÇÃO
@@ -157,13 +163,6 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
     if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
     const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
-        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
-    }
     const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
     const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
     const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
@@ -172,8 +171,77 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const fileName = fileNameMap[fileType];
     const timeout = fileType === 'video' ? 60000 : 30000;
     if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+    const recordRequest = (status) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                source: METRICS_SOURCE,
+                type: fileType,
+                status,
+            });
+        }
+    };
+
+    const recordBytes = (direction, bytes) => {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && bytes > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                {
+                    source: METRICS_SOURCE,
+                    type: fileType,
+                    direction,
+                },
+                bytes
+            );
+        }
+    };
+
+    try {
+        const directPayload = {
+            chat_id: chatId,
+            [field]: fileUrl,
+        };
+        if (caption) {
+            directPayload.caption = caption;
+            directPayload.parse_mode = 'HTML';
+        }
+        const directResponse = await sendTelegramRequest(destinationBotToken, method, directPayload, { timeout });
+        if (directResponse?.ok) {
+            recordRequest('success_direct');
+            return directResponse;
+        }
+        recordRequest('retry_upload');
+    } catch (error) {
+        recordRequest('retry_upload');
+    }
+
+    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    recordBytes('download', fileBuffer.length);
+
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
+    }
     formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
+
+    recordBytes('upload', fileBuffer.length);
+
+    try {
+        const uploadResponse = await sendTelegramRequest(destinationBotToken, method, formData, {
+            headers: formData.getHeaders(),
+            timeout,
+        });
+        if (uploadResponse?.ok) {
+            recordRequest('success_upload');
+        } else {
+            recordRequest('failure');
+        }
+        return uploadResponse;
+    } catch (error) {
+        recordRequest('failure');
+        throw error;
+    }
 }
 
 // Funções de PIX (necessárias para o passo 'pix')

@@ -23,6 +23,11 @@ const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
+const {
+    register: prometheusRegister,
+    isEnabled: isPrometheusEnabled,
+    metrics: prometheusMetrics,
+} = require('./metrics');
 
 // Configuração do Google OAuth
 const googleClient = new OAuth2Client(
@@ -106,6 +111,106 @@ const validateFlowActions = (nodes) => {
 };
 
 const app = express();
+
+const METRICS_IGNORED_PATHS = new Set(['/metrics']);
+
+const resolveRouteLabel = (req, statusCode) => {
+    if (req.route?.path) {
+        const base = req.baseUrl && req.baseUrl !== '/' ? req.baseUrl : '';
+        return `${base}${req.route.path}` || req.route.path;
+    }
+
+    if (!req.route && statusCode === 404) {
+        return 'unmatched';
+    }
+
+    if (req.baseUrl) {
+        return req.baseUrl;
+    }
+
+    if (req.path) {
+        return req.path;
+    }
+
+    if (req.originalUrl) {
+        const withoutQuery = req.originalUrl.split('?')[0];
+        return withoutQuery || 'unknown';
+    }
+
+    return 'unknown';
+};
+
+const parseContentLength = (value) => {
+    if (Array.isArray(value)) {
+        return parseContentLength(value[0]);
+    }
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+};
+
+if (isPrometheusEnabled) {
+    app.get('/metrics', async (_req, res) => {
+        try {
+            const metrics = await prometheusRegister.metrics();
+            res.setHeader('Content-Type', prometheusRegister.contentType);
+            res.send(metrics);
+        } catch (error) {
+            console.error('[Prometheus] Falha ao coletar métricas:', error);
+            res.status(500).send('Erro ao coletar métricas.');
+        }
+    });
+
+    app.use((req, res, next) => {
+        if (METRICS_IGNORED_PATHS.has(req.path)) {
+            return next();
+        }
+
+        const requestBytes = Number.parseInt(req.headers['content-length'] || '0', 10) || 0;
+        const endTimer = prometheusMetrics.httpRequestDuration
+            ? prometheusMetrics.httpRequestDuration.startTimer()
+            : null;
+
+        res.on('finish', () => {
+            const routeLabel = resolveRouteLabel(req, res.statusCode);
+            const labels = {
+                method: req.method,
+                route: routeLabel,
+                status_code: String(res.statusCode),
+            };
+
+            if (prometheusMetrics.httpRequestsTotal) {
+                prometheusMetrics.httpRequestsTotal.inc(labels);
+            }
+
+            if (endTimer) {
+                endTimer(labels);
+            }
+
+            if (prometheusMetrics.httpRequestBytes && requestBytes > 0) {
+                prometheusMetrics.httpRequestBytes.observe(
+                    { method: req.method, route: routeLabel },
+                    requestBytes
+                );
+            }
+
+            if (prometheusMetrics.httpResponseBytes) {
+                const headerValue = res.getHeader('Content-Length') ?? res.getHeader('content-length');
+                const responseBytes = parseContentLength(headerValue);
+                if (responseBytes > 0) {
+                    prometheusMetrics.httpResponseBytes.observe(labels, responseBytes);
+                }
+            }
+        });
+
+        next();
+    });
+}
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
@@ -5990,11 +6095,30 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
     }
+    const mediaType =
+        fileType?.startsWith('image/') ? 'image'
+        : fileType?.startsWith('video/') ? 'video'
+        : fileType?.startsWith('audio/') ? 'audio'
+        : 'unknown';
+    const prometheusLabels = { source: 'api_send_media', type: mediaType };
+    let prometheusStatus = 'success';
+
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
-        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
+        try {
+            validateTelegramSize(buffer, fileType);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -6008,17 +6132,27 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
             method = 'sendVoice';
             field = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de arquivo não suportado.' });
         }
         formData.append(field, buffer, { filename: fileName });
         const response = await sendTelegramRequest(bot.bot_token, method, formData, { headers: formData.getHeaders() });
+        prometheusStatus = response?.ok ? 'success' : 'telegram_error';
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
         res.status(500).json({ message: msg });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
@@ -6254,15 +6388,31 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
 app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
+    const prometheusLabels = { source: 'api_media_upload', type: fileType };
+    let prometheusStatus = 'success';
     try {
         const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
         // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
         const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
-        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
-        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (!mimeHint) {
+            prometheusStatus = 'unsupported_type';
+            return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        }
+        try {
+            validateTelegramSize(buffer, mimeHint);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
@@ -6276,11 +6426,13 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             telegramMethod = 'sendVoice';
             fieldName = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
         if (!response?.ok || !response.result) {
+            prometheusStatus = 'telegram_error';
             throw new Error('Resposta inválida do Telegram ao enviar mídia.');
         }
         const result = response.result; // Mensagem retornada pelo Telegram
@@ -6309,7 +6461,15 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
