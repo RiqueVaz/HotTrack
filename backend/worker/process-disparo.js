@@ -10,6 +10,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { createPixService } = require('../shared/pix');
+const logger = require('../logger');
 const {
     metrics: prometheusMetrics,
     isEnabled: isPrometheusEnabled,
@@ -99,14 +100,14 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
         } catch (error) {
             const chatId = data instanceof FormData ? data.getBoundary && data.get('chat_id') : data.chat_id;
             if (error.response && error.response.status === 403) {
-                console.warn(`[WORKER-DISPARO] Bot bloqueado. ChatID: ${chatId}`);
+                logger.warn(`[WORKER-DISPARO] Bot bloqueado. ChatID: ${chatId}`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
             // Tratamento específico para TOPIC_CLOSED
             if (error.response && error.response.status === 400 && 
                 error.response.data?.description?.includes('TOPIC_CLOSED')) {
-                console.warn(`[WORKER-DISPARO] Chat de grupo fechado. ChatID: ${chatId}`);
+                logger.warn(`[WORKER-DISPARO] Chat de grupo fechado. ChatID: ${chatId}`);
                 return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_CLOSED' };
             }
             const isRetryable = error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.message.includes('socket hang up');
@@ -114,7 +115,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 await new Promise(res => setTimeout(res, delay * (i + 1)));
                 continue;
             }
-            console.error(`[WORKER-DISPARO - Telegram API ERROR] Method: ${method}, ChatID: ${chatId}:`, error.response?.data || error.message);
+            logger.error(`[WORKER-DISPARO - Telegram API ERROR] Method: ${method}, ChatID: ${chatId}:`, error.response?.data || error.message);
             throw error;
         }
     }
@@ -311,11 +312,11 @@ async function handler(req, res) {
                 fileIdentifier = media.file_id;
                 // Log removido por segurança
               } else {
-                console.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
+                logger.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
                 throw new Error(`Arquivo da biblioteca não encontrado: ${step.mediaLibraryId}`);
               }
             } catch (error) {
-              console.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
+              logger.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
               throw error;
             }
           }
@@ -357,21 +358,21 @@ async function handler(req, res) {
                     }
                 );
                 if (unbanResponse?.ok) {
-                    console.log(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                    logger.debug(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
                 } else if (unbanResponse && !unbanResponse.ok) {
                     const desc = (unbanResponse.description || '').toLowerCase();
                     if (desc.includes("can't remove chat owner")) {
-                        console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                        logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
                     } else {
-                        console.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                        logger.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
                     }
                 }
             } catch (unbanError) {
                 const message = (unbanError?.message || '').toLowerCase();
                 if (message.includes("can't remove chat owner")) {
-                    console.info(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
+                    logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
                 } else {
-                    console.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                    logger.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
                 }
             }
 
@@ -420,7 +421,7 @@ async function handler(req, res) {
                 response = null;
             }
 
-            console.log(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
+            logger.debug(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
 
         } else if (step.type === 'action_remove_user_from_group') {
             if (!bot.telegram_supergroup_id) {
@@ -433,7 +434,7 @@ async function handler(req, res) {
             }
 
             const handleOwnerBanRestriction = () => {
-                console.info(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
+                logger.debug(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
                 userVariables.user_was_banned = false;
                 userVariables.banned_user_id = undefined;
             };
@@ -467,7 +468,7 @@ async function handler(req, res) {
             }
 
             if (banResponse?.ok) {
-                console.log(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
+                logger.debug(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
                 userVariables.user_was_banned = true;
                 userVariables.banned_user_id = userToRemove;
                 userVariables.last_ban_at = new Date().toISOString();
@@ -484,15 +485,15 @@ async function handler(req, res) {
                             }
                         );
                         if (revokeResponse.ok) {
-                            console.log(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
+                            logger.debug(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
                             userVariables.invite_link_revoked = true;
                             delete userVariables.invite_link;
                             delete userVariables.invite_link_name;
                         } else {
-                            console.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                            logger.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
                         }
                     } catch (revokeError) {
-                        console.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
+                        logger.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
                     }
                 }
 
@@ -570,7 +571,7 @@ async function handler(req, res) {
         } catch(e) {
           logStatus = 'FAILED';
                 logDetails = e.message.substring(0, 255); 
-          console.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
+          logger.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
         }
     
         // --- LÓGICA DE CONCLUSÃO ---
@@ -599,19 +600,19 @@ async function handler(req, res) {
     
           // 3. Verifica se a campanha terminou
           if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
-            console.log(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
+            logger.info(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
             await sqlWithRetry(
               sql`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
             );
           }
         } catch (dbError) {
-            console.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
+            logger.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
         }
             // --- FIM DA LÓGICA DE CONCLUSÃO ---
     
             res.status(200).send('Worker de disparo finalizado.');
     } catch (error) {
-        console.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
+        logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
         // Tenta logar a falha mesmo se o processamento principal quebrar
         try {
              await sqlWithRetry(
@@ -619,7 +620,7 @@ async function handler(req, res) {
                    VALUES (${history_id || 0}, ${chat_id || 0}, ${bot_id || 0}, 'FAILED', ${error.message.substring(0, 255)})`
             );
         } catch(logFailError) {
-            console.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
+            logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
         }
         res.status(500).send('Erro interno no worker de disparo.');
     }

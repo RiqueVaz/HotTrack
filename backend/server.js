@@ -23,6 +23,7 @@ const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
+const logger = require('./logger');
 const {
     register: prometheusRegister,
     isEnabled: isPrometheusEnabled,
@@ -1753,7 +1754,7 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         // Validar se há links em campos de texto
         const validation = validateFlowActions(nodesArray);
         if (!validation.valid) {
-            console.log(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            logger.info(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
             return res.status(400).json({ message: validation.message });
         }
         
@@ -3826,18 +3827,18 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                             city = geo.data.city || city;
                             state = geo.data.regionName || state;
                         } else {
-                             console.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
+                             logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
                         }
                     } catch (geoError) {
-                         console.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                         logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
                     }
                 } else if (isLocalIp) {
-                     console.log(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
+                     logger.debug(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
                      city = 'Local'; // Ou mantenha Desconhecida
                      state = 'Local';
                 }
                 await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
-                console.log(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
+                logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
                 // Envia InitiateCheckout apenas se originado de um checkout hosted
                 if (checkoutId) {
@@ -3848,15 +3849,15 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
 
                      // Passa o click_id LIMPO para o evento Meta
                      await sendMetaEvent('InitiateCheckout', { ...newClick, click_id: clean_click_id }, { pix_value: eventValue, id: click_record_id });
-                     console.log(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
+                     logger.debug(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
                 }
             } catch (backgroundError) {
-                console.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
+                logger.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
             }
         })();
 
     } catch (error) {
-        console.error("Erro ao registrar clique:", error);
+        logger.error("Erro ao registrar clique:", error);
         if (!res.headersSent) {
             res.status(500).json({ message: 'Erro interno do servidor.' });
         }
@@ -4292,7 +4293,7 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
             `;
         }
     } catch (error) {
-        console.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
+        logger.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
 
@@ -4302,7 +4303,7 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
  * @returns {string} Retorna 'paid', 'pending', 'flow_forwarded', ou 'completed' para que o processFlow decida a navegação.
  */
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
-    console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+    logger.debug(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
     const normalizeChatIdentifier = (value) => {
         if (value === null || value === undefined) return null;
@@ -4320,7 +4321,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
-        console.log(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
+        logger.debug(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
 
         switch (action.type) {
             case 'message':
@@ -4329,7 +4330,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Validação do tamanho do texto (limite do Telegram: 4096 caracteres)
                     if (textToSend.length > 4096) {
-                        console.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
+                        logger.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
                         textToSend = textToSend.substring(0, 4093) + '...';
                     }
                     
@@ -4351,9 +4352,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 
                                 // Log apropriado baseado no tipo de URL
                                 const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
-                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                                logger.debug(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
                             } catch (urlError) {
-                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                                logger.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
                             }
                         }
                         
@@ -4376,7 +4377,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
+                    logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
                 }
                 break;
 
@@ -4388,7 +4389,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
                     if (caption && caption.length > 1024) {
-                        console.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
+                        logger.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
@@ -4398,16 +4399,16 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
                     }
                 } catch (e) {
-                    console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
+                    logger.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
                 }
                 break;
             }
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
-                console.log(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
+                logger.debug(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-                console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
+                logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
                 break;
             
             case 'typing_action':
@@ -4418,7 +4419,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             
             case 'action_pix':
                 try {
-                    console.log(`${logPrefix} Executando action_pix para chat ${chatId}`);
+                    logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
@@ -4449,7 +4450,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Gera PIX e salva no banco
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    console.log(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                    logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
                     
                     // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
@@ -4458,7 +4459,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
                     if (messageText && messageText.length > 1024) {
-                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
                         messageText = messageText.substring(0, 1021) + '...';
                     }
                     
@@ -4474,7 +4475,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
                         // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
-                        console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
                         
                         await sql`
                             UPDATE pix_transactions 
@@ -4487,7 +4488,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    console.log(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                    logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
                     
                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
@@ -4498,15 +4499,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
                         seller, customerDataForUtmify, productDataForUtmify
                     );
-                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                    logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
                     // Envia evento Meta se veio de pressel ou checkout
                     if (click.pressel_id || click.checkout_id) {
                         await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-                        console.log(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
+                        logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                    logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido
                     throw error;
                 }
@@ -4569,24 +4570,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         return 'pending'; // Sinaliza para 'processFlow' seguir pelo handle 'b'
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro ao consultar PIX:`, error);
+                    logger.error(`${logPrefix} Erro ao consultar PIX:`, error);
                     return 'pending'; // Em caso de erro, assume pendente e segue pelo handle 'b'
                 }
             case 'forward_flow':
                 const targetFlowId = actionData.targetFlowId;
                 if (!targetFlowId) {
-                    console.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
+                    logger.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
                     break;
                 }
 
                 // Garante que targetFlowId seja um número para a query SQL
                 const targetFlowIdNum = parseInt(targetFlowId, 10);
                 if (isNaN(targetFlowIdNum)) {
-                    console.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
+                    logger.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
                     break;
                 }
 
-                console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
+                logger.debug(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
 
                 // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
                 try {
@@ -4594,19 +4595,19 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
                             await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                            console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                            logger.debug(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
-                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                            logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
                         }
                     }
                 } catch (e) {
-                    console.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                    logger.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
                 }
 
                 // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
                 const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
-                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
+                    logger.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
                     break;
                 }
                 const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
@@ -4614,7 +4615,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 const targetEdges = targetFlowData.edges || [];
                 const targetStartNode = targetNodes.find(n => n.type === 'trigger');
                 if (!targetStartNode) {
-                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
+                    logger.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
                     break;
                 }
                 
@@ -4632,36 +4633,36 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 while (currentNodeId && attempts < maxAttempts) {
                     const currentNode = targetNodes.find(n => n.id === currentNodeId);
                     if (!currentNode) {
-                        console.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
+                        logger.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
                         break;
                     }
                     
                     if (currentNode.type !== 'trigger') {
                         // Encontrou um nó válido (não é trigger)
-                        console.log(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
+                        logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
                         // Passa os dados do fluxo de destino para o processFlow recursivo
                         await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
                         break;
                     }
                     
                     // Se for trigger, continua procurando o próximo nó
-                    console.log(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
+                    logger.debug(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
                     currentNodeId = findNextNode(currentNodeId, 'a', targetEdges);
                     attempts++;
                 }
                 
                 if (!currentNodeId || attempts >= maxAttempts) {
                     if (attempts >= maxAttempts) {
-                        console.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
+                        logger.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
                     } else {
-                        console.log(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
+                        logger.debug(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
                     }
                 }
                 return 'flow_forwarded';
                 
             case 'action_create_invite_link':
                 try {
-                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+                    logger.debug(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
                     
                     // Buscar o supergroup_id do bot
                     const [botInvite] = await sql`
@@ -4692,21 +4693,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         );
                         if (unbanResponse?.ok) {
-                            console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                            logger.debug(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
                         } else if (unbanResponse && !unbanResponse.ok) {
                             const desc = (unbanResponse.description || '').toLowerCase();
                             if (desc.includes("can't remove chat owner")) {
-                                console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                                logger.debug(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
                             } else {
-                                console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                                logger.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
                             }
                         }
                     } catch (unbanError) {
                         const message = (unbanError?.message || '').toLowerCase();
                         if (message.includes("can't remove chat owner")) {
-                            console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                            logger.debug(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
                         } else {
-                            console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                            logger.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
                         }
                     }
                     
@@ -4752,19 +4753,19 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
                         }
                         
-                        console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
+                        logger.debug(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
                     } else {
                         throw new Error(`Falha ao criar link de convite: ${inviteResponse.description}`);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
+                    logger.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
                     throw error;
                 }
                 break;
                 
             case 'action_remove_user_from_group':
                 try {
-                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+                    logger.debug(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
                     
                     const [bot] = await sql`
                         SELECT telegram_supergroup_id 
@@ -4783,7 +4784,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                                         
                     const handleOwnerBanRestriction = () => {
-                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        logger.debug(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
                         variables.user_was_banned = false;
                         variables.banned_user_id = undefined;
                     };
@@ -4813,13 +4814,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             handleOwnerBanRestriction();
                             break;
                         }
-                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
+                        logger.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
                         throw banError;
                     }
 
-
                     if (banResponse.ok) {
-                        console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
+                        logger.debug(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
                         variables.user_was_banned = true;
                         variables.banned_user_id = userToRemove;
                         variables.last_ban_at = new Date().toISOString();
@@ -4836,15 +4836,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                     }
                                 );
                                 if (revokeResponse.ok) {
-                                    console.log(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
+                                    logger.debug(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
                                     variables.invite_link_revoked = true;
                                     delete variables.invite_link;
                                     delete variables.invite_link_name;
                                 } else {
-                                    console.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                                    logger.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
                                 }
                             } catch (revokeError) {
-                                console.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
+                                logger.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
                             }
                         }
                         
@@ -4875,14 +4875,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (message.includes("can't remove chat owner")) {
                         handleOwnerBanRestriction();
                     } else {
-                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                        logger.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
                         throw error;
                     }
                 }
                 break;
 
             default:
-                console.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
+                logger.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
                 break;
         }
     }
@@ -4897,7 +4897,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  */
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
-    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
     // ==========================================================
     // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
@@ -4937,7 +4937,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         // Usa os dados do fluxo fornecido (do forward_flow)
         nodes = flowNodes;
         edges = flowEdges;
-        console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+        logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
     } else {
         // Busca o fluxo ativo do banco
         const [flow] = await sql`
@@ -4945,7 +4945,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             WHERE bot_id = ${botId} AND is_active = TRUE
             ORDER BY updated_at DESC LIMIT 1`;
         if (!flow || !flow.nodes) {
-            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+            logger.info(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
             return;
         }
 
@@ -4959,16 +4959,16 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (!currentNodeId) {
         if (isStartCommand) {
-            console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+            logger.debug(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
             
             // Cancela tarefa de timeout pendente
             const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                    logger.debug(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) {
-                    console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                    logger.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
                 }
             }
 
@@ -4980,7 +4980,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             // Não é /start, verifica se está esperando resposta
             const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (userState && userState.waiting_for_input) {
-                console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
+                logger.debug(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges); // 'a' = Com Resposta
                 
                 // Carrega variáveis salvas no estado
@@ -4992,7 +4992,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             } else {
                 // Nova conversa sem /start (ou estado expirado), reinicia
-                console.log(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
+                logger.debug(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
@@ -5001,7 +5001,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     }
 
     if (!currentNodeId) {
-        console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
+        logger.debug(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
         await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         return;
     }
@@ -5015,11 +5015,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         let currentNode = nodes.find(node => node.id === currentNodeId);
         
         if (!currentNode) {
-            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
+            logger.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
             break;
         }
 
-        console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+        logger.debug(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
@@ -5059,12 +5059,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
                 
                 if (scheduledMediaActions.length > 0) {
-                    console.log(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
+                    logger.debug(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
                     variables._scheduled_media_actions = scheduledMediaActions;
                 }
             }
             
-            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
+            logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
             
             let actionResult;
             try {
@@ -5074,11 +5074,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             } catch (actionError) {
                 // Erro crítico durante execução de ação (ex: PIX não enviado por bot bloqueado)
-                console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao processar ações do nó ${currentNode.id}:`, actionError.message);
+                logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao processar ações do nó ${currentNode.id}:`, actionError.message);
                 
                 // Limpa o estado do usuário para evitar fluxo preso
                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                console.log(`${logPrefix} [Flow Engine] Estado do usuário limpo devido a erro crítico.`);
+                logger.debug(`${logPrefix} [Flow Engine] Estado do usuário limpo devido a erro crítico.`);
                 
                 // Re-lança o erro para ser capturado pelo try-catch do webhook
                 throw actionError;
@@ -5086,7 +5086,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             // 3. Verifica se uma ação 'forward_flow' foi executada
             if (actionResult === 'flow_forwarded') {
-                console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual.`);
+                logger.debug(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual.`);
                 currentNodeId = null; // Para o loop atual
                 break;
             }
@@ -5118,10 +5118,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     
-                    console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                 
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -5130,12 +5130,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             
             // 5. Verifica se o resultado foi de um 'action_check_pix'
             if (actionResult === 'paid') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
+                logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
                 currentNodeId = findNextNode(currentNode.id, 'a', edges); // 'a' = Pago
                 continue;
             }
             if (actionResult === 'pending') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
+                logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
                 currentNodeId = findNextNode(currentNode.id, 'b', edges); // 'b' = Pendente
                 continue;
             }
@@ -5147,7 +5147,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 
         // Tipo de nó desconhecido
-        console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
+        logger.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
         currentNodeId = null;
     }
     // ==========================================================
@@ -5158,10 +5158,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     if (!currentNodeId) {
         const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
         if (!state) {
-            console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+            logger.debug(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
             await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         } else {
-            console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+            logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
     }
 }
@@ -5177,23 +5177,23 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     try {
         // Validação mais robusta da estrutura da mensagem
         if (!message) {
-            console.warn('[Webhook] Requisição ignorada: objeto message ausente.');
+            logger.debug('[Webhook] Requisição ignorada: objeto message ausente.');
             return;
         }
         
         if (!message.chat) {
-            console.warn('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
+            logger.debug('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
             return;
         }
         
         if (!message.chat.id) {
-            console.warn('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
+            logger.debug('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
             return;
         }
         
         // Verifica se é uma mensagem válida (não callback_query, etc.)
         if (message.message_id === undefined) {
-            console.warn('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
+            logger.debug('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
             return;
         }
         const chatId = message.chat.id;
@@ -5202,7 +5202,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
 
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
-            console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
+            logger.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
             return;
         }
         const { seller_id: sellerId, bot_token: botToken } = bot;
@@ -5218,14 +5218,14 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                   // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
                   if (parts.length > 1 && parts[1].trim() !== '') {
                     const clickIdValue = text;
-                    console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
+                    logger.debug(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
             
                     // Cancela qualquer tarefa pendente e deleta o estado antigo.
                     const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (existingState && existingState.scheduled_message_id) {
                       try {
                         await qstashClient.messages.delete(existingState.scheduled_message_id);
-                        console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                        logger.debug(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
                       } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
                     }
                     await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -5235,7 +5235,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                  
                   } else {
                     // É um /start orgânico (sozinho), que você quer ignorar.
-                    console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
+                    logger.debug(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
                     // Não faz nada e apenas termina a execução.
                   }
                  
@@ -5250,7 +5250,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             if (userState.scheduled_message_id) {
                  try {
                     await qstashClient.messages.delete(userState.scheduled_message_id);
-                    console.log(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                    logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
                 } catch (e) { /* Ignora erros */ }
             }
 
@@ -5264,7 +5264,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                 if (nextNodeId) {
                     await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
                 } else {
-                    console.log(`[Webhook] Fim do fluxo após resposta do usuário.`);
+                    logger.debug(`[Webhook] Fim do fluxo após resposta do usuário.`);
                     await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
             } else {
