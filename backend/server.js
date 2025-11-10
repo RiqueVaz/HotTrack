@@ -28,6 +28,7 @@ const {
     isEnabled: isPrometheusEnabled,
     metrics: prometheusMetrics,
 } = require('./metrics');
+const METRICS_TOKEN = process.env.METRICS_TOKEN;
 
 // Configuração do Google OAuth
 const googleClient = new OAuth2Client(
@@ -155,16 +156,32 @@ const parseContentLength = (value) => {
 };
 
 if (isPrometheusEnabled) {
-    app.get('/metrics', async (_req, res) => {
-        try {
-            const metrics = await prometheusRegister.metrics();
-            res.setHeader('Content-Type', prometheusRegister.contentType);
-            res.send(metrics);
-        } catch (error) {
-            console.error('[Prometheus] Falha ao coletar métricas:', error);
-            res.status(500).send('Erro ao coletar métricas.');
+    app.get(
+        '/metrics',
+        (req, res, next) => {
+            if (!METRICS_TOKEN) {
+                console.warn('[Prometheus] METRICS_TOKEN não configurado. Recusando acesso ao /metrics.');
+                return res.status(500).send('Metrics token not configured.');
+            }
+
+            const authHeader = req.headers.authorization || '';
+            if (authHeader !== `Bearer ${METRICS_TOKEN}`) {
+                res.setHeader('WWW-Authenticate', 'Bearer');
+                return res.status(401).send('Unauthorized');
+            }
+            next();
+        },
+        async (_req, res) => {
+            try {
+                const metrics = await prometheusRegister.metrics();
+                res.setHeader('Content-Type', prometheusRegister.contentType);
+                res.send(metrics);
+            } catch (error) {
+                console.error('[Prometheus] Falha ao coletar métricas:', error);
+                res.status(500).send('Erro ao coletar métricas.');
+            }
         }
-    });
+    );
 
     app.use((req, res, next) => {
         if (METRICS_IGNORED_PATHS.has(req.path)) {
