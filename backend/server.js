@@ -27,6 +27,138 @@ const logger = require('./logger');
 
 
 
+// Configuração do Google OAuth
+const googleClient = new OAuth2Client(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/google-callback.html'
+);
+
+// Configuração do MailerSend
+const mailerSend = new MailerSend({
+    apiKey: process.env.MAILERSEND_API_KEY,
+});
+
+const qstashClient = new Client({
+  token: process.env.QSTASH_TOKEN,
+});
+
+const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
+
+const processDisparoWorker = require('./worker/process-disparo');
+const processTimeoutWorker = require('./worker/process-timeout');
+
+const receiver = new Receiver({
+    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+  });
+
+// Função de validação de URLs em texto (anti-links externos)
+const validateTextForUrls = (text) => {
+    if (!text || typeof text !== 'string') return { valid: true, urls: [] };
+    
+    // Remove variáveis do sistema antes de validar
+    const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
+    
+    // Padrões de URL a detectar
+    const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*)/gi;
+    
+    const foundUrls = [];
+    let match;
+    while ((match = urlPattern.exec(textWithoutVariables)) !== null) {
+        foundUrls.push(match[0]);
+    }
+    
+    return {
+        valid: foundUrls.length === 0,
+        urls: foundUrls
+    };
+};
+
+// Função de validação das ações do fluxo
+const validateFlowActions = (nodes) => {
+    if (!nodes || !Array.isArray(nodes)) return { valid: true };
+    
+    for (const node of nodes) {
+        const actions = node.data?.actions || [];
+        
+        for (const action of actions) {
+            // Validar texto de mensagem
+            if (action.type === 'message' && action.data?.text) {
+                const validation = validateTextForUrls(action.data.text);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+            
+            // Validar legendas
+            if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
+                const validation = validateTextForUrls(action.data.caption);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos nas legendas. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+        }
+    }
+    
+    return { valid: true };
+};
+
+const app = express();
+
+const METRICS_IGNORED_PATHS = new Set(['/metrics']);
+
+const resolveRouteLabel = (req, statusCode) => {
+    if (req.route?.path) {
+        const base = req.baseUrl && req.baseUrl !== '/' ? req.baseUrl : '';
+        return `${base}${req.route.path}` || req.route.path;
+    }
+
+    if (!req.route && statusCode === 404) {
+        return 'unmatched';
+    }
+
+    if (req.baseUrl) {
+        return req.baseUrl;
+    }
+
+    if (req.path) {
+        return req.path;
+    }
+
+    if (req.originalUrl) {
+        const withoutQuery = req.originalUrl.split('?')[0];
+        return withoutQuery || 'unknown';
+    }
+
+    return 'unknown';
+};
+
+const parseContentLength = (value) => {
+    if (Array.isArray(value)) {
+        return parseContentLength(value[0]);
+    }
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+};
+
+
+
+
+
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
 
