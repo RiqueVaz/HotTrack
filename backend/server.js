@@ -22,6 +22,57 @@ const { OAuth2Client } = require('google-auth-library');
 const { Client } = require("@upstash/qstash");
 const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
+const { createPixService } = require('./shared/pix');
+const logger = require('./logger');
+const {
+    register: prometheusRegister,
+    isEnabled: isPrometheusEnabled,
+    metrics: prometheusMetrics,
+} = require('./metrics');
+const METRICS_TOKEN = process.env.METRICS_TOKEN;
+
+const sanitizeMetricLabelValue = (value) => {
+    if (value === undefined || value === null) return 'unknown';
+    const str = String(value);
+    if (str.trim() === '') return 'unknown';
+    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
+};
+
+const formatMetricLabels = (labels = {}) =>
+    Object.keys(labels).reduce((acc, key) => {
+        acc[key] = sanitizeMetricLabelValue(labels[key]);
+        return acc;
+    }, {});
+
+const startHistogramTimer = (histogram, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return null;
+    const end = histogram.startTimer(formatMetricLabels(labels));
+    return typeof end === 'function' ? end : null;
+};
+
+const observeHistogram = (histogram, value, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return;
+    histogram.observe(formatMetricLabels(labels), value);
+};
+
+const incrementCounter = (counter, labels = {}, value = 1) => {
+    if (!isPrometheusEnabled || !counter) return;
+    counter.inc(formatMetricLabels(labels), value);
+};
+
+const measureDbQuery = async (operation, fn) => {
+    if (!isPrometheusEnabled || !prometheusMetrics.dbQueryDuration) {
+        return fn();
+    }
+    const endTimer = prometheusMetrics.dbQueryDuration.startTimer(formatMetricLabels({ operation }));
+    try {
+        return await fn();
+    } finally {
+        if (typeof endTimer === 'function') {
+            endTimer();
+        }
+    }
+};
 
 // Configuração do Google OAuth
 const googleClient = new OAuth2Client(
@@ -38,6 +89,9 @@ const mailerSend = new MailerSend({
 const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN,
 });
+
+const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
 const processDisparoWorker = require('./worker/process-disparo');
 const processTimeoutWorker = require('./worker/process-timeout');
@@ -105,6 +159,122 @@ const validateFlowActions = (nodes) => {
 };
 
 const app = express();
+
+const METRICS_IGNORED_PATHS = new Set(['/metrics']);
+
+const resolveRouteLabel = (req, statusCode) => {
+    if (req.route?.path) {
+        const base = req.baseUrl && req.baseUrl !== '/' ? req.baseUrl : '';
+        return `${base}${req.route.path}` || req.route.path;
+    }
+
+    if (!req.route && statusCode === 404) {
+        return 'unmatched';
+    }
+
+    if (req.baseUrl) {
+        return req.baseUrl;
+    }
+
+    if (req.path) {
+        return req.path;
+    }
+
+    if (req.originalUrl) {
+        const withoutQuery = req.originalUrl.split('?')[0];
+        return withoutQuery || 'unknown';
+    }
+
+    return 'unknown';
+};
+
+const parseContentLength = (value) => {
+    if (Array.isArray(value)) {
+        return parseContentLength(value[0]);
+    }
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+};
+
+if (isPrometheusEnabled) {
+    app.get(
+        '/metrics',
+        (req, res, next) => {
+            if (!METRICS_TOKEN) {
+                console.warn('[Prometheus] METRICS_TOKEN não configurado. Recusando acesso ao /metrics.');
+                return res.status(500).send('Metrics token not configured.');
+            }
+
+            const authHeader = req.headers.authorization || '';
+            if (authHeader !== `Bearer ${METRICS_TOKEN}`) {
+                res.setHeader('WWW-Authenticate', 'Bearer');
+                return res.status(401).send('Unauthorized');
+            }
+            next();
+        },
+        async (_req, res) => {
+            try {
+                const metrics = await prometheusRegister.metrics();
+                res.setHeader('Content-Type', prometheusRegister.contentType);
+                res.send(metrics);
+            } catch (error) {
+                console.error('[Prometheus] Falha ao coletar métricas:', error);
+                res.status(500).send('Erro ao coletar métricas.');
+            }
+        }
+    );
+
+    app.use((req, res, next) => {
+        if (METRICS_IGNORED_PATHS.has(req.path)) {
+            return next();
+        }
+
+        const requestBytes = Number.parseInt(req.headers['content-length'] || '0', 10) || 0;
+        const endTimer = prometheusMetrics.httpRequestDuration
+            ? prometheusMetrics.httpRequestDuration.startTimer()
+            : null;
+
+        res.on('finish', () => {
+            const routeLabel = resolveRouteLabel(req, res.statusCode);
+            const labels = {
+                method: req.method,
+                route: routeLabel,
+                status_code: String(res.statusCode),
+            };
+
+            if (prometheusMetrics.httpRequestsTotal) {
+                prometheusMetrics.httpRequestsTotal.inc(labels);
+            }
+
+            if (endTimer) {
+                endTimer(labels);
+            }
+
+            if (prometheusMetrics.httpRequestBytes && requestBytes > 0) {
+                prometheusMetrics.httpRequestBytes.observe(
+                    { method: req.method, route: routeLabel },
+                    requestBytes
+                );
+            }
+
+            if (prometheusMetrics.httpResponseBytes) {
+                const headerValue = res.getHeader('Content-Length') ?? res.getHeader('content-length');
+                const responseBytes = parseContentLength(headerValue);
+                if (responseBytes > 0) {
+                    prometheusMetrics.httpResponseBytes.observe(labels, responseBytes);
+                }
+            }
+        });
+
+        next();
+    });
+}
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
@@ -288,6 +458,10 @@ async function isDomainAllowedForPressel(presselId, origin) {
   }
 }
 
+const sanitizeTagTitle = (title = '') => title.trim();
+const normalizeHexColor = (color = '') => color.trim().toUpperCase();
+const isValidTagColor = (color) => TAG_COLOR_REGEX.test(color);
+
 // Middleware CORS seletivo baseado na rota
 const corsOptions = async (req, callback) => {
   const origin = req.header('Origin');
@@ -354,6 +528,26 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 // --- OTIMIZAÇÃO CRÍTICA: A conexão com o banco é inicializada UMA VEZ e reutilizada ---
 const sql = neon(process.env.DATABASE_URL);
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET não configurado.');
+}
+
+if (!process.env.JWT_REFRESH_SECRET) {
+    console.warn('[Auth] JWT_REFRESH_SECRET não definido. Usando JWT_SECRET como fallback.');
+}
+
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET;
+
+const ACCESS_TOKEN_TTL_SECONDS = resolvePositiveInt(
+    process.env.JWT_ACCESS_TOKEN_TTL_SECONDS || process.env.JWT_ACCESS_TTL_SECONDS,
+    900
+);
+const REFRESH_TOKEN_TTL_SECONDS = resolvePositiveInt(
+    process.env.JWT_REFRESH_TOKEN_TTL_SECONDS || process.env.JWT_REFRESH_TTL_SECONDS,
+    60 * 60 * 24 * 30 // 30 dias
+);
+
 // ==========================================================
 //          VARIÁVEIS DE AMBIENTE E CONFIGURAÇÕES
 // ==========================================================
@@ -364,6 +558,18 @@ const DOCUMENTATION_URL = process.env.DOCUMENTATION_URL || 'https://documentacao
 // ==========================================================
 //          LÓGICA DE RETRY PARA O BANCO DE DADOS
 // ==========================================================
+function resolvePositiveInt(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+    }
+
+    if (value !== undefined && value !== null) {
+        console.warn(`[Auth] Valor inválido "${value}" para configuração numérica. Usando fallback ${fallback}.`);
+    }
+    return fallback;
+}
+
 async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
@@ -393,11 +599,35 @@ const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
+const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+const TAG_TITLE_MAX_LENGTH = 12;
+const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Cache simples para evitar ultrapassar rate limit em consultas PushinPay (min. 1/min).
 const pushinpayLastCheckAt = new Map(); // key: provider_transaction_id, value: timestamp (ms)
+const wiinpayLastCheckAt = new Map();
+
+const {
+    getSyncPayAuthToken,
+    generatePixForProvider,
+    generatePixWithFallback
+} = createPixService({
+    sql,
+    sqlWithRetry,
+    axios,
+    uuidv4,
+    syncPayTokenCache,
+    adminApiKey: ADMIN_API_KEY,
+    synPayBaseUrl: SYNCPAY_API_BASE_URL,
+    pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
+    cnpaySplitProducerId: CNPAY_SPLIT_PRODUCER_ID,
+    oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
+    brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
+    wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    hottrackApiUrl: process.env.HOTTRACK_API_URL,
+});
 
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
@@ -437,7 +667,6 @@ async function createNetlifySite(accessToken, siteName) {
         };
     }
 }
-
 async function deployToNetlify(accessToken, siteId, htmlContent, fileName = 'index.html') {
     try {
         // 1. Calcular hash SHA1 do conteúdo
@@ -564,7 +793,6 @@ async function getNetlifySites(accessToken) {
         };
     }
 }
-
 async function deleteNetlifySite(accessToken, siteId) {
     try {
         await axios.delete(`https://api.netlify.com/api/v1/sites/${siteId}`, {
@@ -930,7 +1158,6 @@ async function replaceVariables(text, variables) {
     }
     return processedText;
 }
-
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
@@ -971,7 +1198,7 @@ async function processStepForQStash(step, sellerId) {
         return step;
     }
     
-    const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
     const fileUrl = step[urlMap[step.type]];
     
     if (!fileUrl) {
@@ -1051,14 +1278,105 @@ async function handleMediaNode(node, botToken, chatId, caption) {
     return response;
 }
 
+// --- FUNÇÕES DE SUPORTE A TOKENS ---
+function hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getRequestFingerprint(req) {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    let ipAddress = null;
+
+    if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+        ipAddress = forwardedFor[0];
+    } else if (typeof forwardedFor === 'string') {
+        ipAddress = forwardedFor.split(',')[0].trim();
+    } else if (req.ip) {
+        ipAddress = req.ip;
+    }
+
+    const userAgentHeader = req.headers['user-agent'];
+    const userAgent = userAgentHeader ? String(userAgentHeader).slice(0, 512) : null;
+
+    return { ipAddress, userAgent };
+}
+
+async function persistRefreshToken({ sellerId, refreshToken, tokenId, userAgent, ipAddress }) {
+    const tokenHash = hashToken(refreshToken);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);
+
+    await sql`
+        INSERT INTO seller_refresh_tokens (seller_id, token_id, token_hash, user_agent, ip_address, expires_at)
+        VALUES (${sellerId}, ${tokenId}::uuid, ${tokenHash}, ${userAgent}, ${ipAddress}, ${expiresAt})
+    `;
+
+    return { tokenHash, expiresAt };
+}
+
+async function findRefreshTokenByHash(tokenHash) {
+    if (!tokenHash) {
+        return null;
+    }
+
+    const rows = await sql`
+        SELECT id, seller_id, token_id, token_hash, user_agent, ip_address, created_at, expires_at, last_used_at
+        FROM seller_refresh_tokens
+        WHERE token_hash = ${tokenHash}
+        LIMIT 1
+    `;
+
+    return rows[0] || null;
+}
+
+async function revokeRefreshTokenByHash(tokenHash) {
+    if (!tokenHash) {
+        return;
+    }
+
+    await sql`
+        DELETE FROM seller_refresh_tokens
+        WHERE token_hash = ${tokenHash}
+    `;
+}
+
+async function issueAuthTokensForSeller(seller, req) {
+    const tokenPayload = { id: seller.id, email: seller.email };
+    const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
+
+    const tokenId = uuidv4();
+    const refreshPayload = { sub: seller.id, tokenId };
+    const refreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, { expiresIn: REFRESH_TOKEN_TTL_SECONDS });
+
+    const { ipAddress, userAgent } = getRequestFingerprint(req);
+    await persistRefreshToken({
+        sellerId: seller.id,
+        refreshToken,
+        tokenId,
+        userAgent,
+        ipAddress,
+    });
+
+    return {
+        accessToken,
+        refreshToken,
+        accessTokenExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+        refreshTokenExpiresIn: REFRESH_TOKEN_TTL_SECONDS,
+    };
+}
+
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
 async function authenticateJwt(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ message: 'Token não fornecido.' });
     
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: 'Token inválido ou expirado.' });
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            if (err.name === 'TokenExpiredError') {
+                return res.status(401).json({ message: 'Token expirado.', code: 'ACCESS_TOKEN_EXPIRED' });
+            }
+            return res.status(403).json({ message: 'Token inválido.', code: 'ACCESS_TOKEN_INVALID' });
+        }
         req.user = user;
         next();
     });
@@ -1080,202 +1398,80 @@ async function logApiRequest(req, res, next) {
 }
 
 // --- FUNÇÕES DE LÓGICA DE NEGÓCIO ---
-async function getSyncPayAuthToken(seller) {
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
-        return cachedToken.accessToken;
-    }
-    if (!seller.syncpay_client_id || !seller.syncpay_client_secret) {
-        throw new Error('Credenciais da SyncPay não configuradas para este vendedor.');
-    }
-    console.log(`[SyncPay] Solicitando novo token para o vendedor ID: ${seller.id}`);
-    const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/auth-token`, {
-        client_id: seller.syncpay_client_id,
-        client_secret: seller.syncpay_client_secret,
-    });
-    const { access_token, expires_in } = response.data;
-    const expiresAt = Date.now() + (expires_in * 1000);
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
-    return access_token;
-}
+// Funções de geração de PIX movidas para backend/shared/pix.js
 
-// NOVA FUNÇÃO REUTILIZÁVEL PARA GERAR PIX COM FALLBACK
-async function generatePixWithFallback(seller, value_cents, host, apiKey, ip_address, click_id_internal) {
-    const providerOrder = [
-        seller.pix_provider_primary,
-        seller.pix_provider_secondary,
-        seller.pix_provider_tertiary
-    ].filter(Boolean); // Remove nulos ou vazios
-
-    if (providerOrder.length === 0) {
-        throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
-    }
-
-    let lastError = null;
-
-    for (const provider of providerOrder) {
-        try {
-            console.log(`[PIX Fallback] Tentando gerar PIX com ${provider.toUpperCase()} para ${value_cents} centavos.`);
-            const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
-            
-
-            // Salvar a transação no banco AQUI DENTRO da função de fallback
-            // Isso garante que a transação só é salva se a geração for bem-sucedida
-            const [transaction] = await sql`
-                INSERT INTO pix_transactions (
-                    click_id_internal, pix_value, qr_code_text, qr_code_base64,
-                    provider, provider_transaction_id, pix_id
-                ) VALUES (
-                    ${click_id_internal}, ${value_cents / 100}, ${pixResult.qr_code_text},
-                    ${pixResult.qr_code_base64}, ${pixResult.provider},
-                    ${pixResult.transaction_id}, ${pixResult.transaction_id}
-                ) RETURNING id`;
-                console.log(`[PIX Fallback] SUCESSO com ${provider.toUpperCase()}. Transaction ID: ${pixResult.transaction_id}`);
-             // Adiciona o ID interno da transação salva ao resultado para uso posterior
-            pixResult.internal_transaction_id = transaction.id;
-
-            return pixResult; // Retorna o resultado SUCESSO
-
-        } catch (error) {
-            console.error(`[PIX Fallback] FALHA ao gerar PIX com ${provider.toUpperCase()}:`, error.response?.data?.message || error.message);
-            lastError = error; // Guarda o erro para o caso de todos falharem
-        }
-    }
-
-    // Se o loop terminar sem sucesso, lança o último erro ocorrido
-    console.error(`[PIX Fallback FINAL ERROR] Seller ID: ${seller?.id} - Todas as tentativas de geração PIX falharam.`);
-    // Tenta repassar a mensagem de erro mais específica do provedor, se disponível
-    const specificMessage = lastError.response?.data?.message || lastError.message || 'Todos os provedores de PIX falharam.';
-    throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
-}
-
-async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
-    let pixData;
-    let acquirer = 'Não identificado';
-    const commission_rate = seller.commission_rate || 0.0500;
-    
-    // Preferir domínio do HOTTRACK_API_URL para webhooks; alerta se ausente
-    const preferredHost = process.env.HOTTRACK_API_URL ? (() => { try { return new URL(process.env.HOTTRACK_API_URL).host; } catch { return host; } })() : host;
-    if (!process.env.HOTTRACK_API_URL) {
-        console.warn('[PIX] HOTTRACK_API_URL não definido. Usando host do request para callbackUrl:', host);
-    }
-
-    const clientPayload = {
-        document: { number: "21376710773", type: "CPF" },
-        name: "Cliente Padrão",
-        email: "gabriel@email.com",
-        phone: "27995310379"
+function extractWiinpayCustomer(rawData) {
+    if (!rawData) return {};
+    const container = rawData.customer || rawData.payer || rawData.cliente || rawData?.data?.customer || rawData?.payment?.customer || {};
+    const name = container?.name || container?.full_name || container?.nome;
+    const document =
+        container?.document ||
+        container?.document_number ||
+        container?.documento ||
+        container?.cpf ||
+        container?.cnpj ||
+        container?.tax_id;
+    return {
+        name: name || null,
+        document: document || null
     };
-    
-    if (provider === 'brpix') {
-        if (!seller.brpix_secret_key || !seller.brpix_company_id) {
-            throw new Error('Credenciais da BR PIX não configuradas para este vendedor.');
-        }
-        const credentials = Buffer.from(`${seller.brpix_secret_key}:${seller.brpix_company_id}`).toString('base64');
-        
-        const payload = {
-            customer: clientPayload,
-            items: [{ title: "Produto Digital", unitPrice: parseInt(value_cents, 10), quantity: 1 }],
-            paymentMethod: "PIX",
-            amount: parseInt(value_cents, 10),
-            pix: { expiresInDays: 1 },
-            ip: ip_address
-        };
-
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && BRPIX_SPLIT_RECIPIENT_ID) {
-            payload.split = [{ recipientId: BRPIX_SPLIT_RECIPIENT_ID, amount: commission_cents }];
-        }
-        const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
-            headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' }
-        });
-        pixData = response.data;
-        acquirer = "BRPix";
-
-        const brpixTransactionId = pixData?.transaction_id || pixData?.id;
-        const qrCodeText =
-            pixData?.pix?.qrcode ||
-            pixData?.pix?.qrcodeText ||
-            pixData?.pix?.qr_code ||
-            pixData?.pix?.qrCode;
-        const qrCodeBase64 =
-            pixData?.pix?.qr_code_base64 ||
-            pixData?.pix?.qrcode_base64 ||
-            pixData?.pix?.qrcode ||
-            pixData?.pix?.qr_code;
-
-        return {
-            qr_code_text: qrCodeText,
-            qr_code_base64: qrCodeBase64,
-            transaction_id: brpixTransactionId,
-            acquirer,
-            provider
-        };
-    } else if (provider === 'syncpay') {
-        const token = await getSyncPayAuthToken(seller);
-        const payload = { 
-            amount: value_cents / 100, 
-            payer: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            webhook_url: `https://${preferredHost}/api/webhook/syncpay`
-        };
-        const commission_percentage = commission_rate * 100;
-        if (apiKey !== ADMIN_API_KEY && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
-            payload.split = [{
-                percentage: Math.round(commission_percentage), 
-                user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID 
-            }];
-        }
-        const response = await axios.post(`${SYNCPAY_API_BASE_URL}/api/partner/v1/cash-in`, payload, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        pixData = response.data;
-        acquirer = "SyncPay";
-        return { 
-            qr_code_text: pixData.pix_code, 
-            qr_code_base64: null, 
-            transaction_id: pixData.identifier, 
-            acquirer, 
-            provider 
-        };
-    } else if (provider === 'cnpay' || provider === 'oasyfy') {
-        const isCnpay = provider === 'cnpay';
-        const publicKey = isCnpay ? seller.cnpay_public_key : seller.oasyfy_public_key;
-        const secretKey = isCnpay ? seller.cnpay_secret_key : seller.oasyfy_secret_key;
-        if (!publicKey || !secretKey) throw new Error(`Credenciais para ${provider.toUpperCase()} não configuradas.`);
-        const apiUrl = isCnpay ? 'https://painel.appcnpay.com/api/v1/gateway/pix/receive' : 'https://app.oasyfy.com/api/v1/gateway/pix/receive';
-        const splitId = isCnpay ? CNPAY_SPLIT_PRODUCER_ID : OASYFY_SPLIT_PRODUCER_ID;
-        const payload = {
-            identifier: uuidv4(),
-            amount: value_cents / 100,
-            client: { name: "Cliente Padrão", email: "gabriel@gmail.com", document: "21376710773", phone: "27995310379" },
-            callbackUrl: `https://${preferredHost}/api/webhook/${provider}`
-        };
-        const commission = parseFloat(((value_cents / 100) * commission_rate).toFixed(2));
-        if (apiKey !== ADMIN_API_KEY && commission > 0 && splitId) {
-            payload.splits = [{ producerId: splitId, amount: commission }];
-        }
-        const response = await axios.post(apiUrl, payload, { headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey } });
-        pixData = response.data;
-        acquirer = isCnpay ? "CNPay" : "Oasy.fy";
-        return { qr_code_text: pixData.pix.code, qr_code_base64: pixData.pix.base64, transaction_id: pixData.transactionId, acquirer, provider };
-    } else { // Padrão é PushinPay
-        if (!seller.pushinpay_token) throw new Error(`Token da PushinPay não configurado.`);
-        const payload = {
-            value: value_cents,
-            webhook_url: `https://${preferredHost}/api/webhook/pushinpay`,
-        };
-        console.log(`[PushinPay] Criando PIX com webhook_url: ${payload.webhook_url}`);
-        const commission_cents = Math.floor(value_cents * commission_rate);
-        if (apiKey !== ADMIN_API_KEY && commission_cents > 0 && PUSHINPAY_SPLIT_ACCOUNT_ID) {
-            payload.split_rules = [{ value: commission_cents, account_id: PUSHINPAY_SPLIT_ACCOUNT_ID }];
-        }
-        const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-        pixData = pushinpayResponse.data;
-        acquirer = "Woovi";
-        return { qr_code_text: pixData.qr_code, qr_code_base64: pixData.qr_code_base64, transaction_id: pixData.id, acquirer, provider: 'pushinpay' };
-    }
 }
 
+function getSellerWiinpayApiKey(seller) {
+    if (!seller) return null;
+    return seller.wiinpay_api_key || seller.wiinpay_token || seller.wiinpay_key || null;
+}
+
+function parseWiinpayPayment(rawData) {
+    if (!rawData) {
+        return { id: null, status: null, customer: {} };
+    }
+    const payment =
+        rawData.payment ||
+        rawData.data ||
+        rawData.payload ||
+        rawData.transaction ||
+        rawData;
+
+    const id =
+        payment?.id ||
+        payment?.payment_id ||
+        payment?.paymentId ||
+        payment?.transaction_id ||
+        payment?.transactionId ||
+        rawData.payment_id ||
+        rawData.paymentId ||
+        rawData.id;
+
+    const status = String(
+        payment?.status ||
+        rawData.status ||
+        rawData.payment_status ||
+        payment?.payment_status ||
+        ''
+    ).toLowerCase();
+
+    return {
+        id: id || null,
+        status,
+        customer: extractWiinpayCustomer(payment || rawData || {})
+    };
+}
+
+async function getWiinpayPaymentStatus(paymentId, apiKey) {
+    if (!apiKey) {
+        throw new Error('Credenciais da WiinPay não configuradas.');
+    }
+    const response = await axios.get(`https://api.wiinpay.com.br/payment/list/${paymentId}`, {
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+
+    const data = Array.isArray(response.data) ? response.data[0] : response.data;
+    return parseWiinpayPayment(data);
+}
 async function handleSuccessfulPayment(transaction_id, customerData) {
     try {
         const [transaction] = await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
@@ -1393,7 +1589,6 @@ app.get('/api/pix-status/:transaction_id', async (req, res) => {
         res.status(500).json({ error: 'Erro interno ao verificar o status do PIX.' });
     }
 });
-
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
@@ -1615,11 +1810,11 @@ app.put('/api/admin/sellers/:id/password', authenticateAdmin, async (req, res) =
 });
 app.put('/api/admin/sellers/:id/credentials', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    const { pushinpay_token, cnpay_public_key, cnpay_secret_key } = req.body;
+    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key } = req.body;
     try {
         await sql`
             UPDATE sellers 
-            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}
+            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}
             WHERE id = ${id};`;
         res.status(200).json({ message: 'Credenciais alteradas com sucesso.' });
     } catch (error) {
@@ -1726,7 +1921,7 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         // Validar se há links em campos de texto
         const validation = validateFlowActions(nodesArray);
         if (!validation.valid) {
-            console.log(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            logger.info(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
             return res.status(400).json({ message: validation.message });
         }
         
@@ -1766,7 +1961,6 @@ app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
     } catch (error) { res.status(500).json({ message: 'Erro ao atualizar status do fluxo.' }); }
 });
-
 app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
     try {
 
@@ -1795,20 +1989,75 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
         const users = await sqlWithRetry(`
-            SELECT 
-                t.chat_id,
-                (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
-                (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
-                (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
-                (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
-                MAX(t.created_at) as last_message_at
-            FROM telegram_chats t
-            WHERE t.bot_id = $1 AND t.seller_id = $2
-            GROUP BY t.chat_id
-            ORDER BY last_message_at DESC;
+            WITH base_chats AS (
+                SELECT 
+                    t.chat_id,
+                    (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
+                    (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
+                    (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
+                    (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
+                    MAX(t.created_at) as last_message_at
+                FROM telegram_chats t
+                WHERE t.bot_id = $1 AND t.seller_id = $2
+                GROUP BY t.chat_id
+            ),
+            latest_messages AS (
+                SELECT DISTINCT ON (chat_id)
+                    chat_id,
+                    message_text,
+                    sender_type,
+                    created_at
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+                ORDER BY chat_id, created_at DESC
+            ),
+            paid_leads AS (
+                SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                JOIN clicks c ON c.click_id = tc.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc.bot_id = $1
+                  AND tc.seller_id = $2
+                  AND pt.status = 'paid'
+            ),
+            custom_tags AS (
+                SELECT
+                    lcta.chat_id,
+                    json_agg(
+                        json_build_object(
+                            'id', lct.id,
+                            'title', lct.title,
+                            'color', lct.color,
+                            'bot_id', lct.bot_id
+                        )
+                        ORDER BY LOWER(lct.title)
+                    ) AS tags
+                FROM lead_custom_tag_assignments lcta
+                JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
+                WHERE lcta.bot_id = $1
+                  AND lcta.seller_id = $2
+                GROUP BY lcta.chat_id
+            )
+            SELECT
+                bc.chat_id,
+                bc.first_name,
+                bc.last_name,
+                bc.username,
+                bc.click_id,
+                bc.last_message_at,
+                lm.message_text,
+                lm.sender_type AS last_sender_type,
+                COALESCE(ct.tags, '[]'::json) AS custom_tags,
+                CASE WHEN pl.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
+            FROM base_chats bc
+            LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
+            LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
+            LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
+            ORDER BY bc.last_message_at DESC NULLS LAST;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
+        console.error('Erro ao buscar usuários do chat:', error);
         res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
     }
 });
@@ -1860,6 +2109,188 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
     }
 });
 
+// --- ROTAS DE TAGS PERSONALIZADAS ---
+app.get('/api/tags', authenticateJwt, async (req, res) => {
+    const { botId } = req.query;
+
+    try {
+        let query = `
+            SELECT id, title, color, bot_id, created_at
+            FROM lead_custom_tags
+            WHERE seller_id = $1
+        `;
+        const params = [req.user.id];
+
+        if (botId !== undefined) {
+            const parsedBotId = parseInt(botId, 10);
+            if (Number.isNaN(parsedBotId)) {
+                return res.status(400).json({ message: 'botId inválido.' });
+            }
+            query += ' AND bot_id = $2';
+            params.push(parsedBotId);
+        }
+
+        query += ' ORDER BY LOWER(title)';
+
+        const tags = await sqlWithRetry(query, params);
+        res.status(200).json(tags);
+    } catch (error) {
+        console.error('Erro ao listar tags personalizadas:', error);
+        res.status(500).json({ message: 'Erro ao listar tags.' });
+    }
+});
+
+app.post('/api/tags', authenticateJwt, async (req, res) => {
+    const { title, color, botId } = req.body || {};
+    const trimmedTitle = sanitizeTagTitle(title || '');
+    const normalizedColor = normalizeHexColor(color || '');
+
+    if (!trimmedTitle) {
+        return res.status(400).json({ message: 'Título da tag é obrigatório.' });
+    }
+
+    if (trimmedTitle.length > TAG_TITLE_MAX_LENGTH) {
+        return res.status(400).json({ message: `Título deve ter no máximo ${TAG_TITLE_MAX_LENGTH} caracteres.` });
+    }
+
+    if (!normalizedColor || !isValidTagColor(normalizedColor)) {
+        return res.status(400).json({ message: 'Cor inválida. Utilize o formato HEX (#RRGGBB).' });
+    }
+
+    const parsedBotId = parseInt(botId, 10);
+    if (Number.isNaN(parsedBotId)) {
+        return res.status(400).json({ message: 'botId inválido.' });
+    }
+
+    try {
+        const [bot] = await sqlWithRetry(
+            'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
+            [parsedBotId, req.user.id]
+        );
+
+        if (!bot) {
+            return res.status(404).json({ message: 'Bot não encontrado.' });
+        }
+
+        const [tag] = await sqlWithRetry(
+            `INSERT INTO lead_custom_tags (seller_id, bot_id, title, color)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, title, color, bot_id, created_at`,
+            [req.user.id, parsedBotId, trimmedTitle, normalizedColor]
+        );
+
+        res.status(201).json(tag);
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ message: 'Já existe uma tag com esse título para este bot.' });
+        }
+        console.error('Erro ao criar tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao criar tag.' });
+    }
+});
+
+app.delete('/api/tags/:id', authenticateJwt, async (req, res) => {
+    const tagId = parseInt(req.params.id, 10);
+    if (Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'ID de tag inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [tagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        await sqlWithRetry('DELETE FROM lead_custom_tags WHERE id = $1', [tagId]);
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao excluir tag personalizada:', error);
+        res.status(500).json({ message: 'Erro ao excluir tag.' });
+    }
+});
+
+app.post('/api/leads/:botId/:chatId/tags', authenticateJwt, async (req, res) => {
+    const { tagId } = req.body || {};
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const parsedTagId = parseInt(tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId) {
+        return res.status(400).json({ message: 'Parâmetros do lead inválidos.' });
+    }
+
+    if (Number.isNaN(parsedTagId)) {
+        return res.status(400).json({ message: 'tagId inválido.' });
+    }
+
+    try {
+        const [tag] = await sqlWithRetry(
+            'SELECT id, bot_id FROM lead_custom_tags WHERE id = $1 AND seller_id = $2',
+            [parsedTagId, req.user.id]
+        );
+
+        if (!tag) {
+            return res.status(404).json({ message: 'Tag não encontrada.' });
+        }
+
+        if (tag.bot_id !== botId) {
+            return res.status(400).json({ message: 'Tag não pertence a este bot.' });
+        }
+
+        const [chatExists] = await sqlWithRetry(
+            'SELECT 1 FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 LIMIT 1',
+            [botId, chatId, req.user.id]
+        );
+
+        if (!chatExists) {
+            return res.status(404).json({ message: 'Lead não encontrado.' });
+        }
+
+        await sqlWithRetry(
+            `INSERT INTO lead_custom_tag_assignments (tag_id, seller_id, bot_id, chat_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT DO NOTHING`,
+            [parsedTagId, req.user.id, botId, chatId]
+        );
+
+        res.status(201).json({ message: 'Tag adicionada ao lead.' });
+    } catch (error) {
+        console.error('Erro ao adicionar tag ao lead:', error);
+        res.status(500).json({ message: 'Erro ao adicionar tag ao lead.' });
+    }
+});
+
+app.delete('/api/leads/:botId/:chatId/tags/:tagId', authenticateJwt, async (req, res) => {
+    const botId = parseInt(req.params.botId, 10);
+    const chatId = req.params.chatId;
+    const tagId = parseInt(req.params.tagId, 10);
+
+    if (Number.isNaN(botId) || !chatId || Number.isNaN(tagId)) {
+        return res.status(400).json({ message: 'Parâmetros inválidos.' });
+    }
+
+    try {
+        const deleted = await sqlWithRetry(
+            `DELETE FROM lead_custom_tag_assignments
+             WHERE tag_id = $1 AND seller_id = $2 AND bot_id = $3 AND chat_id = $4
+             RETURNING tag_id`,
+            [tagId, req.user.id, botId, chatId]
+        );
+
+        if (deleted.length === 0) {
+            return res.status(404).json({ message: 'Tag não vinculada a este lead.' });
+        }
+
+        res.status(204).send();
+    } catch (error) {
+        console.error('Erro ao remover tag do lead:', error);
+        res.status(500).json({ message: 'Erro ao remover tag do lead.' });
+    }
+});
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
     const { name, email, password, phone } = req.body;
@@ -1958,7 +2389,6 @@ app.post('/api/sellers/register', async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 // Endpoint para verificar email
 app.post('/api/sellers/verify-email', async (req, res) => {
     const { code, email } = req.body;
@@ -2008,7 +2438,6 @@ app.post('/api/sellers/verify-email', async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 // Endpoint para reenviar email de verificação
 app.post('/api/sellers/resend-verification', async (req, res) => {
     const { email } = req.body;
@@ -2126,11 +2555,18 @@ app.post('/api/sellers/login', async (req, res) => {
         const isPasswordCorrect = await bcrypt.compare(password, seller.password_hash);
         if (!isPasswordCorrect) return res.status(401).json({ message: 'Senha incorreta.' });
         
-        const tokenPayload = { id: seller.id, email: seller.email };
-        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        const authTokens = await issueAuthTokensForSeller(seller, req);
         
         const { password_hash, ...sellerData } = seller;
-        res.status(200).json({ message: 'Login bem-sucedido!', token, seller: sellerData });
+        res.status(200).json({
+            message: 'Login bem-sucedido!',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+            seller: sellerData
+        });
 
     } catch (error) {
         console.error("ERRO DETALHADO NO LOGIN:", error); 
@@ -2215,15 +2651,17 @@ app.post('/api/auth/google/callback', async (req, res) => {
             return res.status(403).json({ message: 'Este usuário está bloqueado.' });
         }
 
-        // Gerar JWT
-        const tokenPayload = { id: seller.id, email: seller.email };
-        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        const authTokens = await issueAuthTokensForSeller(seller, req);
         
         const { password_hash, ...sellerData } = seller;
-        res.status(200).json({ 
-            message: 'Login com Google bem-sucedido!', 
-            token, 
-            seller: sellerData 
+        res.status(200).json({
+            message: 'Login com Google bem-sucedido!',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+            seller: sellerData
         });
 
     } catch (error) {
@@ -2232,10 +2670,108 @@ app.post('/api/auth/google/callback', async (req, res) => {
     }
 });
 
+app.post('/api/auth/refresh', async (req, res) => {
+    const refreshToken = req.body?.refreshToken;
+
+    if (!refreshToken) {
+        return res.status(400).json({ message: 'Refresh token é obrigatório.', code: 'REFRESH_TOKEN_REQUIRED' });
+    }
+
+    const tokenHash = hashToken(refreshToken);
+    let decoded;
+
+    try {
+        decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    } catch (error) {
+        console.warn('[Auth] Falha ao verificar refresh token:', error.message);
+        await revokeRefreshTokenByHash(tokenHash);
+
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Refresh token expirado.', code: 'REFRESH_TOKEN_EXPIRED' });
+        }
+
+        return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_INVALID' });
+    }
+
+    try {
+        const storedToken = await findRefreshTokenByHash(tokenHash);
+        if (!storedToken) {
+            return res.status(401).json({ message: 'Refresh token não reconhecido.', code: 'REFRESH_TOKEN_NOT_FOUND' });
+        }
+
+        if (decoded.tokenId && decoded.tokenId !== storedToken.token_id) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_MISMATCH' });
+        }
+
+        if (decoded.sub && Number.parseInt(decoded.sub, 10) !== storedToken.seller_id) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token inválido.', code: 'REFRESH_TOKEN_SUBJECT_MISMATCH' });
+        }
+
+        if (new Date(storedToken.expires_at).getTime() <= Date.now()) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(401).json({ message: 'Refresh token expirado.', code: 'REFRESH_TOKEN_EXPIRED' });
+        }
+
+        await sql`
+            UPDATE seller_refresh_tokens
+            SET last_used_at = now()
+            WHERE token_hash = ${tokenHash}
+        `;
+
+        const sellerResult = await sql`
+            SELECT * FROM sellers WHERE id = ${storedToken.seller_id} LIMIT 1
+        `;
+
+        if (sellerResult.length === 0) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(403).json({ message: 'Usuário não encontrado.' });
+        }
+
+        const seller = sellerResult[0];
+
+        if (!seller.is_active) {
+            await revokeRefreshTokenByHash(tokenHash);
+            return res.status(403).json({ message: 'Este usuário está bloqueado.' });
+        }
+
+        await revokeRefreshTokenByHash(tokenHash);
+
+        const authTokens = await issueAuthTokensForSeller(seller, req);
+
+        return res.status(200).json({
+            message: 'Tokens renovados com sucesso.',
+            token: authTokens.accessToken,
+            accessToken: authTokens.accessToken,
+            refreshToken: authTokens.refreshToken,
+            accessTokenExpiresIn: authTokens.accessTokenExpiresIn,
+            refreshTokenExpiresIn: authTokens.refreshTokenExpiresIn,
+        });
+    } catch (error) {
+        console.error('[Auth] Erro ao renovar tokens:', error);
+        return res.status(500).json({ message: 'Erro ao renovar tokens.' });
+    }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+    try {
+        const refreshToken = req.body?.refreshToken;
+        if (refreshToken) {
+            const tokenHash = hashToken(refreshToken);
+            await revokeRefreshTokenByHash(tokenHash);
+        }
+        res.status(200).json({ message: 'Logout realizado com sucesso.' });
+    } catch (error) {
+        console.error('[Auth] Erro ao realizar logout:', error);
+        res.status(500).json({ message: 'Erro ao realizar logout.' });
+    }
+});
+
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sql`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sql`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sql`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -3309,6 +3845,7 @@ app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     const { 
         pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key,
+        wiinpay_api_key,
         syncpay_client_id, syncpay_client_secret,
         brpix_secret_key, brpix_company_id,
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
@@ -3320,6 +3857,7 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
             cnpay_secret_key = ${cnpay_secret_key || null}, 
             oasyfy_public_key = ${oasyfy_public_key || null}, 
             oasyfy_secret_key = ${oasyfy_secret_key || null},
+            wiinpay_api_key = ${wiinpay_api_key || null},
             syncpay_client_id = ${syncpay_client_id || null},
             syncpay_client_secret = ${syncpay_client_secret || null},
             brpix_secret_key = ${brpix_secret_key || null},
@@ -3389,7 +3927,6 @@ app.get('/api/netlify/sites', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 app.post('/api/netlify/create-site', authenticateJwt, async (req, res) => {
     const { site_name } = req.body;
     
@@ -3508,13 +4045,17 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
 
         // --- INÍCIO DA LÓGICA PARA ENCONTRAR seller_id ---
         if (presselId) {
-            const [pressel] = await sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`;
+            const [pressel] = await measureDbQuery('register_click_pressel_lookup', () =>
+                sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`
+            );
             if (!pressel) {
                 return res.status(404).json({ message: 'Pressel não encontrada.' });
             }
             sellerId = pressel.seller_id;
         } else if (checkoutId) {
-            const [checkout] = await sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`;
+            const [checkout] = await measureDbQuery('register_click_checkout_lookup', () =>
+                sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`
+            );
             if (!checkout) {
                 return res.status(404).json({ message: 'Checkout não encontrado.' });
             }
@@ -3529,13 +4070,15 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         // --- FIM DA LÓGICA PARA ENCONTRAR seller_id ---
 
         // MODIFICADO: Query INSERT usa o sellerId encontrado
-        const result = await sql`INSERT INTO clicks (
-            seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
-            utm_source, utm_campaign, utm_medium, utm_content, utm_term
-        ) VALUES (
-            ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
-            ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
-        ) RETURNING *;`; // Não precisamos mais do JOIN com sellers aqui
+        const result = await measureDbQuery('register_click_insert', () =>
+            sql`INSERT INTO clicks (
+                seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
+                utm_source, utm_campaign, utm_medium, utm_content, utm_term
+            ) VALUES (
+                ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
+                ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
+            ) RETURNING *;`
+        ); // Não precisamos mais do JOIN com sellers aqui
 
         // O resto da lógica permanece o mesmo...
         const newClick = result[0];
@@ -3544,7 +4087,9 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         const clean_click_id = `lead${click_record_id.toString().padStart(6, '0')}`;
         const db_click_id = `/start ${clean_click_id}`;
 
-        await sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`;
+        await measureDbQuery('register_click_update_click_id', () =>
+            sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`
+        );
 
         // Retorna o click_id limpo para o frontend/JS da pressel
         res.status(200).json({ status: 'success', click_id: clean_click_id });
@@ -3562,37 +4107,47 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                             city = geo.data.city || city;
                             state = geo.data.regionName || state;
                         } else {
-                             console.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
+                             logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
                         }
                     } catch (geoError) {
-                         console.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                         logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
                     }
                 } else if (isLocalIp) {
-                     console.log(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
+                     logger.debug(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
                      city = 'Local'; // Ou mantenha Desconhecida
                      state = 'Local';
                 }
-                await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
-                console.log(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
+                await measureDbQuery('register_click_update_geo', () =>
+                    sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`
+                );
+                logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
-                // Envia InitiateCheckout apenas se originado de um checkout hosted
                 if (checkoutId) {
-                     const [checkoutDetails] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`;
-                     // Tenta pegar um valor representativo, pode ser o primeiro pacote ou um valor fixo
-                     const representativeValueCents = checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents || checkoutDetails?.config?.pricing?.fixed_value_cents || 0;
-                     const eventValue = representativeValueCents > 0 ? (representativeValueCents / 100) : 0.01; // Envia 0.01 se não encontrar valor
-
-                     // Passa o click_id LIMPO para o evento Meta
-                     await sendMetaEvent('InitiateCheckout', { ...newClick, click_id: clean_click_id }, { pix_value: eventValue, id: click_record_id });
-                     console.log(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
+                    const [checkoutDetails] = await measureDbQuery(
+                        'register_click_checkout_config',
+                        () => sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`
+                    );
+                    const representativeValueCents =
+                        checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents ||
+                        checkoutDetails?.config?.pricing?.fixed_value_cents ||
+                        0;
+                    const eventValue =
+                        representativeValueCents > 0 ? representativeValueCents / 100 : 0.01;
+                    await sendMetaEvent(
+                        'InitiateCheckout',
+                        { ...newClick, click_id: clean_click_id },
+                        { pix_value: eventValue, id: click_record_id }
+                    );
+                    logger.debug(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
                 }
+
             } catch (backgroundError) {
-                console.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
+                logger.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
             }
         })();
 
     } catch (error) {
-        console.error("Erro ao registrar clique:", error);
+        logger.error("Erro ao registrar clique:", error);
         if (!res.headersSent) {
             res.status(500).json({ message: 'Erro interno do servidor.' });
         }
@@ -3824,9 +4379,26 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (transaction.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[PIX Status] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
 
-                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus)) {
                     await handleSuccessfulPayment(transaction.id, customerData);
                     currentStatus = 'paid';
                 }
@@ -4011,17 +4583,34 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
             `;
         }
     } catch (error) {
-        console.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
+        logger.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
-
 /**
  * [REATORADO] Executa uma lista de ações sequencialmente.
  * Esta função é chamada pelo processFlow para rodar as ações DENTRO de um nó.
  * @returns {string} Retorna 'paid', 'pending', 'flow_forwarded', ou 'completed' para que o processFlow decida a navegação.
  */
-async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
-    console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', metricsContext = {}) {
+    logger.debug(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+
+    const flowIdLabel = sanitizeMetricLabelValue(metricsContext.flowId || 'unknown');
+    const nodeIdLabel = sanitizeMetricLabelValue(metricsContext.nodeId || 'unknown');
+    const recordFlowError = (actionType, error) => {
+        incrementCounter(prometheusMetrics.flowErrorsTotal, {
+            flow_id: flowIdLabel,
+            node_id: nodeIdLabel,
+            action_type: sanitizeMetricLabelValue(actionType),
+            error_type: sanitizeMetricLabelValue(
+                error?.code ||
+                error?.response?.data?.error ||
+                error?.response?.data?.description ||
+                error?.name ||
+                error?.message ||
+                'unknown'
+            ),
+        });
+    };
     
     const normalizeChatIdentifier = (value) => {
         if (value === null || value === undefined) return null;
@@ -4039,8 +4628,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
-        console.log(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
+        logger.debug(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
+        const actionTypeLabel = sanitizeMetricLabelValue(action.type || 'unknown');
+        const endActionTimer = startHistogramTimer(prometheusMetrics.flowActionDuration, {
+            flow_id: flowIdLabel,
+            node_id: nodeIdLabel,
+            action_type: actionTypeLabel,
+        });
 
+        try {
         switch (action.type) {
             case 'message':
                 try {
@@ -4048,7 +4644,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Validação do tamanho do texto (limite do Telegram: 4096 caracteres)
                     if (textToSend.length > 4096) {
-                        console.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
+                        logger.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
                         textToSend = textToSend.substring(0, 4093) + '...';
                     }
                     
@@ -4070,9 +4666,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 
                                 // Log apropriado baseado no tipo de URL
                                 const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
-                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                                logger.debug(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
                             } catch (urlError) {
-                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                                logger.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
                             }
                         }
                         
@@ -4095,7 +4691,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         await sendMessage(chatId, textToSend, botToken, sellerId, botId, false, variables);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
+                    logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
+                    recordFlowError(actionTypeLabel, error);
                 }
                 break;
 
@@ -4107,7 +4704,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
                     if (caption && caption.length > 1024) {
-                        console.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
+                        logger.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
@@ -4117,16 +4714,17 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
                     }
                 } catch (e) {
-                    console.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
+                    logger.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
+                    recordFlowError(actionTypeLabel, e);
                 }
                 break;
             }
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
-                console.log(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
+                logger.debug(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
                 await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-                console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
+                logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
                 break;
             
             case 'typing_action':
@@ -4136,99 +4734,105 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 break;
             
             case 'action_pix':
-                try {
-                    console.log(`${logPrefix} Executando action_pix para chat ${chatId}`);
-                    const valueInCents = actionData.valueInCents;
-                    if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
-    
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
-    
-                    let click_id_from_vars = variables.click_id;
-                    if (!click_id_from_vars) {
-                        const [recentClick] = await sql`
-                            SELECT click_id FROM telegram_chats 
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
-                            ORDER BY created_at DESC LIMIT 1`;
-                        if (recentClick?.click_id) {
-                            click_id_from_vars = recentClick.click_id;
-                        }
-                    }
-    
-                    if (!click_id_from_vars) {
-                        throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
-                    }
-    
-                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
+                let pixTimerStart = isPrometheusEnabled && prometheusMetrics.pixGenerationDuration ? Date.now() : null;
+                let pixProviderLabel = sanitizeMetricLabelValue(actionData?.provider || variables?.preferred_pix_provider || 'auto');
+                let pixErrorStage = 'generate';
+                 try {
+                     logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
+                     const valueInCents = actionData.valueInCents;
+                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
+     
+                     const [seller] = await measureDbQuery('flow_action_pix_seller_lookup', () =>
+                         sql`SELECT * FROM sellers WHERE id = ${sellerId}`
+                     );
+                     if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
+     
+                     let click_id_from_vars = variables.click_id;
+                     if (!click_id_from_vars) {
+                         const [recentClick] = await sql`
+                             SELECT click_id FROM telegram_chats 
+                             WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                             ORDER BY created_at DESC LIMIT 1`;
+                         if (recentClick?.click_id) {
+                             click_id_from_vars = recentClick.click_id;
+                         }
+                     }
+     
+                     if (!click_id_from_vars) {
+                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
+                     }
+     
+                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                     const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                     if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
 
-                    const ip_address = click.ip_address;
-                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                    
-                    // Gera PIX e salva no banco
-                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    console.log(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
-                    
-                    // Atualiza as variáveis do fluxo (IMPORTANTE)
-                    variables.last_transaction_id = pixResult.transaction_id;
-    
-                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
-                    
-                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
-                    if (messageText && messageText.length > 1024) {
-                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
-                        messageText = messageText.substring(0, 1021) + '...';
-                    }
-                    
-                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
-                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-    
-                    // CRÍTICO: Tenta enviar o PIX para o usuário
-                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
-                    });
-    
-                    // Verifica se o envio foi bem-sucedido
-                    if (!sentMessage.ok) {
-                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
-                        console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        
-                        await sql`
-                            UPDATE pix_transactions 
-                            SET status = 'canceled' 
-                            WHERE provider_transaction_id = ${pixResult.transaction_id}
-                        `;
-                        
-                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
-                    }
-                    
-                    // Salva a mensagem no banco
-                    await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    console.log(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
-                    
-                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
-                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmify(
-                        'waiting_payment', 
-                        click, 
-                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
-                        seller, customerDataForUtmify, productDataForUtmify
-                    );
-                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                     const ip_address = click.ip_address;
+                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                     
+                     // Gera PIX e salva no banco
+                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                     logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                     
+                     // Atualiza as variáveis do fluxo (IMPORTANTE)
+                     variables.last_transaction_id = pixResult.transaction_id;
+     
+                     let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
+                     
+                     // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                     if (messageText && messageText.length > 1024) {
+                         logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                         messageText = messageText.substring(0, 1021) + '...';
+                     }
+                     
+                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+     
+                     // CRÍTICO: Tenta enviar o PIX para o usuário
+                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
+                         reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
+                     });
+     
+                     // Verifica se o envio foi bem-sucedido
+                     if (!sentMessage.ok) {
+                         // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                         logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                         
+                         await sql`
+                             UPDATE pix_transactions 
+                             SET status = 'canceled' 
+                             WHERE provider_transaction_id = ${pixResult.transaction_id}
+                         `;
+                         
+                         throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
+                     }
+                     
+                     // Salva a mensagem no banco
+                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                     logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                     
+                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                     const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                     await sendEventToUtmify(
+                         'waiting_payment', 
+                         click, 
+                         { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
+                         seller, customerDataForUtmify, productDataForUtmify
+                     );
+                     logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                    // Envia evento Meta se veio de pressel ou checkout
-                    if (click.pressel_id || click.checkout_id) {
-                        await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-                        console.log(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
-                    }
-                } catch (error) {
-                    console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
-                    // Re-lança o erro para que o fluxo seja interrompido
-                    throw error;
-                }
+                     logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
+                 } catch (error) {
+                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                     // Re-lança o erro para que o fluxo seja interrompido
+                     throw error;
+                 } finally {
+                     if (pixTimerStart) {
+                         const duration = Date.now() - pixTimerStart;
+                         incrementHistogram(prometheusMetrics.pixGenerationDuration, duration, { provider: pixProviderLabel, stage: pixErrorStage });
+                     }
+                 }
                 break;
 
             case 'action_check_pix':
@@ -4244,7 +4848,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
 
                     // Tenta consultar o provedor
-                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
                     let providerStatus = null;
                     let customerData = {};
                     const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
@@ -4265,6 +4869,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
                         providerStatus = String(resp.data.status || '').toLowerCase();
                         customerData = resp.data.payer || {};
+                    } else if (transaction.provider === 'wiinpay') {
+                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                        if (wiinpayApiKey) {
+                            const now = Date.now();
+                            const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        } else {
+                            console.warn(`${logPrefix} Seller ${sellerId} sem chave WiinPay configurada.`);
+                        }
                     }
                     
                     if (providerStatus && paidStatuses.has(providerStatus)) {
@@ -4274,25 +4892,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         return 'pending'; // Sinaliza para 'processFlow' seguir pelo handle 'b'
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro ao consultar PIX:`, error);
+                    logger.error(`${logPrefix} Erro ao consultar PIX:`, error);
                     return 'pending'; // Em caso de erro, assume pendente e segue pelo handle 'b'
                 }
-            
             case 'forward_flow':
                 const targetFlowId = actionData.targetFlowId;
                 if (!targetFlowId) {
-                    console.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
+                    logger.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
                     break;
                 }
 
                 // Garante que targetFlowId seja um número para a query SQL
                 const targetFlowIdNum = parseInt(targetFlowId, 10);
                 if (isNaN(targetFlowIdNum)) {
-                    console.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
+                    logger.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
                     break;
                 }
 
-                console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
+                logger.debug(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
 
                 // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
                 try {
@@ -4300,19 +4917,19 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
                             await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                            console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                            logger.debug(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
-                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                            logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
                         }
                     }
                 } catch (e) {
-                    console.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                    logger.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
                 }
 
                 // Carrega o fluxo de destino e descobre o primeiro nó depois do trigger
                 const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
-                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
+                    logger.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
                     break;
                 }
                 const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
@@ -4320,7 +4937,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 const targetEdges = targetFlowData.edges || [];
                 const targetStartNode = targetNodes.find(n => n.type === 'trigger');
                 if (!targetStartNode) {
-                    console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
+                    logger.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
                     break;
                 }
                 
@@ -4338,36 +4955,36 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 while (currentNodeId && attempts < maxAttempts) {
                     const currentNode = targetNodes.find(n => n.id === currentNodeId);
                     if (!currentNode) {
-                        console.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
+                        logger.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
                         break;
                     }
                     
                     if (currentNode.type !== 'trigger') {
                         // Encontrou um nó válido (não é trigger)
-                        console.log(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
+                        logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
                         // Passa os dados do fluxo de destino para o processFlow recursivo
                         await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
                         break;
                     }
                     
                     // Se for trigger, continua procurando o próximo nó
-                    console.log(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
+                    logger.debug(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
                     currentNodeId = findNextNode(currentNodeId, 'a', targetEdges);
                     attempts++;
                 }
                 
                 if (!currentNodeId || attempts >= maxAttempts) {
                     if (attempts >= maxAttempts) {
-                        console.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
+                        logger.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
                     } else {
-                        console.log(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
+                        logger.debug(`${logPrefix} Fluxo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
                     }
                 }
                 return 'flow_forwarded';
                 
             case 'action_create_invite_link':
                 try {
-                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+                    logger.debug(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
                     
                     // Buscar o supergroup_id do bot
                     const [botInvite] = await sql`
@@ -4398,21 +5015,21 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         );
                         if (unbanResponse?.ok) {
-                            console.log(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
+                            logger.debug(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
                         } else if (unbanResponse && !unbanResponse.ok) {
                             const desc = (unbanResponse.description || '').toLowerCase();
                             if (desc.includes("can't remove chat owner")) {
-                                console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                                logger.debug(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
                             } else {
-                                console.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
+                                logger.warn(`${logPrefix} Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
                             }
                         }
                     } catch (unbanError) {
                         const message = (unbanError?.message || '').toLowerCase();
                         if (message.includes("can't remove chat owner")) {
-                            console.info(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
+                            logger.debug(`${logPrefix} Tentativa de desbanir o proprietário do grupo ignorada.`);
                         } else {
-                            console.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
+                            logger.warn(`${logPrefix} Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
                         }
                     }
                     
@@ -4448,29 +5065,39 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         variables.user_was_banned = false;
                         variables.banned_user_id = undefined;
                         
-                        // Enviar mensagem com o link se configurado
-                        if (actionData.sendMessage) {
-                            const messageText = await replaceVariables(
-                                actionData.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
-                                variables
-                            );
-                            
-                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        const buttonText = (actionData.buttonText || DEFAULT_INVITE_BUTTON_TEXT).trim() || DEFAULT_INVITE_BUTTON_TEXT;
+                        const template = (actionData.messageText || actionData.text || DEFAULT_INVITE_MESSAGE).trim() || DEFAULT_INVITE_MESSAGE;
+                        const messageText = await replaceVariables(template, variables);
+
+                        const payload = {
+                            chat_id: chatId,
+                            text: messageText,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [[{ text: buttonText, url: inviteResponse.result.invite_link }]]
+                            }
+                        };
+
+                        const messageResponse = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        if (messageResponse?.ok) {
+                            await saveMessageToDb(sellerId, botId, messageResponse.result, 'bot');
+                        } else {
+                            throw new Error(messageResponse?.description || 'Falha ao enviar mensagem do convite.');
                         }
                         
-                        console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
+                        logger.debug(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);
                     } else {
                         throw new Error(`Falha ao criar link de convite: ${inviteResponse.description}`);
                     }
                 } catch (error) {
-                    console.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
+                    logger.error(`${logPrefix} Erro ao criar link de convite:`, error.message);
                     throw error;
                 }
                 break;
                 
             case 'action_remove_user_from_group':
                 try {
-                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+                    logger.debug(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
                     
                     const [bot] = await sql`
                         SELECT telegram_supergroup_id 
@@ -4489,7 +5116,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                                         
                     const handleOwnerBanRestriction = () => {
-                        console.info(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
+                        logger.debug(`${logPrefix} Tentativa de banir o proprietário do grupo ignorada.`);
                         variables.user_was_banned = false;
                         variables.banned_user_id = undefined;
                     };
@@ -4519,13 +5146,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             handleOwnerBanRestriction();
                             break;
                         }
-                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
+                        logger.error(`${logPrefix} Erro ao remover usuário do grupo:`, banError.message);
                         throw banError;
                     }
 
-
                     if (banResponse.ok) {
-                        console.log(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
+                        logger.debug(`${logPrefix} Usuário ${userToRemove} removido e banido do grupo`);
                         variables.user_was_banned = true;
                         variables.banned_user_id = userToRemove;
                         variables.last_ban_at = new Date().toISOString();
@@ -4542,15 +5168,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                     }
                                 );
                                 if (revokeResponse.ok) {
-                                    console.log(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
+                                    logger.debug(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
                                     variables.invite_link_revoked = true;
                                     delete variables.invite_link;
                                     delete variables.invite_link_name;
                                 } else {
-                                    console.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
+                                    logger.warn(`${logPrefix} Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
                                 }
                             } catch (revokeError) {
-                                console.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
+                                logger.warn(`${logPrefix} Erro ao tentar revogar link ${linkToRevoke}:`, revokeError.message);
                             }
                         }
                         
@@ -4581,23 +5207,26 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     if (message.includes("can't remove chat owner")) {
                         handleOwnerBanRestriction();
                     } else {
-                        console.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
+                        logger.error(`${logPrefix} Erro ao remover usuário do grupo:`, error.message);
                         throw error;
                     }
                 }
                 break;
 
             default:
-                console.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
+                logger.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
                 break;
+        }
+        } finally {
+            if (endActionTimer) {
+                endActionTimer();
+            }
         }
     }
 
     // Se o loop terminar normalmente (sem 'return' condicional)
     return 'completed';
 }
-
-
 /**
  * [REATORADO] Processa o fluxo principal, navegando entre os nós.
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
@@ -4605,7 +5234,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  */
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
-    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
     // ==========================================================
     // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
@@ -4645,7 +5274,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         // Usa os dados do fluxo fornecido (do forward_flow)
         nodes = flowNodes;
         edges = flowEdges;
-        console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+        logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
     } else {
         // Busca o fluxo ativo do banco
         const [flow] = await sql`
@@ -4653,7 +5282,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             WHERE bot_id = ${botId} AND is_active = TRUE
             ORDER BY updated_at DESC LIMIT 1`;
         if (!flow || !flow.nodes) {
-            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+            logger.info(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
             return;
         }
 
@@ -4667,16 +5296,16 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (!currentNodeId) {
         if (isStartCommand) {
-            console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+            logger.debug(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
             
             // Cancela tarefa de timeout pendente
             const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                    logger.debug(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) {
-                    console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                    logger.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
                 }
             }
 
@@ -4688,7 +5317,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             // Não é /start, verifica se está esperando resposta
             const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (userState && userState.waiting_for_input) {
-                console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
+                logger.debug(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges); // 'a' = Com Resposta
                 
                 // Carrega variáveis salvas no estado
@@ -4700,7 +5329,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             } else {
                 // Nova conversa sem /start (ou estado expirado), reinicia
-                console.log(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
+                logger.debug(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
@@ -4709,7 +5338,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     }
 
     if (!currentNodeId) {
-        console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
+        logger.debug(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
         await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         return;
     }
@@ -4723,11 +5352,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         let currentNode = nodes.find(node => node.id === currentNodeId);
         
         if (!currentNode) {
-            console.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
+            logger.error(`${logPrefix} [Flow Engine] Erro: Nó ${currentNodeId} não encontrado.`);
             break;
         }
 
-        console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+        logger.debug(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
         // Salva o estado atual (não está esperando input... ainda)
         await sql`
@@ -4767,12 +5396,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
                 
                 if (scheduledMediaActions.length > 0) {
-                    console.log(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
+                    logger.debug(`${logPrefix} [Flow Engine] Nó será agendado. Armazenando ${scheduledMediaActions.length} ação(ões) de mídia para envio posterior.`);
                     variables._scheduled_media_actions = scheduledMediaActions;
                 }
             }
             
-            console.log(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
+            logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
             
             let actionResult;
             try {
@@ -4782,11 +5411,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             } catch (actionError) {
                 // Erro crítico durante execução de ação (ex: PIX não enviado por bot bloqueado)
-                console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao processar ações do nó ${currentNode.id}:`, actionError.message);
+                logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao processar ações do nó ${currentNode.id}:`, actionError.message);
                 
                 // Limpa o estado do usuário para evitar fluxo preso
                 await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                console.log(`${logPrefix} [Flow Engine] Estado do usuário limpo devido a erro crítico.`);
+                logger.debug(`${logPrefix} [Flow Engine] Estado do usuário limpo devido a erro crítico.`);
                 
                 // Re-lança o erro para ser capturado pelo try-catch do webhook
                 throw actionError;
@@ -4794,7 +5423,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             // 3. Verifica se uma ação 'forward_flow' foi executada
             if (actionResult === 'flow_forwarded') {
-                console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual.`);
+                logger.debug(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual.`);
                 currentNodeId = null; // Para o loop atual
                 break;
             }
@@ -4826,10 +5455,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     
-                    console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                 
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -4838,12 +5467,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             
             // 5. Verifica se o resultado foi de um 'action_check_pix'
             if (actionResult === 'paid') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
+                logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
                 currentNodeId = findNextNode(currentNode.id, 'a', edges); // 'a' = Pago
                 continue;
             }
             if (actionResult === 'pending') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
+                logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
                 currentNodeId = findNextNode(currentNode.id, 'b', edges); // 'b' = Pendente
                 continue;
             }
@@ -4855,7 +5484,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 
         // Tipo de nó desconhecido
-        console.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
+        logger.warn(`${logPrefix} [Flow Engine] Tipo de nó desconhecido: ${currentNode.type}. Encerrando fluxo.`);
         currentNodeId = null;
     }
     // ==========================================================
@@ -4866,10 +5495,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     if (!currentNodeId) {
         const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
         if (!state) {
-            console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+            logger.debug(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
             await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         } else {
-            console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+            logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
     }
 }
@@ -4885,23 +5514,23 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     try {
         // Validação mais robusta da estrutura da mensagem
         if (!message) {
-            console.warn('[Webhook] Requisição ignorada: objeto message ausente.');
+            logger.debug('[Webhook] Requisição ignorada: objeto message ausente.');
             return;
         }
         
         if (!message.chat) {
-            console.warn('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
+            logger.debug('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
             return;
         }
         
         if (!message.chat.id) {
-            console.warn('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
+            logger.debug('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
             return;
         }
         
         // Verifica se é uma mensagem válida (não callback_query, etc.)
         if (message.message_id === undefined) {
-            console.warn('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
+            logger.debug('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
             return;
         }
         const chatId = message.chat.id;
@@ -4910,7 +5539,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
 
         const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
         if (!bot) {
-            console.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
+            logger.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
             return;
         }
         const { seller_id: sellerId, bot_token: botToken } = bot;
@@ -4926,14 +5555,14 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                   // VERIFICA SE É UM /start COM ID (ex: /start lead... ou /start bot_org...)
                   if (parts.length > 1 && parts[1].trim() !== '') {
                     const clickIdValue = text;
-                    console.log(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
+                    logger.debug(`[Webhook] Click ID de campanha detectado: ${clickIdValue}. Reiniciando fluxo para o chat ${chatId}.`);
             
                     // Cancela qualquer tarefa pendente e deleta o estado antigo.
                     const [existingState] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (existingState && existingState.scheduled_message_id) {
                       try {
                         await qstashClient.messages.delete(existingState.scheduled_message_id);
-                        console.log(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
+                        logger.debug(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
                       } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
                     }
                     await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -4943,7 +5572,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                  
                   } else {
                     // É um /start orgânico (sozinho), que você quer ignorar.
-                    console.log(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
+                    logger.debug(`[Webhook] Comando /start (orgânico) recebido para o chat ${chatId}. Nenhuma ação tomada.`);
                     // Não faz nada e apenas termina a execução.
                   }
                  
@@ -4958,7 +5587,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             if (userState.scheduled_message_id) {
                  try {
                     await qstashClient.messages.delete(userState.scheduled_message_id);
-                    console.log(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                    logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
                 } catch (e) { /* Ignora erros */ }
             }
 
@@ -4972,7 +5601,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                 if (nextNodeId) {
                     await processFlow(chatId, botId, botToken, sellerId, nextNodeId, userState.variables);
                 } else {
-                    console.log(`[Webhook] Fim do fluxo após resposta do usuário.`);
+                    logger.debug(`[Webhook] Fim do fluxo após resposta do usuário.`);
                     await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
             } else {
@@ -4985,7 +5614,6 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
-// ... (restante do código permanece igual a partir daqui)
     }
 });
 
@@ -5015,7 +5643,6 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar detalhes.' });
     }
 });
-
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
       const { botIds, flowSteps, campaignName } = req.body;
@@ -5302,6 +5929,64 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
     res.sendStatus(200);
 });
 
+app.post('/api/webhook/wiinpay', async (req, res) => {
+    try {
+        const parsed = parseWiinpayPayment(req.body || {});
+        if (!parsed.id) {
+            console.warn('[Webhook WiinPay] Payload sem identificador de pagamento:', JSON.stringify(req.body));
+            return res.sendStatus(200);
+        }
+
+        const normalizedStatus = String(parsed.status || '').toLowerCase();
+        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+        const canceledStatuses = new Set(['canceled', 'cancelled', 'expired', 'failed', 'refused']);
+
+        if (paidStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    SELECT * FROM pix_transactions 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) AND provider = 'wiinpay'
+                `;
+
+                if (!tx) {
+                    console.error(`[Webhook WiinPay] Transação não encontrada para ID ${parsed.id}.`);
+                    return res.sendStatus(200);
+                }
+
+                if (tx.status === 'paid') {
+                    console.log(`[Webhook WiinPay] Transação ${tx.id} já está paga. Ignorando duplicata.`);
+                    return res.sendStatus(200);
+                }
+
+                console.log(`[Webhook WiinPay] Processando transação ${parsed.id} (interna: ${tx.id}) com status '${normalizedStatus}'.`);
+                await handleSuccessfulPayment(tx.id, parsed.customer || {});
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao processar pagamento:', error);
+            }
+        } else if (canceledStatuses.has(normalizedStatus)) {
+            try {
+                const [tx] = await sql`
+                    UPDATE pix_transactions 
+                    SET status = 'expired', updated_at = NOW() 
+                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) 
+                      AND provider = 'wiinpay' 
+                      AND status = 'pending'
+                    RETURNING id
+                `;
+                if (tx) {
+                    console.log(`[Webhook WiinPay] Transação ${parsed.id} marcada como expirada (interna: ${tx.id}).`);
+                }
+            } catch (error) {
+                console.error('[Webhook WiinPay] Erro ao marcar transação como expirada:', error.message);
+            }
+        } else {
+            console.log(`[Webhook WiinPay] Status '${normalizedStatus}' não tratado. Payload:`, JSON.stringify(req.body));
+        }
+    } catch (error) {
+        console.error('[Webhook WiinPay] Erro inesperado ao processar payload:', error);
+    }
+    res.sendStatus(200);
+});
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
     console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
@@ -5483,9 +6168,26 @@ async function checkPendingTransactions() {
                     providerStatus = response.data.status;
                     // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
                     customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                } else if (tx.provider === 'wiinpay') {
+                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                    if (wiinpayApiKey) {
+                        const now = Date.now();
+                        const last = wiinpayLastCheckAt.get(tx.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getWiinpayPaymentStatus(tx.provider_transaction_id, wiinpayApiKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            wiinpayLastCheckAt.set(tx.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
+                    }
                 }
                 
-                if ((providerStatus === 'paid' || providerStatus === 'COMPLETED') && tx.status !== 'paid') {
+                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
+                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
+
+                if (paidStatuses.has(normalizedProviderStatus) && tx.status !== 'paid') {
                      await handleSuccessfulPayment(tx.id, customerData);
                 }
             } catch (error) {
@@ -5746,11 +6448,30 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
     }
+    const mediaType =
+        fileType?.startsWith('image/') ? 'image'
+        : fileType?.startsWith('video/') ? 'video'
+        : fileType?.startsWith('audio/') ? 'audio'
+        : 'unknown';
+    const prometheusLabels = { source: 'api_send_media', type: mediaType };
+    let prometheusStatus = 'success';
+
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
-        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
+        try {
+            validateTelegramSize(buffer, fileType);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -5764,17 +6485,27 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
             method = 'sendVoice';
             field = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de arquivo não suportado.' });
         }
         formData.append(field, buffer, { filename: fileName });
         const response = await sendTelegramRequest(bot.bot_token, method, formData, { headers: formData.getHeaders() });
+        prometheusStatus = response?.ok ? 'success' : 'telegram_error';
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
         res.status(500).json({ message: msg });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
@@ -5860,11 +6591,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
             productDataForUtmify
         );
 
-        if (click.pressel_id || click.checkout_id) {
-            await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
-        }
-
-        console.log(`[Manual PIX] Eventos enviados para Utmify e Meta para transação ${pixResult.transaction_id}`);
+        console.log(`[Manual PIX] Evento 'waiting_payment' enviado para Utmify para transação ${pixResult.transaction_id}`);
 
         res.status(200).json({ message: 'PIX enviado ao usuário com sucesso.' });
     } catch (error) {
@@ -5909,7 +6636,6 @@ app.get('/api/chats/check-pix/:botId/:chatId', authenticateJwt, async (req, res)
         return res.status(status).json(payload);
     }
 });
-
 // Endpoint 9: Iniciar fluxo manualmente
 app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const { botId, chatId, flowId } = req.body;
@@ -6006,20 +6732,35 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar a biblioteca de mídia.' });
     }
 });
-
 // Endpoint 12: Upload para biblioteca de mídia
 app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
+    const prometheusLabels = { source: 'api_media_upload', type: fileType };
+    let prometheusStatus = 'success';
     try {
         const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
+            prometheusMetrics.telegramMediaBytes.observe(
+                { ...prometheusLabels, direction: 'upload' },
+                buffer.length
+            );
+        }
         // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
         const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
-        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
-        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
+        if (!mimeHint) {
+            prometheusStatus = 'unsupported_type';
+            return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        }
+        try {
+            validateTelegramSize(buffer, mimeHint);
+        } catch (e) {
+            prometheusStatus = 'payload_too_large';
+            return res.status(413).json({ message: e.message });
+        }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
@@ -6033,11 +6774,13 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             telegramMethod = 'sendVoice';
             fieldName = 'voice';
         } else {
+            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
         if (!response?.ok || !response.result) {
+            prometheusStatus = 'telegram_error';
             throw new Error('Resposta inválida do Telegram ao enviar mídia.');
         }
         const result = response.result; // Mensagem retornada pelo Telegram
@@ -6066,7 +6809,15 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
+        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
+    } finally {
+        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
+            prometheusMetrics.telegramMediaRequests.inc({
+                ...prometheusLabels,
+                status: prometheusStatus,
+            });
+        }
     }
 });
 
@@ -6387,7 +7138,6 @@ function updateNodeReferences(nodes, flowIdMapping) {
         return updated ? { ...node, data: updatedData } : node;
     });
 }
-
 /**
  * Remove referências de mídia dos nós
  */
@@ -6701,7 +7451,6 @@ app.get('/api/flows/check-payment/:purchaseTransactionId', authenticateJwt, asyn
         res.status(500).json({ message: 'Erro ao verificar status do pagamento.' });
     }
 });
-
 // Endpoint 21.3: Importar fluxo pago após confirmação de pagamento
 app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
@@ -6833,7 +7582,6 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar histórico de disparos.' });
     }
 });
-
 // Endpoint 23: Verificar conversões de disparos (modificado)
 app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (req, res) => {
     const { historyId } = req.params;
@@ -7141,31 +7889,7 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             headers: { 'x-api-key': seller.api_key }
         });
 
-        // 4) Enviar evento InitiateCheckout para Meta
-        if (clickRecord && response.data) {
-            try {
-                // Buscar a transação recém-criada do banco para obter o internal_transaction_id
-                const [pixTransaction] = await sql`
-                    SELECT id FROM pix_transactions 
-                    WHERE provider_transaction_id = ${response.data.transaction_id}
-                    ORDER BY created_at DESC 
-                    LIMIT 1
-                `;
-                
-                if (pixTransaction) {
-                    await sendMetaEvent('InitiateCheckout', clickRecord, { 
-                        id: pixTransaction.id, 
-                        pix_value: value_cents / 100 
-                    }, null);
-                    console.log(`[Checkout PIX] Evento InitiateCheckout enviado para Meta para o clique ${clickRecord.id}`);
-                }
-            } catch (metaError) {
-                console.error(`[Checkout PIX] Erro ao enviar evento Meta:`, metaError.message);
-                // Não bloqueia a resposta se o evento Meta falhar
-            }
-        }
-
-        // 5) Retornar a resposta da API central
+        // 4) Retornar a resposta da API central
         return res.status(200).json(response.data);
     } catch (error) {
         const status = error.response?.status || 500;
@@ -7290,7 +8014,6 @@ app.get('/api/obrigado/:pageId', async (req, res) => {
         res.status(500).json({ message: 'Erro interno no servidor.' });
     }
 });
-
 // Trigger Utmify event from the Thank You Page frontend
 app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
     const { pageId, trackingParameters, customerData } = req.body;

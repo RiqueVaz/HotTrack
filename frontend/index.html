@@ -1048,7 +1048,7 @@
         /* Estilos do Live Chat */
         .hotbot-scope .chat-container { display: grid; grid-template-columns: 300px 1fr 320px; height: calc(100% - 78px); border: 1px solid var(--border-color); border-radius: 0.75rem; background-color: var(--bg-secondary); overflow: auto; }
         .hotbot-scope .conversations-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border-color); }
-        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .conversations-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.75rem; }
         .hotbot-scope .conversations-list { 
             overflow-y: auto; 
             flex: 1; 
@@ -1067,9 +1067,52 @@
         .hotbot-scope .conversation-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
         .hotbot-scope .conversation-item-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
         .hotbot-scope .conversation-item-preview { font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hotbot-scope .conversation-item-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+        .hotbot-scope .chat-header-main { display: flex; flex-direction: column; gap: 0.5rem; }
+        .hotbot-scope .chat-header-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+        .hotbot-scope .chat-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+        .hotbot-scope .tag-badge {     display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.25rem;
+            border-radius: 999px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: rgba(59, 130, 246, 0.1);
+            color: #2563EB;
+            border: 1px solid transparent;
+            text-transform: uppercase; letter-spacing: 0.02em; }
+        .hotbot-scope .tag-badge--auto { background: rgba(34, 197, 94, 0.12); color: #15803D; border-color: rgba(34, 197, 94, 0.35); }
+        .hotbot-scope .tag-actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; align-items: flex-start; }
+        .hotbot-scope .tag-filter-container { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .hotbot-scope .tag-filter-label { font-size: 0.75rem; color: var(--text-secondary); }
+        .hotbot-scope .tag-filter-chip { border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.7rem; cursor: pointer; transition: all 0.2s ease; }
+        .hotbot-scope .tag-filter-chip.auto { border-color: rgba(34, 197, 94, 0.35); color: #15803D; }
+        .hotbot-scope .tag-filter-chip.active { background: var(--accent-primary); color: #ffffff !important; border-color: var(--accent-primary); }
+        .hotbot-scope .tag-manager-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1100; }
+        .hotbot-scope .tag-manager-modal { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 1.5rem; width: min(420px, 90%); box-shadow: 0 20px 40px rgba(15,23,42,0.35); display: flex; flex-direction: column; gap: 1rem; }
+        .hotbot-scope .tag-manager-header { display: flex; align-items: center; justify-content: space-between; }
+        .hotbot-scope .tag-manager-header h3 { margin: 0; font-size: 1.1rem; }
+        .hotbot-scope .tag-manager-header button { background: none; border: none; font-size: 1.5rem; color: var(--text-secondary); cursor: pointer; line-height: 1; }
+        .hotbot-scope .tag-manager-form { display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker { display: flex; align-items: center; gap: 0.75rem; }
+        .hotbot-scope .tag-color-picker input[type="color"] { width: 42px; height: 32px; border: none; padding: 0; background: transparent; cursor: pointer; }
+        .hotbot-scope .tag-error { color: #f87171; font-size: 0.8rem; margin: 0; }
+        .hotbot-scope .tag-manager-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+        .hotbot-scope .tag-manager-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+        .hotbot-scope .tag-loading, .hotbot-scope .tag-empty { font-size: 0.85rem; color: var(--text-secondary); margin: 0; }
+        .hotbot-scope .tag-context-menu { position: fixed; z-index: 1200; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 0.5rem; box-shadow: 0 20px 40px rgba(15,23,42,0.35); padding: 0.5rem 0; width: 220px; }
+        .hotbot-scope .tag-context-title { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); padding: 0.5rem 1rem; border-bottom: 1px solid var(--border-color); }
+        .hotbot-scope .tag-context-item { width: 100%; background: none; border: none; display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 1rem; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; text-align: left; }
+        .hotbot-scope .tag-context-item:hover { background: var(--bg-primary); }
+        .hotbot-scope .tag-context-item.active { background: rgba(56, 189, 248, 0.1); }
+        .hotbot-scope .tag-color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .hotbot-scope .tag-context-check { margin-left: auto; color: var(--accent-primary); font-weight: 700; }
+        .hotbot-scope .tag-context-empty { font-size: 0.8rem; color: var(--text-secondary); padding: 0.75rem 1rem; margin: 0; }
+        .hotbot-scope .contact-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
         
         .hotbot-scope .chat-window { display: flex; flex-direction: column; }
-        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .hotbot-scope .chat-header { padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
         .hotbot-scope .chat-header h3 { font-size: 1.1rem; font-weight: 700; margin:0; }
         .hotbot-scope .message-list { 
             flex: 1; 
@@ -1086,7 +1129,7 @@
         .hotbot-scope .message-list::-webkit-scrollbar-track { background: transparent; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
         .hotbot-scope .message-list::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
-        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; }
+        .hotbot-scope .message-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 1rem; overflow-wrap: anywhere; word-break: break-word; }
         .hotbot-scope .message-bubble strong { display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
         .hotbot-scope .message-bubble-time { font-size: 0.7rem; color: var(--text-secondary); text-align: right; margin-top: 0.5rem; }
 
@@ -1218,10 +1261,14 @@
     // ============================================
     // == LÓGICA DO HOTTRACK (APLICAÇÃO PRINCIPAL) ==
     // ============================================
+    const ACCESS_TOKEN_KEY = 'hottrack_token';
+    const REFRESH_TOKEN_KEY = 'hottrack_refresh_token';
+
     const App = {
         state: {
             API_BASE_URL: '', // Será carregado dinamicamente
             token: null,
+            refreshToken: null,
             data: { 
                 pixels: [],
                 bots: [],
@@ -1248,30 +1295,56 @@
 
         // --- SEGURANÇA: Função para obter token de forma segura ---
         getToken() {
-            // Primeiro tenta sessionStorage (mais seguro, expira ao fechar)
-            let token = sessionStorage.getItem('hottrack_token');
-            // Fallback para localStorage (migração gradual, será removido)
+            let token = sessionStorage.getItem(ACCESS_TOKEN_KEY);
             if (!token) {
-                token = localStorage.getItem('hottrack_token');
+                token = localStorage.getItem(ACCESS_TOKEN_KEY);
                 if (token) {
-                    // Migrar para sessionStorage e remover do localStorage
-                    sessionStorage.setItem('hottrack_token', token);
-                    localStorage.removeItem('hottrack_token');
+                    sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+                    localStorage.removeItem(ACCESS_TOKEN_KEY);
                 }
             }
+            this.state.token = token;
             return token;
         },
 
+        getRefreshToken() {
+            let refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
+            if (!refreshToken) {
+                refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+                if (refreshToken) {
+                    sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+                    localStorage.removeItem(REFRESH_TOKEN_KEY);
+                }
+            }
+            this.state.refreshToken = refreshToken;
+            return refreshToken;
+        },
+
         setToken(token) {
-            // Armazenar em sessionStorage (mais seguro)
             if (token) {
-                sessionStorage.setItem('hottrack_token', token);
-                localStorage.removeItem('hottrack_token'); // Remover do localStorage
+                sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+                localStorage.removeItem(ACCESS_TOKEN_KEY);
             } else {
-                sessionStorage.removeItem('hottrack_token');
-                localStorage.removeItem('hottrack_token');
+                sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+                localStorage.removeItem(ACCESS_TOKEN_KEY);
             }
             this.state.token = token;
+        },
+
+        setRefreshToken(refreshToken) {
+            if (refreshToken) {
+                sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+                localStorage.removeItem(REFRESH_TOKEN_KEY);
+            } else {
+                sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+                localStorage.removeItem(REFRESH_TOKEN_KEY);
+            }
+            this.state.refreshToken = refreshToken;
+        },
+
+        clearAuthTokens() {
+            this.setToken(null);
+            this.setRefreshToken(null);
         },
 
         async init() {
@@ -1309,6 +1382,7 @@
             }
 
             this.state.token = this.getToken();
+            this.state.refreshToken = this.getRefreshToken();
             if (this.state.token) {
                 try {
                     const [staticData] = await Promise.all([
@@ -2397,7 +2471,8 @@
                     { value: 'cnpay', text: 'CN Pay' },
                     { value: 'oasyfy', text: 'Oasy.fy' },
                     { value: 'syncpay', text: 'SyncPay' },
-                    { value: 'brpix', text: 'BR PIX' }
+                    { value: 'brpix', text: 'BR PIX' },
+                    { value: 'wiinpay', text: 'WiinPay' }
                 ];
                 const createSelect = (name, selectedValue) => {
                     const options = providers.map(p => `<option value="${p.value}" ${p.value === selectedValue ? 'selected' : ''}>${p.text}</option>`).join('');
@@ -2448,6 +2523,14 @@
                                     <button type="button" data-provider="pushinpay" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
                                 </div>
                                 <label class="block mb-2 text-sm text-gray-400">Bearer Token</label><input name="pushinpay_token" type="password" value="${settings.pushinpay_token || ''}" class="form-input w-full p-2">
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">WiinPay</h3><span id="status-indicator-wiinpay"></span></div>
+                                    <button type="button" data-provider="wiinpay" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">API Key</label><input name="wiinpay_api_key" type="password" value="${settings.wiinpay_api_key || ''}" class="form-input w-full p-2">
+                                <p class="text-xs text-gray-500 mt-2">Use a chave fornecida pela WiinPay para gerar cobranças PIX.</p>
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
@@ -3113,7 +3196,8 @@
 
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
+            const { skipAuthRetry = false } = options;
             try {
                 const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
                 if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
@@ -3128,10 +3212,10 @@
                     headers['x-api-key'] = this.state.data.settings.api_key;
                 }
 
-                const options = { method, headers };
-                if (body) { options.body = JSON.stringify(body); }
+                const requestOptions = { method, headers };
+                if (body) { requestOptions.body = JSON.stringify(body); }
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, options);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
 
                 if (response.status === 204) return null; // No Content
 
@@ -3140,18 +3224,14 @@
                 try {
                     data = JSON.parse(responseBody); // Tenta parsear como JSON
                 } catch (jsonError) {
-                    // Se falhar o parse JSON e a resposta não for OK, trata como erro de texto
                     if (!response.ok) {
                         console.error(`API Error ${response.status} on ${method} ${endpoint}. Response: ${responseBody}`);
-                        // ****** MUDANÇA 1: ANEXA O STATUS AO ERRO ******
                         const err = new Error(responseBody || `Erro ${response.status}`);
                         err.status = response.status;
                         throw err;
                     }
-                    // Se falhar o parse mas a resposta for OK (ex: 200 com texto puro), retorna o texto
                     data = responseBody;
                 }
-
 
                 if (!response.ok) {
                     console.error(`API Error ${response.status} on ${method} ${endpoint}:`, data);
@@ -3161,29 +3241,50 @@
                     } else if (typeof data === 'string') {
                        errorMsg = data; // Usa o texto da resposta como mensagem de erro
                     }
-                    // ****** MUDANÇA 1 (Cont.): ANEXA O STATUS AO ERRO ******
-                    const err = new Error(errorMsg);
+                    const err = new Error(errorMsg);
                     err.status = response.status;
+                    if (data && data.code) {
+                        err.code = data.code;
+                    }
                     throw err;
                 }
                 return data;
             } catch (error) {
                  if (error instanceof Error) {
-                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+                    const statusCode = error.status;
+                    const errorCode = error.code;
+                    const isAuthError = statusCode === 401 || statusCode === 403;
+                    const isPublicRoute =
+                        endpoint.includes('/sellers/login') ||
+                        endpoint.startsWith('/oferta/') ||
+                        endpoint.startsWith('/obrigado/') ||
+                        endpoint.includes('/api/auth/refresh') ||
+                        endpoint.includes('/api/auth/logout');
 
-                    // ****** MUDANÇA 2: LÓGICA DE LOGOUT REFINADA ******
-                    const statusCode = error.status; // Pega o status que anexamos
-                    const isAuthError = statusCode === 401 || statusCode === 403; // Logout SÓ se for 401 ou 403
-                    const isPublicRoute = endpoint.includes('/sellers/login') || endpoint.startsWith('/oferta/') || endpoint.startsWith('/obrigado/');
+                    const canRetryAuth =
+                        !skipAuthRetry &&
+                        statusCode === 401 &&
+                        !endpoint.includes('/api/auth/refresh') &&
+                        !endpoint.includes('/api/auth/logout') &&
+                        !endpoint.includes('/api/sellers/login');
+
+                    const looksExpired =
+                        errorCode === 'ACCESS_TOKEN_EXPIRED' ||
+                        (typeof error.message === 'string' && error.message.toLowerCase().includes('expirado'));
+
+                    if (canRetryAuth && looksExpired) {
+                        const refreshed = await this.tryRefreshToken();
+                        if (refreshed) {
+                            return this.apiRequest(endpoint, method, body, customHeaders, { ...options, skipAuthRetry: true });
+                        }
+                    }
+
+                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
                     
                     if (isAuthError && !isPublicRoute) {
                         console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
-                        // Limpar token do armazenamento antes de fazer logout
-                        sessionStorage.removeItem('hottrack_token');
-                        localStorage.removeItem('hottrack_token');
-                        this.logout();
+                        await this.logout();
                     }
-                    // Se for status 400 (Bad Request), ele não vai mais deslogar.
                  } else {
                     console.error(`Network Error on ${method} ${endpoint}:`, error);
                     this.showToast('Falha na conexão com o servidor.', 'error');
@@ -3191,11 +3292,59 @@
                  throw error; // Re-throw para quem chamou poder tratar
             }
         },
+
+        async tryRefreshToken() {
+            const refreshToken = this.state.refreshToken || this.getRefreshToken();
+            if (!refreshToken) {
+                console.warn('[Auth] Nenhum refresh token disponível para renovar.');
+                return false;
+            }
+
+            const apiBaseUrl = this.state.API_BASE_URL || window.location.origin;
+
+            try {
+                const response = await fetch(`${apiBaseUrl}/api/auth/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refreshToken }),
+                });
+
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (parseErr) {
+                    console.warn('[Auth] Resposta inesperada ao renovar token.', parseErr);
+                }
+
+                if (!response.ok) {
+                    console.warn('[Auth] Falha ao renovar token:', data);
+                    if (data?.code === 'REFRESH_TOKEN_EXPIRED' || data?.code === 'REFRESH_TOKEN_INVALID') {
+                        this.clearAuthTokens();
+                    }
+                    return false;
+                }
+
+                if (data?.token) {
+                    this.setToken(data.token);
+                }
+                if (data?.refreshToken) {
+                    this.setRefreshToken(data.refreshToken);
+                }
+
+                return true;
+            } catch (error) {
+                console.error('[Auth] Erro ao tentar renovar token:', error);
+                return false;
+            }
+        },
         
         async login(email, password) {
             try {
                 const data = await this.apiRequest('/api/sellers/login', 'POST', { email, password });
                 this.setToken(data.token); // Usa função segura para armazenar token
+                if (data.refreshToken) {
+                    this.setRefreshToken(data.refreshToken);
+                }
                 window.location.href = window.location.pathname; 
             } catch (e) {
                 if (e.response && e.response.status === 403 && e.response.data && e.response.data.requiresVerification) {
@@ -3296,21 +3445,36 @@
             }
         },
 
-        logout() {
-            this.state.token = null;
+        async logout(shouldReload = true) {
+            const apiBaseUrl = this.state.API_BASE_URL || window.location.origin;
+            const refreshToken = this.state.refreshToken || this.getRefreshToken();
+
+            if (refreshToken) {
+                try {
+                    await fetch(`${apiBaseUrl}/api/auth/logout`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ refreshToken })
+                    });
+                } catch (error) {
+                    console.warn('[Auth] Falha ao informar logout ao servidor:', error);
+                }
+            }
+
+            this.clearAuthTokens();
             this.state.editingCheckoutId = null;
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
-            // Limpar ambos para garantir
-            sessionStorage.removeItem('hottrack_token');
-            localStorage.removeItem('hottrack_token');
-            // Limpa cache de status de PIX (opcional)
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
+
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
             });
-            window.location.reload();
+
+            if (shouldReload) {
+                window.location.reload();
+            }
         },
 
         showAddUtmifyModal() {
@@ -4906,7 +5070,7 @@ function generatePreviewHTML(data) {
         },
 
         updateAllPixStatusIndicators() {
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix'];
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(provider => this.updatePixStatusIndicator(provider));
         },
 
@@ -5028,7 +5192,7 @@ function generatePreviewHTML(data) {
 // == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
     // ==========================================================
     function launchHotBot(containerElement) {
-        const { useState, useCallback, useEffect, useRef } = window.React;
+        const { useState, useCallback, useEffect, useRef, useMemo } = window.React;
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
@@ -5037,17 +5201,42 @@ function generatePreviewHTML(data) {
         api.interceptors.request.use(
             config => {
             // Usar função helper segura para obter token
-            const token = App.getToken ? App.getToken() : (sessionStorage.getItem('hottrack_token') || localStorage.getItem('hottrack_token'));
+            const token = App.getToken ? App.getToken() : App.state.token;
                 if (token) {
                     config.headers['Authorization'] = `Bearer ${token}`;
-                } else {
-                    // Token não encontrado - limpar qualquer resquício
-                    sessionStorage.removeItem('hottrack_token');
-                    localStorage.removeItem('hottrack_token');
                 }
                 return config;
             },
             error => Promise.reject(error)
+        );
+
+        api.interceptors.response.use(
+            response => response,
+            async error => {
+                const status = error?.response?.status;
+                const originalRequest = error?.config;
+
+                if (status === 401 && originalRequest && !originalRequest._retry) {
+                    originalRequest._retry = true;
+                    const refreshed = await App.tryRefreshToken();
+                    if (refreshed) {
+                        const token = App.state.token || App.getToken();
+                        if (token) {
+                            originalRequest.headers = originalRequest.headers || {};
+                            originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                        }
+                        return api(originalRequest);
+                    }
+                    await App.logout();
+                    return Promise.reject(error);
+                }
+
+                if (status === 403) {
+                    await App.logout();
+                }
+
+                return Promise.reject(error);
+            }
         );
 
     const Icons = {
@@ -5074,6 +5263,91 @@ function generatePreviewHTML(data) {
             const [pressels, setPressels] = useState([]);
             const [thankYouPages, setThankYouPages] = useState([]);
             const [hostedCheckouts, setHostedCheckouts] = useState([]);
+            const [flowEditorDirty, setFlowEditorDirty] = useState(false);
+            const [flowEditorSaveHandler, setFlowEditorSaveHandler] = useState(null);
+            const [discardChangesToken, setDiscardChangesToken] = useState(0);
+            const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false);
+            const [pendingNavigation, setPendingNavigation] = useState(null);
+            const [isProcessingNavigation, setIsProcessingNavigation] = useState(false);
+
+            const registerFlowEditorSaveHandler = useCallback((handler) => {
+                setFlowEditorSaveHandler(() => handler || null);
+            }, []);
+
+            const handleFlowEditorDirtyChange = useCallback((value) => {
+                setFlowEditorDirty(Boolean(value));
+            }, []);
+
+            const attemptPageChange = useCallback((nextPage, options = {}) => {
+                const performNavigation = () => {
+                    options.onNavigate?.();
+                    setCurrentPage(nextPage);
+                    options.afterNavigate?.();
+                };
+
+                if (
+                    !options.force &&
+                    currentPage === 'flow-editor' &&
+                    nextPage !== 'flow-editor' &&
+                    flowEditorDirty
+                ) {
+                    setPendingNavigation(() => performNavigation);
+                    setShowUnsavedPrompt(true);
+                    return false;
+                }
+
+                performNavigation();
+                return true;
+            }, [currentPage, flowEditorDirty]);
+
+            const closeUnsavedPrompt = useCallback(() => {
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+            }, []);
+
+            const handleLeaveWithoutSaving = useCallback(() => {
+                const next = pendingNavigation;
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+                setFlowEditorDirty(false);
+                setDiscardChangesToken((token) => token + 1);
+                if (next) {
+                    next();
+                }
+            }, [pendingNavigation]);
+
+            const handleSaveAndLeave = useCallback(async () => {
+                if (!flowEditorSaveHandler) {
+                    handleLeaveWithoutSaving();
+                    return;
+                }
+
+                setIsProcessingNavigation(true);
+                try {
+                    const saved = await flowEditorSaveHandler();
+                    if (saved) {
+                        const next = pendingNavigation;
+                        setShowUnsavedPrompt(false);
+                        setPendingNavigation(null);
+                        setFlowEditorDirty(false);
+                        setIsProcessingNavigation(false);
+                        if (next) {
+                            next();
+                        }
+                    } else {
+                        setIsProcessingNavigation(false);
+                    }
+                } catch (error) {
+                    console.error('Erro ao salvar antes de sair do editor:', error);
+                    setIsProcessingNavigation(false);
+                }
+            }, [flowEditorSaveHandler, pendingNavigation, handleLeaveWithoutSaving]);
+
+            const handlePromptCancel = useCallback(() => {
+                closeUnsavedPrompt();
+            }, [closeUnsavedPrompt]);
 
             // Salvar a página atual no localStorage sempre que mudar
             // Mas não salvar estados temporários como flow-editor ou import-flow
@@ -5110,11 +5384,31 @@ function generatePreviewHTML(data) {
             // Se tentar acessar flow-editor sem um fluxo válido, redirecionar para flows
             useEffect(() => {
                 if (currentPage === 'flow-editor' && !editingFlow) {
-                    setCurrentPage('flows');
+                    attemptPageChange('flows', { force: true });
                 }
-            }, [currentPage, editingFlow]);
+            }, [attemptPageChange, currentPage, editingFlow]);
 
-            const navigateToFlowEditor = (flow) => { setEditingFlow(flow); setCurrentPage('flow-editor'); };
+            const navigateToFlowEditor = useCallback((flow) => {
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+                setEditingFlow(flow);
+                setFlowEditorDirty(false);
+                setCurrentPage('flow-editor');
+            }, []);
+
+            const handleNavigationRequest = useCallback((page) => {
+                attemptPageChange(page, {
+                    onNavigate: () => {
+                        if (page !== 'flow-editor') {
+                            setEditingFlow(null);
+                        }
+                        if (page !== 'flow-editor') {
+                            setFlowEditorDirty(false);
+                        }
+                    }
+                });
+            }, [attemptPageChange]);
             
         if (isLoading) return <div className="flex items-center justify-center h-full text-white">Carregando dados do HotBot...</div>;
 
@@ -5126,13 +5420,93 @@ function generatePreviewHTML(data) {
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
                 'disparos-history': <DisparosHistoryPage />,
-                'flow-editor': editingFlow ? <FlowEditorPage flow={editingFlow} onBack={() => setCurrentPage('flows')} pressels={pressels} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} /> : null,
-                'import-flow': <ImportFlowPage shareableLinkId={importingFlowLink} bots={bots} onImported={() => { setCurrentPage('flows'); window.history.pushState({}, '', window.location.pathname); setImportingFlowLink(null); }} />
+                'flow-editor': editingFlow ? (
+                    <FlowEditorPage
+                        flow={editingFlow}
+                        onRequestClose={() => attemptPageChange('flows', { onNavigate: () => setEditingFlow(null) })}
+                        pressels={pressels}
+                        thankYouPages={thankYouPages}
+                        hostedCheckouts={hostedCheckouts}
+                        onDirtyChange={handleFlowEditorDirtyChange}
+                        registerSaveHandler={registerFlowEditorSaveHandler}
+                        discardChangesToken={discardChangesToken}
+                    />
+                ) : null,
+                'import-flow': (
+                    <ImportFlowPage
+                        shareableLinkId={importingFlowLink}
+                        bots={bots}
+                        onImported={() => {
+                            attemptPageChange('flows', {
+                                force: true,
+                                onNavigate: () => {
+                                    window.history.pushState({}, '', window.location.pathname);
+                                    setImportingFlowLink(null);
+                                }
+                            });
+                        }}
+                    />
+                )
             }[currentPage];
 
             return (
             <>
-                <HotBotNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+                {showUnsavedPrompt && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 2000
+                        }}
+                    >
+                        <div
+                            style={{
+                                backgroundColor: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '12px',
+                                padding: '24px',
+                                maxWidth: '420px',
+                                width: '90%',
+                                boxShadow: '0 20px 40px rgba(15, 23, 42, 0.4)'
+                            }}
+                        >
+                            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>
+                                Alterações não salvas
+                            </h3>
+                            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                Você possui mudanças no fluxo que ainda não foram salvas. Deseja salvar antes de sair do editor?
+                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.5rem' }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={handlePromptCancel}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    Continuar editando
+                                </button>
+                                <button
+                                    className="btn btn-danger"
+                                    onClick={handleLeaveWithoutSaving}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    Sair sem salvar
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleSaveAndLeave}
+                                    disabled={isProcessingNavigation}
+                                >
+                                    {isProcessingNavigation ? 'Salvando...' : 'Salvar e sair'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <HotBotNav currentPage={currentPage} onNavigate={handleNavigationRequest} disabled={isProcessingNavigation || showUnsavedPrompt} />
                 <main className="hotbot-content">
                         <div style={{animation: 'fadeIn 0.5s ease-in-out', height: '100%'}}>
                             {PageComponent}
@@ -5142,7 +5516,7 @@ function generatePreviewHTML(data) {
             );
         }
     
-    function HotBotNav({ currentPage, setCurrentPage }) {
+    function HotBotNav({ currentPage, onNavigate, disabled }) {
         const pages = { 
             bots: { name: 'Bots', icon: Icons.bots },
             flows: { name: 'Fluxos', icon: Icons.flows },
@@ -5158,7 +5532,8 @@ function generatePreviewHTML(data) {
                     <button 
                         key={key} 
                         className={`tab-button nav-button ${currentPage === key ? 'active' : ''}`} 
-                        onClick={() => setCurrentPage(key)} 
+                        onClick={() => onNavigate(key)} 
+                        disabled={disabled}
                         title={name}
                     >
                         {React.cloneElement(icon, { className: 'h-5 w-5' })}
@@ -5325,6 +5700,19 @@ function generatePreviewHTML(data) {
                 setFlows(res.data.filter(f => f.bot_id == selectedBotId));
             } catch (e) { console.error("Erro ao buscar fluxos", e); }
         }, [selectedBotId]);
+        
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev => prev.map(lead => {
+                if (lead.chat_id !== chatId) return lead;
+                const updated = transformer({ ...lead });
+                return updated || lead;
+            }));
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
@@ -6014,9 +6402,84 @@ function generatePreviewHTML(data) {
         const [inactiveChatIds, setInactiveChatIds] = useState([]);
         const [isValidating, setIsValidating] = useState(false);
         
+        const [customTags, setCustomTags] = useState([]);
+        const [tagFilters, setTagFilters] = useState([]);
+        const [isTagManagerOpen, setIsTagManagerOpen] = useState(false);
+        const [tagContextMenu, setTagContextMenu] = useState(null);
+        const [newTagTitle, setNewTagTitle] = useState('');
+        const [newTagColor, setNewTagColor] = useState('#2563EB');
+        const [isSavingTag, setIsSavingTag] = useState(false);
+        const [tagError, setTagError] = useState('');
+        const [isLoadingTags, setIsLoadingTags] = useState(false);
+        
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
+        const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
+        const contextMenuPosition = useMemo(() => {
+            if (!tagContextMenu) return null;
+            if (typeof window === 'undefined') {
+                return { top: tagContextMenu.y, left: tagContextMenu.x };
+            }
+            const maxTop = Math.max(0, window.innerHeight - 220);
+            const maxLeft = Math.max(0, window.innerWidth - 220);
+            return {
+                top: Math.max(0, Math.min(tagContextMenu.y, maxTop)),
+                left: Math.max(0, Math.min(tagContextMenu.x, maxLeft))
+            };
+        }, [tagContextMenu]);
+        const tagFilterOptions = useMemo(() => {
+            const automatic = [{ key: 'auto:Pagante', label: 'Pagante', variant: 'auto' }];
+            const custom = customTags.map(tag => ({
+                key: `custom:${tag.id}`,
+                label: tag.title,
+                variant: 'custom',
+                color: tag.color
+            }));
+            return [...automatic, ...custom];
+        }, [customTags]);
+        
+        const getContrastColor = useCallback((hexColor) => {
+            if (!hexColor || typeof hexColor !== 'string') return '#ffffff';
+            const sanitized = hexColor.replace('#', '');
+            if (sanitized.length !== 6) return '#ffffff';
+            const r = parseInt(sanitized.substring(0, 2), 16);
+            const g = parseInt(sanitized.substring(2, 4), 16);
+            const b = parseInt(sanitized.substring(4, 6), 16);
+            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+            return brightness > 160 ? '#0f172a' : '#ffffff';
+        }, []);
+
+        const updateLeadState = useCallback((chatId, transformer) => {
+            setUsers(prev =>
+                prev.map(lead => {
+                    if (lead.chat_id !== chatId) return lead;
+                    const updated = transformer({ ...lead });
+                    return updated || lead;
+                })
+            );
+            setSelectedChat(prev => {
+                if (!prev || prev.chat_id !== chatId) return prev;
+                const updated = transformer({ ...prev });
+                return updated || prev;
+            });
+        }, []);
+
+        useEffect(() => {
+            const handleGlobalClick = () => setTagContextMenu(null);
+            const handleKeyDown = (event) => {
+                if (event.key === 'Escape') setTagContextMenu(null);
+            };
+            const handleScroll = () => setTagContextMenu(null);
+            window.addEventListener('click', handleGlobalClick);
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('scroll', handleScroll, true);
+            return () => {
+                window.removeEventListener('click', handleGlobalClick);
+                window.removeEventListener('keydown', handleKeyDown);
+                window.removeEventListener('scroll', handleScroll, true);
+            };
+        }, []);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
@@ -6036,19 +6499,156 @@ function generatePreviewHTML(data) {
         }, [messages]);
         
         useEffect(() => {
+            setTagContextMenu(null);
+            setTagFilters([]);
+        }, [selectedBotId]);
+        
+        useEffect(() => {
             api.get('/api/flows').then(({data}) => setAllFlows(data || []));
         }, []);
 
+        const fetchTags = useCallback(async () => {
+            if (!selectedBotId) {
+                setCustomTags([]);
+                return;
+            }
+            setIsLoadingTags(true);
+            try {
+                const { data } = await api.get('/api/tags', { params: { botId: selectedBotId } });
+                const safeData = Array.isArray(data) ? data : [];
+                setCustomTags(safeData);
+                setTagFilters(prev => prev.filter(key => {
+                    if (!key.startsWith('custom:')) return true;
+                    const tagId = Number(key.split(':')[1]);
+                    return safeData.some(tag => tag.id === tagId);
+                }));
+            } catch (e) {
+                console.error("Erro ao carregar tags personalizadas", e);
+                alert('Não foi possível carregar as tags personalizadas.');
+            } finally {
+                setIsLoadingTags(false);
+            }
+        }, [selectedBotId]);
+
+        useEffect(() => { fetchTags(); }, [fetchTags]);
+
         const fetchUsers = useCallback(async () => {
-            if (!selectedBotId) return;
+            if (!selectedBotId) {
+                setUsers([]);
+                return;
+            }
             try {
                 const { data } = await api.get(`/api/chats/${selectedBotId}`);
-                setUsers(data);
+                const normalized = (data || []).map(lead => ({
+                    ...lead,
+                    custom_tags: Array.isArray(lead.custom_tags) ? lead.custom_tags : [],
+                    automatic_tags: Array.isArray(lead.automatic_tags) ? lead.automatic_tags : []
+                }));
+                setUsers(normalized);
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
             }
         }, [selectedBotId]);
         
+        const handleConversationContextMenu = (event, user) => {
+            event.preventDefault();
+            setTagContextMenu({ x: event.clientX, y: event.clientY, chatId: user.chat_id });
+        };
+
+        const toggleLeadTag = async (tag, lead) => {
+            if (!tag || !lead) return;
+            const isAssigned = (lead.custom_tags || []).some(t => t.id === tag.id);
+            try {
+                if (isAssigned) {
+                    await api.delete(`/api/leads/${selectedBotId}/${lead.chat_id}/tags/${tag.id}`);
+                    updateLeadState(lead.chat_id, current => ({
+                        ...current,
+                        custom_tags: (current.custom_tags || []).filter(t => t.id !== tag.id)
+                    }));
+                } else {
+                    await api.post(`/api/leads/${selectedBotId}/${lead.chat_id}/tags`, { tagId: tag.id });
+                    updateLeadState(lead.chat_id, current => {
+                        const currentTags = Array.isArray(current.custom_tags) ? current.custom_tags : [];
+                        if (currentTags.some(t => t.id === tag.id)) return current;
+                        return {
+                            ...current,
+                            custom_tags: [...currentTags, { id: tag.id, title: tag.title, color: tag.color }]
+                        };
+                    });
+                }
+            } catch (error) {
+                console.error("Erro ao atualizar tags do lead:", error);
+                alert('Erro ao atualizar tags do lead.');
+            }
+        };
+
+        const handleTagFilterToggle = (key) => {
+            setTagFilters(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
+        };
+
+        const handleOpenTagManager = () => {
+            setTagError('');
+            setTagContextMenu(null);
+            setIsTagManagerOpen(true);
+        };
+
+        const handleCreateTag = async (event) => {
+            event.preventDefault();
+            if (!selectedBotId) {
+                setTagError('Selecione um bot para criar tags.');
+                return;
+            }
+            const trimmedTitle = newTagTitle.trim();
+            if (!trimmedTitle) {
+                setTagError('Informe um título.');
+                return;
+            }
+            if (trimmedTitle.length > 12) {
+                setTagError('O título deve ter no máximo 12 caracteres.');
+                return;
+            }
+            setIsSavingTag(true);
+            setTagError('');
+            try {
+                const payload = {
+                    title: trimmedTitle,
+                    color: newTagColor.toUpperCase(),
+                    botId: selectedBotId
+                };
+                const { data } = await api.post('/api/tags', payload);
+                setCustomTags(prev => {
+                    const next = [...prev, data];
+                    return next.sort((a, b) => a.title.localeCompare(b.title));
+                });
+                setNewTagTitle('');
+            } catch (error) {
+                const message = error.response?.data?.message || 'Erro ao criar tag.';
+                setTagError(message);
+            } finally {
+                setIsSavingTag(false);
+            }
+        };
+
+        const handleDeleteTag = async (tagId) => {
+            if (!confirm('Deseja realmente excluir esta tag?')) return;
+            try {
+                await api.delete(`/api/tags/${tagId}`);
+                setCustomTags(prev => prev.filter(tag => tag.id !== tagId));
+                setTagFilters(prev => prev.filter(key => key !== `custom:${tagId}`));
+                setUsers(prev => prev.map(lead => ({
+                    ...lead,
+                    custom_tags: (lead.custom_tags || []).filter(tag => tag.id !== tagId)
+                })));
+                setSelectedChat(prev => prev ? {
+                    ...prev,
+                    custom_tags: (prev.custom_tags || []).filter(tag => tag.id !== tagId)
+                } : prev);
+            } catch (error) {
+                console.error("Erro ao excluir tag:", error);
+                alert('Erro ao excluir tag.');
+            }
+        };
+
         useEffect(() => {
             if (!selectedBotId) return;
             fetchUsers();
@@ -6116,20 +6716,39 @@ function generatePreviewHTML(data) {
         };
         
         useEffect(() => {
-        const activeUsers = showOnlyActive 
-            ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
-            : users;
+            const activeUsers = showOnlyActive 
+                ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
+                : users;
 
-        setFilteredUsers(
-            activeUsers.filter(u => {
-                const term = searchTerm.toLowerCase();
-                const firstName = (u.first_name || '').toLowerCase();
-                const leadId = getLeadId(u).toLowerCase();
-                
-                return firstName.includes(term) || leadId.includes(term);
-            })
-        );
-    }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
+            const normalizedTerm = searchTerm.toLowerCase();
+
+            setFilteredUsers(
+                activeUsers.filter(u => {
+                    const firstName = (u.first_name || '').toLowerCase();
+                    const leadId = getLeadId(u).toLowerCase();
+                    const matchesSearch = !normalizedTerm || firstName.includes(normalizedTerm) || leadId.includes(normalizedTerm);
+                    if (!matchesSearch) return false;
+
+                    if (tagFilters.length === 0) return true;
+                    const leadTagKeys = [
+                        ...(Array.isArray(u.automatic_tags) ? u.automatic_tags.map(name => `auto:${name}`) : []),
+                        ...(Array.isArray(u.custom_tags) ? u.custom_tags.map(tag => `custom:${tag.id}`) : [])
+                    ];
+                    return tagFilters.every(tagKey => leadTagKeys.includes(tagKey));
+                })
+            );
+        }, [searchTerm, users, showOnlyActive, inactiveChatIds, tagFilters]);
+
+        useEffect(() => {
+            if (!selectedChat) return;
+            const updated = users.find(u => u.chat_id === selectedChat.chat_id);
+            if (!updated) return;
+            const customChanged = JSON.stringify(updated.custom_tags || []) !== JSON.stringify(selectedChat.custom_tags || []);
+            const autoChanged = JSON.stringify(updated.automatic_tags || []) !== JSON.stringify(selectedChat.automatic_tags || []);
+            if (customChanged || autoChanged || updated.first_name !== selectedChat.first_name || updated.last_message_at !== selectedChat.last_message_at) {
+                setSelectedChat(prev => prev ? { ...prev, ...updated } : prev);
+            }
+        }, [users, selectedChat]);
 
     const handleFilterActiveToggle = async () => {
         const nextState = !showOnlyActive;
@@ -6246,12 +6865,137 @@ function generatePreviewHTML(data) {
         return (
             <div className="chat-page-layout">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSendFromLibrary} onClose={() => setIsMediaModalOpen(false)} />}
+                {isTagManagerOpen && (
+                    <div className="tag-manager-backdrop" onClick={() => setIsTagManagerOpen(false)}>
+                        <div className="tag-manager-modal" onClick={e => e.stopPropagation()}>
+                            <div className="tag-manager-header">
+                                <h3>Gerenciar tags</h3>
+                                <button type="button" onClick={() => setIsTagManagerOpen(false)} aria-label="Fechar">
+                                    <span aria-hidden="true">&times;</span>
+                                </button>
+                            </div>
+                            <form className="tag-manager-form" onSubmit={handleCreateTag}>
+                                <div className="form-group">
+                                    <label>Título (até 12 caracteres)</label>
+                                    <input
+                                        className="form-input"
+                                        maxLength={12}
+                                        value={newTagTitle}
+                                        onChange={e => setNewTagTitle(e.target.value)}
+                                        placeholder="Ex: VIP"
+                                        required
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label>Cor</label>
+                                    <div className="tag-color-picker">
+                                        <input
+                                            type="color"
+                                            value={newTagColor}
+                                            onChange={e => setNewTagColor(e.target.value.toUpperCase())}
+                                            aria-label="Selecionar cor da tag"
+                                        />
+                                        <span>{newTagColor}</span>
+                                    </div>
+                                </div>
+                                {tagError && <p className="tag-error">{tagError}</p>}
+                                <button className="btn btn-primary" type="submit" disabled={isSavingTag}>
+                                    {isSavingTag ? 'Salvando...' : 'Criar tag'}
+                                </button>
+                            </form>
+                            <div className="tag-manager-list">
+                                {isLoadingTags ? (
+                                    <p className="tag-loading">Carregando tags...</p>
+                                ) : customTags.length === 0 ? (
+                                    <p className="tag-empty">Nenhuma tag criada ainda.</p>
+                                ) : (
+                                    customTags.map(tag => (
+                                        <div key={`manager-${tag.id}`} className="tag-manager-item">
+                                            <span
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                            <button type="button" className="btn btn-red btn-sm" onClick={() => handleDeleteTag(tag.id)}>
+                                                Excluir
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {tagContextMenu && contextMenuPosition && leadForContextMenu && (
+                    <div
+                        className="tag-context-menu"
+                        style={{ top: contextMenuPosition.top, left: contextMenuPosition.left }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="tag-context-title">Tags personalizadas</div>
+                        {customTags.length === 0 ? (
+                            <p className="tag-context-empty">Crie tags para atribuí-las aos seus leads.</p>
+                        ) : (
+                            customTags.map(tag => {
+                                const isAssigned = (leadForContextMenu.custom_tags || []).some(t => t.id === tag.id);
+                                return (
+                                    <button
+                                        key={`context-${tag.id}`}
+                                        type="button"
+                                        className={`tag-context-item ${isAssigned ? 'active' : ''}`}
+                                        onClick={() => toggleLeadTag(tag, leadForContextMenu)}
+                                    >
+                                        <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
+                                        <span>{tag.title}</span>
+                                        {isAssigned && <span className="tag-context-check">✓</span>}
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                )}
                 <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
                     <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
                     <div className="chat-container" style={{height: 'calc(100vh - 8.5rem)', margin: '0 3rem 2rem 3rem'}} >
                         <div className="conversations-panel">
                             <div className="conversations-header">
                                 <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <div className="tag-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={handleOpenTagManager}
+                                        disabled={!selectedBotId}
+                                    >
+                                        Gerenciar tags
+                                    </button>
+                                    <div className="tag-filter-container">
+                                        <span className="tag-filter-label">Filtrar por tags:</span>
+                                        {tagFilterOptions.map(option => {
+                                            const isActive = tagFilters.includes(option.key);
+                                            const style = option.variant === 'custom'
+                                                ? {
+                                                    borderColor: option.color,
+                                                    backgroundColor: isActive ? option.color : 'transparent',
+                                                    color: isActive ? getContrastColor(option.color) : option.color
+                                                  }
+                                                : undefined;
+                                            const className = `tag-filter-chip ${option.variant === 'auto' ? 'auto' : ''} ${isActive ? 'active' : ''}`;
+                                            return (
+                                                <button
+                                                    key={option.key}
+                                                    type="button"
+                                                    className={className}
+                                                    style={style}
+                                                    onClick={() => handleTagFilterToggle(option.key)}
+                                                >
+                                                    {option.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                             </div>
                             <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                 <label htmlFor="activeFilter" style={{ cursor: 'pointer', flexGrow: 1, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -6269,7 +7013,12 @@ function generatePreviewHTML(data) {
                                 {filteredUsers.map(u => {
                                     const formattedTime = formatLastMessageTime(u.last_message_at);
                                     return (
-                                        <div key={u.chat_id} className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`} onClick={() => handleSelectChat(u)}>
+                                        <div
+                                            key={u.chat_id}
+                                            className={`conversation-item ${selectedChat?.chat_id === u.chat_id ? 'active' : ''}`}
+                                            onClick={() => handleSelectChat(u)}
+                                            onContextMenu={(e) => handleConversationContextMenu(e, u)}
+                                        >
                                             <div className="conversation-item-header">
                                                 <div className="conversation-item-name">
                                                     {getFirstName(u)}
@@ -6278,19 +7027,105 @@ function generatePreviewHTML(data) {
                                                 {formattedTime ? <span className="conversation-item-time">{formattedTime}</span> : null}
                                             </div>
                                             <p className="conversation-item-preview">{u.message_text}</p>
+                                            <div className="conversation-item-tags">
+                                                {(u.automatic_tags || []).map(tagName => (
+                                                    <span key={`auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(u.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
                                     );
                                 })}
                             </div>
                         </div>
-                        <div className="chat-window">{selectedChat ? (<><div className="chat-header"><h3>{getFirstName(selectedChat)} <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span></h3><button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button></div><div className="message-list" ref={chatWindowRef}>{messages.map((m, i) => (<div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}><strong>{getMessageSender(m)}</strong>{renderMessageContent(m)}<div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div></div>))}</div><div className="chat-input-area"><form onSubmit={handleSend} className="chat-input-form"><input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" /><button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button><button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button><input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." /><button className="btn btn-primary" type="submit">{Icons.send}</button></form></div></>) : (<div className="centered-placeholder">{Icons.chat}<h3>Selecione uma conversa</h3><p>Escolha um contato à esquerda.</p></div>)}</div>
+                        <div className="chat-window">
+                            {selectedChat ? (
+                                <>
+                                    <div className="chat-header">
+                                        <div className="chat-header-main">
+                                            <h3>
+                                                {getFirstName(selectedChat)}
+                                                <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span>
+                                            </h3>
+                                            <div className="chat-header-tags">
+                                                {(selectedChat.automatic_tags || []).map(tagName => (
+                                                    <span key={`header-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                                ))}
+                                                {(selectedChat.custom_tags || []).map(tag => (
+                                                    <span
+                                                        key={`header-custom-${tag.id}`}
+                                                        className="tag-badge"
+                                                        style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                                    >
+                                                        {tag.title}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="chat-header-actions">
+                                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button>
+                                        </div>
+                                    </div>
+                                    <div className="message-list" ref={chatWindowRef}>
+                                        {messages.map((m, i) => (
+                                            <div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}>
+                                                <strong>{getMessageSender(m)}</strong>
+                                                {renderMessageContent(m)}
+                                                <div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="chat-input-area">
+                                        <form onSubmit={handleSend} className="chat-input-form">
+                                            <input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" />
+                                            <button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button>
+                                            <button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button>
+                                            <input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." />
+                                            <button className="btn btn-primary" type="submit">{Icons.send}</button>
+                                        </form>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="centered-placeholder">
+                                    {Icons.chat}
+                                    <h3>Selecione uma conversa</h3>
+                                    <p>Escolha um contato à esquerda.</p>
+                                </div>
+                            )}
+                        </div>
                         <div className="contact-panel">
                             {selectedChat ? (<>
                                 <h3>Detalhes</h3>
                                 <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
-                                <div className="contact-detail"><label>Username</label><p>{selectedChat.username ? `@${selectedChat.username}` : 'Nenhum'}</p></div>
-                                <div className="contact-detail"><label>Chat ID</label><p>{selectedChat.chat_id}</p></div>
-                                <div className="contact-detail"><label>Click ID</label><p>{selectedChat.click_id || 'Nenhum'}</p></div>
+                                <div className="contact-detail">
+                                    <label>Tags</label>
+                                    <div className="contact-tags">
+                                        {(selectedChat.automatic_tags || []).map(tagName => (
+                                            <span key={`panel-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
+                                        ))}
+                                        {(selectedChat.custom_tags || []).map(tag => (
+                                            <span
+                                                key={`panel-custom-${tag.id}`}
+                                                className="tag-badge"
+                                                style={{ backgroundColor: tag.color, color: getContrastColor(tag.color), borderColor: tag.color }}
+                                            >
+                                                {tag.title}
+                                            </span>
+                                        ))}
+                                        {(!selectedChat.automatic_tags || selectedChat.automatic_tags.length === 0) && (!selectedChat.custom_tags || selectedChat.custom_tags.length === 0) && (
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Sem tags atribuídas.</span>
+                                        )}
+                                    </div>
+                                    <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>Use o clique direito na lista para atribuir tags.</small>
+                                </div>
                                 <ChatActionsPanel botId={selectedBotId} chat={selectedChat} flows={botFlows} onAction={fetchMessages}/>
                             </>) : (<div className="centered-placeholder"><h3>Informações</h3><p>Detalhes do contato aqui.</p></div>)}
                         </div>
@@ -6640,6 +7475,57 @@ function generatePreviewHTML(data) {
         return labels[actionType] || actionType;
     };
 
+    const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+    const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
+
+    const normalizeInviteAction = (action) => {
+        if (!action || action.type !== 'action_create_invite_link') {
+            return { action, changed: false };
+        }
+
+        const originalData = action.data || {};
+        const normalizedData = { ...originalData };
+        let changed = false;
+
+        const existingMessage = (originalData.messageText ?? originalData.text ?? '').trim();
+        const messageText = existingMessage || DEFAULT_INVITE_MESSAGE;
+
+        if (normalizedData.messageText !== messageText) {
+            normalizedData.messageText = messageText;
+            changed = true;
+        }
+
+        if (normalizedData.text !== messageText) {
+            normalizedData.text = messageText;
+            changed = true;
+        }
+
+        const existingButton = (originalData.buttonText || '').trim();
+        const buttonText = existingButton || DEFAULT_INVITE_BUTTON_TEXT;
+
+        if (normalizedData.buttonText !== buttonText) {
+            normalizedData.buttonText = buttonText;
+            changed = true;
+        }
+
+        ['linkName', 'sendMessage', 'buttonUrl', 'buttonLink'].forEach((field) => {
+            if (field in normalizedData) {
+                delete normalizedData[field];
+                changed = true;
+            }
+        });
+
+        return {
+            action: changed ? { ...action, data: normalizedData } : action,
+            changed
+        };
+    };
+
+    const createActionWithDefaults = (type, data = {}) => {
+        const baseAction = { type, data };
+        return normalizeInviteAction(baseAction).action;
+    };
+
     const CustomNode = ({ id, type, data, isConnectable, selected }) => {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
@@ -6678,7 +7564,17 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
-            action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName ? `${actionData.linkName} (uso único)` : 'Link descartável.' },
+            action_create_invite_link: { 
+                icon: '🔗', 
+                name: 'Criar Convite', 
+                content: (() => {
+                    const messagePreview = (actionData.messageText || actionData.text || '').trim();
+                    const buttonPreview = (actionData.buttonText || '').trim();
+                    const messageLabel = messagePreview ? `"${messagePreview.substring(0, 30)}${messagePreview.length > 30 ? '…' : ''}"` : 'Mensagem não definida.';
+                    const buttonLabel = buttonPreview ? `Botão: ${buttonPreview}` : 'Botão sem texto.';
+                    return `${messageLabel} • ${buttonLabel}`;
+                })()
+            },
             action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
@@ -6829,15 +7725,38 @@ function generatePreviewHTML(data) {
         const [urlValidationErrors, setUrlValidationErrors] = useState({});
         
         useEffect(() => { 
-            const data = selectedNode.data || {};
-            // Garantir que actions seja um array
-            if (!data.actions) {
-                data.actions = [];
+            if (!selectedNode) {
+                return;
             }
-            if (!data.waitForReply) data.waitForReply = false;
-            if (!data.replyTimeout) data.replyTimeout = 5;
-            setNodeData(data);
-        }, [selectedNode]);
+
+            if (selectedNode.type === 'trigger') {
+                setNodeData(selectedNode.data || {});
+                return;
+            }
+
+            const currentData = selectedNode.data || {};
+            const actionsSource = Array.isArray(currentData.actions) ? currentData.actions : [];
+            const normalizedResults = actionsSource.map(action => normalizeInviteAction(action));
+            const normalizedActions = normalizedResults.map(result => result.action);
+            const actionsChanged = normalizedResults.some(result => result.changed) || !Array.isArray(currentData.actions);
+
+            const ensuredData = {
+                ...currentData,
+                actions: normalizedActions,
+                waitForReply: currentData.waitForReply ?? false,
+                replyTimeout: currentData.replyTimeout ?? 5
+            };
+
+            setNodeData(ensuredData);
+
+            if (
+                actionsChanged ||
+                currentData.waitForReply === undefined ||
+                currentData.replyTimeout === undefined
+            ) {
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: ensuredData } : n));
+            }
+        }, [selectedNode, setNodes]);
         
         // Nodes agora só têm ações (sem ação principal)
         const actions = nodeData.actions || [];
@@ -6850,7 +7769,7 @@ function generatePreviewHTML(data) {
                 alert('Você pode adicionar no máximo 5 ações.');
                 return;
             }
-            const newAction = { type: actionType, data: {} };
+            const newAction = createActionWithDefaults(actionType);
             const newData = { ...nodeData, actions: [...actions, newAction] };
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
@@ -7474,69 +8393,55 @@ function generatePreviewHTML(data) {
                     {action.type === 'action_create_invite_link' && (
                         <>
                             <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Nome do Link</label>
-                                <input 
-                                    type="text" 
-                                    className="form-input" 
-                                    value={actionData.linkName || ''} 
-                                    onChange={e => updateAction(index, 'linkName', e.target.value)}
+                                <label style={{fontSize: '0.85rem'}}>Mensagem</label>
+                                <textarea
+                                    id={`invite-message-textarea-${index}`}
+                                    className="form-textarea"
+                                    rows="3"
+                                    maxLength="4096"
+                                    value={(actionData.messageText ?? actionData.text ?? '')}
+                                    onChange={e => {
+                                        const text = e.target.value;
+                                        updateActionMultiple(index, { messageText: text, text });
+                                        const validation = validateTextForUrls(text);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`invite-${index}`]: validation
+                                        }));
+                                    }}
                                     style={{fontSize: '0.85rem'}}
-                                    placeholder="Nome identificador do link"
+                                    placeholder="Escreva a mensagem. Use {{invite_link}} para inserir o link gerado."
+                                />
+                                {urlValidationErrors[`invite-${index}`] && !urlValidationErrors[`invite-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`invite-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use {'{{invite_link}}'} para incluir o link automaticamente.</span>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={actionData.buttonText || ''}
+                                    onChange={e => updateAction(index, 'buttonText', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Texto exibido no botão (obrigatório)"
                                 />
                             </div>
                             <p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
-                                O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
+                                O link do botão é gerado automaticamente e válido para um único acesso.
                             </p>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.sendMessage}
-                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
-                                    />
-                                    Enviar mensagem com o link
-                                </label>
-                            </div>
-                            {actionData.sendMessage && (
-                                <div className="form-group">
-                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
-                                    <textarea 
-                                        id={`invite-message-textarea-${index}`}
-                                        className="form-textarea" 
-                                        rows="2" 
-                                        maxLength="4096" 
-                                        value={actionData.messageText || ''} 
-                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
-                                        style={{fontSize: '0.85rem'}}
-                                        placeholder="Use {{invite_link}} para incluir o link gerado"
-                                    />
-                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-                                        <button 
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            onClick={() => {
-                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
-                                                if (textarea) {
-                                                    const cursorPos = textarea.selectionStart;
-                                                    const currentText = actionData.messageText || '';
-                                                    const textBefore = currentText.substring(0, cursorPos);
-                                                    const textAfter = currentText.substring(cursorPos);
-                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
-                                                    updateAction(index, 'messageText', newValue);
-                                                    setTimeout(() => {
-                                                        textarea.focus();
-                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
-                                                        textarea.setSelectionRange(newCursor, newCursor);
-                                                    }, 0);
-                                                }
-                                            }}
-                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
-                                        >
-                                            + Link de Convite
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
                         </>
                     )}
                     
@@ -7667,13 +8572,31 @@ function generatePreviewHTML(data) {
         );
     }
     
-    function FlowEditorPage({ flow, onBack, pressels, thankYouPages, hostedCheckouts }) {
+function FlowEditorPage({
+        flow,
+        onRequestClose,
+        pressels,
+        thankYouPages,
+        hostedCheckouts,
+        onDirtyChange,
+        registerSaveHandler,
+        discardChangesToken = 0
+    }) {
         const reactFlowWrapper = useRef(null);
-        const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-        const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+        const [nodes, setNodesState, rawOnNodesChange] = useNodesState(initialNodes);
+        const [edges, setEdgesState, rawOnEdgesChange] = useEdgesState([]);
         const [selectedNode, setSelectedNode] = useState(null);
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
         const [presselDomains, setPresselDomains] = useState([]);
+        const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+        const updateDirtyState = useCallback((value) => {
+            setHasUnsavedChanges(prev => {
+                if (prev !== value && typeof onDirtyChange === 'function') {
+                    onDirtyChange(value);
+                }
+                return value;
+            });
+        }, [onDirtyChange]);
         
         // Handle node copy
         useEffect(() => {
@@ -7742,6 +8665,57 @@ function generatePreviewHTML(data) {
         const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
+
+        const setNodes = useCallback((updater, options = {}) => {
+            setNodesState(updater);
+            if (!options.skipDirty) {
+                updateDirtyState(true);
+            }
+        }, [setNodesState, updateDirtyState]);
+
+        const setEdges = useCallback((updater, options = {}) => {
+            setEdgesState(updater);
+            if (!options.skipDirty) {
+                updateDirtyState(true);
+            }
+        }, [setEdgesState, updateDirtyState]);
+
+        const handleNodesChange = useCallback((changes) => {
+            if (changes && changes.length > 0) {
+                updateDirtyState(true);
+            }
+            rawOnNodesChange(changes);
+        }, [rawOnNodesChange, updateDirtyState]);
+
+        const handleEdgesChange = useCallback((changes) => {
+            if (changes && changes.length > 0) {
+                updateDirtyState(true);
+            }
+            rawOnEdgesChange(changes);
+        }, [rawOnEdgesChange, updateDirtyState]);
+
+        useEffect(() => {
+            const beforeUnloadHandler = (event) => {
+                if (!hasUnsavedChanges) return;
+                event.preventDefault();
+                event.returnValue = '';
+                return '';
+            };
+
+            if (hasUnsavedChanges) {
+                window.addEventListener('beforeunload', beforeUnloadHandler);
+            }
+
+            return () => {
+                window.removeEventListener('beforeunload', beforeUnloadHandler);
+            };
+        }, [hasUnsavedChanges]);
+
+        useEffect(() => {
+            if (discardChangesToken > 0) {
+                updateDirtyState(false);
+            }
+        }, [discardChangesToken, updateDirtyState]);
 
         useEffect(() => {
             if (!selectedEdge) {
@@ -7822,17 +8796,30 @@ function generatePreviewHTML(data) {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
-                    // Garantir que todos os nodes tenham o campo actions
+                    const nodeData = node.data || {};
+                    if (node.type === 'trigger') {
+                        return {
+                            ...node,
+                            data: nodeData
+                        };
+                    }
+
+                    const actionsSource = Array.isArray(nodeData.actions) ? nodeData.actions : [];
+                    const normalizedActions = actionsSource.map(action => normalizeInviteAction(action).action);
+
                     return {
                         ...node,
                         data: {
-                            ...node.data,
-                            actions: node.data?.actions || []
+                            ...nodeData,
+                            actions: normalizedActions,
+                            waitForReply: nodeData.waitForReply ?? false,
+                            replyTimeout: nodeData.replyTimeout ?? 5
                         }
                     };
                 });
-                setNodes(nodesToSet);
-                setEdges(flowContent.edges || []);
+                setNodes(nodesToSet, { skipDirty: true });
+                setEdges(flowContent.edges || [], { skipDirty: true });
+                updateDirtyState(false);
                 
                 // Find the initial node (trigger node)
                 const initialNode = nodesToSet.find(node => node.type === 'trigger');
@@ -7866,7 +8853,7 @@ function generatePreviewHTML(data) {
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
             }
-        }, [flow, reactFlowInstance]);
+        }, [flow, reactFlowInstance, setEdges, setNodes]);
         
         // Carregar domínios das pressels
         useEffect(() => {
@@ -7913,7 +8900,12 @@ function generatePreviewHTML(data) {
             }
         }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
-        const onNodesDelete = useCallback((deleted) => { setEdges(deleted.reduce((acc, node) => { const connectedEdges = getConnectedEdges([node], acc); return acc.filter((edge) => !connectedEdges.includes(edge)); }, edges)); }, [nodes, edges] );
+        const onNodesDelete = useCallback((deleted) => {
+            setEdges((prevEdges) => {
+                const connectedEdges = getConnectedEdges(deleted, prevEdges);
+                return prevEdges.filter((edge) => !connectedEdges.includes(edge));
+            });
+        }, [setEdges]);
         const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, eds)), [setEdges]);
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => { setSelectedNode(null); setSelectedEdge(null); }, []);
@@ -7935,46 +8927,89 @@ function generatePreviewHTML(data) {
                 id: `action-${Date.now()}`, 
                 type: 'action', 
                 position, 
-                data: { actions: [{ type: actionType, data: {} }] }, 
+                data: { actions: [createActionWithDefaults(actionType)] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
-        }, [reactFlowInstance] );
-        const handleSave = async () => { 
-            // Validar todos os campos de texto antes de salvar
+        }, [reactFlowInstance, setNodes, reactFlowWrapper] );
+        const handleSave = useCallback(async () => {
+            if (!flow?.id) {
+                alert('Fluxo inválido. Atualize a página e tente novamente.');
+                return false;
+            }
+
             for (const node of nodes) {
                 const actions = node.data?.actions || [];
-                
+
                 for (let i = 0; i < actions.length; i++) {
                     const action = actions[i];
-                    
-                    // Validar texto de mensagem
+
                     if (action.type === 'message' && action.data?.text) {
                         const validation = validateTextForUrls(action.data.text);
                         if (!validation.valid) {
                             alert(`❌ Links não são permitidos no texto da mensagem!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
-                            return; // Impede salvamento
+                            return false;
                         }
                     }
-                    
-                    // Validar legendas de mídia
+
+                    if (action.type === 'action_create_invite_link') {
+                        const messageValue = (action.data?.messageText ?? action.data?.text ?? '').trim();
+                        if (!messageValue) {
+                            alert('❌ Defina o texto da mensagem para o convite.');
+                            return false;
+                        }
+                        const validation = validateTextForUrls(messageValue);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos na mensagem do convite!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para usar o link gerado, adicione a variável {{invite_link}} ou utilize o botão embutido.`);
+                            return false;
+                        }
+
+                        const buttonValue = (action.data?.buttonText || '').trim();
+                        if (!buttonValue) {
+                            alert('❌ Informe o texto do botão do convite.');
+                            return false;
+                        }
+
+                        // Garantir sincronização dos campos antes de salvar
+                        action.data.messageText = messageValue;
+                        action.data.text = messageValue;
+                        action.data.buttonText = buttonValue;
+                        delete action.data.buttonUrl;
+                        delete action.data.sendMessage;
+                        delete action.data.linkName;
+                    }
+
                     if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
                         const validation = validateTextForUrls(action.data.caption);
                         if (!validation.valid) {
                             alert(`❌ Links não são permitidos na legenda!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
-                            return; // Impede salvamento
+                            return false;
                         }
                     }
                 }
             }
-            
-            // Se passou todas as validações, salvar normalmente
-            try { 
-                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) }); 
-                alert("Salvo!"); 
-            } catch (e) { 
-                alert("Erro ao salvar."); 
-            } 
-        };
+
+            try {
+                await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) });
+                alert("Salvo!");
+                updateDirtyState(false);
+                return true;
+            } catch (error) {
+                console.error('Erro ao salvar fluxo:', error);
+                alert("Erro ao salvar.");
+                return false;
+            }
+        }, [api, edges, flow, nodes]);
+        useEffect(() => {
+            if (typeof registerSaveHandler !== 'function') {
+                return;
+            }
+
+            registerSaveHandler(handleSave);
+
+            return () => {
+                registerSaveHandler(null);
+            };
+        }, [registerSaveHandler, handleSave]);
         const addNode = (actionType, position = null) => {
             if (!reactFlowInstance) return;
             
@@ -7995,7 +9030,7 @@ function generatePreviewHTML(data) {
                 type: 'action', 
                 position: nodePosition, 
                 data: { 
-                    actions: [{ type: actionType, data: {} }]
+                    actions: [createActionWithDefaults(actionType)]
                 },
             };
             
@@ -8039,11 +9074,11 @@ function generatePreviewHTML(data) {
         return (
             <div className="flow-editor-page">
                 {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} allowedTypes={mediaAllowedTypes} />}
-                <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={onBack}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
+                <div className="flow-header"><h3>Editando: {flow.name}</h3><div><button className="btn btn-secondary" onClick={() => onRequestClose && onRequestClose()}>Voltar</button><button className="btn btn-primary" onClick={handleSave}>Salvar</button></div></div>
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
                                 <Background />
                                 <Controls />
                 </ReactFlow>

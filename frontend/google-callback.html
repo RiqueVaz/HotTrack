@@ -69,9 +69,15 @@
 
                     if (response.ok) {
                         // Salvar token em sessionStorage (mais seguro, expira ao fechar navegador)
-                        sessionStorage.setItem('hottrack_token', data.token);
+                        if (data.token) {
+                            sessionStorage.setItem('hottrack_token', data.token);
+                        }
+                        if (data.refreshToken) {
+                            sessionStorage.setItem('hottrack_refresh_token', data.refreshToken);
+                        }
                         // Remover do localStorage se existir (migração)
                         localStorage.removeItem('hottrack_token');
+                        localStorage.removeItem('hottrack_refresh_token');
                         window.location.href = '/?success=google_login';
                     } else {
                         // Redirecionar com erro
