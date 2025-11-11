@@ -53,21 +53,52 @@ const {
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
 // ==========================================================
 
-async function sqlWithRetry(query, params = [], retries = 3, delay = 1000, ...rest) {
+async function sqlWithRetry(query, ...args) {
+    let retries = 3;
+    let delay = 1000;
+    let params = [];
+    const isTemplate = Array.isArray(query);
+    const templateValues = isTemplate ? [...args] : [];
+
+    if (!isTemplate) {
+        if (args.length > 0) {
+            params = args[0] ?? [];
+        }
+        if (args.length > 1) {
+            const maybeOptions = args[1];
+            if (typeof maybeOptions === 'number') {
+                retries = maybeOptions;
+                if (args.length > 2 && typeof args[2] === 'number') {
+                    delay = args[2];
+                }
+            } else if (maybeOptions && typeof maybeOptions === 'object') {
+                if (typeof maybeOptions.retries === 'number') {
+                    retries = maybeOptions.retries;
+                }
+                if (typeof maybeOptions.delay === 'number') {
+                    delay = maybeOptions.delay;
+                }
+            }
+        }
+    }
+
     const execute = async () => {
-        if (Array.isArray(query)) {
-            const args = [params, ...rest].filter((value) => value !== undefined);
-            return await sql(query, ...args);
+        if (isTemplate) {
+            return await sql(query, ...templateValues);
         }
         return await sql(query, params);
     };
 
-    for (let i = 0; i < retries; i++) {
+    for (let attempt = 0; attempt < retries; attempt++) {
         try {
             return await execute();
         } catch (error) {
             const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
-            if (isRetryable && i < retries - 1) { await new Promise(res => setTimeout(res, delay)); } else { throw error; }
+            if (isRetryable && attempt < retries - 1) {
+                await new Promise(res => setTimeout(res, delay));
+            } else {
+                throw error;
+            }
         }
     }
 }
