@@ -8519,6 +8519,14 @@ function FlowEditorPage({
         const [reactFlowInstance, setReactFlowInstance] = useState(null);
         const [presselDomains, setPresselDomains] = useState([]);
         const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+        const updateDirtyState = useCallback((value) => {
+            setHasUnsavedChanges(prev => {
+                if (prev !== value && typeof onDirtyChange === 'function') {
+                    onDirtyChange(value);
+                }
+                return value;
+            });
+        }, [onDirtyChange]);
         
         // Handle node copy
         useEffect(() => {
@@ -8591,36 +8599,30 @@ function FlowEditorPage({
         const setNodes = useCallback((updater, options = {}) => {
             setNodesState(updater);
             if (!options.skipDirty) {
-                setHasUnsavedChanges(true);
+                updateDirtyState(true);
             }
-        }, [setNodesState]);
+        }, [setNodesState, updateDirtyState]);
 
         const setEdges = useCallback((updater, options = {}) => {
             setEdgesState(updater);
             if (!options.skipDirty) {
-                setHasUnsavedChanges(true);
+                updateDirtyState(true);
             }
-        }, [setEdgesState]);
+        }, [setEdgesState, updateDirtyState]);
 
         const handleNodesChange = useCallback((changes) => {
             if (changes && changes.length > 0) {
-                setHasUnsavedChanges(true);
+                updateDirtyState(true);
             }
             rawOnNodesChange(changes);
-        }, [rawOnNodesChange]);
+        }, [rawOnNodesChange, updateDirtyState]);
 
         const handleEdgesChange = useCallback((changes) => {
             if (changes && changes.length > 0) {
-                setHasUnsavedChanges(true);
+                updateDirtyState(true);
             }
             rawOnEdgesChange(changes);
-        }, [rawOnEdgesChange]);
-
-        useEffect(() => {
-            if (typeof onDirtyChange === 'function') {
-                onDirtyChange(hasUnsavedChanges);
-            }
-        }, [hasUnsavedChanges, onDirtyChange]);
+        }, [rawOnEdgesChange, updateDirtyState]);
 
         useEffect(() => {
             const beforeUnloadHandler = (event) => {
@@ -8641,9 +8643,9 @@ function FlowEditorPage({
 
         useEffect(() => {
             if (discardChangesToken > 0) {
-                setHasUnsavedChanges(false);
+                updateDirtyState(false);
             }
-        }, [discardChangesToken]);
+        }, [discardChangesToken, updateDirtyState]);
 
         useEffect(() => {
             if (!selectedEdge) {
@@ -8735,7 +8737,7 @@ function FlowEditorPage({
                 });
                 setNodes(nodesToSet, { skipDirty: true });
                 setEdges(flowContent.edges || [], { skipDirty: true });
-                setHasUnsavedChanges(false);
+                updateDirtyState(false);
                 
                 // Find the initial node (trigger node)
                 const initialNode = nodesToSet.find(node => node.type === 'trigger');
@@ -8880,7 +8882,7 @@ function FlowEditorPage({
             try {
                 await api.put(`/api/flows/${flow.id}`, { name: flow.name, nodes: JSON.stringify({ nodes, edges }) });
                 alert("Salvo!");
-                setHasUnsavedChanges(false);
+                updateDirtyState(false);
                 return true;
             } catch (error) {
                 console.error('Erro ao salvar fluxo:', error);
