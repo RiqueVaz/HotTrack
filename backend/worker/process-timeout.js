@@ -66,9 +66,11 @@ async function sqlWithRetry(query, ...args) {
     let delay = 1000;
     let params = [];
     const isTemplate = Array.isArray(query);
+    const isDirectQuery = !isTemplate && typeof query === 'string';
+    const isImmediate = !isTemplate && !isDirectQuery;
     const templateValues = isTemplate ? [...args] : [];
 
-    if (!isTemplate) {
+    if (isDirectQuery) {
         if (args.length > 0) {
             params = args[0] ?? [];
         }
@@ -93,6 +95,9 @@ async function sqlWithRetry(query, ...args) {
     const execute = async () => {
         if (isTemplate) {
             return await sql(query, ...templateValues);
+        }
+        if (isImmediate) {
+            return await query;
         }
         return await sql(query, params);
     };
