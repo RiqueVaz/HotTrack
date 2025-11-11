@@ -53,11 +53,18 @@ const {
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
 // ==========================================================
 
-async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
+async function sqlWithRetry(query, params = [], retries = 3, delay = 1000, ...rest) {
+    const execute = async () => {
+        if (Array.isArray(query)) {
+            const args = [params, ...rest].filter((value) => value !== undefined);
+            return await sql(query, ...args);
+        }
+        return await sql(query, params);
+    };
+
     for (let i = 0; i < retries; i++) {
         try {
-            if (typeof query === 'string') { return await sql(query, params); }
-            return await query;
+            return await execute();
         } catch (error) {
             const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
             if (isRetryable && i < retries - 1) { await new Promise(res => setTimeout(res, delay)); } else { throw error; }
