@@ -4830,7 +4830,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                  } finally {
                      if (pixTimerStart) {
                          const duration = Date.now() - pixTimerStart;
-                         incrementHistogram(prometheusMetrics.pixGenerationDuration, duration, { provider: pixProviderLabel, stage: pixErrorStage });
+                         observeHistogram(prometheusMetrics.pixGenerationDuration, duration, { provider: pixProviderLabel, stage: pixErrorStage });
                      }
                  }
                 break;
