@@ -11,37 +11,11 @@ const { v4: uuidv4 } = require('uuid');
 const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
-const {
-    metrics: prometheusMetrics,
-    isEnabled: isPrometheusEnabled,
-} = require('../metrics');
 
-const METRICS_SOURCE = 'worker_process_timeout';
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
-const sanitizeMetricLabelValue = (value) => {
-    if (value === undefined || value === null) return 'unknown';
-    const str = String(value);
-    if (str.trim() === '') return 'unknown';
-    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
-};
 
-const formatMetricLabels = (labels = {}) =>
-    Object.keys(labels).reduce((acc, key) => {
-        acc[key] = sanitizeMetricLabelValue(labels[key]);
-        return acc;
-    }, {});
-
-const observeHistogram = (histogram, value, labels = {}) => {
-    if (!isPrometheusEnabled || !histogram) return;
-    histogram.observe(formatMetricLabels(labels), value);
-};
-
-const incrementCounter = (counter, labels = {}, value = 1) => {
-    if (!isPrometheusEnabled || !counter) return;
-    counter.inc(formatMetricLabels(labels), value);
-};
 
 // ==========================================================
 //                     INICIALIZAÇÃO
@@ -87,14 +61,52 @@ const {
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
 // ==========================================================
 
-async function sqlWithRetry(query, params = [], retries = 3, delay = 1000) {
-    for (let i = 0; i < retries; i++) {
+async function sqlWithRetry(query, ...args) {
+    let retries = 3;
+    let delay = 1000;
+    let params = [];
+    const isTemplate = Array.isArray(query);
+    const templateValues = isTemplate ? [...args] : [];
+
+    if (!isTemplate) {
+        if (args.length > 0) {
+            params = args[0] ?? [];
+        }
+        if (args.length > 1) {
+            const maybeOptions = args[1];
+            if (typeof maybeOptions === 'number') {
+                retries = maybeOptions;
+                if (args.length > 2 && typeof args[2] === 'number') {
+                    delay = args[2];
+                }
+            } else if (maybeOptions && typeof maybeOptions === 'object') {
+                if (typeof maybeOptions.retries === 'number') {
+                    retries = maybeOptions.retries;
+                }
+                if (typeof maybeOptions.delay === 'number') {
+                    delay = maybeOptions.delay;
+                }
+            }
+        }
+    }
+
+    const execute = async () => {
+        if (isTemplate) {
+            return await sql(query, ...templateValues);
+        }
+        return await sql(query, params);
+    };
+
+    for (let attempt = 0; attempt < retries; attempt++) {
         try {
-            if (typeof query === 'string') { return await sql(query, params); }
-            return await query;
+            return await execute();
         } catch (error) {
             const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
-            if (isRetryable && i < retries - 1) { await new Promise(res => setTimeout(res, delay)); } else { throw error; }
+            if (isRetryable && attempt < retries - 1) {
+                await new Promise(res => setTimeout(res, delay));
+            } else {
+                throw error;
+            }
         }
     }
 }
@@ -145,85 +157,30 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
     const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
 
-    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
-    const method = methodMap[fileType];
-    const field = fieldMap[fileType];
-    const timeout = fileType === 'video' ? 60000 : 30000;
-
-    if (!method) throw new Error('Tipo de arquivo não suportado.');
-
-    const recordRequest = (status) => {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
-            prometheusMetrics.telegramMediaRequests.inc({
-                source: METRICS_SOURCE,
-                type: fileType,
-                status,
-            });
-        }
-    };
-
-    const recordBytes = (direction, bytes) => {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && bytes > 0) {
-            prometheusMetrics.telegramMediaBytes.observe(
-                {
-                    source: METRICS_SOURCE,
-                    type: fileType,
-                    direction,
-                },
-                bytes
-            );
-        }
-    };
-
-    try {
-        const directPayload = {
-            chat_id: chatId,
-            [field]: fileUrl,
-        };
-        if (caption) {
-            directPayload.caption = caption;
-        }
-        const directResponse = await sendTelegramRequest(destinationBotToken, method, directPayload, { timeout });
-        if (directResponse?.ok) {
-            recordRequest('success_direct');
-            return directResponse;
-        }
-        recordRequest('retry_upload');
-    } catch (error) {
-        recordRequest('retry_upload');
-    }
-
     const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    recordBytes('download', fileBuffer.length);
-
+    
     const formData = new FormData();
     formData.append('chat_id', chatId);
     if (caption) {
         formData.append('caption', caption);
     }
 
+    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
+    const method = methodMap[fileType];
+    const field = fieldMap[fileType];
     const fileName = fileNameMap[fileType];
+    const timeout = fileType === 'video' ? 60000 : 30000;
+
+    if (!method) throw new Error('Tipo de arquivo não suportado.');
+
+
     formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
 
-    recordBytes('upload', fileBuffer.length);
+    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 
-    try {
-        const uploadResponse = await sendTelegramRequest(destinationBotToken, method, formData, {
-            headers: formData.getHeaders(),
-            timeout,
-        });
-        if (uploadResponse?.ok) {
-            recordRequest('success_upload');
-        } else {
-            recordRequest('failure');
-        }
-        return uploadResponse;
-    } catch (error) {
-        recordRequest('failure');
-        throw error;
-    }
+
 }
 
 async function handleMediaNode(node, botToken, chatId, caption) {
@@ -1344,25 +1301,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 // ==========================================================
 
 async function handler(req, res) {
-    const jobMetricBase = {
-        worker: 'process-timeout',
-        job_type: 'timeout',
-    };
-    const jobTimerStart = isPrometheusEnabled && prometheusMetrics.workerJobDuration ? Date.now() : null;
-    let jobStatus = 'success';
 
     if (req.method !== 'POST') {
-        jobStatus = 'skipped';
-        const response = res.status(405).json({ message: 'Method Not Allowed' });
-        if (jobTimerStart !== null) {
-            observeHistogram(
-                prometheusMetrics.workerJobDuration,
-                (Date.now() - jobTimerStart) / 1000,
-                { ...jobMetricBase, status: jobStatus }
-            );
-        }
-        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
-        return response;
+        return res.status(405).json({ message: 'Method Not Allowed' });
+
+
     }
 
     try {
@@ -1390,13 +1333,11 @@ async function handler(req, res) {
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
             console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
-            jobStatus = 'skipped';
             return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
         }
         
         if (!currentState.waiting_for_input) {
             console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
-            jobStatus = 'skipped';
             return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
         }
 
@@ -1429,19 +1370,10 @@ async function handler(req, res) {
         }
 
     } catch (error) {
-        jobStatus = 'error';
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);
         // Retornamos 200 para que o QStash NÃO tente re-executar um fluxo que falhou logicamente.
         return res.status(200).json({ error: `Failed to process timeout: ${error.message}` });
-    } finally {
-        if (jobTimerStart !== null) {
-            observeHistogram(
-                prometheusMetrics.workerJobDuration,
-                (Date.now() - jobTimerStart) / 1000,
-                { ...jobMetricBase, status: jobStatus }
-            );
-        }
-        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
+    
     }
 }
 
