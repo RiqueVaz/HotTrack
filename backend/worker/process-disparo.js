@@ -11,12 +11,7 @@ const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
-const {
-    metrics: prometheusMetrics,
-    isEnabled: isPrometheusEnabled,
-} = require('../metrics');
 
-const METRICS_SOURCE = 'worker_process_disparo';
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
@@ -53,28 +48,6 @@ const {
     hottrackApiUrl: process.env.HOTTRACK_API_URL,
 });
 
-const sanitizeMetricLabelValue = (value) => {
-    if (value === undefined || value === null) return 'unknown';
-    const str = String(value);
-    if (str.trim() === '') return 'unknown';
-    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
-};
-
-const formatMetricLabels = (labels = {}) =>
-    Object.keys(labels).reduce((acc, key) => {
-        acc[key] = sanitizeMetricLabelValue(labels[key]);
-        return acc;
-    }, {});
-
-const observeHistogram = (histogram, value, labels = {}) => {
-    if (!isPrometheusEnabled || !histogram) return;
-    histogram.observe(formatMetricLabels(labels), value);
-};
-
-const incrementCounter = (counter, labels = {}, value = 1) => {
-    if (!isPrometheusEnabled || !counter) return;
-    counter.inc(formatMetricLabels(labels), value);
-};
 
 // ==========================================================
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
@@ -189,6 +162,13 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
     if (!fileInfo.ok) throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
     const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
+    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
+    }
     const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
     const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
     const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
@@ -198,76 +178,14 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const timeout = fileType === 'video' ? 60000 : 30000;
     if (!method) throw new Error('Tipo de arquivo não suportado.');
 
-    const recordRequest = (status) => {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
-            prometheusMetrics.telegramMediaRequests.inc({
-                source: METRICS_SOURCE,
-                type: fileType,
-                status,
-            });
-        }
-    };
 
-    const recordBytes = (direction, bytes) => {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && bytes > 0) {
-            prometheusMetrics.telegramMediaBytes.observe(
-                {
-                    source: METRICS_SOURCE,
-                    type: fileType,
-                    direction,
-                },
-                bytes
-            );
-        }
-    };
-
-    try {
-        const directPayload = {
-            chat_id: chatId,
-            [field]: fileUrl,
-        };
-        if (caption) {
-            directPayload.caption = caption;
-            directPayload.parse_mode = 'HTML';
-        }
-        const directResponse = await sendTelegramRequest(destinationBotToken, method, directPayload, { timeout });
-        if (directResponse?.ok) {
-            recordRequest('success_direct');
-            return directResponse;
-        }
-        recordRequest('retry_upload');
-    } catch (error) {
-        recordRequest('retry_upload');
-    }
-
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    recordBytes('download', fileBuffer.length);
-
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
-        formData.append('parse_mode', 'HTML'); // Adicionado para consistência
-    }
     formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
 
-    recordBytes('upload', fileBuffer.length);
+    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 
-    try {
-        const uploadResponse = await sendTelegramRequest(destinationBotToken, method, formData, {
-            headers: formData.getHeaders(),
-            timeout,
-        });
-        if (uploadResponse?.ok) {
-            recordRequest('success_upload');
-        } else {
-            recordRequest('failure');
-        }
-        return uploadResponse;
-    } catch (error) {
-        recordRequest('failure');
-        throw error;
-    }
+  
+
+
 }
 
 // Funções de PIX (necessárias para o passo 'pix')
@@ -283,12 +201,7 @@ async function handler(req, res) {
     
       const step = JSON.parse(step_json);
       const userVariables = JSON.parse(variables_json);
-      const jobMetricBase = {
-        worker: 'process-disparo',
-        job_type: sanitizeMetricLabelValue(step?.type || 'unknown'),
-      };
-      const jobTimerStart = isPrometheusEnabled && prometheusMetrics.workerJobDuration ? Date.now() : null;
-      let jobStatus = 'success';
+
        
       let logStatus = 'SENT';
         let logDetails = 'Enviado com sucesso.';
@@ -601,7 +514,6 @@ async function handler(req, res) {
           }
         } catch(e) {
           logStatus = 'FAILED';
-          jobStatus = 'error';
                 logDetails = e.message.substring(0, 255); 
           logger.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
         }
@@ -641,14 +553,10 @@ async function handler(req, res) {
             logger.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
         }
             // --- FIM DA LÓGICA DE CONCLUSÃO ---
-            if (logStatus === 'FAILED') {
-                jobStatus = 'error';
-            } else if (logStatus === 'SKIPPED' && jobStatus !== 'error') {
-                jobStatus = 'skipped';
-            }
+
             res.status(200).send('Worker de disparo finalizado.');
     } catch (error) {
-        jobStatus = 'error';
+
         logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
         // Tenta logar a falha mesmo se o processamento principal quebrar
         try {
@@ -660,15 +568,7 @@ async function handler(req, res) {
             logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
         }
         res.status(500).send('Erro interno no worker de disparo.');
-    } finally {
-        if (jobTimerStart !== null) {
-            observeHistogram(
-                prometheusMetrics.workerJobDuration,
-                (Date.now() - jobTimerStart) / 1000,
-                { ...jobMetricBase, status: jobStatus }
-            );
-        }
-        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
+    
     }
 }
 

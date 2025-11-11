@@ -24,257 +24,8 @@ const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
-const {
-    register: prometheusRegister,
-    isEnabled: isPrometheusEnabled,
-    metrics: prometheusMetrics,
-} = require('./metrics');
-const METRICS_TOKEN = process.env.METRICS_TOKEN;
 
-const sanitizeMetricLabelValue = (value) => {
-    if (value === undefined || value === null) return 'unknown';
-    const str = String(value);
-    if (str.trim() === '') return 'unknown';
-    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
-};
 
-const formatMetricLabels = (labels = {}) =>
-    Object.keys(labels).reduce((acc, key) => {
-        acc[key] = sanitizeMetricLabelValue(labels[key]);
-        return acc;
-    }, {});
-
-const startHistogramTimer = (histogram, labels = {}) => {
-    if (!isPrometheusEnabled || !histogram) return null;
-    const end = histogram.startTimer(formatMetricLabels(labels));
-    return typeof end === 'function' ? end : null;
-};
-
-const observeHistogram = (histogram, value, labels = {}) => {
-    if (!isPrometheusEnabled || !histogram) return;
-    histogram.observe(formatMetricLabels(labels), value);
-};
-
-const incrementCounter = (counter, labels = {}, value = 1) => {
-    if (!isPrometheusEnabled || !counter) return;
-    counter.inc(formatMetricLabels(labels), value);
-};
-
-const measureDbQuery = async (operation, fn) => {
-    if (!isPrometheusEnabled || !prometheusMetrics.dbQueryDuration) {
-        return fn();
-    }
-    const endTimer = prometheusMetrics.dbQueryDuration.startTimer(formatMetricLabels({ operation }));
-    try {
-        return await fn();
-    } finally {
-        if (typeof endTimer === 'function') {
-            endTimer();
-        }
-    }
-};
-
-// Configuração do Google OAuth
-const googleClient = new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/google-callback.html'
-);
-
-// Configuração do MailerSend
-const mailerSend = new MailerSend({
-    apiKey: process.env.MAILERSEND_API_KEY,
-});
-
-const qstashClient = new Client({
-  token: process.env.QSTASH_TOKEN,
-});
-
-const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
-const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
-
-const processDisparoWorker = require('./worker/process-disparo');
-const processTimeoutWorker = require('./worker/process-timeout');
-
-const receiver = new Receiver({
-    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
-    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
-  });
-
-// Função de validação de URLs em texto (anti-links externos)
-const validateTextForUrls = (text) => {
-    if (!text || typeof text !== 'string') return { valid: true, urls: [] };
-    
-    // Remove variáveis do sistema antes de validar
-    const textWithoutVariables = text.replace(/\{\{[^}]+\}\}/g, '');
-    
-    // Padrões de URL a detectar
-    const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|([a-zA-Z0-9-]+\.(?:com|net|org|br|app|io|co|dev|tech|link|site|online|store|shop|xyz|info|biz|me|tv|cc|us|uk|de|fr|es|it|pt|ru|cn|jp|kr|in|au|ca|mx|ar|cl|pe|ve|co\.uk|com\.br|gov|edu|mil)[^\s]*)/gi;
-    
-    const foundUrls = [];
-    let match;
-    while ((match = urlPattern.exec(textWithoutVariables)) !== null) {
-        foundUrls.push(match[0]);
-    }
-    
-    return {
-        valid: foundUrls.length === 0,
-        urls: foundUrls
-    };
-};
-
-// Função de validação das ações do fluxo
-const validateFlowActions = (nodes) => {
-    if (!nodes || !Array.isArray(nodes)) return { valid: true };
-    
-    for (const node of nodes) {
-        const actions = node.data?.actions || [];
-        
-        for (const action of actions) {
-            // Validar texto de mensagem
-            if (action.type === 'message' && action.data?.text) {
-                const validation = validateTextForUrls(action.data.text);
-                if (!validation.valid) {
-                    return { 
-                        valid: false, 
-                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
-                    };
-                }
-            }
-            
-            // Validar legendas
-            if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
-                const validation = validateTextForUrls(action.data.caption);
-                if (!validation.valid) {
-                    return { 
-                        valid: false, 
-                        message: `Links não são permitidos nas legendas. Links detectados: ${validation.urls.join(', ')}` 
-                    };
-                }
-            }
-        }
-    }
-    
-    return { valid: true };
-};
-
-const app = express();
-
-const METRICS_IGNORED_PATHS = new Set(['/metrics']);
-
-const resolveRouteLabel = (req, statusCode) => {
-    if (req.route?.path) {
-        const base = req.baseUrl && req.baseUrl !== '/' ? req.baseUrl : '';
-        return `${base}${req.route.path}` || req.route.path;
-    }
-
-    if (!req.route && statusCode === 404) {
-        return 'unmatched';
-    }
-
-    if (req.baseUrl) {
-        return req.baseUrl;
-    }
-
-    if (req.path) {
-        return req.path;
-    }
-
-    if (req.originalUrl) {
-        const withoutQuery = req.originalUrl.split('?')[0];
-        return withoutQuery || 'unknown';
-    }
-
-    return 'unknown';
-};
-
-const parseContentLength = (value) => {
-    if (Array.isArray(value)) {
-        return parseContentLength(value[0]);
-    }
-    if (typeof value === 'number') {
-        return value;
-    }
-    if (typeof value === 'string') {
-        const parsed = Number.parseInt(value, 10);
-        return Number.isNaN(parsed) ? 0 : parsed;
-    }
-    return 0;
-};
-
-if (isPrometheusEnabled) {
-    app.get(
-        '/metrics',
-        (req, res, next) => {
-            if (!METRICS_TOKEN) {
-                console.warn('[Prometheus] METRICS_TOKEN não configurado. Recusando acesso ao /metrics.');
-                return res.status(500).send('Metrics token not configured.');
-            }
-
-            const authHeader = req.headers.authorization || '';
-            if (authHeader !== `Bearer ${METRICS_TOKEN}`) {
-                res.setHeader('WWW-Authenticate', 'Bearer');
-                return res.status(401).send('Unauthorized');
-            }
-            next();
-        },
-        async (_req, res) => {
-            try {
-                const metrics = await prometheusRegister.metrics();
-                res.setHeader('Content-Type', prometheusRegister.contentType);
-                res.send(metrics);
-            } catch (error) {
-                console.error('[Prometheus] Falha ao coletar métricas:', error);
-                res.status(500).send('Erro ao coletar métricas.');
-            }
-        }
-    );
-
-    app.use((req, res, next) => {
-        if (METRICS_IGNORED_PATHS.has(req.path)) {
-            return next();
-        }
-
-        const requestBytes = Number.parseInt(req.headers['content-length'] || '0', 10) || 0;
-        const endTimer = prometheusMetrics.httpRequestDuration
-            ? prometheusMetrics.httpRequestDuration.startTimer()
-            : null;
-
-        res.on('finish', () => {
-            const routeLabel = resolveRouteLabel(req, res.statusCode);
-            const labels = {
-                method: req.method,
-                route: routeLabel,
-                status_code: String(res.statusCode),
-            };
-
-            if (prometheusMetrics.httpRequestsTotal) {
-                prometheusMetrics.httpRequestsTotal.inc(labels);
-            }
-
-            if (endTimer) {
-                endTimer(labels);
-            }
-
-            if (prometheusMetrics.httpRequestBytes && requestBytes > 0) {
-                prometheusMetrics.httpRequestBytes.observe(
-                    { method: req.method, route: routeLabel },
-                    requestBytes
-                );
-            }
-
-            if (prometheusMetrics.httpResponseBytes) {
-                const headerValue = res.getHeader('Content-Length') ?? res.getHeader('content-length');
-                const responseBytes = parseContentLength(headerValue);
-                if (responseBytes > 0) {
-                    prometheusMetrics.httpResponseBytes.observe(labels, responseBytes);
-                }
-            }
-        });
-
-        next();
-    });
-}
 
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
@@ -4045,17 +3796,13 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
 
         // --- INÍCIO DA LÓGICA PARA ENCONTRAR seller_id ---
         if (presselId) {
-            const [pressel] = await measureDbQuery('register_click_pressel_lookup', () =>
-                sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`
-            );
+            const [pressel] = await sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`;
             if (!pressel) {
                 return res.status(404).json({ message: 'Pressel não encontrada.' });
             }
             sellerId = pressel.seller_id;
         } else if (checkoutId) {
-            const [checkout] = await measureDbQuery('register_click_checkout_lookup', () =>
-                sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`
-            );
+            const [checkout] = await sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`;
             if (!checkout) {
                 return res.status(404).json({ message: 'Checkout não encontrado.' });
             }
@@ -4070,15 +3817,13 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         // --- FIM DA LÓGICA PARA ENCONTRAR seller_id ---
 
         // MODIFICADO: Query INSERT usa o sellerId encontrado
-        const result = await measureDbQuery('register_click_insert', () =>
-            sql`INSERT INTO clicks (
-                seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
-                utm_source, utm_campaign, utm_medium, utm_content, utm_term
-            ) VALUES (
-                ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
-                ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
-            ) RETURNING *;`
-        ); // Não precisamos mais do JOIN com sellers aqui
+        const result = await sql`INSERT INTO clicks (
+            seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
+            utm_source, utm_campaign, utm_medium, utm_content, utm_term
+        ) VALUES (
+            ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
+            ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
+        ) RETURNING *;`; // Não precisamos mais do JOIN com sellers aqui
 
         // O resto da lógica permanece o mesmo...
         const newClick = result[0];
@@ -4087,9 +3832,7 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         const clean_click_id = `lead${click_record_id.toString().padStart(6, '0')}`;
         const db_click_id = `/start ${clean_click_id}`;
 
-        await measureDbQuery('register_click_update_click_id', () =>
-            sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`
-        );
+        await sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`;
 
         // Retorna o click_id limpo para o frontend/JS da pressel
         res.status(200).json({ status: 'success', click_id: clean_click_id });
@@ -4117,29 +3860,10 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                      city = 'Local'; // Ou mantenha Desconhecida
                      state = 'Local';
                 }
-                await measureDbQuery('register_click_update_geo', () =>
-                    sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`
-                );
+                await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
                 logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
-                if (checkoutId) {
-                    const [checkoutDetails] = await measureDbQuery(
-                        'register_click_checkout_config',
-                        () => sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`
-                    );
-                    const representativeValueCents =
-                        checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents ||
-                        checkoutDetails?.config?.pricing?.fixed_value_cents ||
-                        0;
-                    const eventValue =
-                        representativeValueCents > 0 ? representativeValueCents / 100 : 0.01;
-                    await sendMetaEvent(
-                        'InitiateCheckout',
-                        { ...newClick, click_id: clean_click_id },
-                        { pix_value: eventValue, id: click_record_id }
-                    );
-                    logger.debug(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
-                }
+
 
             } catch (backgroundError) {
                 logger.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
@@ -4591,26 +4315,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
  * Esta função é chamada pelo processFlow para rodar as ações DENTRO de um nó.
  * @returns {string} Retorna 'paid', 'pending', 'flow_forwarded', ou 'completed' para que o processFlow decida a navegação.
  */
-async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', metricsContext = {}) {
+async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
     logger.debug(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
 
-    const flowIdLabel = sanitizeMetricLabelValue(metricsContext.flowId || 'unknown');
-    const nodeIdLabel = sanitizeMetricLabelValue(metricsContext.nodeId || 'unknown');
-    const recordFlowError = (actionType, error) => {
-        incrementCounter(prometheusMetrics.flowErrorsTotal, {
-            flow_id: flowIdLabel,
-            node_id: nodeIdLabel,
-            action_type: sanitizeMetricLabelValue(actionType),
-            error_type: sanitizeMetricLabelValue(
-                error?.code ||
-                error?.response?.data?.error ||
-                error?.response?.data?.description ||
-                error?.name ||
-                error?.message ||
-                'unknown'
-            ),
-        });
-    };
+
     
     const normalizeChatIdentifier = (value) => {
         if (value === null || value === undefined) return null;
@@ -4629,14 +4337,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
         logger.debug(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
-        const actionTypeLabel = sanitizeMetricLabelValue(action.type || 'unknown');
-        const endActionTimer = startHistogramTimer(prometheusMetrics.flowActionDuration, {
-            flow_id: flowIdLabel,
-            node_id: nodeIdLabel,
-            action_type: actionTypeLabel,
-        });
 
-        try {
+
+
         switch (action.type) {
             case 'message':
                 try {
@@ -4692,7 +4395,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
-                    recordFlowError(actionTypeLabel, error);
+
                 }
                 break;
 
@@ -4715,7 +4418,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (e) {
                     logger.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
-                    recordFlowError(actionTypeLabel, e);
+
                 }
                 break;
             }
@@ -4734,105 +4437,95 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 break;
             
             case 'action_pix':
-                let pixTimerStart = isPrometheusEnabled && prometheusMetrics.pixGenerationDuration ? Date.now() : null;
-                let pixProviderLabel = sanitizeMetricLabelValue(actionData?.provider || variables?.preferred_pix_provider || 'auto');
-                let pixErrorStage = 'generate';
-                 try {
-                     logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
-                     const valueInCents = actionData.valueInCents;
-                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
-     
-                     const [seller] = await measureDbQuery('flow_action_pix_seller_lookup', () =>
-                         sql`SELECT * FROM sellers WHERE id = ${sellerId}`
-                     );
-                     if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
-     
-                     let click_id_from_vars = variables.click_id;
-                     if (!click_id_from_vars) {
-                         const [recentClick] = await sql`
-                             SELECT click_id FROM telegram_chats 
-                             WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
-                             ORDER BY created_at DESC LIMIT 1`;
-                         if (recentClick?.click_id) {
-                             click_id_from_vars = recentClick.click_id;
-                         }
-                     }
-     
-                     if (!click_id_from_vars) {
-                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
-                     }
-     
-                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                     const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                     if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
+                try {
+                    logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
+                    const valueInCents = actionData.valueInCents;
+                    if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
+    
+                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
+    
+                    let click_id_from_vars = variables.click_id;
+                    if (!click_id_from_vars) {
+                        const [recentClick] = await sql`
+                            SELECT click_id FROM telegram_chats 
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                            ORDER BY created_at DESC LIMIT 1`;
+                        if (recentClick?.click_id) {
+                            click_id_from_vars = recentClick.click_id;
+                        }
+                    }
+    
+                    if (!click_id_from_vars) {
+                        throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
+                    }
+    
+                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
 
-                     const ip_address = click.ip_address;
-                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                     
-                     // Gera PIX e salva no banco
-                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                     logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
-                     
-                     // Atualiza as variáveis do fluxo (IMPORTANTE)
-                     variables.last_transaction_id = pixResult.transaction_id;
-     
-                     let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
-                     
-                     // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
-                     if (messageText && messageText.length > 1024) {
-                         logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
-                         messageText = messageText.substring(0, 1021) + '...';
-                     }
-                     
-                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
-                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-     
-                     // CRÍTICO: Tenta enviar o PIX para o usuário
-                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                         reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
-                     });
-     
-                     // Verifica se o envio foi bem-sucedido
-                     if (!sentMessage.ok) {
-                         // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
-                         logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                         
-                         await sql`
-                             UPDATE pix_transactions 
-                             SET status = 'canceled' 
-                             WHERE provider_transaction_id = ${pixResult.transaction_id}
-                         `;
-                         
-                         throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
-                     }
-                     
-                     // Salva a mensagem no banco
-                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                     logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
-                     
-                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
-                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                     const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                     await sendEventToUtmify(
-                         'waiting_payment', 
-                         click, 
-                         { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
-                         seller, customerDataForUtmify, productDataForUtmify
-                     );
-                     logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                    const ip_address = click.ip_address;
+                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                    
+                    // Gera PIX e salva no banco
+                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                    logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                    
+                    // Atualiza as variáveis do fluxo (IMPORTANTE)
+                    variables.last_transaction_id = pixResult.transaction_id;
+    
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
+                    
+                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                    if (messageText && messageText.length > 1024) {
+                        logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        messageText = messageText.substring(0, 1021) + '...';
+                    }
+                    
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+    
+                    // CRÍTICO: Tenta enviar o PIX para o usuário
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
+                    });
+    
+                    // Verifica se o envio foi bem-sucedido
+                    if (!sentMessage.ok) {
+                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                        logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        
+                        await sql`
+                            UPDATE pix_transactions 
+                            SET status = 'canceled' 
+                            WHERE provider_transaction_id = ${pixResult.transaction_id}
+                        `;
+                        
+                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
+                    }
+                    
+                    // Salva a mensagem no banco
+                    await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                    logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                    
+                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                    await sendEventToUtmify(
+                        'waiting_payment', 
+                        click, 
+                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
+                        seller, customerDataForUtmify, productDataForUtmify
+                    );
+                    logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                     logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
-                 } catch (error) {
-                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
-                     // Re-lança o erro para que o fluxo seja interrompido
-                     throw error;
-                 } finally {
-                     if (pixTimerStart) {
-                         const duration = Date.now() - pixTimerStart;
-                         observeHistogram(prometheusMetrics.pixGenerationDuration, duration, { provider: pixProviderLabel, stage: pixErrorStage });
-                     }
-                 }
+                    logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
+                } catch (error) {
+                    logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                    // Re-lança o erro para que o fluxo seja interrompido
+                    throw error;
+                }
                 break;
 
             case 'action_check_pix':
@@ -5217,11 +4910,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 logger.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
                 break;
         }
-        } finally {
-            if (endActionTimer) {
-                endActionTimer();
-            }
-        }
+        
     }
 
     // Se o loop terminar normalmente (sem 'return' condicional)
@@ -6448,30 +6137,13 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
     if (!chatId || !fileData || !fileType || !fileName) {
         return res.status(400).json({ message: 'Dados incompletos.' });
     }
-    const mediaType =
-        fileType?.startsWith('image/') ? 'image'
-        : fileType?.startsWith('video/') ? 'video'
-        : fileType?.startsWith('audio/') ? 'audio'
-        : 'unknown';
-    const prometheusLabels = { source: 'api_send_media', type: mediaType };
-    let prometheusStatus = 'success';
+
 
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
         if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
-            prometheusMetrics.telegramMediaBytes.observe(
-                { ...prometheusLabels, direction: 'upload' },
-                buffer.length
-            );
-        }
-        try {
-            validateTelegramSize(buffer, fileType);
-        } catch (e) {
-            prometheusStatus = 'payload_too_large';
-            return res.status(413).json({ message: e.message });
-        }
+        try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', chatId);
         let method, field;
@@ -6485,27 +6157,20 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
             method = 'sendVoice';
             field = 'voice';
         } else {
-            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de arquivo não suportado.' });
         }
         formData.append(field, buffer, { filename: fileName });
         const response = await sendTelegramRequest(bot.bot_token, method, formData, { headers: formData.getHeaders() });
-        prometheusStatus = response?.ok ? 'success' : 'telegram_error';
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
         res.status(200).json({ message: 'Mídia enviada!' });
     } catch (error) {
-        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
+
         const msg = error.message?.includes('excede') ? error.message : 'Não foi possível enviar a mídia.';
         res.status(500).json({ message: msg });
-    } finally {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
-            prometheusMetrics.telegramMediaRequests.inc({
-                ...prometheusLabels,
-                status: prometheusStatus,
-            });
-        }
+ 
+        
     }
 });
 
@@ -6736,31 +6401,16 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
 app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
     if (!fileName || !fileData || !fileType) return res.status(400).json({ message: 'Dados do ficheiro incompletos.' });
-    const prometheusLabels = { source: 'api_media_upload', type: fileType };
-    let prometheusStatus = 'success';
     try {
         const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
         const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
         if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
         const buffer = Buffer.from(fileData, 'base64');
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaBytes && buffer.length > 0) {
-            prometheusMetrics.telegramMediaBytes.observe(
-                { ...prometheusLabels, direction: 'upload' },
-                buffer.length
-            );
-        }
+
         // fileType aqui é 'image' | 'video' | 'audio'. Transformamos em um hint MIME para validar.
         const mimeHint = fileType === 'image' ? 'image/' : (fileType === 'video' ? 'video/' : (fileType === 'audio' ? 'audio/' : ''));
-        if (!mimeHint) {
-            prometheusStatus = 'unsupported_type';
-            return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
-        }
-        try {
-            validateTelegramSize(buffer, mimeHint);
-        } catch (e) {
-            prometheusStatus = 'payload_too_large';
-            return res.status(413).json({ message: e.message });
-        }
+        if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
+        try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
         formData.append('chat_id', storageChannelId);
         let telegramMethod = '', fieldName = '';
@@ -6774,13 +6424,11 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             telegramMethod = 'sendVoice';
             fieldName = 'voice';
         } else {
-            prometheusStatus = 'unsupported_type';
             return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         }
         formData.append(fieldName, buffer, { filename: fileName });
         const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
         if (!response?.ok || !response.result) {
-            prometheusStatus = 'telegram_error';
             throw new Error('Resposta inválida do Telegram ao enviar mídia.');
         }
         const result = response.result; // Mensagem retornada pelo Telegram
@@ -6809,15 +6457,8 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
-        prometheusStatus = prometheusStatus === 'success' ? 'error' : prometheusStatus;
         res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
-    } finally {
-        if (isPrometheusEnabled && prometheusMetrics.telegramMediaRequests) {
-            prometheusMetrics.telegramMediaRequests.inc({
-                ...prometheusLabels,
-                status: prometheusStatus,
-            });
-        }
+
     }
 });
 
