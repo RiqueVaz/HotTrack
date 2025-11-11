@@ -5565,9 +5565,9 @@ function generatePreviewHTML(data) {
             const groupId = prompt(
                 "Insira o ID do Supergrupo do Telegram:\n\n" +
                 "Como obter o ID:\n" +
-                "1. Adicione o bot como administrador do grupo\n" +
-                "2. Use bots como @userinfobot ou @getidsbot no grupo\n" +
-                "3. O ID do supergrupo começa com -100\n\n" +
+                "1. Adicione o bot como administrador do grupo (Confirme que seu grupo é um Supergrupo\n" +
+                "2. Adicione o bot @myidbot no seu grupo e mande o comando /getgroupid\n" +
+                "3. O bot vai mandar o ID do grupo (Começa com -100)\n\n" +
                 "ID atual: " + (currentBot?.telegram_supergroup_id || "Não configurado")
             );
             
