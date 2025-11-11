@@ -1264,6 +1264,16 @@
     const ACCESS_TOKEN_KEY = 'hottrack_token';
     const REFRESH_TOKEN_KEY = 'hottrack_refresh_token';
 
+    const normalizePixQrCodeSrc = (value) => {
+        if (!value || typeof value !== 'string') return null;
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) {
+            return trimmed;
+        }
+        return `data:image/png;base64,${trimmed}`;
+    };
+
     const App = {
         state: {
             API_BASE_URL: '', // Será carregado dinamicamente
@@ -1671,8 +1681,9 @@
             }
 
             // Monta o HTML do QR Code (se base64 estiver disponível)
-            const qrCodeHTML = pixData.qr_code_base64
-                ? `<img src="data:image/png;base64,${pixData.qr_code_base64}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
+            const qrCodeSrc = normalizePixQrCodeSrc(pixData.qr_code_base64);
+            const qrCodeHTML = qrCodeSrc
+                ? `<img src="${qrCodeSrc}" alt="QR Code PIX" class="mx-auto my-4 border border-slate-600 p-2 rounded-lg bg-white max-w-[200px]">`
                 : '<p class="text-xs text-slate-500 my-4">(QR Code não disponível)</p>'; // Fallback
 
             const modalContent = `
@@ -5949,6 +5960,7 @@ function generatePreviewHTML(data) {
         
         const isPaid = flowDetails && flowDetails.share_price_cents > 0;
         const priceInReais = (flowDetails.share_price_cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const qrCodeSrc = normalizePixQrCodeSrc(pixData?.qr_code_base64);
 
         return (
             <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
@@ -5982,10 +5994,10 @@ function generatePreviewHTML(data) {
                                         Valor: <strong>{(pixData.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
                                     </p>
                                     
-                                    {pixData.qr_code_base64 && (
+                                    {qrCodeSrc && (
                                         <div style={{marginBottom: '1.5rem'}}>
                                             <img 
-                                                src={`data:image/png;base64,${pixData.qr_code_base64}`} 
+                                                src={qrCodeSrc} 
                                                 alt="QR Code PIX" 
                                                 style={{maxWidth: '280px', border: '2px solid var(--border-color)', borderRadius: '8px', padding: '10px', backgroundColor: 'white', display: 'block', margin: '0 auto'}}
                                             />
