@@ -4605,6 +4605,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
+                    console.log(
+                        '[PIX][action_pix] seller=%s click=%s transaction_id=%s',
+                        sellerId,
+                        click.id,
+                        variables.last_transaction_id
+                    );
     
                     let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
                     
@@ -4663,6 +4669,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'action_check_pix':
                 try {
                     const transactionId = variables.last_transaction_id;
+                    console.log(
+                        '[PIX][action_check_pix] seller=%s chat=%s buscando transaction_id=%s',
+                        sellerId,
+                        chatId,
+                        transactionId
+                    );
                     if (!transactionId) throw new Error("Nenhum ID de transação PIX nas variáveis.");
                     
                     const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;

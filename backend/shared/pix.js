@@ -340,6 +340,12 @@ function createPixService({
     for (const provider of providerOrder) {
       try {
         const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
+        console.log(
+          '[PIX][generatePixWithFallback] provider=%s transaction_id=%s qr_len=%s',
+          pixResult.provider,
+          pixResult.transaction_id,
+          pixResult.qr_code_text ? pixResult.qr_code_text.length : 0
+        );
 
         const [transaction] = await runQuery`
           INSERT INTO pix_transactions (
@@ -350,6 +356,11 @@ function createPixService({
               ${pixResult.qr_code_base64}, ${pixResult.provider},
               ${pixResult.transaction_id}, ${pixResult.transaction_id}
           ) RETURNING id`;
+        console.log(
+          '[PIX][generatePixWithFallback] insert ok id=%s provider_tx=%s',
+          transaction.id,
+          pixResult.transaction_id
+        );
 
         pixResult.internal_transaction_id = transaction.id;
         return pixResult;
