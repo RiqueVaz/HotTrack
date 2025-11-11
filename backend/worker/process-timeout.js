@@ -17,6 +17,8 @@ const {
 } = require('../metrics');
 
 const METRICS_SOURCE = 'worker_process_timeout';
+const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
 const sanitizeMetricLabelValue = (value) => {
     if (value === undefined || value === null) return 'unknown';
@@ -706,12 +708,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         variables.user_was_banned = false;
                         variables.banned_user_id = undefined;
 
-                        if (actionData.sendMessage) {
-                            const messageText = await replaceVariables(
-                                actionData.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
-                                variables
-                            );
-                            await sendMessage(chatId, messageText, botToken, sellerId, botId, false, variables);
+                        const buttonText = (actionData.buttonText || DEFAULT_INVITE_BUTTON_TEXT).trim() || DEFAULT_INVITE_BUTTON_TEXT;
+                        const template = (actionData.messageText || actionData.text || DEFAULT_INVITE_MESSAGE).trim() || DEFAULT_INVITE_MESSAGE;
+                        const messageText = await replaceVariables(template, variables);
+
+                        const payload = {
+                            chat_id: chatId,
+                            text: messageText,
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [[{ text: buttonText, url: inviteResponse.result.invite_link }]]
+                            }
+                        };
+
+                        const messageResponse = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        if (messageResponse?.ok) {
+                            await saveMessageToDb(sellerId, botId, messageResponse.result, 'bot');
+                        } else {
+                            throw new Error(messageResponse?.description || 'Falha ao enviar mensagem do convite.');
                         }
 
                         console.log(`${logPrefix} Link de convite criado com sucesso: ${inviteResponse.result.invite_link}`);

@@ -17,6 +17,8 @@ const {
 } = require('../metrics');
 
 const METRICS_SOURCE = 'worker_process_disparo';
+const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
 // ==========================================================
 //                   INICIALIZAÇÃO
@@ -430,24 +432,24 @@ async function handler(req, res) {
             userVariables.user_was_banned = false;
             userVariables.banned_user_id = undefined;
 
-            if (step.sendMessage) {
-                const messageText = await replaceVariables(
-                    step.messageText || `Link de convite criado: ${inviteResponse.result.invite_link}`,
-                    userVariables
-                );
-                const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                    chat_id: chat_id,
-                    text: messageText,
-                    parse_mode: 'HTML'
-                });
-                if (messageResponse.ok) {
-                    await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
-                    response = messageResponse;
-                } else {
-                    throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
+            const buttonText = (step.buttonText || DEFAULT_INVITE_BUTTON_TEXT).trim() || DEFAULT_INVITE_BUTTON_TEXT;
+            const template = (step.messageText || step.text || DEFAULT_INVITE_MESSAGE).trim() || DEFAULT_INVITE_MESSAGE;
+            const messageText = await replaceVariables(template, userVariables);
+            const messagePayload = {
+                chat_id: chat_id,
+                text: messageText,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: buttonText, url: inviteResponse.result.invite_link }]]
                 }
+            };
+
+            const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', messagePayload);
+            if (messageResponse.ok) {
+                await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
+                response = messageResponse;
             } else {
-                response = null;
+                throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
             }
 
             logger.debug(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);

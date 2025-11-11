@@ -7475,6 +7475,57 @@ function generatePreviewHTML(data) {
         return labels[actionType] || actionType;
     };
 
+    const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
+    const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
+
+    const normalizeInviteAction = (action) => {
+        if (!action || action.type !== 'action_create_invite_link') {
+            return { action, changed: false };
+        }
+
+        const originalData = action.data || {};
+        const normalizedData = { ...originalData };
+        let changed = false;
+
+        const existingMessage = (originalData.messageText ?? originalData.text ?? '').trim();
+        const messageText = existingMessage || DEFAULT_INVITE_MESSAGE;
+
+        if (normalizedData.messageText !== messageText) {
+            normalizedData.messageText = messageText;
+            changed = true;
+        }
+
+        if (normalizedData.text !== messageText) {
+            normalizedData.text = messageText;
+            changed = true;
+        }
+
+        const existingButton = (originalData.buttonText || '').trim();
+        const buttonText = existingButton || DEFAULT_INVITE_BUTTON_TEXT;
+
+        if (normalizedData.buttonText !== buttonText) {
+            normalizedData.buttonText = buttonText;
+            changed = true;
+        }
+
+        ['linkName', 'sendMessage', 'buttonUrl', 'buttonLink'].forEach((field) => {
+            if (field in normalizedData) {
+                delete normalizedData[field];
+                changed = true;
+            }
+        });
+
+        return {
+            action: changed ? { ...action, data: normalizedData } : action,
+            changed
+        };
+    };
+
+    const createActionWithDefaults = (type, data = {}) => {
+        const baseAction = { type, data };
+        return normalizeInviteAction(baseAction).action;
+    };
+
     const CustomNode = ({ id, type, data, isConnectable, selected }) => {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
@@ -7513,7 +7564,17 @@ function generatePreviewHTML(data) {
                 action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
                 action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
                 forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
-            action_create_invite_link: { icon: '🔗', name: 'Criar Convite', content: actionData.linkName ? `${actionData.linkName} (uso único)` : 'Link descartável.' },
+            action_create_invite_link: { 
+                icon: '🔗', 
+                name: 'Criar Convite', 
+                content: (() => {
+                    const messagePreview = (actionData.messageText || actionData.text || '').trim();
+                    const buttonPreview = (actionData.buttonText || '').trim();
+                    const messageLabel = messagePreview ? `"${messagePreview.substring(0, 30)}${messagePreview.length > 30 ? '…' : ''}"` : 'Mensagem não definida.';
+                    const buttonLabel = buttonPreview ? `Botão: ${buttonPreview}` : 'Botão sem texto.';
+                    return `${messageLabel} • ${buttonLabel}`;
+                })()
+            },
             action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
             };
             return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
@@ -7664,15 +7725,38 @@ function generatePreviewHTML(data) {
         const [urlValidationErrors, setUrlValidationErrors] = useState({});
         
         useEffect(() => { 
-            const data = selectedNode.data || {};
-            // Garantir que actions seja um array
-            if (!data.actions) {
-                data.actions = [];
+            if (!selectedNode) {
+                return;
             }
-            if (!data.waitForReply) data.waitForReply = false;
-            if (!data.replyTimeout) data.replyTimeout = 5;
-            setNodeData(data);
-        }, [selectedNode]);
+
+            if (selectedNode.type === 'trigger') {
+                setNodeData(selectedNode.data || {});
+                return;
+            }
+
+            const currentData = selectedNode.data || {};
+            const actionsSource = Array.isArray(currentData.actions) ? currentData.actions : [];
+            const normalizedResults = actionsSource.map(action => normalizeInviteAction(action));
+            const normalizedActions = normalizedResults.map(result => result.action);
+            const actionsChanged = normalizedResults.some(result => result.changed) || !Array.isArray(currentData.actions);
+
+            const ensuredData = {
+                ...currentData,
+                actions: normalizedActions,
+                waitForReply: currentData.waitForReply ?? false,
+                replyTimeout: currentData.replyTimeout ?? 5
+            };
+
+            setNodeData(ensuredData);
+
+            if (
+                actionsChanged ||
+                currentData.waitForReply === undefined ||
+                currentData.replyTimeout === undefined
+            ) {
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: ensuredData } : n));
+            }
+        }, [selectedNode, setNodes]);
         
         // Nodes agora só têm ações (sem ação principal)
         const actions = nodeData.actions || [];
@@ -7685,7 +7769,7 @@ function generatePreviewHTML(data) {
                 alert('Você pode adicionar no máximo 5 ações.');
                 return;
             }
-            const newAction = { type: actionType, data: {} };
+            const newAction = createActionWithDefaults(actionType);
             const newData = { ...nodeData, actions: [...actions, newAction] };
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
@@ -8309,69 +8393,55 @@ function generatePreviewHTML(data) {
                     {action.type === 'action_create_invite_link' && (
                         <>
                             <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Nome do Link</label>
-                                <input 
-                                    type="text" 
-                                    className="form-input" 
-                                    value={actionData.linkName || ''} 
-                                    onChange={e => updateAction(index, 'linkName', e.target.value)}
+                                <label style={{fontSize: '0.85rem'}}>Mensagem</label>
+                                <textarea
+                                    id={`invite-message-textarea-${index}`}
+                                    className="form-textarea"
+                                    rows="3"
+                                    maxLength="4096"
+                                    value={(actionData.messageText ?? actionData.text ?? '')}
+                                    onChange={e => {
+                                        const text = e.target.value;
+                                        updateActionMultiple(index, { messageText: text, text });
+                                        const validation = validateTextForUrls(text);
+                                        setUrlValidationErrors(prev => ({
+                                            ...prev,
+                                            [`invite-${index}`]: validation
+                                        }));
+                                    }}
                                     style={{fontSize: '0.85rem'}}
-                                    placeholder="Nome identificador do link"
+                                    placeholder="Escreva a mensagem. Use {{invite_link}} para inserir o link gerado."
+                                />
+                                {urlValidationErrors[`invite-${index}`] && !urlValidationErrors[`invite-${index}`].valid && (
+                                    <div style={{
+                                        color: '#ef4444',
+                                        fontSize: '0.75rem',
+                                        marginTop: '0.25rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderRadius: '0.25rem',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                        ⚠️ <strong>Links detectados:</strong> {urlValidationErrors[`invite-${index}`].urls.join(', ')}
+                                        <br />
+                                        <span style={{fontSize: '0.7rem'}}>Use {'{{invite_link}}'} para incluir o link automaticamente.</span>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="form-group">
+                                <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={actionData.buttonText || ''}
+                                    onChange={e => updateAction(index, 'buttonText', e.target.value)}
+                                    style={{fontSize: '0.85rem'}}
+                                    placeholder="Texto exibido no botão (obrigatório)"
                                 />
                             </div>
                             <p style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>
-                                O link é gerado automaticamente como descartável, exclusivo para este usuário e válido para um único acesso.
+                                O link do botão é gerado automaticamente e válido para um único acesso.
                             </p>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <input 
-                                        type="checkbox"
-                                        checked={!!actionData.sendMessage}
-                                        onChange={e => updateAction(index, 'sendMessage', e.target.checked)}
-                                    />
-                                    Enviar mensagem com o link
-                                </label>
-                            </div>
-                            {actionData.sendMessage && (
-                                <div className="form-group">
-                                    <label style={{fontSize: '0.85rem'}}>Texto da Mensagem</label>
-                                    <textarea 
-                                        id={`invite-message-textarea-${index}`}
-                                        className="form-textarea" 
-                                        rows="2" 
-                                        maxLength="4096" 
-                                        value={actionData.messageText || ''} 
-                                        onChange={e => updateAction(index, 'messageText', e.target.value)}
-                                        style={{fontSize: '0.85rem'}}
-                                        placeholder="Use {{invite_link}} para incluir o link gerado"
-                                    />
-                                    <div style={{marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-                                        <button 
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            onClick={() => {
-                                                const textarea = document.getElementById(`invite-message-textarea-${index}`);
-                                                if (textarea) {
-                                                    const cursorPos = textarea.selectionStart;
-                                                    const currentText = actionData.messageText || '';
-                                                    const textBefore = currentText.substring(0, cursorPos);
-                                                    const textAfter = currentText.substring(cursorPos);
-                                                    const newValue = `${textBefore}{{invite_link}}${textAfter}`;
-                                                    updateAction(index, 'messageText', newValue);
-                                                    setTimeout(() => {
-                                                        textarea.focus();
-                                                        const newCursor = cursorPos + '{{invite_link}}'.length;
-                                                        textarea.setSelectionRange(newCursor, newCursor);
-                                                    }, 0);
-                                                }
-                                            }}
-                                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
-                                        >
-                                            + Link de Convite
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
                         </>
                     )}
                     
@@ -8726,12 +8796,24 @@ function FlowEditorPage({
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                 const nodesToSet = (flowContent.nodes || initialNodes).map(node => {
-                    // Garantir que todos os nodes tenham o campo actions
+                    const nodeData = node.data || {};
+                    if (node.type === 'trigger') {
+                        return {
+                            ...node,
+                            data: nodeData
+                        };
+                    }
+
+                    const actionsSource = Array.isArray(nodeData.actions) ? nodeData.actions : [];
+                    const normalizedActions = actionsSource.map(action => normalizeInviteAction(action).action);
+
                     return {
                         ...node,
                         data: {
-                            ...node.data,
-                            actions: node.data?.actions || []
+                            ...nodeData,
+                            actions: normalizedActions,
+                            waitForReply: nodeData.waitForReply ?? false,
+                            replyTimeout: nodeData.replyTimeout ?? 5
                         }
                     };
                 });
@@ -8845,7 +8927,7 @@ function FlowEditorPage({
                 id: `action-${Date.now()}`, 
                 type: 'action', 
                 position, 
-                data: { actions: [{ type: actionType, data: {} }] }, 
+                data: { actions: [createActionWithDefaults(actionType)] }, 
             }; 
             setNodes((nds) => nds.concat(newNode)); 
         }, [reactFlowInstance, setNodes, reactFlowWrapper] );
@@ -8867,6 +8949,33 @@ function FlowEditorPage({
                             alert(`❌ Links não são permitidos no texto da mensagem!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para adicionar links:\n1. Use o campo "Texto do Botão"\n2. Selecione a URL no dropdown\n3. Isso garante rastreamento correto!`);
                             return false;
                         }
+                    }
+
+                    if (action.type === 'action_create_invite_link') {
+                        const messageValue = (action.data?.messageText ?? action.data?.text ?? '').trim();
+                        if (!messageValue) {
+                            alert('❌ Defina o texto da mensagem para o convite.');
+                            return false;
+                        }
+                        const validation = validateTextForUrls(messageValue);
+                        if (!validation.valid) {
+                            alert(`❌ Links não são permitidos na mensagem do convite!\n\nLinks detectados:\n• ${validation.urls.join('\n• ')}\n\n💡 Para usar o link gerado, adicione a variável {{invite_link}} ou utilize o botão embutido.`);
+                            return false;
+                        }
+
+                        const buttonValue = (action.data?.buttonText || '').trim();
+                        if (!buttonValue) {
+                            alert('❌ Informe o texto do botão do convite.');
+                            return false;
+                        }
+
+                        // Garantir sincronização dos campos antes de salvar
+                        action.data.messageText = messageValue;
+                        action.data.text = messageValue;
+                        action.data.buttonText = buttonValue;
+                        delete action.data.buttonUrl;
+                        delete action.data.sendMessage;
+                        delete action.data.linkName;
                     }
 
                     if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
@@ -8921,7 +9030,7 @@ function FlowEditorPage({
                 type: 'action', 
                 position: nodePosition, 
                 data: { 
-                    actions: [{ type: actionType, data: {} }]
+                    actions: [createActionWithDefaults(actionType)]
                 },
             };
             
