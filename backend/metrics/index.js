@@ -46,6 +46,52 @@ if (isEnabled) {
     buckets: [512, 1024, 4096, 16384, 65536, 262144, 1048576, 5242880, 10485760, 52428800],
   });
 
+  metrics.flowActionDuration = new client.Histogram({
+    name: 'hottrack_flow_action_duration_seconds',
+    help: 'Duração da execução de ações no motor de fluxos.',
+    labelNames: ['flow_id', 'node_id', 'action_type'],
+    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+  });
+
+  metrics.flowErrorsTotal = new client.Counter({
+    name: 'hottrack_flow_errors_total',
+    help: 'Total de erros registrados durante a execução de fluxos.',
+    labelNames: ['flow_id', 'node_id', 'action_type', 'error_type'],
+  });
+
+  metrics.pixGenerationDuration = new client.Histogram({
+    name: 'hottrack_pix_generation_duration_seconds',
+    help: 'Duração das operações de geração de PIX.',
+    labelNames: ['provider'],
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16],
+  });
+
+  metrics.pixErrorsTotal = new client.Counter({
+    name: 'hottrack_pix_errors_total',
+    help: 'Total de erros ao gerar ou consultar PIX.',
+    labelNames: ['provider', 'stage'],
+  });
+
+  metrics.dbQueryDuration = new client.Histogram({
+    name: 'hottrack_db_query_duration_seconds',
+    help: 'Duração de consultas SQL instrumentadas.',
+    labelNames: ['operation'],
+    buckets: [0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1],
+  });
+
+  metrics.workerJobsTotal = new client.Counter({
+    name: 'hottrack_worker_jobs_total',
+    help: 'Total de jobs processados pelos workers.',
+    labelNames: ['worker', 'job_type', 'status'],
+  });
+
+  metrics.workerJobDuration = new client.Histogram({
+    name: 'hottrack_worker_job_duration_seconds',
+    help: 'Duração do processamento de jobs nos workers.',
+    labelNames: ['worker', 'job_type', 'status'],
+    buckets: [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32],
+  });
+
   metrics.telegramMediaRequests = new client.Counter({
     name: 'hottrack_telegram_media_requests_total',
     help: 'Total de operações de mídia envolvendo o Telegram.',

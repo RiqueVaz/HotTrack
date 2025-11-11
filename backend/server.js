@@ -31,6 +31,49 @@ const {
 } = require('./metrics');
 const METRICS_TOKEN = process.env.METRICS_TOKEN;
 
+const sanitizeMetricLabelValue = (value) => {
+    if (value === undefined || value === null) return 'unknown';
+    const str = String(value);
+    if (str.trim() === '') return 'unknown';
+    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
+};
+
+const formatMetricLabels = (labels = {}) =>
+    Object.keys(labels).reduce((acc, key) => {
+        acc[key] = sanitizeMetricLabelValue(labels[key]);
+        return acc;
+    }, {});
+
+const startHistogramTimer = (histogram, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return null;
+    const end = histogram.startTimer(formatMetricLabels(labels));
+    return typeof end === 'function' ? end : null;
+};
+
+const observeHistogram = (histogram, value, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return;
+    histogram.observe(formatMetricLabels(labels), value);
+};
+
+const incrementCounter = (counter, labels = {}, value = 1) => {
+    if (!isPrometheusEnabled || !counter) return;
+    counter.inc(formatMetricLabels(labels), value);
+};
+
+const measureDbQuery = async (operation, fn) => {
+    if (!isPrometheusEnabled || !prometheusMetrics.dbQueryDuration) {
+        return fn();
+    }
+    const endTimer = prometheusMetrics.dbQueryDuration.startTimer(formatMetricLabels({ operation }));
+    try {
+        return await fn();
+    } finally {
+        if (typeof endTimer === 'function') {
+            endTimer();
+        }
+    }
+};
+
 // Configuração do Google OAuth
 const googleClient = new OAuth2Client(
     process.env.GOOGLE_CLIENT_ID,
@@ -747,7 +790,6 @@ async function getNetlifySites(accessToken) {
         };
     }
 }
-
 async function deleteNetlifySite(accessToken, siteId) {
     try {
         await axios.delete(`https://api.netlify.com/api/v1/sites/${siteId}`, {
@@ -1544,7 +1586,6 @@ app.get('/api/pix-status/:transaction_id', async (req, res) => {
         res.status(500).json({ error: 'Erro interno ao verificar o status do PIX.' });
     }
 });
-
 app.post('/api/admin/validate-key', (req, res) => {
     const adminKey = req.headers['x-admin-api-key'];
     if (!adminKey || adminKey !== ADMIN_API_KEY) {
@@ -2247,7 +2288,6 @@ app.delete('/api/leads/:botId/:chatId/tags/:tagId', authenticateJwt, async (req,
         res.status(500).json({ message: 'Erro ao remover tag do lead.' });
     }
 });
-
 // --- ROTAS GERAIS DE USUÁRIO ---
 app.post('/api/sellers/register', async (req, res) => {
     const { name, email, password, phone } = req.body;
@@ -2346,7 +2386,6 @@ app.post('/api/sellers/register', async (req, res) => {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 });
-
 // Endpoint para verificar email
 app.post('/api/sellers/verify-email', async (req, res) => {
     const { code, email } = req.body;
@@ -4003,13 +4042,17 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
 
         // --- INÍCIO DA LÓGICA PARA ENCONTRAR seller_id ---
         if (presselId) {
-            const [pressel] = await sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`;
+            const [pressel] = await measureDbQuery('register_click_pressel_lookup', () =>
+                sql`SELECT seller_id FROM pressels WHERE id = ${presselId}`
+            );
             if (!pressel) {
                 return res.status(404).json({ message: 'Pressel não encontrada.' });
             }
             sellerId = pressel.seller_id;
         } else if (checkoutId) {
-            const [checkout] = await sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`;
+            const [checkout] = await measureDbQuery('register_click_checkout_lookup', () =>
+                sql`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`
+            );
             if (!checkout) {
                 return res.status(404).json({ message: 'Checkout não encontrado.' });
             }
@@ -4024,13 +4067,15 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         // --- FIM DA LÓGICA PARA ENCONTRAR seller_id ---
 
         // MODIFICADO: Query INSERT usa o sellerId encontrado
-        const result = await sql`INSERT INTO clicks (
-            seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
-            utm_source, utm_campaign, utm_medium, utm_content, utm_term
-        ) VALUES (
-            ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
-            ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
-        ) RETURNING *;`; // Não precisamos mais do JOIN com sellers aqui
+        const result = await measureDbQuery('register_click_insert', () =>
+            sql`INSERT INTO clicks (
+                seller_id, pressel_id, checkout_id, ip_address, user_agent, referer, fbclid, fbp, fbc,
+                utm_source, utm_campaign, utm_medium, utm_content, utm_term
+            ) VALUES (
+                ${sellerId}, ${presselId || null}, ${checkoutId || null}, ${ip_address}, ${user_agent}, ${referer}, ${fbclid}, ${fbp}, ${fbc},
+                ${utm_source || null}, ${utm_campaign || null}, ${utm_medium || null}, ${utm_content || null}, ${utm_term || null}
+            ) RETURNING *;`
+        ); // Não precisamos mais do JOIN com sellers aqui
 
         // O resto da lógica permanece o mesmo...
         const newClick = result[0];
@@ -4039,7 +4084,9 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         const clean_click_id = `lead${click_record_id.toString().padStart(6, '0')}`;
         const db_click_id = `/start ${clean_click_id}`;
 
-        await sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`;
+        await measureDbQuery('register_click_update_click_id', () =>
+            sql`UPDATE clicks SET click_id = ${db_click_id} WHERE id = ${click_record_id}`
+        );
 
         // Retorna o click_id limpo para o frontend/JS da pressel
         res.status(200).json({ status: 'success', click_id: clean_click_id });
@@ -4067,8 +4114,29 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                      city = 'Local'; // Ou mantenha Desconhecida
                      state = 'Local';
                 }
-                await sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
+                await measureDbQuery('register_click_update_geo', () =>
+                    sql`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`
+                );
                 logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
+
+                if (checkoutId) {
+                    const [checkoutDetails] = await measureDbQuery(
+                        'register_click_checkout_config',
+                        () => sql`SELECT config FROM hosted_checkouts WHERE id = ${checkoutId}`
+                    );
+                    const representativeValueCents =
+                        checkoutDetails?.config?.pricing?.packages?.[0]?.value_cents ||
+                        checkoutDetails?.config?.pricing?.fixed_value_cents ||
+                        0;
+                    const eventValue =
+                        representativeValueCents > 0 ? representativeValueCents / 100 : 0.01;
+                    await sendMetaEvent(
+                        'InitiateCheckout',
+                        { ...newClick, click_id: clean_click_id },
+                        { pix_value: eventValue, id: click_record_id }
+                    );
+                    logger.debug(`[BACKGROUND] Evento InitiateCheckout enviado para o clique ${click_record_id}.`);
+                }
 
             } catch (backgroundError) {
                 logger.error("Erro em tarefa de segundo plano (registerClick):", backgroundError.message);
@@ -4515,14 +4583,31 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
         logger.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
     }
 }
-
 /**
  * [REATORADO] Executa uma lista de ações sequencialmente.
  * Esta função é chamada pelo processFlow para rodar as ações DENTRO de um nó.
  * @returns {string} Retorna 'paid', 'pending', 'flow_forwarded', ou 'completed' para que o processFlow decida a navegação.
  */
-async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
+async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', metricsContext = {}) {
     logger.debug(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+
+    const flowIdLabel = sanitizeMetricLabelValue(metricsContext.flowId || 'unknown');
+    const nodeIdLabel = sanitizeMetricLabelValue(metricsContext.nodeId || 'unknown');
+    const recordFlowError = (actionType, error) => {
+        incrementCounter(prometheusMetrics.flowErrorsTotal, {
+            flow_id: flowIdLabel,
+            node_id: nodeIdLabel,
+            action_type: sanitizeMetricLabelValue(actionType),
+            error_type: sanitizeMetricLabelValue(
+                error?.code ||
+                error?.response?.data?.error ||
+                error?.response?.data?.description ||
+                error?.name ||
+                error?.message ||
+                'unknown'
+            ),
+        });
+    };
     
     const normalizeChatIdentifier = (value) => {
         if (value === null || value === undefined) return null;
@@ -4541,7 +4626,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
         const action = actions[i];
         const actionData = action.data || {}; // Garante que actionData exista
         logger.debug(`${logPrefix} [${i + 1}/${actions.length}] Processando ação: ${action.type}`);
+        const actionTypeLabel = sanitizeMetricLabelValue(action.type || 'unknown');
+        const endActionTimer = startHistogramTimer(prometheusMetrics.flowActionDuration, {
+            flow_id: flowIdLabel,
+            node_id: nodeIdLabel,
+            action_type: actionTypeLabel,
+        });
 
+        try {
         switch (action.type) {
             case 'message':
                 try {
@@ -4597,6 +4689,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (error) {
                     logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
+                    recordFlowError(actionTypeLabel, error);
                 }
                 break;
 
@@ -4619,6 +4712,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } catch (e) {
                     logger.error(`${logPrefix} [Flow Media] Erro ao enviar mídia (ação ${action.type}) para o chat ${chatId}: ${e.message}`);
+                    recordFlowError(actionTypeLabel, e);
                 }
                 break;
             }
@@ -4637,95 +4731,105 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 break;
             
             case 'action_pix':
-                try {
-                    logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
-                    const valueInCents = actionData.valueInCents;
-                    if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
-    
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
-    
-                    let click_id_from_vars = variables.click_id;
-                    if (!click_id_from_vars) {
-                        const [recentClick] = await sql`
-                            SELECT click_id FROM telegram_chats 
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
-                            ORDER BY created_at DESC LIMIT 1`;
-                        if (recentClick?.click_id) {
-                            click_id_from_vars = recentClick.click_id;
-                        }
-                    }
-    
-                    if (!click_id_from_vars) {
-                        throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
-                    }
-    
-                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
+                let pixTimerStart = isPrometheusEnabled && prometheusMetrics.pixGenerationDuration ? Date.now() : null;
+                let pixProviderLabel = sanitizeMetricLabelValue(actionData?.provider || variables?.preferred_pix_provider || 'auto');
+                let pixErrorStage = 'generate';
+                 try {
+                     logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
+                     const valueInCents = actionData.valueInCents;
+                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
+     
+                     const [seller] = await measureDbQuery('flow_action_pix_seller_lookup', () =>
+                         sql`SELECT * FROM sellers WHERE id = ${sellerId}`
+                     );
+                     if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
+     
+                     let click_id_from_vars = variables.click_id;
+                     if (!click_id_from_vars) {
+                         const [recentClick] = await sql`
+                             SELECT click_id FROM telegram_chats 
+                             WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
+                             ORDER BY created_at DESC LIMIT 1`;
+                         if (recentClick?.click_id) {
+                             click_id_from_vars = recentClick.click_id;
+                         }
+                     }
+     
+                     if (!click_id_from_vars) {
+                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
+                     }
+     
+                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                     const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                     if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
 
-                    const ip_address = click.ip_address;
-                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                    
-                    // Gera PIX e salva no banco
-                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
-                    
-                    // Atualiza as variáveis do fluxo (IMPORTANTE)
-                    variables.last_transaction_id = pixResult.transaction_id;
-    
-                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
-                    
-                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
-                    if (messageText && messageText.length > 1024) {
-                        logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
-                        messageText = messageText.substring(0, 1021) + '...';
-                    }
-                    
-                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
-                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-    
-                    // CRÍTICO: Tenta enviar o PIX para o usuário
-                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
-                    });
-    
-                    // Verifica se o envio foi bem-sucedido
-                    if (!sentMessage.ok) {
-                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
-                        logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        
-                        await sql`
-                            UPDATE pix_transactions 
-                            SET status = 'canceled' 
-                            WHERE provider_transaction_id = ${pixResult.transaction_id}
-                        `;
-                        
-                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
-                    }
-                    
-                    // Salva a mensagem no banco
-                    await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
-                    
-                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
-                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmify(
-                        'waiting_payment', 
-                        click, 
-                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
-                        seller, customerDataForUtmify, productDataForUtmify
-                    );
-                    logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                     const ip_address = click.ip_address;
+                     const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                     
+                     // Gera PIX e salva no banco
+                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                     logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                     
+                     // Atualiza as variáveis do fluxo (IMPORTANTE)
+                     variables.last_transaction_id = pixResult.transaction_id;
+     
+                     let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
+                     
+                     // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                     if (messageText && messageText.length > 1024) {
+                         logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                         messageText = messageText.substring(0, 1021) + '...';
+                     }
+                     
+                     const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                     const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+     
+                     // CRÍTICO: Tenta enviar o PIX para o usuário
+                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
+                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
+                         reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
+                     });
+     
+                     // Verifica se o envio foi bem-sucedido
+                     if (!sentMessage.ok) {
+                         // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                         logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                         
+                         await sql`
+                             UPDATE pix_transactions 
+                             SET status = 'canceled' 
+                             WHERE provider_transaction_id = ${pixResult.transaction_id}
+                         `;
+                         
+                         throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
+                     }
+                     
+                     // Salva a mensagem no banco
+                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                     logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                     
+                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                     const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                     await sendEventToUtmify(
+                         'waiting_payment', 
+                         click, 
+                         { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
+                         seller, customerDataForUtmify, productDataForUtmify
+                     );
+                     logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                    logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
-                } catch (error) {
-                    logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
-                    // Re-lança o erro para que o fluxo seja interrompido
-                    throw error;
-                }
+                     logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
+                 } catch (error) {
+                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
+                     // Re-lança o erro para que o fluxo seja interrompido
+                     throw error;
+                 } finally {
+                     if (pixTimerStart) {
+                         const duration = Date.now() - pixTimerStart;
+                         incrementHistogram(prometheusMetrics.pixGenerationDuration, duration, { provider: pixProviderLabel, stage: pixErrorStage });
+                     }
+                 }
                 break;
 
             case 'action_check_pix':
@@ -5099,6 +5203,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             default:
                 logger.warn(`${logPrefix} Tipo de ação aninhada desconhecida: ${action.type}. Ignorando.`);
                 break;
+        }
+        } finally {
+            if (endActionTimer) {
+                endActionTimer();
+            }
         }
     }
 
@@ -5865,7 +5974,6 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
     }
     res.sendStatus(200);
 });
-
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
     console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
@@ -6611,7 +6719,6 @@ app.get('/api/media', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar a biblioteca de mídia.' });
     }
 });
-
 // Endpoint 12: Upload para biblioteca de mídia
 app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
     const { fileName, fileData, fileType } = req.body;
@@ -7331,7 +7438,6 @@ app.get('/api/flows/check-payment/:purchaseTransactionId', authenticateJwt, asyn
         res.status(500).json({ message: 'Erro ao verificar status do pagamento.' });
     }
 });
-
 // Endpoint 21.3: Importar fluxo pago após confirmação de pagamento
 app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;

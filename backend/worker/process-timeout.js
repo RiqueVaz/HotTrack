@@ -18,6 +18,29 @@ const {
 
 const METRICS_SOURCE = 'worker_process_timeout';
 
+const sanitizeMetricLabelValue = (value) => {
+    if (value === undefined || value === null) return 'unknown';
+    const str = String(value);
+    if (str.trim() === '') return 'unknown';
+    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
+};
+
+const formatMetricLabels = (labels = {}) =>
+    Object.keys(labels).reduce((acc, key) => {
+        acc[key] = sanitizeMetricLabelValue(labels[key]);
+        return acc;
+    }, {});
+
+const observeHistogram = (histogram, value, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return;
+    histogram.observe(formatMetricLabels(labels), value);
+};
+
+const incrementCounter = (counter, labels = {}, value = 1) => {
+    if (!isPrometheusEnabled || !counter) return;
+    counter.inc(formatMetricLabels(labels), value);
+};
+
 // ==========================================================
 //                     INICIALIZAÇÃO
 // ==========================================================
@@ -1307,8 +1330,25 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 // ==========================================================
 
 async function handler(req, res) {
+    const jobMetricBase = {
+        worker: 'process-timeout',
+        job_type: 'timeout',
+    };
+    const jobTimerStart = isPrometheusEnabled && prometheusMetrics.workerJobDuration ? Date.now() : null;
+    let jobStatus = 'success';
+
     if (req.method !== 'POST') {
-        return res.status(405).json({ message: 'Method Not Allowed' });
+        jobStatus = 'skipped';
+        const response = res.status(405).json({ message: 'Method Not Allowed' });
+        if (jobTimerStart !== null) {
+            observeHistogram(
+                prometheusMetrics.workerJobDuration,
+                (Date.now() - jobTimerStart) / 1000,
+                { ...jobMetricBase, status: jobStatus }
+            );
+        }
+        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
+        return response;
     }
 
     try {
@@ -1336,11 +1376,13 @@ async function handler(req, res) {
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
             console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
+            jobStatus = 'skipped';
             return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
         }
         
         if (!currentState.waiting_for_input) {
             console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
+            jobStatus = 'skipped';
             return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
         }
 
@@ -1373,9 +1415,19 @@ async function handler(req, res) {
         }
 
     } catch (error) {
+        jobStatus = 'error';
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);
         // Retornamos 200 para que o QStash NÃO tente re-executar um fluxo que falhou logicamente.
         return res.status(200).json({ error: `Failed to process timeout: ${error.message}` });
+    } finally {
+        if (jobTimerStart !== null) {
+            observeHistogram(
+                prometheusMetrics.workerJobDuration,
+                (Date.now() - jobTimerStart) / 1000,
+                { ...jobMetricBase, status: jobStatus }
+            );
+        }
+        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
     }
 }
 

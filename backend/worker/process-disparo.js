@@ -51,6 +51,29 @@ const {
     hottrackApiUrl: process.env.HOTTRACK_API_URL,
 });
 
+const sanitizeMetricLabelValue = (value) => {
+    if (value === undefined || value === null) return 'unknown';
+    const str = String(value);
+    if (str.trim() === '') return 'unknown';
+    return str.length > 80 ? `${str.slice(0, 77)}...` : str;
+};
+
+const formatMetricLabels = (labels = {}) =>
+    Object.keys(labels).reduce((acc, key) => {
+        acc[key] = sanitizeMetricLabelValue(labels[key]);
+        return acc;
+    }, {});
+
+const observeHistogram = (histogram, value, labels = {}) => {
+    if (!isPrometheusEnabled || !histogram) return;
+    histogram.observe(formatMetricLabels(labels), value);
+};
+
+const incrementCounter = (counter, labels = {}, value = 1) => {
+    if (!isPrometheusEnabled || !counter) return;
+    counter.inc(formatMetricLabels(labels), value);
+};
+
 // ==========================================================
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
 // ==========================================================
@@ -258,6 +281,12 @@ async function handler(req, res) {
     
       const step = JSON.parse(step_json);
       const userVariables = JSON.parse(variables_json);
+      const jobMetricBase = {
+        worker: 'process-disparo',
+        job_type: sanitizeMetricLabelValue(step?.type || 'unknown'),
+      };
+      const jobTimerStart = isPrometheusEnabled && prometheusMetrics.workerJobDuration ? Date.now() : null;
+      let jobStatus = 'success';
        
       let logStatus = 'SENT';
         let logDetails = 'Enviado com sucesso.';
@@ -570,6 +599,7 @@ async function handler(req, res) {
           }
         } catch(e) {
           logStatus = 'FAILED';
+          jobStatus = 'error';
                 logDetails = e.message.substring(0, 255); 
           logger.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
         }
@@ -609,9 +639,14 @@ async function handler(req, res) {
             logger.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
         }
             // --- FIM DA LÓGICA DE CONCLUSÃO ---
-    
+            if (logStatus === 'FAILED') {
+                jobStatus = 'error';
+            } else if (logStatus === 'SKIPPED' && jobStatus !== 'error') {
+                jobStatus = 'skipped';
+            }
             res.status(200).send('Worker de disparo finalizado.');
     } catch (error) {
+        jobStatus = 'error';
         logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
         // Tenta logar a falha mesmo se o processamento principal quebrar
         try {
@@ -623,6 +658,15 @@ async function handler(req, res) {
             logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
         }
         res.status(500).send('Erro interno no worker de disparo.');
+    } finally {
+        if (jobTimerStart !== null) {
+            observeHistogram(
+                prometheusMetrics.workerJobDuration,
+                (Date.now() - jobTimerStart) / 1000,
+                { ...jobMetricBase, status: jobStatus }
+            );
+        }
+        incrementCounter(prometheusMetrics.workerJobsTotal, { ...jobMetricBase, status: jobStatus });
     }
 }
 
