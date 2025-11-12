@@ -10,7 +10,7 @@ const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
-const { sql } = require('../db');
+const { sqlTx, sqlWithRetry } = require('../db');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -32,7 +32,7 @@ const {
     generatePixForProvider,
     generatePixWithFallback
 } = createPixService({
-    sql,
+    sql: sqlTx,
     sqlWithRetry,
     axios,
     uuidv4,
@@ -51,69 +51,6 @@ const {
 // ==========================================================
 //          FUNÇÕES AUXILIARES (Copiadas do backend.js)
 // ==========================================================
-
-async function sqlWithRetry(query, ...args) {
-    let retries = 3;
-    let delay = 1000;
-    let params = [];
-    const isTemplate = Array.isArray(query);
-    const isDirectQuery = !isTemplate && typeof query === 'string';
-    const isImmediate = !isTemplate && !isDirectQuery;
-    const templateValues = isTemplate ? [...args] : [];
-
-    if (isDirectQuery) {
-        if (args.length > 0) {
-            params = args[0] ?? [];
-        }
-        if (args.length > 1) {
-            const maybeOptions = args[1];
-            if (typeof maybeOptions === 'number') {
-                retries = maybeOptions;
-                if (args.length > 2 && typeof args[2] === 'number') {
-                    delay = args[2];
-                }
-            } else if (maybeOptions && typeof maybeOptions === 'object') {
-                if (typeof maybeOptions.retries === 'number') {
-                    retries = maybeOptions.retries;
-                }
-                if (typeof maybeOptions.delay === 'number') {
-                    delay = maybeOptions.delay;
-                }
-            }
-        }
-    }
-
-    const execute = async () => {
-        if (isTemplate) {
-            return await sql(query, ...templateValues);
-        }
-        if (isImmediate) {
-            return await query;
-        }
-        return await sql.unsafe(query, params);
-    };
-
-    for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-            return await execute();
-        } catch (error) {
-            const isRetryable =
-                (typeof error.message === 'string' && (
-                    error.message.includes('fetch failed') ||
-                    error.message.includes('Connection terminated unexpectedly') ||
-                    error.message.includes('Client has encountered a connection error') ||
-                    error.message.includes('write ECONNRESET')
-                )) ||
-                ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ESOCKETTIMEDOUT'].includes(error.code);
-
-            if (isRetryable && attempt < retries - 1) {
-                await new Promise(res => setTimeout(res, delay));
-            } else {
-                throw error;
-            }
-        }
-    }
-}
 
 async function replaceVariables(text, variables) {
     if (!text) return '';
@@ -259,18 +196,18 @@ async function handler(req, res) {
       let lastTransactionId = null;
     
       try {
-        const [bot] = await sqlWithRetry(sql`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
+        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
           throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
         }
          
-        const [seller] = await sqlWithRetry(sql`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
+        const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
             if (!seller) {
                 throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
             }
 
             // Busca o click_id mais recente para garantir que está atualizado
-            const [chat] = await sqlWithRetry(sql`
+            const [chat] = await sqlWithRetry(sqlTx`
                 SELECT click_id FROM telegram_chats 
                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
                 ORDER BY created_at DESC LIMIT 1
@@ -573,20 +510,20 @@ async function handler(req, res) {
         try {
           // 1. Loga o resultado deste job
           await sqlWithRetry(
-            sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
+            sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
                        VALUES (${history_id}, ${chat_id}, ${bot_id}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
           );
     
           // 2. Atualiza a contagem de falhas (se houver) e de processados
             let query;
             if (logStatus === 'FAILED') {
-                query = sql`UPDATE disparo_history
+                query = sqlTx`UPDATE disparo_history
                             SET processed_jobs = processed_jobs + 1,
                                 failure_count = failure_count + 1
                             WHERE id = ${history_id}
                             RETURNING processed_jobs, total_jobs, status`;
             } else {
-                query = sql`UPDATE disparo_history
+                query = sqlTx`UPDATE disparo_history
                             SET processed_jobs = processed_jobs + 1
                             WHERE id = ${history_id}
                             RETURNING processed_jobs, total_jobs, status`;
@@ -597,7 +534,7 @@ async function handler(req, res) {
           if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
             logger.info(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
             await sqlWithRetry(
-              sql`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
+              sqlTx`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
             );
           }
         } catch (dbError) {
@@ -612,7 +549,7 @@ async function handler(req, res) {
         // Tenta logar a falha mesmo se o processamento principal quebrar
         try {
              await sqlWithRetry(
-                sql`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details) 
+                sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details) 
                    VALUES (${history_id || 0}, ${chat_id || 0}, ${bot_id || 0}, 'FAILED', ${error.message.substring(0, 255)})`
             );
         } catch(logFailError) {
