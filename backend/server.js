@@ -4508,13 +4508,16 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Verifica se tem botão para anexar
                     if (actionData.buttonUrl) {
-                        let rawBtnText = actionData.buttonText ?? 'Clique aqui';
-                        let btnText = await replaceVariables(rawBtnText, variables);
-                        btnText = btnText && btnText.trim() !== '' ? btnText : 'Clique aqui';
-
-                        if (!actionData.buttonText) {
-                            logger.warn(`${logPrefix} [Flow Message] Botão sem texto informado. Aplicando texto padrão '${btnText}'.`);
+                        // Trata buttonText vazio, null, undefined ou string vazia
+                        let rawBtnText = actionData.buttonText;
+                        if (!rawBtnText || (typeof rawBtnText === 'string' && rawBtnText.trim() === '')) {
+                            rawBtnText = 'Clique aqui';
+                            logger.warn(`${logPrefix} [Flow Message] Botão sem texto informado. Aplicando texto padrão '${rawBtnText}'.`);
                         }
+                        
+                        let btnText = await replaceVariables(rawBtnText, variables);
+                        // Garante que após replaceVariables ainda tenha texto válido
+                        btnText = btnText && btnText.trim() !== '' ? btnText : 'Clique aqui';
 
                         let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
                         
