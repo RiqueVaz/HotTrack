@@ -83,7 +83,8 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
             return response.data;
         } catch (error) {
-            const chatId = data instanceof FormData ? data.getBoundary && data.get('chat_id') : data.chat_id;
+            // FormData do Node.js não tem .get(), então tenta extrair do erro ou deixa undefined
+            const chatId = data?.chat_id || 'unknown';
             const description = error.response?.data?.description || error.message;
             if (error.response && error.response.status === 403) {
                 logger.debug(`[WORKER-DISPARO] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
