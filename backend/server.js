@@ -7,7 +7,6 @@ if (process.env.NODE_ENV !== 'production') {
 }
 const express = require('express');
 const cors = require('cors');
-const { neon } = require('@neondatabase/serverless');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -24,6 +23,7 @@ const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
+const { sql } = require('./db');
 
 
 
@@ -409,7 +409,6 @@ const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
 // --- OTIMIZAÇÃO CRÍTICA: A conexão com o banco é inicializada UMA VEZ e reutilizada ---
-const sql = neon(process.env.DATABASE_URL);
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -491,14 +490,22 @@ async function sqlWithRetry(query, ...args) {
         if (isImmediate) {
             return await query;
         }
-        return await sql(query, params);
+        return await sql.unsafe(query, params);
     };
 
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
             return await execute();
         } catch (error) {
-            const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
+            const isRetryable =
+                (typeof error.message === 'string' && (
+                    error.message.includes('fetch failed') ||
+                    error.message.includes('Connection terminated unexpectedly') ||
+                    error.message.includes('Client has encountered a connection error') ||
+                    error.message.includes('write ECONNRESET')
+                )) ||
+                ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ESOCKETTIMEDOUT'].includes(error.code);
+
             if (isRetryable && attempt < retries - 1) {
                 await new Promise(res => setTimeout(res, delay));
             } else {

@@ -5,12 +5,12 @@ if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ path: '../../.env' });
 }
 
-const { neon } = require('@neondatabase/serverless');
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
+const { sql } = require('../db');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -18,7 +18,6 @@ const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 // ==========================================================
 //                   INICIALIZAÇÃO
 // ==========================================================
-const sql = neon(process.env.DATABASE_URL);
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
@@ -91,14 +90,22 @@ async function sqlWithRetry(query, ...args) {
         if (isImmediate) {
             return await query;
         }
-        return await sql(query, params);
+        return await sql.unsafe(query, params);
     };
 
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
             return await execute();
         } catch (error) {
-            const isRetryable = error.message.includes('fetch failed') || (error.sourceError && error.sourceError.code === 'UND_ERR_SOCKET');
+            const isRetryable =
+                (typeof error.message === 'string' && (
+                    error.message.includes('fetch failed') ||
+                    error.message.includes('Connection terminated unexpectedly') ||
+                    error.message.includes('Client has encountered a connection error') ||
+                    error.message.includes('write ECONNRESET')
+                )) ||
+                ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ESOCKETTIMEDOUT'].includes(error.code);
+
             if (isRetryable && attempt < retries - 1) {
                 await new Promise(res => setTimeout(res, delay));
             } else {
