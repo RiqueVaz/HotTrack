@@ -4189,9 +4189,8 @@ app.get('/api/transactions', authenticateJwt, async (req, res) => {
         // 3. Adicionar a ordenação
         queryString += ` ORDER BY pt.created_at DESC;`;
 
-        // 4. Executar a consulta usando a sintaxe de função sql(query, params)
-        //    Isto é diferente do "sql`...`" (template tag) e é o que resolve o erro.
-        const transactions = await sql(queryString, queryParams);
+        // 4. Executar a consulta usando a sintaxe compatível com o cliente postgres
+        const transactions = await sql.unsafe(queryString, queryParams);
 
         res.status(200).json(transactions);
     } catch (error) {
