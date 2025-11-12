@@ -5285,6 +5285,29 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             // 4. Verifica se o NÓ está configurado para 'waitForReply'
             if (currentNode.data.waitForReply) {
+                // 4.1. Se houver mídias agendadas, envia ANTES de pausar
+                if (variables._scheduled_media_actions && Array.isArray(variables._scheduled_media_actions)) {
+                    logger.debug(`${logPrefix} [Flow Engine] Enviando ${variables._scheduled_media_actions.length} mídia(s) antes de aguardar resposta.`);
+                    
+                    try {
+                        await processActions(
+                            variables._scheduled_media_actions,
+                            chatId,
+                            botId,
+                            botToken,
+                            sellerId,
+                            variables,
+                            `${logPrefix} [Scheduled Media]`
+                        );
+                        
+                        logger.debug(`${logPrefix} [Flow Engine] Mídias enviadas. Mantendo referência nas variáveis para o worker.`);
+                        // NÃO remove _scheduled_media_actions aqui, pois o worker pode precisar reenviar em caso de timeout
+                    } catch (mediaError) {
+                        logger.error(`${logPrefix} [Flow Engine] Erro ao enviar mídias agendadas:`, mediaError);
+                        // Continua mesmo se falhar
+                    }
+                }
+                
                 const noReplyNodeId = findNextNode(currentNode.id, 'b', edges); // 'b' = Sem Resposta
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
@@ -5497,6 +5520,13 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                         }
                     } else {
                         logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
+                    }
+                    
+                    // Remove _scheduled_media_actions pois as mídias já foram enviadas
+                    // ANTES de pausar o fluxo (na linha 5288-5309)
+                    if (parsedVariables._scheduled_media_actions) {
+                        logger.debug(`[Webhook] Removendo ${parsedVariables._scheduled_media_actions.length} referência(s) de mídia já enviada(s).`);
+                        delete parsedVariables._scheduled_media_actions;
                     }
                     
                     logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}`);
