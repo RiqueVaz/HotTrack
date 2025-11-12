@@ -7631,8 +7631,18 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
         }
 
         // 3. Retorna a configuração e o click_id final para o frontend
+        let parsedConfig = checkout.config;
+        if (typeof parsedConfig === 'string') {
+            try {
+                parsedConfig = JSON.parse(parsedConfig);
+            } catch (parseError) {
+                console.error(`Erro ao converter config do checkout ${checkoutId}:`, parseError);
+                return res.status(500).json({ message: 'Configuração inválida do checkout.' });
+            }
+        }
+
         res.status(200).json({
-            config: checkout.config,
+            config: parsedConfig,
             click_id: finalClickId // Envia o ID existente ou o novo ID orgânico
         });
 
