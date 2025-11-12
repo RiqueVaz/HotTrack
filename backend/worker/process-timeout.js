@@ -10,7 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
-const { sql } = require('../db');
+const { sqlTx, sqlWithRetry } = require('../db');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -42,7 +42,7 @@ const {
     generatePixForProvider,
     generatePixWithFallback
 } = createPixService({
-    sql,
+    sql: sqlTx,
     sqlWithRetry,
     axios,
     uuidv4,
@@ -59,69 +59,6 @@ const {
 // ==========================================================
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
 // ==========================================================
-
-async function sqlWithRetry(query, ...args) {
-    let retries = 3;
-    let delay = 1000;
-    let params = [];
-    const isTemplate = Array.isArray(query);
-    const isDirectQuery = !isTemplate && typeof query === 'string';
-    const isImmediate = !isTemplate && !isDirectQuery;
-    const templateValues = isTemplate ? [...args] : [];
-
-    if (isDirectQuery) {
-        if (args.length > 0) {
-            params = args[0] ?? [];
-        }
-        if (args.length > 1) {
-            const maybeOptions = args[1];
-            if (typeof maybeOptions === 'number') {
-                retries = maybeOptions;
-                if (args.length > 2 && typeof args[2] === 'number') {
-                    delay = args[2];
-                }
-            } else if (maybeOptions && typeof maybeOptions === 'object') {
-                if (typeof maybeOptions.retries === 'number') {
-                    retries = maybeOptions.retries;
-                }
-                if (typeof maybeOptions.delay === 'number') {
-                    delay = maybeOptions.delay;
-                }
-            }
-        }
-    }
-
-    const execute = async () => {
-        if (isTemplate) {
-            return await sql(query, ...templateValues);
-        }
-        if (isImmediate) {
-            return await query;
-        }
-        return await sql.unsafe(query, params);
-    };
-
-    for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-            return await execute();
-        } catch (error) {
-            const isRetryable =
-                (typeof error.message === 'string' && (
-                    error.message.includes('fetch failed') ||
-                    error.message.includes('Connection terminated unexpectedly') ||
-                    error.message.includes('Client has encountered a connection error') ||
-                    error.message.includes('write ECONNRESET')
-                )) ||
-                ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ESOCKETTIMEDOUT'].includes(error.code);
-
-            if (isRetryable && attempt < retries - 1) {
-                await new Promise(res => setTimeout(res, delay));
-            } else {
-                throw error;
-            }
-        }
-    }
-}
 
 async function replaceVariables(text, variables) {
     if (!text) return '';
@@ -292,7 +229,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
 
         if (clickData.pressel_id) {
             console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
-            const [pressel] = await sql`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
+            const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
             if (pressel) {
                 integrationId = pressel.utmify_integration_id;
             }
@@ -306,7 +243,7 @@ async function sendEventToUtmify(status, clickData, pixData, sellerData, custome
         }
 
         console.log(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
-        const [integration] = await sql`
+        const [integration] = await sqlTx`
             SELECT api_token FROM utmify_integrations 
             WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
         `;
@@ -342,9 +279,9 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
     try {
         let presselPixels = [];
         if (clickData.pressel_id) {
-            presselPixels = await sql`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
         } else if (clickData.checkout_id) {
-            presselPixels = await sql`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
+            presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
         }
 
         if (presselPixels.length === 0) {
@@ -383,7 +320,7 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
         Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
         
         for (const { pixel_config_id } of presselPixels) {
-            const [pixelConfig] = await sql`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
             if (pixelConfig) {
                 const { pixel_id, meta_api_token } = pixelConfig;
                 const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
@@ -410,7 +347,7 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
                 console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
 
                 if (eventName === 'Purchase') {
-                     await sql`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
                 }
             }
         }
@@ -421,7 +358,7 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
 
 async function handleSuccessfulPayment(transaction_id, customerData) {
     try {
-        const [transaction] = await sql`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
+        const [transaction] = await sqlTx`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
         if (!transaction) { 
             console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada ou não encontrada.`);
             return; 
@@ -444,8 +381,8 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
             });
         }
         
-        const [click] = await sql`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
-        const [seller] = await sql`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
+        const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
+        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
 
         if (click && seller) {
             const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
@@ -503,7 +440,7 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            await sql`
+            await sqlTx`
                 INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
                 VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
@@ -611,7 +548,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 try {
                     console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
 
-                    const [botInvite] = await sql`
+                    const [botInvite] = await sqlTx`
                         SELECT telegram_supergroup_id
                         FROM telegram_bots
                         WHERE id = ${botId}
@@ -722,7 +659,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 try {
                     console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
 
-                    const [bot] = await sql`
+                    const [bot] = await sqlTx`
                         SELECT telegram_supergroup_id
                         FROM telegram_bots
                         WHERE id = ${botId}
@@ -842,12 +779,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
                     if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
     
                     let click_id_from_vars = variables.click_id;
                     if (!click_id_from_vars) {
-                        const [recentClick] = await sql`
+                        const [recentClick] = await sqlTx`
                             SELECT click_id FROM telegram_chats 
                             WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL 
                             ORDER BY created_at DESC LIMIT 1`;
@@ -861,7 +798,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
     
                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                    const [click] = await sql`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
                     if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
     
                     const ip_address = click.ip_address;
@@ -896,7 +833,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
                         console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
                         
-                        await sql`
+                        await sqlTx`
                             UPDATE pix_transactions 
                             SET status = 'canceled' 
                             WHERE provider_transaction_id = ${pixResult.transaction_id}
@@ -937,7 +874,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const transactionId = variables.last_transaction_id;
                     if (!transactionId) throw new Error("Nenhum ID de transação PIX nas variáveis.");
                     
-                    const [transaction] = await sql`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                    const [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
                     if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
 
                     if (transaction.status === 'paid') {
@@ -947,7 +884,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
                     let providerStatus = null;
                     let customerData = {};
-                    const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
 
                     if (transaction.provider === 'pushinpay') {
                         const last = pushinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
@@ -989,7 +926,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 
                 // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
                 try {
-                    const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
                             await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
@@ -1009,7 +946,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     break;
                 }
                 
-                const [targetFlow] = await sql`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
+                const [targetFlow] = await sqlTx`SELECT * FROM flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`;
                 if (!targetFlow || !targetFlow.nodes) {
                      console.error(`${logPrefix} Fluxo de destino ${targetFlowIdNum} não encontrado.`);
                      break;
@@ -1031,7 +968,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 const maxAttempts = 20; // Proteção contra loops infinitos
                 
                 // Limpa o estado atual antes de iniciar o novo fluxo
-                await sql`UPDATE user_flow_states 
+                await sqlTx`UPDATE user_flow_states 
                           SET waiting_for_input = false, scheduled_message_id = NULL 
                           WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
@@ -1091,7 +1028,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    const [user] = await sql`
+    const [user] = await sqlTx`
         SELECT first_name, last_name 
         FROM telegram_chats 
         WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
@@ -1104,7 +1041,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (variables.click_id) {
         const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
-        const [click] = await sql`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
+        const [click] = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
         if (click) {
             variables.cidade = click.city || '';
             variables.estado = click.state || '';
@@ -1116,35 +1053,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     // FIM DO PASSO 1
     // ==========================================================
-    
-        if (variables._scheduled_media_actions && Array.isArray(variables._scheduled_media_actions)) {
-        console.log(`[WORKER - Timeout] Processando ${variables._scheduled_media_actions.length} ação(ões) de mídia agendadas.`);
-        
-        for (const mediaAction of variables._scheduled_media_actions) {
-            try {
-                const actionData = mediaAction.data || {};
-                let caption = await replaceVariables(actionData.caption || '', variables);
-                
-                // Validação do tamanho da legenda
-                if (caption && caption.length > 1024) {
-                    console.warn(`[WORKER - Media] Legenda excede limite de 1024 caracteres. Truncando...`);
-                    caption = caption.substring(0, 1021) + '...';
-                }
-                
-                const response = await handleMediaNode(mediaAction, botToken, chatId, caption);
-                
-                if (response && response.ok) {
-                    await saveMessageToDb(sellerId, botId, response.result, 'bot');
-                }
-            } catch (e) {
-                console.error(`[WORKER - Media] Erro ao enviar mídia agendada (${mediaAction.type}):`, e.message);
-            }
-        }
-        
-        // Remove as ações de mídia processadas das variáveis
-        delete variables._scheduled_media_actions;
-    }
-    
     // Se os dados do fluxo foram fornecidos (ex: forward_flow), usa eles. Caso contrário, busca do banco.
     let nodes, edges;
     if (flowNodes && flowEdges) {
@@ -1154,7 +1062,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
     } else {
         // Busca o fluxo ativo do banco
-        const [flow] = await sql`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`;
+        const [flow] = await sqlTx`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`;
         if (!flow || !flow.nodes) {
             console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
             return;
@@ -1172,19 +1080,19 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         
         if (isStartCommand) {
             console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
-            const [stateToCancel] = await sql`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
                     console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message); }
             }
-            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             const startNode = nodes.find(node => node.type === 'trigger');
             currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
 
         } else {
-            const [userState] = await sql`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const [userState] = await sqlTx`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
@@ -1194,7 +1102,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
-                await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
             }
@@ -1204,7 +1112,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (!currentNodeId) {
         console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
-        await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         return;
     }
 
@@ -1223,7 +1131,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
-        await sql`
+        await sqlTx`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
             VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL)
             ON CONFLICT (chat_id, bot_id)
@@ -1237,7 +1145,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         if (currentNode.type === 'trigger') {
             if (currentNode.data.actions && currentNode.data.actions.length > 0) {
                  await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
-                 await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                 await sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             }
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
             continue;
@@ -1247,7 +1155,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const actions = currentNode.data.actions || [];
             const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
-            await sql`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
 
             if (actionResult === 'flow_forwarded') {
                 console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual (worker).`);
@@ -1274,7 +1182,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         method: "POST"
                     });
                     
-                    await sql`
+                    await sqlTx`
                         UPDATE user_flow_states 
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -1312,10 +1220,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
 
     if (!currentNodeId) {
-        const [state] = await sql`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+        const [state] = await sqlTx`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
         if (!state) {
             console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
-            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         } else {
             console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
@@ -1339,7 +1247,7 @@ async function handler(req, res) {
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
 
         // 2. Busca o bot para obter o token e sellerId
-        const [bot] = await sql`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
+        const [bot] = await sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
         if (!bot || !bot.bot_token) {
             throw new Error(`[WORKER] Bot ${bot_id} ou token não encontrado.`);
         }
@@ -1348,7 +1256,7 @@ async function handler(req, res) {
 
         // 3. *** VERIFICAÇÃO CRÍTICA ***
         // Verifica se o estado atual corresponde ao esperado
-        const [currentState] = await sql`
+        const [currentState] = await sqlTx`
             SELECT waiting_for_input, scheduled_message_id, current_node_id 
             FROM user_flow_states 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
@@ -1368,7 +1276,7 @@ async function handler(req, res) {
         console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
         
         // Limpa o estado de 'espera' ANTES de processar o próximo nó
-        await sql`
+        await sqlTx`
             UPDATE user_flow_states 
             SET waiting_for_input = false, scheduled_message_id = NULL 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
@@ -1388,7 +1296,7 @@ async function handler(req, res) {
             return res.status(200).json({ message: 'Timeout processed successfully.' });
         } else {
             console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
-            await sql`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
             return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
         }
 
