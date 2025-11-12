@@ -952,7 +952,8 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             });
             return response.data;
         } catch (error) {
-            const chatId = data instanceof FormData ? data.getBoundary && data.get('chat_id') : data.chat_id;
+            // FormData do Node.js não tem .get(), então tenta extrair do erro ou deixa undefined
+            const chatId = data?.chat_id || 'unknown';
 
             if (error.response && error.response.status === 403) {
                 console.warn(`[TELEGRAM API WARN] O bot foi bloqueado pelo usuário. ChatID: ${chatId}`);
