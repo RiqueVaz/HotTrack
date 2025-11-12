@@ -25,6 +25,23 @@ const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
 const { sql } = require('./db');
 
+function parseJsonField(value, context) {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    if (typeof value === 'object') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value);
+        } catch (error) {
+            console.error(`[JSON] Falha ao converter ${context}:`, error);
+            throw new Error(`JSON_PARSE_ERROR_${context}`);
+        }
+    }
+    return value;
+}
 
 
 // Configuração do Google OAuth
@@ -1024,6 +1041,11 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 ? JSON.parse(Buffer.from(errorData).toString('utf8'))
                 : errorData;
 
+            const description = (errorMessage && errorMessage.description) || error.message;
+            if (description && description.includes('bot was blocked by the user')) {
+                logger.debug(`[Telegram API] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
+                return { ok: false, error_code: 403, description };
+            }
             console.error(`[TELEGRAM API ERROR] Method: ${method}, ChatID: ${chatId}:`, errorMessage || error.message);
             throw error;
         }
@@ -1066,13 +1088,29 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
         messageText = '[Mensagem de Voz]';
     }
     const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
-    const fromUser = from || chat;
+    const fromUser = from || chat || {};
+
+    const safeValues = [
+        sellerId,
+        botId,
+        chat?.id ?? null,
+        message_id ?? null,
+        fromUser?.id ?? null,
+        fromUser?.first_name ?? botInfo.first_name ?? null,
+        fromUser?.last_name ?? botInfo.last_name ?? null,
+        fromUser?.username ?? null,
+        messageText ?? null,
+        senderType ?? null,
+        mediaType ?? null,
+        mediaFileId ?? null,
+        finalClickId ?? null
+    ];
 
     await sqlWithRetry(`
         INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (chat_id, message_id) DO NOTHING;
-    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId]);
+    `, safeValues);
 
     if (newClickId) {
         await sqlWithRetry(
@@ -4320,8 +4358,13 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
             // Se veio de checkout hospedado, tenta buscar URL de sucesso no config
             if (transaction.checkout_id && String(transaction.checkout_id).startsWith('cko_')) {
                 const [checkoutConfig] = await sql`SELECT config FROM hosted_checkouts WHERE id = ${transaction.checkout_id}`;
-                // Ajuste o caminho conforme seu schema de config
-                redirectUrl = checkoutConfig?.config?.redirects?.success_url || null;
+                let checkoutConfigJson;
+                try {
+                    checkoutConfigJson = parseJsonField(checkoutConfig?.config, `hosted_checkouts:${transaction.checkout_id}`);
+                } catch {
+                    checkoutConfigJson = null;
+                }
+                redirectUrl = checkoutConfigJson?.redirects?.success_url || null;
                 if (!redirectUrl) {
                     console.warn(`[PIX Status] Checkout ${transaction.checkout_id} sem redirects.success_url configurado.`);
                 }
@@ -7544,9 +7587,9 @@ app.put('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
         // Update the config JSON and updated_at timestamp for the specific checkout ID and seller ID
         const result = await sql`
             UPDATE hosted_checkouts
-            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            SET config = ${sql.json(newConfig)}, updated_at = NOW()
             WHERE id = ${checkoutId} AND seller_id = ${sellerId}
-            RETURNING id; -- Return the ID to confirm update occurred
+            RETURNING id; -- Confirma a atualização
         `;
 
         // Check if any row was updated
@@ -7574,7 +7617,7 @@ app.post('/api/checkouts/create-hosted', authenticateJwt, async (req, res) => {
         // Insert into the hosted_checkouts table
         await sql`
             INSERT INTO hosted_checkouts (id, seller_id, config)
-            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+            VALUES (${checkoutId}, ${sellerId}, ${sql.json(config)});
         `;
 
         // Return the generated ID to the frontend
@@ -7631,16 +7674,12 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
         }
 
         // 3. Retorna a configuração e o click_id final para o frontend
-        let parsedConfig = checkout.config;
-        if (typeof parsedConfig === 'string') {
-            try {
-                parsedConfig = JSON.parse(parsedConfig);
-            } catch (parseError) {
-                console.error(`Erro ao converter config do checkout ${checkoutId}:`, parseError);
-                return res.status(500).json({ message: 'Configuração inválida do checkout.' });
-            }
+        let parsedConfig;
+        try {
+            parsedConfig = parseJsonField(checkout.config, `hosted_checkouts:${checkoutId}`);
+        } catch {
+            return res.status(500).json({ message: 'Configuração inválida do checkout.' });
         }
-
         res.status(200).json({
             config: parsedConfig,
             click_id: finalClickId // Envia o ID existente ou o novo ID orgânico
@@ -7757,7 +7796,7 @@ app.post('/api/checkouts/create-hosted', authenticateApiKey, async (req, res) =>
         // Insert into the hosted_checkouts table
         await sql`
             INSERT INTO hosted_checkouts (id, seller_id, config)
-            VALUES (${checkoutId}, ${sellerId}, ${JSON.stringify(config)});
+            VALUES (${checkoutId}, ${sellerId}, ${sql.json(config)});
         `;
 
         // Return the generated ID to the frontend
@@ -7792,7 +7831,7 @@ app.put('/api/thank-you-pages/:pageId', authenticateApiKey, async (req, res) => 
     try {
         const result = await sql`
             UPDATE thank_you_pages
-            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            SET config = ${sql.json(newConfig)}, updated_at = NOW()
             WHERE id = ${pageId} AND seller_id = ${sellerId}
             RETURNING id;
         `;
@@ -7822,7 +7861,7 @@ app.post('/api/thank-you-pages/create', authenticateApiKey, async (req, res) => 
         // Insert the configuration into the database
         await sql`
             INSERT INTO thank_you_pages (id, seller_id, config)
-            VALUES (${pageId}, ${sellerId}, ${JSON.stringify(config)});
+            VALUES (${pageId}, ${sellerId}, ${sql.json(config)});
         `;
 
         res.status(201).json({
@@ -7849,8 +7888,15 @@ app.get('/api/obrigado/:pageId', async (req, res) => {
             return res.status(404).json({ message: 'Página de obrigado não encontrada.' });
         }
 
+        let parsedConfig;
+        try {
+            parsedConfig = parseJsonField(page.config, `thank_you_pages:${pageId}`);
+        } catch {
+            return res.status(500).json({ message: 'Configuração inválida da página de obrigado.' });
+        }
+
         res.status(200).json({
-            config: page.config,
+            config: parsedConfig,
         });
 
     } catch (error) {
@@ -7867,12 +7913,19 @@ app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
             SELECT seller_id, config FROM thank_you_pages WHERE id = ${pageId}
         `;
 
-        if (!page || !page.config.utmify_integration_id) {
+        let parsedConfig;
+        try {
+            parsedConfig = parseJsonField(page?.config, `thank_you_pages:${pageId}`);
+        } catch {
+            return res.status(500).json({ message: 'Configuração inválida da página de obrigado.' });
+        }
+
+        if (!page || !parsedConfig?.utmify_integration_id) {
             return res.status(404).json({ message: 'Página ou integração Utmify não configurada.' });
         }
 
         const sellerId = page.seller_id;
-        const utmifyIntegrationId = page.config.utmify_integration_id;
+        const utmifyIntegrationId = parsedConfig.utmify_integration_id;
 
         const [seller] = await sql`SELECT * FROM sellers WHERE id = ${sellerId}`;
         if (!seller) {
@@ -7889,7 +7942,7 @@ app.post('/api/thank-you-pages/fire-utmify', async (req, res) => {
                 ...trackingParameters
             },
             purchase_data: {
-                value: page.config.purchase_value,
+                value: parsedConfig.purchase_value,
                 currency: 'BRL'
             }
         };
@@ -7947,7 +8000,13 @@ app.get('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
         if (!page) {
             return res.status(404).json({ message: 'Página de obrigado não encontrada ou não pertence a você.' });
         }
-        res.status(200).json(page);
+        let parsedConfig;
+        try {
+            parsedConfig = parseJsonField(page.config, `thank_you_pages:${pageId}`);
+        } catch {
+            return res.status(500).json({ message: 'Configuração inválida da página de obrigado.' });
+        }
+        res.status(200).json({ ...page, config: parsedConfig });
     } catch (error) {
         console.error(`Erro ao buscar página de obrigado ${pageId}:`, error);
         res.status(500).json({ message: 'Erro interno ao buscar a página.' });
@@ -7971,7 +8030,7 @@ app.put('/api/thank-you-pages/:pageId', authenticateJwt, async (req, res) => {
     try {
         const result = await sql`
             UPDATE thank_you_pages
-            SET config = ${JSON.stringify(newConfig)}, updated_at = NOW()
+            SET config = ${sql.json(newConfig)}, updated_at = NOW()
             WHERE id = ${pageId} AND seller_id = ${sellerId}
             RETURNING id;
         `;

@@ -147,8 +147,9 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             return response.data;
         } catch (error) {
             const chatId = data instanceof FormData ? data.getBoundary && data.get('chat_id') : data.chat_id;
+            const description = error.response?.data?.description || error.message;
             if (error.response && error.response.status === 403) {
-                logger.warn(`[WORKER-DISPARO] Bot bloqueado. ChatID: ${chatId}`);
+                logger.debug(`[WORKER-DISPARO] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
