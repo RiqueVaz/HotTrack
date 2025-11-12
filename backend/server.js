@@ -5479,12 +5479,17 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
             
             if (flow && flow.nodes) {
                 logger.debug(`[Webhook] Flow.nodes tipo:`, typeof flow.nodes);
-                const nodes = flow.nodes.nodes || [];
-                const edges = flow.nodes.edges || [];
+                
+                // IMPORTANTE: Parse correto do flow.nodes (pode ser string ou objeto)
+                const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                const nodes = flowData.nodes || [];
+                const edges = flowData.edges || [];
                 logger.debug(`[Webhook] Nodes: ${nodes.length}, Edges: ${edges.length}`);
                 
                 const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
                 logger.debug(`[Webhook] Próximo nó (handle 'a'):`, nextNodeId || 'NENHUM');
+                logger.debug(`[Webhook] Current node:`, userState.current_node_id);
+                logger.debug(`[Webhook] Edges disponíveis:`, edges.filter(e => e.source === userState.current_node_id));
 
                 if (nextNodeId) {
                     // Parse das variáveis se necessário
@@ -5492,11 +5497,13 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                     if (typeof parsedVariables === 'string') {
                         try {
                             parsedVariables = JSON.parse(parsedVariables);
-                            logger.debug(`[Webhook] Variáveis parseadas com sucesso`);
+                            logger.debug(`[Webhook] Variáveis parseadas com sucesso:`, parsedVariables);
                         } catch (e) {
                             logger.error('[Webhook] Erro ao fazer parse das variáveis:', e);
                             parsedVariables = {};
                         }
+                    } else {
+                        logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
                     }
                     
                     logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}`);
@@ -5506,6 +5513,7 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                         logger.debug(`[Webhook] Fluxo continuado com sucesso para ${chatId}`);
                     } catch (error) {
                         logger.error(`[Webhook] Erro ao continuar fluxo para ${chatId}:`, error);
+                        logger.error(`[Webhook] Stack trace:`, error.stack);
                         // Limpa estado corrompido
                         await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     }
@@ -6533,6 +6541,9 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         const [flow] = await sqlTx`SELECT nodes FROM flows WHERE id = ${flowId} AND bot_id = ${botId}`;
         if (!flow || !flow.nodes) return res.status(404).json({ message: 'Fluxo não encontrado ou não pertence a este bot.' });
 
+        // Parse correto do flow.nodes (pode ser string ou objeto)
+        const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+
         // --- LÓGICA DE LIMPEZA ---
         console.log(`[Manual Flow Start] Iniciando limpeza para o chat ${chatId} antes de iniciar o fluxo ${flowId}.`);
         const [existingState] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
@@ -6547,8 +6558,8 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         // --- FIM DA LÓGICA DE LIMPEZA ---
 
         // Encontra o ponto de partida do fluxo
-        const startNode = flow.nodes.nodes?.find(node => node.type === 'trigger');
-        const firstNodeId = findNextNode(startNode.id, null, flow.nodes.edges);
+        const startNode = flowData.nodes?.find(node => node.type === 'trigger');
+        const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
 
         if (!firstNodeId) {
             return res.status(400).json({ message: 'O fluxo selecionado não tem um nó inicial configurado após o gatilho.' });
