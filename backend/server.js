@@ -5453,6 +5453,12 @@ app.post('/api/webhook/telegram/:botId', async (req, res) => {
                 } catch (e) { /* Ignora erros */ }
             }
 
+            // IMPORTANTE: Limpa o estado de espera ANTES de continuar o fluxo
+            await sqlTx`
+                UPDATE user_flow_states 
+                SET waiting_for_input = false, scheduled_message_id = NULL 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
             // Continua o fluxo a partir do próximo nó.
             const [flow] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
             if (flow && flow.nodes) {
