@@ -6711,8 +6711,8 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
         res.status(201).json(newMedia);
     } catch (error) {
-        res.status(500).json({ message: 'Erro ao fazer upload da mídia.' });
-
+        console.error('[Media Upload] Erro:', error);
+        res.status(500).json({ message: 'Erro ao fazer upload da mídia: ' + error.message });
     }
 });
 
