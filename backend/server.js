@@ -4507,8 +4507,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                     
                     // Verifica se tem botão para anexar
-                    if (actionData.buttonText && actionData.buttonUrl) {
-                        const btnText = await replaceVariables(actionData.buttonText, variables);
+                    if (actionData.buttonUrl) {
+                        let rawBtnText = actionData.buttonText ?? 'Clique aqui';
+                        let btnText = await replaceVariables(rawBtnText, variables);
+                        btnText = btnText && btnText.trim() !== '' ? btnText : 'Clique aqui';
+
+                        if (!actionData.buttonText) {
+                            logger.warn(`${logPrefix} [Flow Message] Botão sem texto informado. Aplicando texto padrão '${btnText}'.`);
+                        }
+
                         let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
                         
                         // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
