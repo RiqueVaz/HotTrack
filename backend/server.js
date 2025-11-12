@@ -1083,13 +1083,29 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
         messageText = '[Mensagem de Voz]';
     }
     const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
-    const fromUser = from || chat;
+    const fromUser = from || chat || {};
+
+    const safeValues = [
+        sellerId,
+        botId,
+        chat?.id ?? null,
+        message_id ?? null,
+        fromUser?.id ?? null,
+        fromUser?.first_name ?? botInfo.first_name ?? null,
+        fromUser?.last_name ?? botInfo.last_name ?? null,
+        fromUser?.username ?? null,
+        messageText ?? null,
+        senderType ?? null,
+        mediaType ?? null,
+        mediaFileId ?? null,
+        finalClickId ?? null
+    ];
 
     await sqlWithRetry(`
         INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (chat_id, message_id) DO NOTHING;
-    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId]);
+    `, safeValues);
 
     if (newClickId) {
         await sqlWithRetry(
