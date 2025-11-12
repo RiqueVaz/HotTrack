@@ -23,7 +23,11 @@ const resolveSslOption = () => {
 
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
-    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS)
+    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 10,
+    idle_timeout: 20,
+    connect_timeout: 10,
+    // PgBouncer-friendly: desabilita prepared statements (incompatível com transaction mode)
+    prepare: false,
 });
 
 // Função unificada de retry para queries SQL

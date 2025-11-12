@@ -2980,17 +2980,15 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
         }
         const bot_name = botResult[0].bot_name;
 
-        await sqlTx`BEGIN`;
-        try {
-            
-            const [newPressel] = await sqlTx`
+        const result = await sqlTx.begin(async sql => {
+            const [newPressel] = await sql`
                 INSERT INTO pressels (seller_id, name, bot_id, bot_name, white_page_url, utmify_integration_id, traffic_type, netlify_url) 
                 VALUES (${req.user.id}, ${name}, ${numeric_bot_id}, ${bot_name}, ${white_page_url}, ${utmify_integration_id || null}, ${traffic_type || 'both'}, NULL) 
                 RETURNING *;
             `;
             
             for (const pixelId of numeric_pixel_ids) {
-                await sqlTx`INSERT INTO pressel_pixels (pressel_id, pixel_config_id) VALUES (${newPressel.id}, ${pixelId})`;
+                await sql`INSERT INTO pressel_pixels (pressel_id, pixel_config_id) VALUES (${newPressel.id}, ${pixelId})`;
             }
             
             let netlifyUrl = null;
@@ -2999,7 +2997,7 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
             if (deploy_to_netlify) {
                 try {
                     // Buscar configurações do Netlify
-                    const [seller] = await sqlTx`SELECT netlify_access_token, netlify_site_id FROM sellers WHERE id = ${req.user.id}`;
+                    const [seller] = await sql`SELECT netlify_access_token, netlify_site_id FROM sellers WHERE id = ${req.user.id}`;
                     
                     if (seller?.netlify_access_token) {
                         // Gerar HTML da pressel
@@ -3023,11 +3021,11 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
                                     netlifyUrl = deployResult.url;
 
                                     // Atualizar campo netlify_url na tabela pressels
-                                    await sqlTx`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
+                                    await sql`UPDATE pressels SET netlify_url = ${netlifyUrl} WHERE id = ${newPressel.id}`;
 
                                     // Adicionar domínio automaticamente
                                     const domain = deployResult.url.replace('https://', '');
-                                    await sqlTx`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
+                                    await sql`INSERT INTO pressel_allowed_domains (pressel_id, domain) VALUES (${newPressel.id}, ${domain})`;
 
                                     console.log(`[Netlify] Site exclusivo criado e pressel ${newPressel.id} deployada: ${netlifyUrl}`);
                                 }
@@ -3046,22 +3044,18 @@ app.post('/api/pressels', authenticateJwt, async (req, res) => {
             
             // Se o deploy via Netlify foi solicitado, a URL é obrigatória
             if (deploy_to_netlify && !netlifyUrl) {
-                await sqlTx`ROLLBACK`;
-                return res.status(400).json({ message: 'Falha no deploy Netlify: URL não gerada.' });
+                throw new Error('Falha no deploy Netlify: URL não gerada.');
             }
 
-            await sqlTx`COMMIT`;
+            return { newPressel, netlifyUrl };
+        });
 
-            res.status(201).json({ 
-                ...newPressel, 
-                pixel_ids: numeric_pixel_ids, 
-                bot_name,
-                netlify_url: netlifyUrl
-            });
-        } catch (transactionError) {
-            await sqlTx`ROLLBACK`;
-            throw transactionError;
-        }
+        res.status(201).json({ 
+            ...result.newPressel, 
+            pixel_ids: numeric_pixel_ids, 
+            bot_name,
+            netlify_url: result.netlifyUrl
+        });
     } catch (error) {
         console.error("Erro ao salvar pressel:", error);
         res.status(500).json({ message: 'Erro ao salvar a pressel.' });
@@ -3692,23 +3686,22 @@ app.post('/api/checkouts', authenticateJwt, async (req, res) => {
     }
 
     try {
-        await sqlTx`BEGIN`;
+        const newCheckout = await sqlTx.begin(async sql => {
+            const [checkout] = await sql`
+                INSERT INTO checkouts (seller_id, name, product_name, redirect_url, value_type, fixed_value_cents)
+                VALUES (${req.user.id}, ${name}, ${product_name}, ${redirect_url}, ${value_type}, ${value_type === 'fixed' ? fixed_value_cents : null})
+                RETURNING *;
+            `;
 
-        const [newCheckout] = await sqlTx`
-            INSERT INTO checkouts (seller_id, name, product_name, redirect_url, value_type, fixed_value_cents)
-            VALUES (${req.user.id}, ${name}, ${product_name}, ${redirect_url}, ${value_type}, ${value_type === 'fixed' ? fixed_value_cents : null})
-            RETURNING *;
-        `;
-
-        for (const pixelId of pixel_ids) {
-            await sqlTx`INSERT INTO checkout_pixels (checkout_id, pixel_config_id) VALUES (${newCheckout.id}, ${pixelId})`;
-        }
-        
-        await sqlTx`COMMIT`;
+            for (const pixelId of pixel_ids) {
+                await sql`INSERT INTO checkout_pixels (checkout_id, pixel_config_id) VALUES (${checkout.id}, ${pixelId})`;
+            }
+            
+            return checkout;
+        });
 
         res.status(201).json({ ...newCheckout, pixel_ids: pixel_ids.map(id => parseInt(id)) });
     } catch (error) {
-        await sqlTx`ROLLBACK`;
         console.error("Erro ao salvar checkout:", error);
         res.status(500).json({ message: 'Erro interno ao salvar o checkout.' });
     }
