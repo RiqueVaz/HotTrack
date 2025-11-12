@@ -7702,7 +7702,7 @@ app.get('/api/oferta/:checkoutId', async (req, res) => {
 });
 
 app.post('/api/oferta/generate-pix', async (req, res) => {
-    const { checkoutId, value_cents, click_id } = req.body;
+    const { checkoutId, value_cents, click_id, customer, product } = req.body;
 
     if (!checkoutId || !value_cents) {
         return res.status(400).json({ message: 'Dados insuficientes para gerar o PIX.' });
@@ -7710,57 +7710,58 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
 
     try {
         // 1) Validar checkout e obter seller
-        const [hostedCheckout] = await sqlTx`SELECT seller_id FROM hosted_checkouts WHERE id = ${checkoutId}`;
+        const [hostedCheckout] = await sqlTx`
+            SELECT seller_id, config 
+            FROM hosted_checkouts 
+            WHERE id = ${checkoutId}
+        `;
         if (!hostedCheckout) {
             return res.status(404).json({ message: 'Checkout não encontrado.' });
         }
 
         const sellerId = hostedCheckout.seller_id;
-        const [seller] = await sqlTx`SELECT api_key FROM sellers WHERE id = ${sellerId}`;
+        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
         if (!seller || !seller.api_key) {
             return res.status(400).json({ message: 'API Key não configurada para o vendedor.' });
         }
 
         // 2) Garantir que há um click_id associado e buscar dados do click
-        const ip_address = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+        const requestIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
         const user_agent = req.headers['user-agent'];
         let finalClickId = click_id;
         let clickRecord = null;
-        
-        // Verifica se já existe um clique com este click_id
+
         if (finalClickId) {
-            // Remove o prefixo '/start ' se existir
             const cleanClickId = finalClickId.replace('/start ', '');
             const dbClickId = cleanClickId.startsWith('/start ') ? cleanClickId : `/start ${cleanClickId}`;
-            
-            // Verifica se o click_id já existe no banco
             const [existingClick] = await sqlTx`
                 SELECT * FROM clicks 
                 WHERE click_id = ${dbClickId} AND seller_id = ${sellerId}
             `;
-            
+
             if (!existingClick) {
-                // Se não existe, precisa criar um novo registro de click para este checkout
                 console.log(`[Checkout PIX] Click_id ${cleanClickId} não encontrado, criando novo registro para checkout`);
                 const [newClick] = await sqlTx`
                     INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, click_id, is_organic)
-                    VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, ${dbClickId}, FALSE)
+                    VALUES (${sellerId}, ${checkoutId}, ${requestIp}, ${user_agent}, ${dbClickId}, FALSE)
                     RETURNING *;
                 `;
-                finalClickId = cleanClickId; // Usa o click_id do fluxo
+                finalClickId = cleanClickId;
                 clickRecord = newClick;
             } else {
-                // Click já existe, usa ele
                 finalClickId = cleanClickId;
                 clickRecord = existingClick;
+                if (!clickRecord.checkout_id) {
+                    await sqlTx`UPDATE clicks SET checkout_id = ${checkoutId} WHERE id = ${clickRecord.id}`;
+                    clickRecord = { ...clickRecord, checkout_id: checkoutId };
+                }
                 console.log(`[Checkout PIX] Usando click_id existente: ${cleanClickId}`);
             }
         } else {
-            // Criar clique orgânico e gerar click_id no padrão existente
             console.log(`[Checkout PIX] Nenhum click_id fornecido, gerando orgânico`);
             const [newClick] = await sqlTx`
                 INSERT INTO clicks (seller_id, checkout_id, ip_address, user_agent, is_organic)
-                VALUES (${sellerId}, ${checkoutId}, ${ip_address}, ${user_agent}, TRUE)
+                VALUES (${sellerId}, ${checkoutId}, ${requestIp}, ${user_agent}, TRUE)
                 RETURNING *;
             `;
             finalClickId = `org_${newClick.id.toString().padStart(7, '0')}`;
@@ -7769,22 +7770,81 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             console.log(`[Checkout PIX] Click_id orgânico gerado: ${finalClickId}`);
         }
 
-        // 3) Delegar geração para o endpoint central usando HOTTRACK_API_URL
-        const baseApiUrl = process.env.HOTTRACK_API_URL;
-        if (!baseApiUrl) {
-            return res.status(500).json({ message: 'HOTTRACK_API_URL não configurada no servidor.' });
+        if (!clickRecord) {
+            return res.status(500).json({ message: 'Não foi possível criar ou localizar o clique.' });
         }
 
-        const response = await axios.post(`${baseApiUrl}/api/pix/generate`, {
-            click_id: finalClickId,
-            value_cents: value_cents
-        }, {
-            headers: { 'x-api-key': seller.api_key }
-        });
+        const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${clickRecord.id}`;
+        if (!click) {
+            return res.status(500).json({ message: 'Clique associado não encontrado após criação.' });
+        }
 
-        // 4) Retornar a resposta da API central
-        return res.status(200).json(response.data);
+        const hostForPix = (() => {
+            if (req.headers.host) return req.headers.host;
+            if (process.env.HOTTRACK_API_URL) {
+                try {
+                    return new URL(process.env.HOTTRACK_API_URL).host;
+                } catch (_) {
+                    return 'localhost';
+                }
+            }
+            return 'localhost';
+        })();
+
+        const pixIpAddress = click.ip_address || requestIp;
+        const pixResult = await generatePixWithFallback(
+            seller,
+            value_cents,
+            hostForPix,
+            seller.api_key,
+            pixIpAddress,
+            click.id
+        );
+
+        // 3) Disparar eventos pós-geração de PIX
+        const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
+
+        let checkoutConfigJson = null;
+        if (hostedCheckout.config) {
+            try {
+                checkoutConfigJson = parseJsonField(hostedCheckout.config, `hosted_checkouts:${checkoutId}`);
+            } catch (configError) {
+                console.warn(`[Checkout PIX] Configuração inválida para checkout ${checkoutId}:`, configError.message);
+                checkoutConfigJson = null;
+            }
+        }
+
+        const productDataForUtmify = product || {
+            id: checkoutConfigJson?.product?.id || "prod_1",
+            name: checkoutConfigJson?.content?.main_title || checkoutConfigJson?.product?.name || "Produto Ofertado"
+        };
+
+        const transactionDataForEvents = {
+            provider_transaction_id: pixResult.transaction_id,
+            pix_value: value_cents / 100,
+            created_at: new Date()
+        };
+
+        await sendMetaEvent(
+            'InitiateCheckout',
+            { ...click, checkout_id: checkoutId },
+            { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 },
+            customer || null
+        );
+
+        await sendEventToUtmify(
+            'waiting_payment',
+            { ...click, checkout_id: checkoutId },
+            transactionDataForEvents,
+            seller,
+            customerDataForUtmify,
+            productDataForUtmify
+        );
+
+        const { internal_transaction_id, ...apiResponse } = pixResult;
+        return res.status(200).json(apiResponse);
     } catch (error) {
+        console.error('[Checkout PIX] Erro geral ao gerar PIX:', error.response?.data || error.message);
         const status = error.response?.status || 500;
         const message = error.response?.data?.message || error.message || 'Não foi possível gerar o PIX no momento.';
         return res.status(status).json({ message });
