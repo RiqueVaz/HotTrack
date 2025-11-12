@@ -480,7 +480,13 @@ async function sendTypingAction(chatId, botToken) {
     try {
         await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, { chat_id: chatId, action: 'typing' });
     } catch (error) {
-        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, error.response?.data || error.message);
+        const errorData = error.response?.data;
+        const description = errorData?.description || error.message;
+        if (description?.includes('bot was blocked by the user')) {
+            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (typing). Ignorando.`);
+            return;
+        }
+        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, errorData || error.message);
     }
 }
 
@@ -497,7 +503,6 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
         const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
         if (response.data.ok) {
             const sentMessage = response.data.result;
-            // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
             await sql`
                 INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
                 VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
@@ -505,7 +510,13 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
             `;
         }
     } catch (error) {
-        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
+        const errorData = error.response?.data;
+        const description = errorData?.description || error.message;
+        if (description?.includes('bot was blocked by the user')) {
+            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (message). Ignorando.`);
+            return;
+        }
+        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, errorData || error.message);
     }
 }
 

@@ -1041,6 +1041,11 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 ? JSON.parse(Buffer.from(errorData).toString('utf8'))
                 : errorData;
 
+            const description = (errorMessage && errorMessage.description) || error.message;
+            if (description && description.includes('bot was blocked by the user')) {
+                logger.debug(`[Telegram API] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
+                return { ok: false, error_code: 403, description };
+            }
             console.error(`[TELEGRAM API ERROR] Method: ${method}, ChatID: ${chatId}:`, errorMessage || error.message);
             throw error;
         }
