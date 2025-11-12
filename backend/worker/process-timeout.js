@@ -1053,35 +1053,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     // FIM DO PASSO 1
     // ==========================================================
-    
-        if (variables._scheduled_media_actions && Array.isArray(variables._scheduled_media_actions)) {
-        console.log(`[WORKER - Timeout] Processando ${variables._scheduled_media_actions.length} ação(ões) de mídia agendadas.`);
-        
-        for (const mediaAction of variables._scheduled_media_actions) {
-            try {
-                const actionData = mediaAction.data || {};
-                let caption = await replaceVariables(actionData.caption || '', variables);
-                
-                // Validação do tamanho da legenda
-                if (caption && caption.length > 1024) {
-                    console.warn(`[WORKER - Media] Legenda excede limite de 1024 caracteres. Truncando...`);
-                    caption = caption.substring(0, 1021) + '...';
-                }
-                
-                const response = await handleMediaNode(mediaAction, botToken, chatId, caption);
-                
-                if (response && response.ok) {
-                    await saveMessageToDb(sellerId, botId, response.result, 'bot');
-                }
-            } catch (e) {
-                console.error(`[WORKER - Media] Erro ao enviar mídia agendada (${mediaAction.type}):`, e.message);
-            }
-        }
-        
-        // Remove as ações de mídia processadas das variáveis
-        delete variables._scheduled_media_actions;
-    }
-    
     // Se os dados do fluxo foram fornecidos (ex: forward_flow), usa eles. Caso contrário, busca do banco.
     let nodes, edges;
     if (flowNodes && flowEdges) {
