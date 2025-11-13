@@ -174,19 +174,64 @@ function createPixService({
         };
       }
 
-      const response = await axios.post('https://api-v2.wiinpay.com.br/payment/create', payload, {
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      });
+      let response;
+      try {
+        response = await axios.post('https://api-v2.wiinpay.com.br/payment/create', payload, {
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        });
+      } catch (axiosError) {
+        const errorMessage = axiosError.response?.data?.message || axiosError.response?.data?.error || axiosError.message;
+        const errorDetails = axiosError.response?.data ? JSON.stringify(axiosError.response.data) : 'Sem detalhes';
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Erro HTTP:`, {
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          message: errorMessage,
+          data: errorDetails,
+        });
+        throw new Error(`Erro ao comunicar com WiinPay: ${errorMessage || 'Erro desconhecido'}`);
+      }
+
+      if (response.status < 200 || response.status >= 300) {
+        const errorMessage = response.data?.message || response.data?.error || `Status HTTP ${response.status}`;
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Status HTTP inválido:`, {
+          status: response.status,
+          data: JSON.stringify(response.data),
+        });
+        throw new Error(`WiinPay retornou status inválido: ${errorMessage}`);
+      }
+
       pixData = response.data;
       acquirer = 'WiinPay';
 
+      // Verifica diferentes formatos de resposta (similar ao parseWiinpayPayment)
+      const paymentData =
+        pixData?.payment ||
+        pixData?.data ||
+        pixData?.payload ||
+        pixData?.transaction ||
+        pixData;
+
       const transactionId =
+        paymentData?.id ||
+        paymentData?.payment_id ||
+        paymentData?.paymentId ||
+        paymentData?.transaction_id ||
+        paymentData?.transactionId ||
         pixData?.id ||
         pixData?.payment_id ||
         pixData?.paymentId ||
         pixData?.transaction_id ||
         pixData?.transactionId;
+      
       const qrCodeText =
+        paymentData?.pix?.copy_paste ||
+        paymentData?.pix?.copyAndPaste ||
+        paymentData?.pix?.code ||
+        paymentData?.pix?.qrcode ||
+        paymentData?.pix_code ||
+        paymentData?.qr_code ||
+        paymentData?.qrCode ||
+        paymentData?.copy_paste ||
         pixData?.pix?.copy_paste ||
         pixData?.pix?.copyAndPaste ||
         pixData?.pix?.code ||
@@ -195,7 +240,13 @@ function createPixService({
         pixData?.qr_code ||
         pixData?.qrCode ||
         pixData?.copy_paste;
+      
       const qrCodeBase64 =
+        paymentData?.pix?.base64 ||
+        paymentData?.pix?.qrcode_base64 ||
+        paymentData?.pix?.qr_code_base64 ||
+        paymentData?.qr_code_base64 ||
+        paymentData?.qrcode_base64 ||
         pixData?.pix?.base64 ||
         pixData?.pix?.qrcode_base64 ||
         pixData?.pix?.qr_code_base64 ||
@@ -203,7 +254,14 @@ function createPixService({
         pixData?.qrcode_base64;
 
       if (!transactionId || !qrCodeText) {
-        throw new Error('Resposta inesperada da WiinPay ao gerar PIX.');
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Resposta inesperada:`, {
+          status: response.status,
+          responseData: JSON.stringify(pixData),
+          transactionIdFound: !!transactionId,
+          qrCodeTextFound: !!qrCodeText,
+        });
+        const errorMessage = pixData?.message || pixData?.error || 'Resposta não contém transactionId ou qrCodeText';
+        throw new Error(`Resposta inesperada da WiinPay ao gerar PIX: ${errorMessage}. Resposta recebida: ${JSON.stringify(pixData)}`);
       }
 
       return {
