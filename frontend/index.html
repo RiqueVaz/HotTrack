@@ -9021,7 +9021,19 @@ function FlowEditorPage({
                 return prevEdges.filter((edge) => !connectedEdges.includes(edge));
             });
         }, [setEdges]);
-        const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, eds)), [setEdges]);
+        const onConnect = useCallback((params) => {
+            // Garante que cada handle só pode conectar a 1 nó
+            // Remove qualquer conexão existente do mesmo handle antes de adicionar nova
+            setEdges((eds) => {
+                // Remove todas as conexões existentes do mesmo source e sourceHandle
+                const filteredEdges = eds.filter(
+                    edge => !(edge.source === params.source && edge.sourceHandle === params.sourceHandle)
+                );
+                
+                // Adiciona a nova conexão
+                return addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, filteredEdges);
+            });
+        }, [setEdges]);
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => { setSelectedNode(null); setSelectedEdge(null); }, []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
