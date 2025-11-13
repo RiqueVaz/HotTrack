@@ -1028,11 +1028,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    const [user] = await sqlTx`
+    const [user] = await sqlWithRetry(sqlTx`
         SELECT first_name, last_name 
         FROM telegram_chats 
         WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
-        ORDER BY created_at DESC LIMIT 1`;
+        ORDER BY created_at DESC LIMIT 1`);
 
     if (user) {
         variables.primeiro_nome = user.first_name || '';
@@ -1041,7 +1041,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (variables.click_id) {
         const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
-        const [click] = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`;
+        const [click] = await sqlWithRetry(sqlTx`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`);
         if (click) {
             variables.cidade = click.city || '';
             variables.estado = click.state || '';
@@ -1062,7 +1062,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
     } else {
         // Busca o fluxo ativo do banco
-        const [flow] = await sqlTx`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`;
+        const [flow] = await sqlWithRetry(sqlTx`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`);
         if (!flow || !flow.nodes) {
             console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
             return;
@@ -1080,19 +1080,19 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         
         if (isStartCommand) {
             console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
-            const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
                     console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message); }
             }
-            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             const startNode = nodes.find(node => node.type === 'trigger');
             currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
 
         } else {
-            const [userState] = await sqlTx`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            const [userState] = await sqlWithRetry(sqlTx`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (userState && userState.waiting_for_input) {
                 console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
@@ -1102,7 +1102,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             } else {
                 console.log(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
-                await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
             }
@@ -1112,7 +1112,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
     if (!currentNodeId) {
         console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
-        await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
         return;
     }
 
@@ -1131,7 +1131,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
 
-        await sqlTx`
+        await sqlWithRetry(sqlTx`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
             VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL)
             ON CONFLICT (chat_id, bot_id)
@@ -1140,12 +1140,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 variables = EXCLUDED.variables, 
                 waiting_for_input = false, 
                 scheduled_message_id = NULL;
-        `;
+        `);
 
         if (currentNode.type === 'trigger') {
             if (currentNode.data.actions && currentNode.data.actions.length > 0) {
                  await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
-                 await sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                 await sqlWithRetry(sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             }
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
             continue;
@@ -1155,7 +1155,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const actions = currentNode.data.actions || [];
             const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
 
-            await sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlWithRetry(sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
 
             if (actionResult === 'flow_forwarded') {
                 console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual (worker).`);
@@ -1182,10 +1182,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         method: "POST"
                     });
                     
-                    await sqlTx`
+                    await sqlWithRetry(sqlTx`
                         UPDATE user_flow_states 
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
-                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
                     
                     console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                 
@@ -1220,10 +1220,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
 
     if (!currentNodeId) {
-        const [state] = await sqlTx`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+        const [state] = await sqlWithRetry(sqlTx`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`);
         if (!state) {
             console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
-            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+            await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
         } else {
             console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
@@ -1247,7 +1247,7 @@ async function handler(req, res) {
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
 
         // 2. Busca o bot para obter o token e sellerId
-        const [bot] = await sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`;
+        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
             throw new Error(`[WORKER] Bot ${bot_id} ou token não encontrado.`);
         }
@@ -1256,10 +1256,10 @@ async function handler(req, res) {
 
         // 3. *** VERIFICAÇÃO CRÍTICA ***
         // Verifica se o estado atual corresponde ao esperado
-        const [currentState] = await sqlTx`
+        const [currentState] = await sqlWithRetry(sqlTx`
             SELECT waiting_for_input, scheduled_message_id, current_node_id 
             FROM user_flow_states 
-            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
@@ -1276,10 +1276,10 @@ async function handler(req, res) {
         console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
         
         // Limpa o estado de 'espera' ANTES de processar o próximo nó
-        await sqlTx`
+        await sqlWithRetry(sqlTx`
             UPDATE user_flow_states 
             SET waiting_for_input = false, scheduled_message_id = NULL 
-            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
         // 5. Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
@@ -1296,11 +1296,21 @@ async function handler(req, res) {
             return res.status(200).json({ message: 'Timeout processed successfully.' });
         } else {
             console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
-            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`;
+            await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
             return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
         }
 
     } catch (error) {
+        // Tratar especificamente CONNECT_TIMEOUT
+        if (error.message?.includes('CONNECT_TIMEOUT') || error.message?.includes('write CONNECT_TIMEOUT')) {
+            console.error(`[WORKER] CONNECT_TIMEOUT ao processar timeout para chat ${chat_id}. Pool pode estar esgotado.`);
+            // Retornar 500 para que o QStash tente novamente mais tarde
+            return res.status(500).json({ 
+                error: `Database connection timeout: ${error.message}`,
+                retry: true 
+            });
+        }
+        
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);
         // Retornamos 200 para que o QStash NÃO tente re-executar um fluxo que falhou logicamente.
         return res.status(200).json({ error: `Failed to process timeout: ${error.message}` });
