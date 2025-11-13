@@ -14,6 +14,7 @@ function createPixService({
   oasyfySplitProducerId = null,
   brpixSplitRecipientId = null,
   wiinpaySplitUserId = null,
+  pixupSplitUsername = null,
   hottrackApiUrl = process.env.HOTTRACK_API_URL,
 }) {
   if (!sql) {
@@ -316,6 +317,65 @@ function createPixService({
         qr_code_text: pixData.qr_code,
         qr_code_base64: pixData.qr_code_base64,
         transaction_id: pushinpayResponse.data.id || pushinpayResponse.data.transaction_id || pushinpayResponse.data.identifier,
+        acquirer,
+        provider,
+      };
+    }
+
+    if (provider === 'pixup') {
+      const pixupApiToken = seller.pixup_api_token || seller.pixup_token;
+      if (!pixupApiToken) {
+        throw new Error('Token da Pixup não configurado para este vendedor.');
+      }
+      const amount = parseFloat((value_cents / 100).toFixed(2));
+      const externalId = uuidv4();
+
+      const payload = {
+        amount: amount,
+        external_id: externalId,
+        postbackUrl: `https://${preferredHost}/api/webhook/pixup`,
+        payerQuestion: `PIX HotTrack #${externalId}`,
+        payer: {
+          name: clientPayload.name,
+          document: clientPayload.document?.number || '',
+          email: clientPayload.email,
+        },
+      };
+
+      // Implementar split se houver comissão e username configurado
+      if (apiKey !== adminApiKey && commission_rate > 0 && pixupSplitUsername) {
+        const commissionPercentage = parseFloat((commission_rate * 100).toFixed(1));
+        // Validar: mínimo 0.1%, máximo 95%
+        if (commissionPercentage >= 0.1 && commissionPercentage <= 95) {
+          payload.split = [
+            {
+              username: pixupSplitUsername,
+              percentageSplit: commissionPercentage.toFixed(1),
+            },
+          ];
+        }
+      }
+
+      const response = await axios.post('https://api.pixupbr.com/v2/pix/qrcode', payload, {
+        headers: {
+          Authorization: `Bearer ${pixupApiToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      pixData = response.data;
+      acquirer = 'Pixup';
+
+      const transactionId = pixData?.transactionId || pixData?.transaction_id || externalId;
+      const qrCodeText = pixData?.qrcode || pixData?.qr_code || pixData?.qrcode_text;
+
+      if (!transactionId || !qrCodeText) {
+        throw new Error('Resposta inesperada da Pixup ao gerar PIX.');
+      }
+
+      return {
+        qr_code_text: qrCodeText,
+        qr_code_base64: null, // Pixup não retorna base64 na resposta padrão
+        transaction_id: transactionId,
         acquirer,
         provider,
       };
