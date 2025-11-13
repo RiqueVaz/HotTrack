@@ -76,10 +76,22 @@ function createPixService({
     }
 
     // OAuth2 com Basic Auth conforme documentação Pixup
-    const credentials = `${seller.pixup_client_id}:${seller.pixup_client_secret}`;
+    // Concatena client_id:client_secret e codifica em base64
+    // Remove espaços em branco que podem causar erro 401
+    const clientId = (seller.pixup_client_id || '').trim();
+    const clientSecret = (seller.pixup_client_secret || '').trim();
+    
+    if (!clientId || !clientSecret) {
+      throw new Error('Credenciais da Pixup não configuradas corretamente. Client ID e Client Secret são obrigatórios.');
+    }
+    
+    const credentials = `${clientId}:${clientSecret}`;
     const base64Credentials = Buffer.from(credentials).toString('base64');
 
     try {
+      // Log para debug (não logar as credenciais completas por segurança)
+      console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Tentando obter token OAuth2`);
+      
       const response = await axios.post('https://api.pixupbr.com/v2/oauth/token', {}, {
         headers: {
           'Authorization': `Basic ${base64Credentials}`,
@@ -88,12 +100,33 @@ function createPixService({
       });
 
       const { access_token, expires_in } = response.data;
+      if (!access_token) {
+        throw new Error('Token de acesso não retornado pela API Pixup');
+      }
+
       const expiresAt = Date.now() + (expires_in * 1000);
       pixupTokenCache.set(cacheKey, { accessToken: access_token, expiresAt });
+      console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Token obtido com sucesso, expira em ${expires_in}s`);
       return access_token;
     } catch (error) {
-      const errorMessage = error.response?.data?.message || error.response?.data?.error || error.message;
-      console.error(`[PIXUP AUTH ERROR] Seller ID: ${seller.id} - Erro ao obter token:`, errorMessage);
+      // Log detalhado do erro para debug
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      const errorData = error.response?.data;
+      const errorMessage = errorData?.message || errorData?.error || error.message;
+      
+      console.error(`[PIXUP AUTH ERROR] Seller ID: ${seller.id} - Erro ao obter token:`, {
+        status,
+        statusText,
+        message: errorMessage,
+        data: errorData,
+        clientIdPrefix: seller.pixup_client_id ? seller.pixup_client_id.substring(0, 10) + '...' : 'não configurado',
+      });
+      
+      if (status === 401) {
+        throw new Error('Credenciais inválidas da Pixup. Verifique se o Client ID e Client Secret estão corretos.');
+      }
+      
       throw new Error(`Erro ao obter token da Pixup: ${errorMessage || 'Erro desconhecido'}`);
     }
   }
