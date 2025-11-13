@@ -23,7 +23,7 @@ const resolveSslOption = () => {
 
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
-    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 20,
+    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 100,
     idle_timeout: 30,
     connect_timeout: 30,
     // PgBouncer-friendly: desabilita prepared statements (incompatível com transaction mode)
