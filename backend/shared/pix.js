@@ -169,7 +169,7 @@ function createPixService({
       if (apiKey !== adminApiKey && commissionValue > 0 && wiinpaySplitUserId) {
         payload.split = {
           value: commissionValue,
-          percentage: parseFloat((commission_rate * 100).toFixed(4)),
+          percentage: parseFloat(commission_rate.toFixed(4)), // percentage como decimal (0.01 = 1%)
           user_id: wiinpaySplitUserId,
         };
       }
