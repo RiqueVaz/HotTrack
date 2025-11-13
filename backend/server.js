@@ -1100,6 +1100,105 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 }
 
+// Função para processar promises do QStash em batches para evitar sobrecarga
+async function publishQStashInBatches(promises, batchSize = 50, delayMs = 100) {
+    const batches = [];
+    for (let i = 0; i < promises.length; i += batchSize) {
+        batches.push(promises.slice(i, i + batchSize));
+    }
+    
+    for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        await Promise.all(batch);
+        // Adiciona delay entre batches, exceto no último
+        if (delayMs > 0 && i < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+}
+
+// Função para processar múltiplos steps em batch (otimização)
+async function processStepsForQStashBatch(steps, sellerId) {
+    const processedStepsCache = new Map();
+    
+    // Identifica steps únicos que precisam de processamento (apenas mídia)
+    const mediaSteps = steps.filter(step => ['image', 'video', 'audio'].includes(step.type));
+    
+    if (mediaSteps.length === 0) {
+        // Se não há steps de mídia, retorna cache vazio
+        return processedStepsCache;
+    }
+    
+    // Coleta todos os file_ids únicos que precisam ser buscados
+    const fileIdsToLookup = new Set();
+    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
+    
+    for (const step of mediaSteps) {
+        const fileUrl = step[urlMap[step.type]];
+        if (fileUrl && (fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC'))) {
+            fileIdsToLookup.add(fileUrl);
+        }
+    }
+    
+    if (fileIdsToLookup.size === 0) {
+        return processedStepsCache;
+    }
+    
+    try {
+        // Busca todos os file_ids de uma vez usando IN
+        const fileIdsArray = Array.from(fileIdsToLookup);
+        const mediaResults = await sqlWithRetry(
+            sqlTx`SELECT id, file_id FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
+        );
+        
+        // Cria um Map de file_id -> media_id para lookup rápido
+        const fileIdToMediaId = new Map();
+        for (const media of mediaResults) {
+            fileIdToMediaId.set(media.file_id, media.id);
+        }
+        
+        // Processa cada step e armazena no cache
+        for (const step of steps) {
+            const stepKey = JSON.stringify(step);
+            
+            if (!['image', 'video', 'audio'].includes(step.type)) {
+                // Step não é mídia, não precisa processar
+                processedStepsCache.set(stepKey, step);
+                continue;
+            }
+            
+            const fileUrl = step[urlMap[step.type]];
+            if (!fileUrl) {
+                processedStepsCache.set(stepKey, step);
+                continue;
+            }
+            
+            const isLibraryFile = fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC');
+            if (!isLibraryFile) {
+                processedStepsCache.set(stepKey, step);
+                continue;
+            }
+            
+            const mediaId = fileIdToMediaId.get(fileUrl);
+            if (mediaId) {
+                // Cria uma cópia do step substituindo file_id por mediaLibraryId
+                const processedStep = { ...step };
+                processedStep[urlMap[step.type]] = null;
+                processedStep.mediaLibraryId = mediaId;
+                processedStepsCache.set(stepKey, processedStep);
+            } else {
+                // Não encontrado na biblioteca, mantém original
+                processedStepsCache.set(stepKey, step);
+            }
+        }
+    } catch (error) {
+        console.error(`[processStepsForQStashBatch] Erro ao processar steps em batch:`, error);
+        // Em caso de erro, retorna cache vazio e o código vai usar processStepForQStash individual
+    }
+    
+    return processedStepsCache;
+}
+
 // Função para processar steps e substituir file_id da biblioteca por mediaLibraryId antes de enviar ao QStash
 async function processStepForQStash(step, sellerId) {
     // Se o step não é de mídia, retorna sem alterações
@@ -5657,25 +5756,43 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         let historyId; 
     
       try {
-            // 1. Buscar todos os contatos únicos (semelhante a antes)
-        const allContacts = new Map();
+            // 1. Verificar quais bots são válidos primeiro (otimização)
+        const validBotIds = [];
         for (const botId of botIds) {
-                const [botCheck] = await sqlWithRetry(
-                    'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
-                    [botId, sellerId]
-                );
-                if (!botCheck) continue; 
-    
-            const contacts = await sqlWithRetry(
-                'SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id FROM telegram_chats WHERE bot_id = $1 AND seller_id = $2 ORDER BY chat_id, created_at DESC',
+            const [botCheck] = await sqlWithRetry(
+                'SELECT id FROM telegram_bots WHERE id = $1 AND seller_id = $2',
                 [botId, sellerId]
             );
-          contacts.forEach(c => {
-            if (!allContacts.has(c.chat_id)) {
-              allContacts.set(c.chat_id, { ...c, bot_id_source: botId });
+            if (botCheck) {
+                validBotIds.push(botId);
             }
-          });
         }
+        
+        if (validBotIds.length === 0) {
+            return res.status(404).json({ message: 'Nenhum bot válido encontrado.' });
+        }
+        
+        // 2. Buscar todos os contatos únicos em uma única query (otimização)
+        const allContacts = new Map();
+        const contacts = await sqlWithRetry(
+            sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                  FROM telegram_chats 
+                  WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
+                  ORDER BY chat_id, created_at DESC`
+        );
+        
+        contacts.forEach(c => {
+            if (!allContacts.has(c.chat_id)) {
+                allContacts.set(c.chat_id, { 
+                    chat_id: c.chat_id,
+                    first_name: c.first_name,
+                    last_name: c.last_name,
+                    username: c.username,
+                    click_id: c.click_id,
+                    bot_id_source: c.bot_id 
+                });
+            }
+        });
         const uniqueContacts = Array.from(allContacts.values());
     
         if (uniqueContacts.length === 0) {
@@ -5706,61 +5823,87 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
     
-        // 4. Publicar CADA TAREFA (step) para o QStash com um atraso
-        let messageCounter = 0;
-        const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
-            const qstashPromises = [];
-    
-        for (const contact of uniqueContacts) {
-          const userVariables = {
-            primeiro_nome: contact.first_name || '',
-            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-          };
-         
-          let currentStepDelay = 0; 
-    
-          for (const step of flowSteps) {
-            // Processa o step para converter arquivos base64 em file_id antes de enviar ao QStash
-            const processedStep = await processStepForQStash(step, sellerId);
-            
-            const payload = {
-              history_id: historyId,
-              chat_id: contact.chat_id,
-              bot_id: contact.bot_id_source,
-              step_json: JSON.stringify(processedStep),
-              variables_json: JSON.stringify(userVariables)
-            };
-    
-                    const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
-    
-            qstashPromises.push(
-                        qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                            body: payload,
-                            delay: `${totalDelaySeconds}s`, 
-                            retries: 2 
-                        })
-                    );
-           
-                    const delayData = step.data || step; 
-                    if (step.type === 'delay') {
-                        currentStepDelay += (delayData.delayInSeconds || 1);
-                    } else {
-                        currentStepDelay += 1; 
-                    }
-          }
-                messageCounter++; 
-        }
-    
-            await Promise.all(qstashPromises);
-    
-        // 5. Atualizar o status da campanha para "RUNNING"
-        await sqlWithRetry(
-                sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
-            );
-    
+        // 4. Processar todos os steps em batch ANTES do loop (otimização)
+        const processedStepsCache = await processStepsForQStashBatch(flowSteps, sellerId);
+        
+        // 5. Retornar resposta HTTP imediatamente e processar em background
         res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
+        
+        // 6. Processar publicação ao QStash em background (não bloqueia resposta HTTP)
+        (async () => {
+            try {
+                let messageCounter = 0;
+                const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
+                const qstashPromises = [];
+        
+                for (const contact of uniqueContacts) {
+                    const userVariables = {
+                        primeiro_nome: contact.first_name || '',
+                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                    };
+                    
+                    let currentStepDelay = 0; 
+        
+                    for (const step of flowSteps) {
+                        // Usa cache de steps processados ou processa individualmente se não estiver no cache
+                        const stepKey = JSON.stringify(step);
+                        let processedStep;
+                        if (processedStepsCache.has(stepKey)) {
+                            processedStep = processedStepsCache.get(stepKey);
+                        } else {
+                            // Fallback: processa individualmente se não estiver no cache
+                            processedStep = await processStepForQStash(step, sellerId);
+                        }
+                        
+                        const payload = {
+                            history_id: historyId,
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source,
+                            step_json: JSON.stringify(processedStep),
+                            variables_json: JSON.stringify(userVariables)
+                        };
+        
+                        const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
+        
+                        qstashPromises.push(
+                            qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                body: payload,
+                                delay: `${totalDelaySeconds}s`, 
+                                retries: 2 
+                            })
+                        );
+                       
+                        const delayData = step.data || step; 
+                        if (step.type === 'delay') {
+                            currentStepDelay += (delayData.delayInSeconds || 1);
+                        } else {
+                            currentStepDelay += 1; 
+                        }
+                    }
+                    messageCounter++; 
+                }
+        
+                // Processar promises em batches para evitar sobrecarga
+                await publishQStashInBatches(qstashPromises, 50, 100);
+        
+                // Atualizar o status da campanha para "RUNNING"
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
+                );
+            } catch (bgError) {
+                console.error("Erro no processamento em background do disparo:", bgError);
+                // Atualizar status para erro se possível
+                try {
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                    );
+                } catch (updateError) {
+                    console.error("Erro ao atualizar status para FAILED:", updateError);
+                }
+            }
+        })();
     
       } catch (error) {
         console.error("Erro crítico no agendamento do disparo:", error);
