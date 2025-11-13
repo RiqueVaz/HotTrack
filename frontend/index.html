@@ -941,6 +941,31 @@
     padding: 0.25rem 0.5rem;
 }
 
+        /* Badge de contagem de execuções do node */
+        .hotbot-scope .node-execution-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: linear-gradient(135deg, #4c4d50, #2563eb);
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 4px 8px;
+            border-radius: 12px;
+            z-index: 10;
+            min-width: 24px;
+            text-align: center;
+            line-height: 1.2;
+            border: 2px solid var(--bg-primary);
+        }
+        
+        .hotbot-scope .node-execution-badge:hover {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            
+            transform: scale(1.05);
+            transition: all 0.2s ease;
+        }
+
 /* Cores específicas para cada tipo de ação */
 .hotbot-scope .node-header.react-flow__node-message {
     background-color: rgba(184, 204, 238, 0.1);
@@ -7580,159 +7605,6 @@ function generatePreviewHTML(data) {
         return normalizeInviteAction(baseAction).action;
     };
 
-    const CustomNode = ({ id, type, data, isConnectable, selected }) => {
-        const API_BASE_URL = App.state.API_BASE_URL;
-        const buildPreviewSrc = (value) => {
-            if (!value) return null;
-            const v = String(value).trim();
-            return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
-        };
-        
-        // Trigger node mantém comportamento antigo
-        if (type === 'trigger') {
-            return (
-                <>
-                    <div className={`node-header react-flow__node-trigger`}>
-                        <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            🚀 Gatilho Inicial
-                        </div>
-                    </div>
-                    <div className="node-content">
-                        Início do fluxo com click_id.
-                    </div>
-                    <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />
-                </>
-            );
-        }
-        
-        // Nodes normais: mostrar apenas as ações
-        const actions = data.actions || [];
-        const getActionInfo = (actionType, actionData) => {
-            const actionInfoMap = {
-                message: { icon: '💬', name: 'Mensagem', content: actionData.text ? `"${actionData.text.substring(0, 30)}..."` : 'Configure.' },
-                image: { icon: '🖼️', name: 'Imagem', content: actionData.imageUrl ? 'Configurado.' : 'Configure.' },
-                video: { icon: '🎬', name: 'Vídeo', content: actionData.videoUrl ? 'Configurado.' : 'Configure.' },
-                audio: { icon: '🎵', name: 'Áudio', content: actionData.audioUrl ? 'Configurado.' : 'Configure.' },
-                delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar ${actionData.delayInSeconds || 1}s.` },
-                typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
-                action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
-                action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
-                forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
-            action_create_invite_link: { 
-                icon: '🔗', 
-                name: 'Criar Convite', 
-                content: (() => {
-                    const messagePreview = (actionData.messageText || actionData.text || '').trim();
-                    const buttonPreview = (actionData.buttonText || '').trim();
-                    const messageLabel = messagePreview ? `"${messagePreview.substring(0, 30)}${messagePreview.length > 30 ? '…' : ''}"` : 'Mensagem não definida.';
-                    const buttonLabel = buttonPreview ? `Botão: ${buttonPreview}` : 'Botão sem texto.';
-                    return `${messageLabel} • ${buttonLabel}`;
-                })()
-            },
-            action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
-            };
-            return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
-        };
-        
-        const hasConditionalExits = data.waitForReply || actions.some(a => a.type === 'action_check_pix');
-        
-        return (
-            <>
-                <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
-                <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`}>
-                    <div className="action-badge">
-                        {actions.length > 0 ? (
-                            <>
-                                {getActionIcon(actions[0].type)}
-                                {getActionLabel(actions[0].type)}
-                                {actions.length > 1 && ` +${actions.length - 1}`}
-                            </>
-                        ) : 'Nó vazio'}
-                    </div>
-                    <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
-                                window.dispatchEvent(event);
-                            }}
-                            className="node-action-btn"
-                            title="Copiar nó"
-                        >
-                            📋
-                        </button>
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
-                                window.dispatchEvent(event);
-                            }}
-                            className="node-action-btn delete"
-                            title="Excluir nó"
-                        >
-                            ❌
-                        </button>
-                    </div>
-                </div>
-                <div className="node-content" style={{ position: 'relative' }}>
-                    {actions.length === 0 ? (
-                        <div style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>Adicione ações neste nó</div>
-                    ) : (
-                        actions.map((action, idx) => {
-                            const actInfo = getActionInfo(action.type, action.data || {});
-                            const actSrc = action.type === 'image' ? buildPreviewSrc((action.data||{}).imageUrl) : action.type === 'video' ? buildPreviewSrc((action.data||{}).videoUrl) : null;
-                            return (
-                                <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: idx > 0 ? '0.3rem' : 0, opacity: 0.9}}>
-                                    <span>{actInfo.icon}</span>
-                                    <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
-                                    <span>{actInfo.content}</span>
-                                    {actSrc && (
-                                        <span style={{ marginLeft: 'auto' }}>
-                                            {action.type === 'image' ? (
-                                                <img src={actSrc} alt="preview" style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} />
-                                            ) : (
-                                                <video src={actSrc} style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} muted autoPlay loop playsInline preload="metadata" />
-                                            )}
-                                        </span>
-                                    )}
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-                
-                {(() => {
-                    // Verificar se há ações que precisam de handles condicionais
-                    const hasWaitForReply = data.waitForReply;
-                    const hasCheckPix = actions.some(a => a.type === 'action_check_pix');
-                    
-                    if (hasWaitForReply) {
-                        return (
-                            <>
-                                <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Com Resp.</div>
-                                <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
-                                <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Sem Resp.</div>
-                                <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
-                            </>
-                        );
-                    }
-                    if (hasCheckPix) {
-                        return (
-                            <>
-                                <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Pago</div>
-                                <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
-                                <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Pendente</div>
-                                <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
-                            </>
-                        );
-                    }
-                    // Handle padrão para nodes normais
-                    return <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />;
-                })()}
-            </>
-        );
-    };
-
     const validateTextForUrls = (text) => {
         if (!text || typeof text !== 'string') return { valid: true, urls: [] };
 
@@ -7759,8 +7631,6 @@ function generatePreviewHTML(data) {
             urls: foundUrls
         };
     };
-
-    const nodeTypes = { trigger: CustomNode, action: CustomNode };
 
     function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
         const API_BASE_URL = App.state.API_BASE_URL;
@@ -8719,6 +8589,178 @@ function FlowEditorPage({
         const [isGroupMenuOpen, setIsGroupMenuOpen] = useState(false);
         const [selectedEdge, setSelectedEdge] = useState(null);
         const [isFading, setIsFading] = useState(false);
+        const [nodeStats, setNodeStats] = useState({}); // Contagens de execução dos nodes
+
+        // Função para formatar números grandes (ex: 1200 -> "1.2k")
+        const formatCount = useCallback((count) => {
+            if (!count || count === 0) return '0';
+            if (count < 1000) return count.toString();
+            if (count < 1000000) return (count / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+            return (count / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+        }, []);
+
+        // CustomNode definido dentro do FlowEditor para ter acesso ao nodeStats
+        const CustomNode = useCallback(({ id, type, data, isConnectable, selected }) => {
+            const API_BASE_URL = App.state.API_BASE_URL;
+            const buildPreviewSrc = (value) => {
+                if (!value) return null;
+                const v = String(value).trim();
+                return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
+            };
+            
+            // Obtém a contagem de execuções deste node
+            const executionCount = nodeStats[id] || 0;
+            
+            // Trigger node mantém comportamento antigo
+            if (type === 'trigger') {
+                return (
+                    <>
+                        <div className={`node-header react-flow__node-trigger`}>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                🚀 Gatilho Inicial
+                            </div>
+                        </div>
+                        <div className="node-content">
+                            Início do fluxo com click_id.
+                        </div>
+                        <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />
+                    </>
+                );
+            }
+            
+            // Nodes normais: mostrar apenas as ações
+            const actions = data.actions || [];
+            const getActionInfo = (actionType, actionData) => {
+                const actionInfoMap = {
+                    message: { icon: '💬', name: 'Mensagem', content: actionData.text ? `"${actionData.text.substring(0, 30)}..."` : 'Configure.' },
+                    image: { icon: '🖼️', name: 'Imagem', content: actionData.imageUrl ? 'Configurado.' : 'Configure.' },
+                    video: { icon: '🎬', name: 'Vídeo', content: actionData.videoUrl ? 'Configurado.' : 'Configure.' },
+                    audio: { icon: '🎵', name: 'Áudio', content: actionData.audioUrl ? 'Configurado.' : 'Configure.' },
+                    delay: { icon: '⏱️', name: 'Atraso', content: `Aguardar ${actionData.delayInSeconds || 1}s.` },
+                    typing_action: { icon: '✍️', name: 'Digitando', content: `${actionData.durationInSeconds || 1}s.` },
+                    action_pix: { icon: '💳', name: 'PIX', content: `R$ ${((actionData.valueInCents || 0) / 100).toFixed(2)}.` },
+                    action_check_pix: { icon: '🔍', name: 'Verificar PIX', content: 'Verificar pagamento.' },
+                    forward_flow: { icon: '↪️', name: 'Encaminhar', content: actionData.targetFlowName || 'Configure.' },
+                    action_create_invite_link: { 
+                        icon: '🔗', 
+                        name: 'Criar Convite', 
+                        content: (() => {
+                            const messagePreview = (actionData.messageText || actionData.text || '').trim();
+                            const buttonPreview = (actionData.buttonText || '').trim();
+                            const messageLabel = messagePreview ? `"${messagePreview.substring(0, 30)}${messagePreview.length > 30 ? '…' : ''}"` : 'Mensagem não definida.';
+                            const buttonLabel = buttonPreview ? `Botão: ${buttonPreview}` : 'Botão sem texto.';
+                            return `${messageLabel} • ${buttonLabel}`;
+                        })()
+                    },
+                    action_remove_user_from_group: { icon: '👤', name: 'Remover Usuário', content: 'Remove e bane o usuário do grupo.' },
+                };
+                return actionInfoMap[actionType] || { icon: '❓', name: actionType, content: 'Configure.' };
+            };
+            
+            const hasConditionalExits = data.waitForReply || actions.some(a => a.type === 'action_check_pix');
+            
+            return (
+                <>
+                    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`} style={{ position: 'relative' }}>
+                        {/* Badge de contagem de execuções */}
+                        <div className="node-execution-badge" title={`Este node foi executado ${executionCount} vez${executionCount !== 1 ? 'es' : ''}`}>
+                            {formatCount(executionCount)}
+                        </div>
+                        <div className="action-badge">
+                            {actions.length > 0 ? (
+                                <>
+                                    {getActionIcon(actions[0].type)}
+                                    {getActionLabel(actions[0].type)}
+                                    {actions.length > 1 && ` +${actions.length - 1}`}
+                                </>
+                            ) : 'Nó vazio'}
+                        </div>
+                        <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                    window.dispatchEvent(event);
+                                }}
+                                className="node-action-btn"
+                                title="Copiar nó"
+                            >
+                                📋
+                            </button>
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
+                                    window.dispatchEvent(event);
+                                }}
+                                className="node-action-btn delete"
+                                title="Excluir nó"
+                            >
+                                ❌
+                            </button>
+                        </div>
+                    </div>
+                    <div className="node-content" style={{ position: 'relative' }}>
+                        {actions.length === 0 ? (
+                            <div style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>Adicione ações neste nó</div>
+                        ) : (
+                            actions.map((action, idx) => {
+                                const actInfo = getActionInfo(action.type, action.data || {});
+                                const actSrc = action.type === 'image' ? buildPreviewSrc((action.data||{}).imageUrl) : action.type === 'video' ? buildPreviewSrc((action.data||{}).videoUrl) : null;
+                                return (
+                                    <div key={idx} style={{fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: idx > 0 ? '0.3rem' : 0, opacity: 0.9}}>
+                                        <span>{actInfo.icon}</span>
+                                        <span style={{fontWeight: '600'}}>{actInfo.name}:</span>
+                                        <span>{actInfo.content}</span>
+                                        {actSrc && (
+                                            <span style={{ marginLeft: 'auto' }}>
+                                                {action.type === 'image' ? (
+                                                    <img src={actSrc} alt="preview" style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} />
+                                                ) : (
+                                                    <video src={actSrc} style={{ width: 40, height: 28, objectFit: 'cover', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)' }} muted autoPlay loop playsInline preload="metadata" />
+                                                )}
+                                            </span>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
+                    
+                    {(() => {
+                        // Verificar se há ações que precisam de handles condicionais
+                        const hasWaitForReply = data.waitForReply;
+                        const hasCheckPix = actions.some(a => a.type === 'action_check_pix');
+                        
+                        if (hasWaitForReply) {
+                            return (
+                                <>
+                                    <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Com Resp.</div>
+                                    <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                                    <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Sem Resp.</div>
+                                    <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                                </>
+                            );
+                        }
+                        if (hasCheckPix) {
+                            return (
+                                <>
+                                    <div className="handle-label" style={{ left: '25%', transform: 'translateX(-50%)' }}>Pago</div>
+                                    <Handle type="source" position={Position.Bottom} id="a" style={{ left: '25%' }} isConnectable={isConnectable} />
+                                    <div className="handle-label" style={{ left: '75%', transform: 'translateX(-50%)' }}>Pendente</div>
+                                    <Handle type="source" position={Position.Bottom} id="b" style={{ left: '75%' }} isConnectable={isConnectable} />
+                                </>
+                            );
+                        }
+                        // Handle padrão para nodes normais
+                        return <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />;
+                    })()}
+                </>
+            );
+        }, [nodeStats, formatCount]);
+
+        const nodeTypes = useMemo(() => ({ trigger: CustomNode, action: CustomNode }), [CustomNode]);
 
         const setNodes = useCallback((updater, options = {}) => {
             setNodesState(updater);
@@ -8906,6 +8948,16 @@ function FlowEditorPage({
                 api.get('/api/flows')
                    .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
                    .catch(console.error);
+            }
+            
+            // Buscar estatísticas de execução dos nodes
+            if (flow?.id) {
+                api.get(`/api/flows/${flow.id}/node-stats`)
+                   .then(res => setNodeStats(res.data || {}))
+                   .catch(err => {
+                       console.error('Erro ao buscar estatísticas dos nodes:', err);
+                       setNodeStats({});
+                   });
             }
         }, [flow, reactFlowInstance, setEdges, setNodes]);
         

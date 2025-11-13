@@ -1850,6 +1850,27 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
     }
 });
 
+app.get('/api/flows/:id/node-stats', authenticateJwt, async (req, res) => {
+    try {
+        const [flow] = await sqlTx`
+            SELECT node_execution_counts 
+            FROM flows 
+            WHERE id = ${req.params.id} AND seller_id = ${req.user.id}
+        `;
+        
+        if (!flow) {
+            return res.status(404).json({ message: 'Fluxo não encontrado.' });
+        }
+        
+        // Retorna o objeto de contagens ou objeto vazio se for NULL
+        const stats = flow.node_execution_counts || {};
+        res.status(200).json(stats);
+    } catch (error) {
+        console.error('[Node Stats] Error:', error);
+        res.status(500).json({ message: 'Erro ao buscar estatísticas dos nodes.' });
+    }
+});
+
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
     try {
         const { isActive } = req.body;
@@ -5098,6 +5119,39 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  * Esta função agora lida apenas com a lógica de NAVEGAÇÃO.
  * Ela chama 'processActions' para EXECUTAR o conteúdo de cada nó.
  */
+// Função helper para incrementar contador de execução de node
+async function incrementNodeExecutionCount(flowId, nodeId) {
+    if (!flowId || !nodeId) return; // Não rastreia se não tiver flow_id ou node_id
+    
+    try {
+        // Busca o valor atual e incrementa
+        const [current] = await sqlTx`
+            SELECT COALESCE(node_execution_counts, '{}'::jsonb) as counts 
+            FROM flows 
+            WHERE id = ${flowId}
+        `;
+        
+        if (!current) return;
+        
+        const currentCount = current.counts[nodeId] || 0;
+        const newCount = parseInt(currentCount) + 1;
+        
+        // Usa jsonb_set com array de texto para o caminho
+        await sqlTx`
+            UPDATE flows 
+            SET node_execution_counts = jsonb_set(
+                COALESCE(node_execution_counts, '{}'::jsonb),
+                ARRAY[${nodeId}],
+                ${newCount}::text::jsonb
+            )
+            WHERE id = ${flowId}
+        `;
+    } catch (error) {
+        logger.warn(`[Flow Engine] Erro ao incrementar contador de execução do node ${nodeId} no flow ${flowId}:`, error.message);
+        // Não interrompe o fluxo se houver erro no rastreamento
+    }
+}
+
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
@@ -5106,6 +5160,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
     // ==========================================================
     let variables = { ...initialVariables };
+    let currentFlowId = null; // Armazena o ID do fluxo atual para rastreamento
 
     const [user] = await sqlTx`
         SELECT first_name, last_name 
@@ -5152,6 +5207,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             return;
         }
 
+        currentFlowId = flow.id; // Armazena o ID do fluxo para rastreamento
         const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
         nodes = flowData.nodes || [];
         edges = flowData.edges || [];
@@ -5223,6 +5279,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         logger.debug(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+
+        // Incrementa contador de execução do node (apenas se tiver flow_id)
+        if (currentFlowId && currentNode.id !== 'start') {
+            await incrementNodeExecutionCount(currentFlowId, currentNode.id);
+        }
 
         // Salva o estado atual (não está esperando input... ainda)
         await sqlTx`
