@@ -1120,6 +1120,16 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // PASSO 3: O NOVO LOOP DE NAVEGAÇÃO
     // ==========================================================
     let safetyLock = 0;
+    let currentFlowId = null; // Armazena o ID do fluxo atual para rastreamento
+    
+    // Identifica o flow_id se foi buscado do banco
+    if (!flowNodes && !flowEdges) {
+        const [flow] = await sqlWithRetry(sqlTx`SELECT id FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`);
+        if (flow) {
+            currentFlowId = flow.id;
+        }
+    }
+    
     while (currentNodeId && safetyLock < 20) {
         safetyLock++;
         let currentNode = nodes.find(node => node.id === currentNodeId);
@@ -1130,6 +1140,34 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+
+        // Incrementa contador de execução do node (apenas se tiver flow_id)
+        if (currentFlowId && currentNode.id !== 'start') {
+            try {
+                const [current] = await sqlWithRetry(sqlTx`
+                    SELECT COALESCE(node_execution_counts, '{}'::jsonb) as counts 
+                    FROM flows 
+                    WHERE id = ${currentFlowId}
+                `);
+                
+                if (current) {
+                    const currentCount = current.counts[currentNode.id] || 0;
+                    const newCount = parseInt(currentCount) + 1;
+                    
+                    await sqlWithRetry(sqlTx`
+                        UPDATE flows 
+                        SET node_execution_counts = jsonb_set(
+                            COALESCE(node_execution_counts, '{}'::jsonb),
+                            ARRAY[${currentNode.id}],
+                            ${newCount}::text::jsonb
+                        )
+                        WHERE id = ${currentFlowId}
+                    `);
+                }
+            } catch (error) {
+                console.warn(`[Flow Engine] Erro ao incrementar contador de execução do node ${currentNode.id} no flow ${currentFlowId}:`, error.message);
+            }
+        }
 
         await sqlWithRetry(sqlTx`
             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
