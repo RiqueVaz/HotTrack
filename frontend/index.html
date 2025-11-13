@@ -2574,8 +2574,9 @@
                                     <div><h3 class="text-lg font-medium text-sky-400 inline-block">Pixup</h3><span id="status-indicator-pixup"></span></div>
                                     <button type="button" data-provider="pixup" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
                                 </div>
-                                <label class="block mb-2 text-sm text-gray-400">API Token</label><input name="pixup_api_token" type="password" value="${settings.pixup_api_token || ''}" class="form-input w-full p-2">
-                                <p class="text-xs text-gray-500 mt-2">Use o token Bearer fornecido pela Pixup para gerar cobranças PIX.</p>
+                                <label class="block mb-2 text-sm text-gray-400">Client ID</label><input name="pixup_client_id" type="text" value="${settings.pixup_client_id || ''}" class="form-input w-full p-2">
+                                <label class="block mb-2 mt-3 text-sm text-gray-400">Client Secret</label><input name="pixup_client_secret" type="password" value="${settings.pixup_client_secret || ''}" class="form-input w-full p-2">
+                                <p class="text-xs text-gray-500 mt-2">Configure suas credenciais OAuth2 da Pixup. Acesse o menu API → Credenciais no painel da Pixup para obter suas credenciais.</p>
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">

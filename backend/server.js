@@ -1820,11 +1820,11 @@ app.put('/api/admin/sellers/:id/password', authenticateAdmin, async (req, res) =
 });
 app.put('/api/admin/sellers/:id/credentials', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key, pixup_api_token } = req.body;
+    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret } = req.body;
     try {
         await sqlTx`
             UPDATE sellers 
-            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}, pixup_api_token = ${pixup_api_token}
+            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}, pixup_client_id = ${pixup_client_id || null}, pixup_client_secret = ${pixup_client_secret || null}
             WHERE id = ${id};`;
         res.status(200).json({ message: 'Credenciais alteradas com sucesso.' });
     } catch (error) {
@@ -2802,7 +2802,7 @@ app.post('/api/auth/logout', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_api_token, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sqlTx`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sqlTx`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -3869,7 +3869,7 @@ app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     const { 
         pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key,
-        wiinpay_api_key, pixup_api_token,
+        wiinpay_api_key, pixup_client_id, pixup_client_secret,
         syncpay_client_id, syncpay_client_secret,
         brpix_secret_key, brpix_company_id,
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
@@ -3882,7 +3882,8 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
             oasyfy_public_key = ${oasyfy_public_key || null}, 
             oasyfy_secret_key = ${oasyfy_secret_key || null},
             wiinpay_api_key = ${wiinpay_api_key || null},
-            pixup_api_token = ${pixup_api_token || null},
+            pixup_client_id = ${pixup_client_id || null},
+            pixup_client_secret = ${pixup_client_secret || null},
             syncpay_client_id = ${syncpay_client_id || null},
             syncpay_client_secret = ${syncpay_client_secret || null},
             brpix_secret_key = ${brpix_secret_key || null},
@@ -6034,10 +6035,16 @@ app.post('/api/webhook/pixup', async (req, res) => {
                 console.log(`[Webhook Pixup] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
                 
                 // creditParty contém os dados do pagador (quem pagou)
+                // Documentação: creditParty { name, email, taxId }
                 const payerName = creditParty?.name || '';
                 const payerDocument = creditParty?.taxId || '';
+                const payerEmail = creditParty?.email || '';
                 
-                await handleSuccessfulPayment(tx.id, { name: payerName, document: payerDocument });
+                await handleSuccessfulPayment(tx.id, { 
+                    name: payerName, 
+                    document: payerDocument,
+                    email: payerEmail 
+                });
                 console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
             } catch (error) {
                 console.error('[Webhook Pixup] Erro ao processar pagamento:', error);

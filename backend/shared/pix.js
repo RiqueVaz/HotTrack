@@ -7,6 +7,7 @@ function createPixService({
   axios = axiosDefault,
   uuidv4 = uuidv4Default,
   syncPayTokenCache = new Map(),
+  pixupTokenCache = new Map(),
   adminApiKey,
   synPayBaseUrl = 'https://api.syncpayments.com.br',
   pushinpaySplitAccountId = null,
@@ -57,6 +58,44 @@ function createPixService({
     const expiresAt = Date.now() + (expires_in * 1000);
     syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
     return access_token;
+  }
+
+  async function getPixupAuthToken(seller) {
+    if (!pixupTokenCache) {
+      throw new Error('createPixService: pixupTokenCache não foi fornecido.');
+    }
+
+    if (!seller.pixup_client_id || !seller.pixup_client_secret) {
+      throw new Error('Credenciais da Pixup não configuradas para este vendedor. Configure pixup_client_id e pixup_client_secret.');
+    }
+
+    const cacheKey = seller.id;
+    const cachedToken = pixupTokenCache.get(cacheKey);
+    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
+      return cachedToken.accessToken;
+    }
+
+    // OAuth2 com Basic Auth conforme documentação Pixup
+    const credentials = `${seller.pixup_client_id}:${seller.pixup_client_secret}`;
+    const base64Credentials = Buffer.from(credentials).toString('base64');
+
+    try {
+      const response = await axios.post('https://api.pixupbr.com/v2/oauth/token', {}, {
+        headers: {
+          'Authorization': `Basic ${base64Credentials}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const { access_token, expires_in } = response.data;
+      const expiresAt = Date.now() + (expires_in * 1000);
+      pixupTokenCache.set(cacheKey, { accessToken: access_token, expiresAt });
+      return access_token;
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || error.response?.data?.error || error.message;
+      console.error(`[PIXUP AUTH ERROR] Seller ID: ${seller.id} - Erro ao obter token:`, errorMessage);
+      throw new Error(`Erro ao obter token da Pixup: ${errorMessage || 'Erro desconhecido'}`);
+    }
   }
 
   async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
@@ -429,10 +468,9 @@ function createPixService({
     }
 
     if (provider === 'pixup') {
-      const pixupApiToken = seller.pixup_api_token || seller.pixup_token;
-      if (!pixupApiToken) {
-        throw new Error('Token da Pixup não configurado para este vendedor.');
-      }
+      // Obtém o token OAuth2 ou usa o token direto como fallback
+      const pixupToken = await getPixupAuthToken(seller);
+      
       const amount = parseFloat((value_cents / 100).toFixed(2));
       const externalId = uuidv4();
 
@@ -449,6 +487,7 @@ function createPixService({
       };
 
       // Implementar split se houver comissão e username configurado
+      // Documentação Pixup: mínimo 0.1%, máximo 95%, percentageSplit deve ser string
       if (apiKey !== adminApiKey && commission_rate > 0 && pixupSplitUsername) {
         const commissionPercentage = parseFloat((commission_rate * 100).toFixed(1));
         // Validar: mínimo 0.1%, máximo 95%
@@ -456,18 +495,51 @@ function createPixService({
           payload.split = [
             {
               username: pixupSplitUsername,
-              percentageSplit: commissionPercentage.toFixed(1),
+              percentageSplit: commissionPercentage.toFixed(1), // String conforme documentação
             },
           ];
         }
       }
 
-      const response = await axios.post('https://api.pixupbr.com/v2/pix/qrcode', payload, {
-        headers: {
-          Authorization: `Bearer ${pixupApiToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
+      let response;
+      try {
+        response = await axios.post('https://api.pixupbr.com/v2/pix/qrcode', payload, {
+          headers: {
+            Authorization: `Bearer ${pixupToken}`,
+            'Content-Type': 'application/json',
+          },
+        });
+      } catch (axiosError) {
+        // Extrai a mensagem de erro corretamente
+        let errorMessage = axiosError.message;
+        const errorData = axiosError.response?.data;
+        
+        if (errorData) {
+          if (typeof errorData === 'string') {
+            try {
+              const parsed = JSON.parse(errorData);
+              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
+            } catch {
+              errorMessage = errorData;
+            }
+          } else if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          } else if (errorData.message) {
+            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
+          } else if (errorData.error) {
+            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+          }
+        }
+        
+        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: pixup - Erro HTTP:`, {
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          message: errorMessage,
+          data: errorDetails,
+        });
+        throw new Error(`Erro ao comunicar com Pixup: ${errorMessage || 'Erro desconhecido'}`);
+      }
       pixData = response.data;
       acquirer = 'Pixup';
 
