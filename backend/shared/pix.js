@@ -174,7 +174,7 @@ function createPixService({
         };
       }
 
-      const response = await axios.post('https://api.wiinpay.com.br/payment/create', payload, {
+      const response = await axios.post('https://api-v2.wiinpay.com.br/payment/create', payload, {
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       });
       pixData = response.data;
