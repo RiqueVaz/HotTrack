@@ -154,7 +154,7 @@ function createPixService({
         throw new Error('Credenciais da WiinPay não configuradas para este vendedor.');
       }
       const amount = parseFloat((value_cents / 100).toFixed(2));
-      const commissionValue = parseFloat((amount * commission_rate).toFixed(2));
+      let commissionValue = parseFloat((amount * commission_rate).toFixed(2));
 
       const payload = {
         api_key: wiinpayApiKey,
@@ -167,6 +167,12 @@ function createPixService({
       };
 
       if (apiKey !== adminApiKey && commissionValue > 0 && wiinpaySplitUserId) {
+        // WiinPay requer que o split seja maior que R$ 0,10
+        // Se o valor calculado for exatamente 0.10 ou menor, ajustamos para 0.11
+        if (commissionValue <= 0.10) {
+          commissionValue = 0.11;
+        }
+        
         payload.split = {
           value: commissionValue,
           percentage: parseFloat((commission_rate * 100).toFixed(4)), // percentage como inteiro (1 = 1%)
@@ -180,8 +186,29 @@ function createPixService({
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         });
       } catch (axiosError) {
-        const errorMessage = axiosError.response?.data?.message || axiosError.response?.data?.error || axiosError.message;
-        const errorDetails = axiosError.response?.data ? JSON.stringify(axiosError.response.data) : 'Sem detalhes';
+        // Extrai a mensagem de erro corretamente, lidando com objetos aninhados
+        let errorMessage = axiosError.message;
+        const errorData = axiosError.response?.data;
+        
+        if (errorData) {
+          // Tenta diferentes formatos de resposta de erro
+          if (typeof errorData === 'string') {
+            try {
+              const parsed = JSON.parse(errorData);
+              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
+            } catch {
+              errorMessage = errorData;
+            }
+          } else if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          } else if (errorData.message) {
+            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
+          } else if (errorData.error) {
+            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+          }
+        }
+        
+        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
         console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Erro HTTP:`, {
           status: axiosError.response?.status,
           statusText: axiosError.response?.statusText,
@@ -192,10 +219,31 @@ function createPixService({
       }
 
       if (response.status < 200 || response.status >= 300) {
-        const errorMessage = response.data?.message || response.data?.error || `Status HTTP ${response.status}`;
+        // Extrai a mensagem de erro corretamente
+        let errorMessage = `Status HTTP ${response.status}`;
+        const errorData = response.data;
+        
+        if (errorData) {
+          if (typeof errorData === 'string') {
+            try {
+              const parsed = JSON.parse(errorData);
+              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
+            } catch {
+              errorMessage = errorData;
+            }
+          } else if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          } else if (errorData.message) {
+            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
+          } else if (errorData.error) {
+            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+          }
+        }
+        
         console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Status HTTP inválido:`, {
           status: response.status,
           data: JSON.stringify(response.data),
+          message: errorMessage,
         });
         throw new Error(`WiinPay retornou status inválido: ${errorMessage}`);
       }
