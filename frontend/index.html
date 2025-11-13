@@ -2508,7 +2508,8 @@
                     { value: 'oasyfy', text: 'Oasy.fy' },
                     { value: 'syncpay', text: 'SyncPay' },
                     { value: 'brpix', text: 'BR PIX' },
-                    { value: 'wiinpay', text: 'WiinPay' }
+                    { value: 'wiinpay', text: 'WiinPay' },
+                    { value: 'pixup', text: 'Pixup' }
                 ];
                 const createSelect = (name, selectedValue) => {
                     const options = providers.map(p => `<option value="${p.value}" ${p.value === selectedValue ? 'selected' : ''}>${p.text}</option>`).join('');
@@ -2567,6 +2568,14 @@
                                 </div>
                                 <label class="block mb-2 text-sm text-gray-400">API Key</label><input name="wiinpay_api_key" type="password" value="${settings.wiinpay_api_key || ''}" class="form-input w-full p-2">
                                 <p class="text-xs text-gray-500 mt-2">Use a chave fornecida pela WiinPay para gerar cobranças PIX.</p>
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">Pixup</h3><span id="status-indicator-pixup"></span></div>
+                                    <button type="button" data-provider="pixup" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">API Token</label><input name="pixup_api_token" type="password" value="${settings.pixup_api_token || ''}" class="form-input w-full p-2">
+                                <p class="text-xs text-gray-500 mt-2">Use o token Bearer fornecido pela Pixup para gerar cobranças PIX.</p>
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
