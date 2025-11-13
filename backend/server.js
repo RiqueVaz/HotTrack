@@ -1470,7 +1470,7 @@ async function getWiinpayPaymentStatus(paymentId, apiKey) {
     if (!apiKey) {
         throw new Error('Credenciais da WiinPay não configuradas.');
     }
-    const response = await axios.get(`https://api.wiinpay.com.br/payment/list/${paymentId}`, {
+    const response = await axios.get(`https://api-v2.wiinpay.com.br/payment/list/${paymentId}`, {
         headers: {
             Accept: 'application/json',
             Authorization: `Bearer ${apiKey}`
