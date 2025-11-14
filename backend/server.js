@@ -7255,8 +7255,8 @@ app.post('/api/shared-flows/:id/import', authenticateJwt, async (req, res) => {
 
         const newFlowName = `${sharedFlow.name} (Importado)`;
         const [newFlow] = await sqlWithRetry(
-            `INSERT INTO flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *`,
-            [sellerId, botId, newFlowName, sharedFlow.nodes]
+            `INSERT INTO flows (seller_id, bot_id, name, nodes, share_allow_reshare) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [sellerId, botId, newFlowName, sharedFlow.nodes, false]
         );
         
         await sqlWithRetry('UPDATE shared_flows SET import_count = import_count + 1 WHERE id = $1', [id]);
@@ -7277,9 +7277,9 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
     console.log(`[Generate Share Link] Params: price=${priceInCents}, reshare=${allowReshare}, flows=${bundleLinkedFlows}, media=${bundleMedia}`);
 
     try {
-        // Buscar informações do fluxo antes de gerar link
+        // Verificar se o fluxo existe e pertence ao vendedor
         const [flow] = await sqlWithRetry(
-            'SELECT share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
+            'SELECT id FROM flows WHERE id = $1 AND seller_id = $2',
             [id, sellerId]
         );
         
@@ -7288,14 +7288,8 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
             return res.status(404).json({ message: 'Fluxo não encontrado.' });
         }
         
-        // Verificar se o fluxo permite compartilhamento baseado no campo share_allow_reshare do banco
-        if (flow.share_allow_reshare === false) {
-            console.log(`[Generate Share Link] Bloqueado: fluxo com share_allow_reshare = false`);
-            return res.status(403).json({ 
-                message: 'Este fluxo não está habilitado para compartilhamento.' 
-            });
-        }
-        
+        // O dono sempre pode gerar link de compartilhamento
+        // O valor de share_allow_reshare será definido pelo parâmetro allowReshare que vem do frontend
         const shareId = uuidv4();
         console.log(`[Generate Share Link] Generated UUID: ${shareId}`);
         
@@ -7611,7 +7605,7 @@ app.post('/api/flows/import-from-link', authenticateJwt, async (req, res) => {
         // Buscar fluxo original com configurações de compartilhamento
         const [originalFlow] = await sqlWithRetry(`
             SELECT name, nodes, share_price_cents, seller_id,
-                   share_bundle_linked_flows, share_bundle_media
+                   share_bundle_linked_flows, share_bundle_media, share_allow_reshare
             FROM flows WHERE shareable_link_id = $1
         `, [shareableLinkId]);
         
