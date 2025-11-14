@@ -109,7 +109,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType, variables = {}) {
-    const { message_id, chat, from, text, photo, video, voice } = message;
+    const { message_id, chat, from, text, photo, video, voice, reply_markup } = message;
     let mediaType = null;
     let mediaFileId = null;
     let messageText = text;
@@ -129,18 +129,22 @@ async function saveMessageToDb(sellerId, botId, message, senderType, variables =
     
     const fromUser = from || chat;
 
+    // Extrai reply_markup se existir
+    const replyMarkupJson = reply_markup ? JSON.stringify(reply_markup) : null;
+
     // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
     await sqlWithRetry(`
-        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (chat_id, message_id) DO NOTHING;
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id, reply_markup)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (chat_id, message_id) DO UPDATE SET reply_markup = EXCLUDED.reply_markup;
     `, [
         sellerId, botId, chat.id, message_id, fromUser.id, 
         senderType === 'user' ? fromUser.first_name : null, 
         senderType === 'user' ? fromUser.last_name : null, 
         senderType === 'user' ? fromUser.username : null, 
         messageText, senderType, mediaType, mediaFileId, 
-        variables.click_id || null
+        variables.click_id || null,
+        replyMarkupJson
     ]);
 }
 

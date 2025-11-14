@@ -171,7 +171,7 @@ async function handleMediaNode(node, botToken, chatId, caption) {
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
-    const { message_id, chat, from, text, photo, video, voice } = message;
+    const { message_id, chat, from, text, photo, video, voice, reply_markup } = message;
     let mediaType = null;
     let mediaFileId = null;
     let messageText = text;
@@ -208,11 +208,14 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
     const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
     const fromUser = from || chat;
 
+    // Extrai reply_markup se existir
+    const replyMarkupJson = reply_markup ? JSON.stringify(reply_markup) : null;
+
     await sqlWithRetry(`
-        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (chat_id, message_id) DO NOTHING;
-    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId]);
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id, reply_markup)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (chat_id, message_id) DO UPDATE SET reply_markup = EXCLUDED.reply_markup;
+    `, [sellerId, botId, chat.id, message_id, fromUser.id, fromUser.first_name || botInfo.first_name, fromUser.last_name || botInfo.last_name, fromUser.username || null, messageText, senderType, mediaType, mediaFileId, finalClickId, replyMarkupJson]);
 
     if (newClickId) {
         await sqlWithRetry(
