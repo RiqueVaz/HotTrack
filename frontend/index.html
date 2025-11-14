@@ -1162,6 +1162,10 @@
         .hotbot-scope .message-attendant { background-color: #0c4a6e; align-self: flex-end; border-top-right-radius: 0; white-space: pre-wrap; word-break: break-all;}
         .hotbot-scope .message-attendant strong { color: var(--accent-primary); }
         .hotbot-scope .chat-media { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; cursor: pointer; }
+        .hotbot-scope .inline-buttons-container { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+        .hotbot-scope .inline-buttons-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .hotbot-scope .inline-button { display: inline-block; padding: 0.5rem 1rem; background-color: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 0.5rem; font-size: 0.85rem; color: var(--text-primary); }
+        .hotbot-scope .inline-button-url { font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7; }
         
         .hotbot-scope .chat-input-area { padding: 1rem; border-top: 1px solid var(--border-color); }
         .hotbot-scope .chat-input-form { display: flex; gap: 0.75rem; }
@@ -5876,24 +5880,16 @@ function generatePreviewHTML(data) {
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
                                 {(() => {
-                                    const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                    const cannotShare = isImported && flow.share_allow_reshare === false;
-                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Importado sem permissão de compartilhamento</p>;
+                                    const cannotShare = flow.share_allow_reshare === false;
+                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Compartilhamento não habilitado para este fluxo</p>;
                                 })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
                                     <button 
                                         className="btn btn-secondary btn-sm" 
                                         onClick={() => handleOpenShareModal(flow)}
-                                        disabled={(() => {
-                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                            return isImported && flow.share_allow_reshare === false;
-                                        })()}
-                                        title={(() => {
-                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                            const cannotShare = isImported && flow.share_allow_reshare === false;
-                                            return cannotShare ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo';
-                                        })()}
+                                        disabled={flow.share_allow_reshare === false}
+                                        title={flow.share_allow_reshare === false ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo'}
                                     >
                                         Compartilhar
                                     </button>
@@ -6944,17 +6940,59 @@ function generatePreviewHTML(data) {
         };
 
         // ******** CORREÇÃO DE SEGURANÇA (XSS) APLICADA AQUI ********
+        const renderMessageButtons = (msg) => {
+            if (!msg.reply_markup) return null;
+            
+            let replyMarkup;
+            try {
+                replyMarkup = typeof msg.reply_markup === 'string' ? JSON.parse(msg.reply_markup) : msg.reply_markup;
+            } catch (e) {
+                console.error('Erro ao parsear reply_markup:', e);
+                return null;
+            }
+            
+            if (!replyMarkup.inline_keyboard || !Array.isArray(replyMarkup.inline_keyboard)) return null;
+            
+            return (
+                <div className="inline-buttons-container">
+                    {replyMarkup.inline_keyboard.map((row, rowIndex) => (
+                        <div key={rowIndex} className="inline-buttons-row">
+                            {row.map((button, btnIndex) => (
+                                <span key={btnIndex} className="inline-button">
+                                    {button.text}
+                                    {button.url && <span className="inline-button-url"> ({button.url})</span>}
+                                </span>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+        
         const renderMessageContent = (msg) => {
             const text = msg.message_text || '';
-            if (msg.media_type === 'photo') { return <img src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />; }
-            if (msg.media_type === 'video') { return <video src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />; }
-            if (msg.media_type === 'voice') { return <audio src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />; }
+            const content = [];
+            
+            if (msg.media_type === 'photo') {
+                content.push(<img key="photo" src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" alt="Foto" onClick={() => window.open(`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`)} />);
+            } else if (msg.media_type === 'video') {
+                content.push(<video key="video" src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-media" controls />);
+            } else if (msg.media_type === 'voice') {
+                content.push(<audio key="voice" src={`${API_BASE_URL}/api/media/preview/${msg.bot_id}/${msg.media_file_id}`} className="chat-audio" controls />);
+            }
             
             // SANITIZAÇÃO: Limpa o HTML de qualquer script malicioso antes de renderizar.
             // A biblioteca DOMPurify foi adicionada no <head> do HTML.
             const sanitizedHtml = DOMPurify.sanitize(text.replace(/\n/g, '<br />'));
+            content.push(<div key="text" dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />);
             
-            return <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />;
+            // Adiciona botões inline se existirem
+            const buttons = renderMessageButtons(msg);
+            if (buttons) {
+                content.push(buttons);
+            }
+            
+            return <>{content}</>;
         };
         
         const botFlows = allFlows.filter(f => f.bot_id == selectedBotId);

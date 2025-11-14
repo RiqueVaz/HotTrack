@@ -996,7 +996,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 }
 
 async function saveMessageToDb(sellerId, botId, message, senderType) {
-    const { message_id, chat, from, text, photo, video, voice } = message;
+    const { message_id, chat, from, text, photo, video, voice, reply_markup } = message;
     let mediaType = null;
     let mediaFileId = null;
     let messageText = text;
@@ -1033,6 +1033,9 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
     const botInfo = senderType === 'bot' ? { first_name: 'Bot', last_name: '(Automação)' } : {};
     const fromUser = from || chat || {};
 
+    // Extrai reply_markup se existir
+    const replyMarkupJson = reply_markup ? JSON.stringify(reply_markup) : null;
+
     const safeValues = [
         sellerId,
         botId,
@@ -1046,13 +1049,14 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
         senderType ?? null,
         mediaType ?? null,
         mediaFileId ?? null,
-        finalClickId ?? null
+        finalClickId ?? null,
+        replyMarkupJson
     ];
 
     await sqlWithRetry(`
-        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (chat_id, message_id) DO NOTHING;
+        INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, media_type, media_file_id, click_id, reply_markup)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (chat_id, message_id) DO UPDATE SET reply_markup = EXCLUDED.reply_markup;
     `, safeValues);
 
     if (newClickId) {
@@ -7275,7 +7279,7 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
     try {
         // Buscar informações do fluxo antes de gerar link
         const [flow] = await sqlWithRetry(
-            'SELECT name, share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
+            'SELECT share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
             [id, sellerId]
         );
         
@@ -7284,12 +7288,11 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
             return res.status(404).json({ message: 'Fluxo não encontrado.' });
         }
         
-        // Verificar se é um fluxo importado que não permite reshare
-        const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-        if (isImported && flow.share_allow_reshare === false) {
-            console.log(`[Generate Share Link] Bloqueado: fluxo importado sem permissão de reshare`);
+        // Verificar se o fluxo permite compartilhamento baseado no campo share_allow_reshare do banco
+        if (flow.share_allow_reshare === false) {
+            console.log(`[Generate Share Link] Bloqueado: fluxo com share_allow_reshare = false`);
             return res.status(403).json({ 
-                message: 'Este fluxo foi importado sem permissão para compartilhamento. Você não pode gerar um link para ele.' 
+                message: 'Este fluxo não está habilitado para compartilhamento.' 
             });
         }
         
