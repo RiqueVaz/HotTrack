@@ -228,7 +228,10 @@ app.post(
 
     } catch (error) {
       console.error("Erro crítico no handler do worker:", error);
-      res.status(500).send("Internal Server Error");
+      // Verificar se resposta já foi enviada antes de tentar enviar
+      if (!res.headersSent) {
+        res.status(500).send("Internal Server Error");
+      }
     }
   }
 );
@@ -260,7 +263,10 @@ app.post(
     
       } catch (error) {
        console.error("Erro crítico no handler do worker de disparo:", error);
-       res.status(500).send("Internal Server Error");
+       // Verificar se resposta já foi enviada antes de tentar enviar
+       if (!res.headersSent) {
+         res.status(500).send("Internal Server Error");
+       }
       }
      }
     );
