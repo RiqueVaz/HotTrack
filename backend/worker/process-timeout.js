@@ -1330,22 +1330,46 @@ async function handler(req, res) {
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
         // o 'processFlow' saberá que deve encerrar o fluxo.
         if (target_node_id) {
-            await processFlow(
-                chat_id, 
-                bot_id, 
-                botToken, 
-                sellerId, 
-                target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
-                variables
-            );
-            return res.status(200).json({ message: 'Timeout processed successfully.' });
+            try {
+                await processFlow(
+                    chat_id, 
+                    bot_id, 
+                    botToken, 
+                    sellerId, 
+                    target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
+                    variables
+                );
+                // Verificar se resposta já foi enviada antes de enviar
+                if (!res.headersSent) {
+                    return res.status(200).json({ message: 'Timeout processed successfully.' });
+                }
+                return;
+            } catch (flowError) {
+                // Erro durante processFlow - logar mas não quebrar o handler
+                console.error(`[WORKER] Erro durante processFlow para timeout:`, flowError.message);
+                // Verificar se resposta já foi enviada antes de enviar
+                if (!res.headersSent) {
+                    return res.status(200).json({ message: 'Timeout processed with errors.' });
+                }
+                return;
+            }
         } else {
             console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
             await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
-            return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
+            // Verificar se resposta já foi enviada antes de enviar
+            if (!res.headersSent) {
+                return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
+            }
+            return;
         }
 
     } catch (error) {
+        // Verificar se resposta já foi enviada antes de tentar enviar qualquer resposta
+        if (res.headersSent) {
+            console.error('[WORKER] Erro após resposta já enviada:', error.message);
+            return;
+        }
+        
         // Tratar requisições abortadas silenciosamente
         if (error.message?.includes('request aborted') || 
             error.message?.includes('aborted') ||

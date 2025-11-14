@@ -7403,10 +7403,27 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         }
         formData.append(fieldName, buffer, { filename: fileName });
-        const response = await sendTelegramRequest(storageBotToken, telegramMethod, formData, { headers: formData.getHeaders() });
+        
+        // Adicionar timeout maior para uploads grandes (120 segundos)
+        const response = await sendTelegramRequest(
+            storageBotToken, 
+            telegramMethod, 
+            formData, 
+            { 
+                headers: formData.getHeaders(),
+                timeout: 120000 // 120 segundos para uploads grandes
+            }
+        );
+        
         if (!response?.ok || !response.result) {
-            throw new Error('Resposta inválida do Telegram ao enviar mídia.');
+            const errorMsg = response?.description || 'Resposta inválida do Telegram ao enviar mídia.';
+            console.error('[Media Upload] Resposta inválida:', errorMsg);
+            if (!res.headersSent) {
+                return res.status(500).json({ message: `Erro ao enviar mídia: ${errorMsg}` });
+            }
+            return;
         }
+        
         const result = response.result; // Mensagem retornada pelo Telegram
 
         let fileId, thumbnailFileId = null;
@@ -7423,18 +7440,42 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
             // audio -> enviamos como voice
             fileId = result.voice?.file_id || null;
         }
+        
         if (!fileId) {
             console.error('[Media Upload] Resposta Telegram inesperada (sem file_id):', JSON.stringify(result).slice(0, 1000));
+            if (!res.headersSent) {
+                return res.status(500).json({ message: 'Não foi possível obter o file_id do Telegram.' });
+            }
+            return;
         }
-        if (!fileId) throw new Error('Não foi possível obter o file_id do Telegram.');
+        
         const [newMedia] = await sqlWithRetry(`
             INSERT INTO media_library (seller_id, file_name, file_id, file_type, thumbnail_file_id)
             VALUES ($1, $2, $3, $4, $5) RETURNING id, file_name, file_id, file_type, thumbnail_file_id;
         `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
-        res.status(201).json(newMedia);
+        
+        if (!res.headersSent) {
+            return res.status(201).json(newMedia);
+        }
     } catch (error) {
         console.error('[Media Upload] Erro:', error);
-        res.status(500).json({ message: 'Erro ao fazer upload da mídia: ' + error.message });
+        
+        // Verificar se resposta já foi enviada
+        if (res.headersSent) {
+            return;
+        }
+        
+        // Mensagens de erro mais específicas
+        let errorMessage = 'Erro ao fazer upload da mídia.';
+        if (error.message?.includes('timeout')) {
+            errorMessage = 'Timeout ao enviar mídia. O arquivo pode ser muito grande ou a conexão está lenta.';
+        } else if (error.message?.includes('ECONNRESET') || error.message?.includes('socket')) {
+            errorMessage = 'Conexão perdida durante o upload. Tente novamente.';
+        } else if (error.message) {
+            errorMessage = `Erro ao fazer upload: ${error.message}`;
+        }
+        
+        res.status(500).json({ message: errorMessage });
     }
 });
 

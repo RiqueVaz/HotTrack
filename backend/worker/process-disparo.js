@@ -552,8 +552,16 @@ async function handler(req, res) {
         }
             // --- FIM DA LÓGICA DE CONCLUSÃO ---
 
-            res.status(200).send('Worker de disparo finalizado.');
+            if (!res.headersSent) {
+                res.status(200).send('Worker de disparo finalizado.');
+            }
     } catch (error) {
+        // Verificar se resposta já foi enviada antes de tentar enviar qualquer resposta
+        if (res.headersSent) {
+            logger.error('[WORKER-DISPARO] Erro após resposta já enviada:', error.message);
+            return;
+        }
+        
         // Tratar requisições abortadas silenciosamente
         if (error.message?.includes('request aborted') || 
             error.message?.includes('aborted') ||
@@ -573,7 +581,10 @@ async function handler(req, res) {
         } catch(logFailError) {
             logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
         }
-        res.status(500).send('Erro interno no worker de disparo.');
+        
+        if (!res.headersSent) {
+            res.status(500).send('Erro interno no worker de disparo.');
+        }
     
     }
 }
