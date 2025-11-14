@@ -7503,16 +7503,35 @@ app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
     const { name, description } = req.body;
     const sellerId = req.user.id;
     try {
-        const [flow] = await sqlWithRetry('SELECT * FROM flows WHERE id = $1 AND seller_id = $2', [id, sellerId]);
+        // Buscar fluxo original incluindo flags de compartilhamento
+        const [flow] = await sqlWithRetry(
+            `SELECT nodes, share_bundle_linked_flows, share_bundle_media, share_allow_reshare 
+             FROM flows WHERE id = $1 AND seller_id = $2`, 
+            [id, sellerId]
+        );
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
 
         const [seller] = await sqlWithRetry('SELECT name FROM sellers WHERE id = $1', [sellerId]);
         if (!seller) return res.status(404).json({ message: 'Vendedor não encontrado.' });
         
+        // Inserir em shared_flows incluindo flags de compartilhamento do fluxo original
         await sqlWithRetry(`
-            INSERT INTO shared_flows (name, description, original_flow_id, seller_id, seller_name, nodes)
-            VALUES ($1, $2, $3, $4, $5, $6)`,
-            [name, description, id, sellerId, seller.name, flow.nodes]
+            INSERT INTO shared_flows (
+                name, description, original_flow_id, seller_id, seller_name, nodes,
+                share_bundle_linked_flows, share_bundle_media, share_allow_reshare
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+                name, 
+                description, 
+                id, 
+                sellerId, 
+                seller.name, 
+                flow.nodes,
+                flow.share_bundle_linked_flows || false,
+                flow.share_bundle_media || false,
+                flow.share_allow_reshare || false
+            ]
         );
         await sqlWithRetry('UPDATE flows SET is_shared = TRUE WHERE id = $1', [id]);
         res.status(201).json({ message: 'Fluxo compartilhado com sucesso!' });
@@ -7539,19 +7558,70 @@ app.post('/api/shared-flows/:id/import', authenticateJwt, async (req, res) => {
     try {
         if (!botId) return res.status(400).json({ message: 'É necessário selecionar um bot para importar.' });
         
-        const [sharedFlow] = await sqlWithRetry('SELECT * FROM shared_flows WHERE id = $1', [id]);
+        // Buscar shared_flow incluindo flags de compartilhamento e seller_id original
+        const [sharedFlow] = await sqlWithRetry(
+            `SELECT name, nodes, seller_id, 
+                    share_bundle_linked_flows, share_bundle_media, share_allow_reshare
+             FROM shared_flows WHERE id = $1`, 
+            [id]
+        );
         if (!sharedFlow) return res.status(404).json({ message: 'Fluxo compartilhado não encontrado.' });
+
+        console.log(`[Import Shared Flow] Configurações: bundle_linked_flows=${sharedFlow.share_bundle_linked_flows}, bundle_media=${sharedFlow.share_bundle_media}, allow_reshare=${sharedFlow.share_allow_reshare}`);
+
+        // Deep clone para evitar mutar o original
+        let processedNodes = JSON.parse(JSON.stringify(sharedFlow.nodes));
+        
+        // Verificar se a estrutura tem o array de nós
+        const nodesArray = processedNodes?.nodes || [];
+        console.log(`[Import Shared Flow] Estrutura de nós: ${nodesArray.length} nós encontrados`);
+        
+        // Flags independentes
+        const shouldCopyLinkedFlows = sharedFlow.share_bundle_linked_flows === true;
+        const shouldCopyMedia = sharedFlow.share_bundle_media === true;
+        
+        // Copiar fluxos anexados se configurado
+        if (shouldCopyLinkedFlows) {
+            console.log('[Import Shared Flow] Copiando fluxos anexados...');
+            const flowIdMapping = await copyLinkedFlows(
+                nodesArray,
+                sharedFlow.seller_id, // seller_id original do fluxo compartilhado
+                sellerId,
+                botId,
+                shouldCopyMedia, // Passar flag para limpar mídias dos fluxos anexados se necessário
+                sharedFlow.share_allow_reshare || false // Herdar share_allow_reshare do fluxo compartilhado
+            );
+            processedNodes.nodes = updateNodeReferences(nodesArray, flowIdMapping);
+        } else {
+            console.log('[Import Shared Flow] NÃO copiando fluxos anexados (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanLinkedFlowReferences(nodesArray);
+        }
+        
+        // Copiar mídias se configurado
+        if (shouldCopyMedia) {
+            console.log('[Import Shared Flow] Copiando mídias...');
+            await copyMediaFiles(
+                nodesArray,
+                sharedFlow.seller_id, // seller_id original do fluxo compartilhado
+                sellerId
+            );
+        } else {
+            console.log('[Import Shared Flow] NÃO copiando mídias (flag desabilitada) - removendo referências');
+            processedNodes.nodes = cleanMediaReferences(processedNodes.nodes || nodesArray);
+        }
 
         const newFlowName = `${sharedFlow.name} (Importado)`;
         const [newFlow] = await sqlWithRetry(
             `INSERT INTO flows (seller_id, bot_id, name, nodes, share_allow_reshare) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [sellerId, botId, newFlowName, sharedFlow.nodes, false]
+            [sellerId, botId, newFlowName, processedNodes, sharedFlow.share_allow_reshare || false]
         );
         
         await sqlWithRetry('UPDATE shared_flows SET import_count = import_count + 1 WHERE id = $1', [id]);
         
+        console.log(`[Import Shared Flow] Fluxo importado com sucesso (allow_reshare=${sharedFlow.share_allow_reshare})`);
         res.status(201).json(newFlow);
     } catch (error) {
+        console.error("Erro ao importar fluxo compartilhado:", error);
         res.status(500).json({ message: 'Erro ao importar fluxo: ' + error.message });
     }
 });
