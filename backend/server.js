@@ -1946,11 +1946,9 @@ app.post('/api/flows', authenticateJwt, async (req, res) => {
     if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
     try {
         const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {} }], edges: [] };
-        // Primeiro, desativa todos os fluxos do mesmo bot
-        await sqlWithRetry(`UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2`, [botId, req.user.id]);
-        // Cria o novo fluxo como ativo
+        // Cria o novo fluxo como inativo
         const [newFlow] = await sqlWithRetry(`
-            INSERT INTO flows (seller_id, bot_id, name, nodes, is_active) VALUES ($1, $2, $3, $4, TRUE) RETURNING *;`, [req.user.id, botId, name, JSON.stringify(initialFlow)]);
+            INSERT INTO flows (seller_id, bot_id, name, nodes, is_active) VALUES ($1, $2, $3, $4, FALSE) RETURNING *;`, [req.user.id, botId, name, JSON.stringify(initialFlow)]);
         res.status(201).json(newFlow);
     } catch (error) { res.status(500).json({ message: 'Erro ao criar o fluxo.' }); }
 });
@@ -1975,10 +1973,7 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         const [flow] = await sqlWithRetry('SELECT bot_id FROM flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
         
-        // Ao editar, automaticamente ativa o fluxo (desativa os outros do mesmo bot)
-        await sqlWithRetry('UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
-        
-        const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW(), is_active = TRUE WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
+        const [updated] = await sqlWithRetry('UPDATE flows SET name = $1, nodes = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
         if (updated) res.status(200).json(updated);
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
     } catch (error) { 
