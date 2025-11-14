@@ -8679,7 +8679,7 @@ function FlowEditorPage({
             
             return (
                 <>
-                    <Handle type="target" position={Position.Top} isConnectable={isConnectable} />
+                <Handle type="target" position={Position.Top} isConnectable={isConnectable}  />
                     <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`} style={{ position: 'relative' }}>
                         {/* Badge de contagem de execuções */}
                         <div className="node-execution-badge" title={`Este node foi executado ${executionCount} vez${executionCount !== 1 ? 'es' : ''}`}>
@@ -9214,7 +9214,7 @@ function FlowEditorPage({
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} fitView minZoom={0.1} maxZoom={2.0}>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} connectionMode="loose" connectionRadius={60} fitView minZoom={0.1} maxZoom={2.0}>
                                 <Background />
                                 <Controls />
                 </ReactFlow>
