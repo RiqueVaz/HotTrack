@@ -23,13 +23,23 @@ const resolveSslOption = () => {
 
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
-    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 100,
-    idle_timeout: 30,
-    connect_timeout: 30,
+    // Usar PG_POOL_MAX da env (35) - está ok para 1 réplica com DEFAULT_POOL_SIZE=50
+    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 35,
+    
+    // Timeout maior para dar tempo ao pgbouncer processar quando há fila
+    // Em picos de tráfego, o pgbouncer pode demorar mais para alocar conexões
+    connect_timeout: parsePositiveInt(process.env.PG_CONNECT_TIMEOUT) || 60,
+    
+    // Idle timeout maior para evitar reconexões desnecessárias
+    // O pgbouncer gerencia isso bem, então podemos manter conexões vivas por mais tempo
+    idle_timeout: parsePositiveInt(process.env.PG_IDLE_TIMEOUT) || 120,
+    
     // PgBouncer-friendly: desabilita prepared statements (incompatível com transaction mode)
     prepare: false,
-    // Adicionar configurações para melhorar resiliência
-    max_lifetime: 60 * 30, // 30 minutos - fecha conexões antigas antes do PgBouncer
+    
+    // Max lifetime menor para evitar conexões "zumbis" que podem causar problemas no pgbouncer
+    max_lifetime: parsePositiveInt(process.env.PG_MAX_LIFETIME) || (60 * 10), // 10 minutos
+    
     connection: {
         application_name: 'hottrack_app'
     }
@@ -107,15 +117,20 @@ async function sqlWithRetry(query, ...args) {
                 // Backoff exponencial com jitter para evitar thundering herd
                 const baseDelay = delay * Math.pow(2, attempt);
                 const jitter = Math.random() * 1000;
-                const backoffDelay = Math.min(baseDelay + jitter, 10000); // Máximo de 10 segundos
+                const backoffDelay = Math.min(baseDelay + jitter, 15000); // Máximo de 15 segundos
                 
-                console.warn(`[DB] Tentativa ${attempt + 1}/${retries} falhou (${error.message?.substring(0, 100)}). Tentando novamente em ${Math.round(backoffDelay)}ms...`);
+                // Só logar em tentativas críticas para reduzir spam de logs
+                if (isConnectTimeout || attempt >= retries - 2) {
+                    console.warn(`[DB] Tentativa ${attempt + 1}/${retries} falhou (${error.message?.substring(0, 100)}). Tentando novamente em ${Math.round(backoffDelay)}ms...`);
+                }
+                
                 await new Promise(res => setTimeout(res, backoffDelay));
             } else {
                 // Log detalhado do erro final
                 if (isConnectTimeout) {
                     console.error(`[DB] CONNECT_TIMEOUT após ${retries} tentativas. Pool pode estar esgotado ou servidor sobrecarregado.`);
                     console.error(`[DB] Erro completo:`, error.message);
+                    console.error(`[DB] Config: max=${sqlTx.options.max}, connect_timeout=${sqlTx.options.connect_timeout}s`);
                 }
                 throw error;
             }
