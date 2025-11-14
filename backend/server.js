@@ -7500,13 +7500,12 @@ app.delete('/api/media/:id', authenticateJwt, async (req, res) => {
 // Endpoint 14: Compartilhar fluxo
 app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
     const { id } = req.params;
-    const { name, description } = req.body;
+    const { name, description, allowReshare, bundleLinkedFlows, bundleMedia } = req.body;
     const sellerId = req.user.id;
     try {
-        // Buscar fluxo original incluindo flags de compartilhamento
+        // Buscar apenas nodes do fluxo original (flags vêm do body, definidas pelo usuário)
         const [flow] = await sqlWithRetry(
-            `SELECT nodes, share_bundle_linked_flows, share_bundle_media, share_allow_reshare 
-             FROM flows WHERE id = $1 AND seller_id = $2`, 
+            `SELECT nodes FROM flows WHERE id = $1 AND seller_id = $2`, 
             [id, sellerId]
         );
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
@@ -7514,7 +7513,7 @@ app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
         const [seller] = await sqlWithRetry('SELECT name FROM sellers WHERE id = $1', [sellerId]);
         if (!seller) return res.status(404).json({ message: 'Vendedor não encontrado.' });
         
-        // Inserir em shared_flows incluindo flags de compartilhamento do fluxo original
+        // Inserir em shared_flows usando flags definidas pelo usuário no body (não do fluxo original)
         await sqlWithRetry(`
             INSERT INTO shared_flows (
                 name, description, original_flow_id, seller_id, seller_name, nodes,
@@ -7528,9 +7527,9 @@ app.post('/api/flows/:id/share', authenticateJwt, async (req, res) => {
                 sellerId, 
                 seller.name, 
                 flow.nodes,
-                flow.share_bundle_linked_flows || false,
-                flow.share_bundle_media || false,
-                flow.share_allow_reshare || false
+                !!bundleLinkedFlows,  // Flag definida pelo usuário no momento do compartilhamento
+                !!bundleMedia,        // Flag definida pelo usuário no momento do compartilhamento
+                !!allowReshare        // Flag definida pelo usuário no momento do compartilhamento
             ]
         );
         await sqlWithRetry('UPDATE flows SET is_shared = TRUE WHERE id = $1', [id]);
