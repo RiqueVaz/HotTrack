@@ -2509,7 +2509,8 @@
                     { value: 'syncpay', text: 'SyncPay' },
                     { value: 'brpix', text: 'BR PIX' },
                     { value: 'wiinpay', text: 'WiinPay' },
-                    { value: 'pixup', text: 'Pixup' }
+                    { value: 'pixup', text: 'Pixup' },
+                    { value: 'paradise', text: 'Paradise' }
                 ];
                 const createSelect = (name, selectedValue) => {
                     const options = providers.map(p => `<option value="${p.value}" ${p.value === selectedValue ? 'selected' : ''}>${p.text}</option>`).join('');
@@ -2577,6 +2578,15 @@
                                 <label class="block mb-2 text-sm text-gray-400">Client ID</label><input name="pixup_client_id" type="text" value="${settings.pixup_client_id || ''}" class="form-input w-full p-2">
                                 <label class="block mb-2 mt-3 text-sm text-gray-400">Client Secret</label><input name="pixup_client_secret" type="password" value="${settings.pixup_client_secret || ''}" class="form-input w-full p-2">
                                 <p class="text-xs text-gray-500 mt-2">Configure suas credenciais OAuth2 da Pixup. Acesse o menu API → Credenciais no painel da Pixup para obter suas credenciais.</p>
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">Paradise</h3><span id="status-indicator-paradise"></span></div>
+                                    <button type="button" data-provider="paradise" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">Secret Key <span class="text-red-400">*</span></label><input name="paradise_secret_key" type="password" value="${settings.paradise_secret_key || ''}" class="form-input w-full p-2" required>
+                                <label class="block mb-2 mt-3 text-sm text-gray-400">Product Hash <span class="text-red-400">*</span></label><input name="paradise_product_hash" type="text" value="${settings.paradise_product_hash || ''}" class="form-input w-full p-2" required>
+                                <p class="text-xs text-gray-500 mt-2">Configure sua Chave Secreta da Paradise (sk_...) e o Product Hash (código do produto encontrado nos detalhes do produto no painel). Acesse Configurações e API no portal da Paradise para obter sua chave.</p>
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">

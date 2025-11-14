@@ -16,6 +16,7 @@ function createPixService({
   brpixSplitRecipientId = null,
   wiinpaySplitUserId = null,
   pixupSplitUsername = null,
+  paradiseSplitRecipientId = null,
   hottrackApiUrl = process.env.HOTTRACK_API_URL,
 }) {
   if (!sql) {
@@ -587,6 +588,118 @@ function createPixService({
         qr_code_text: qrCodeText,
         qr_code_base64: null, // Pixup não retorna base64 na resposta padrão
         transaction_id: transactionId,
+        acquirer,
+        provider,
+      };
+    }
+
+    if (provider === 'paradise') {
+      const paradiseSecretKey = seller.paradise_secret_key;
+      if (!paradiseSecretKey) {
+        throw new Error('Chave secreta da Paradise não configurada para este vendedor.');
+      }
+
+      const paradiseProductHash = seller.paradise_product_hash;
+      if (!paradiseProductHash) {
+        throw new Error('Product Hash da Paradise não configurado para este vendedor. Configure o código do produto no painel Paradise.');
+      }
+
+      const amount = parseInt(value_cents, 10); // Paradise usa centavos como integer
+      const reference = uuidv4();
+      const customerPhone = clientPayload.phone?.replace(/\D/g, '') || '11999999999'; // Remove caracteres não numéricos
+      const customerDocument = clientPayload.document?.number?.replace(/\D/g, '') || '21376710773'; // Remove caracteres não numéricos
+
+      const payload = {
+        amount: amount,
+        description: `PIX HotTrack #${reference}`,
+        reference: reference,
+        productHash: paradiseProductHash,
+        customer: {
+          name: clientPayload.name,
+          email: clientPayload.email,
+          document: customerDocument,
+          phone: customerPhone,
+        },
+        postback_url: `https://${preferredHost}/api/webhook/paradise`,
+      };
+
+      // Implementar split seguindo o padrão dos outros gateways
+      // Apenas a comissão do SaaS vai para PARADISE_SPLIT_RECIPIENT_ID (do .env)
+      // O restante fica na conta principal do seller (que está fazendo a transação)
+      if (apiKey !== adminApiKey && commission_rate > 0 && paradiseSplitRecipientId) {
+        const commissionAmount = Math.floor(value_cents * commission_rate);
+        if (commissionAmount > 0) {
+          payload.splits = [
+            {
+              recipientId: paradiseSplitRecipientId,
+              amount: commissionAmount,
+            },
+          ];
+        }
+      }
+
+      let response;
+      try {
+        response = await axios.post('https://multi.paradisepags.com/api/v1/transaction.php', payload, {
+          headers: {
+            'X-API-Key': paradiseSecretKey,
+            'Content-Type': 'application/json',
+          },
+        });
+      } catch (axiosError) {
+        // Extrai a mensagem de erro corretamente
+        let errorMessage = axiosError.message;
+        const errorData = axiosError.response?.data;
+        
+        if (errorData) {
+          if (typeof errorData === 'string') {
+            try {
+              const parsed = JSON.parse(errorData);
+              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
+            } catch {
+              errorMessage = errorData;
+            }
+          } else if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          } else if (errorData.message) {
+            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
+          } else if (errorData.error) {
+            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+          }
+        }
+        
+        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: paradise - Erro HTTP:`, {
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          message: errorMessage,
+          data: errorDetails,
+        });
+        throw new Error(`Erro ao comunicar com Paradise: ${errorMessage || 'Erro desconhecido'}`);
+      }
+
+      pixData = response.data;
+      acquirer = pixData?.acquirer || 'ParadiseBank';
+
+      // Paradise retorna transaction_id (numérico) e id (que é o reference)
+      const transactionId = pixData?.transaction_id || pixData?.id || reference;
+      const qrCodeText = pixData?.qr_code || pixData?.qrcode;
+      const qrCodeBase64 = pixData?.qr_code_base64 || null;
+
+      if (!transactionId || !qrCodeText) {
+        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: paradise - Resposta inesperada:`, {
+          status: response.status,
+          responseData: JSON.stringify(pixData),
+          transactionIdFound: !!transactionId,
+          qrCodeTextFound: !!qrCodeText,
+        });
+        throw new Error('Resposta inesperada da Paradise ao gerar PIX.');
+      }
+
+      return {
+        qr_code_text: qrCodeText,
+        qr_code_base64: qrCodeBase64,
+        transaction_id: String(transactionId), // Converter para string para consistência
         acquirer,
         provider,
       };
