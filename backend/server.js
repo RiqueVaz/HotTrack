@@ -7279,7 +7279,7 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
     try {
         // Buscar informações do fluxo antes de gerar link
         const [flow] = await sqlWithRetry(
-            'SELECT name, share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
+            'SELECT share_allow_reshare FROM flows WHERE id = $1 AND seller_id = $2',
             [id, sellerId]
         );
         
@@ -7288,12 +7288,11 @@ app.post('/api/flows/:id/generate-share-link', authenticateJwt, async (req, res)
             return res.status(404).json({ message: 'Fluxo não encontrado.' });
         }
         
-        // Verificar se é um fluxo importado que não permite reshare
-        const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-        if (isImported && flow.share_allow_reshare === false) {
-            console.log(`[Generate Share Link] Bloqueado: fluxo importado sem permissão de reshare`);
+        // Verificar se o fluxo permite compartilhamento baseado no campo share_allow_reshare do banco
+        if (flow.share_allow_reshare === false) {
+            console.log(`[Generate Share Link] Bloqueado: fluxo com share_allow_reshare = false`);
             return res.status(403).json({ 
-                message: 'Este fluxo foi importado sem permissão para compartilhamento. Você não pode gerar um link para ele.' 
+                message: 'Este fluxo não está habilitado para compartilhamento.' 
             });
         }
         

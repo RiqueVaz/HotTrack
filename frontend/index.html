@@ -5880,24 +5880,16 @@ function generatePreviewHTML(data) {
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
                                 {(() => {
-                                    const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                    const cannotShare = isImported && flow.share_allow_reshare === false;
-                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Importado sem permissão de compartilhamento</p>;
+                                    const cannotShare = flow.share_allow_reshare === false;
+                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Compartilhamento não habilitado para este fluxo</p>;
                                 })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
                                     <button 
                                         className="btn btn-secondary btn-sm" 
                                         onClick={() => handleOpenShareModal(flow)}
-                                        disabled={(() => {
-                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                            return isImported && flow.share_allow_reshare === false;
-                                        })()}
-                                        title={(() => {
-                                            const isImported = flow.name.includes('(Importado)') || flow.name.includes('(Anexado)');
-                                            const cannotShare = isImported && flow.share_allow_reshare === false;
-                                            return cannotShare ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo';
-                                        })()}
+                                        disabled={flow.share_allow_reshare === false}
+                                        title={flow.share_allow_reshare === false ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo'}
                                     >
                                         Compartilhar
                                     </button>
