@@ -337,6 +337,16 @@ const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutos
 const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests por 15 minutos por IP
 
+// Limpar entradas expiradas do rateLimitMap periodicamente (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, data] of rateLimitMap.entries()) {
+        if (now > data.resetTime) {
+            rateLimitMap.delete(ip);
+        }
+    }
+}, 5 * 60 * 1000); // Limpar a cada 5 minutos
+
 // Middleware de rate limiting
 function rateLimitMiddleware(req, res, next) {
     const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
@@ -372,6 +382,16 @@ function rateLimitMiddleware(req, res, next) {
 const webhookRateLimit = new Map();
 const WEBHOOK_RATE_LIMIT_WINDOW = 60 * 1000; // 1 minuto
 const WEBHOOK_RATE_LIMIT_MAX = 100; // 100 requisições por minuto por bot
+
+// Limpar entradas expiradas do webhookRateLimit periodicamente (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of webhookRateLimit.entries()) {
+        if (now > data.resetTime) {
+            webhookRateLimit.delete(key);
+        }
+    }
+}, 2 * 60 * 1000); // Limpar a cada 2 minutos
 
 function webhookRateLimitMiddleware(req, res, next) {
     const botId = req.params.botId;
@@ -2262,7 +2282,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
             LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
             LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
             LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
-            ORDER BY bc.last_message_at DESC NULLS LAST;
+            ORDER BY bc.last_message_at DESC NULLS LAST
+            LIMIT 1000;
         `, [req.params.botId, req.user.id]);
         res.status(200).json(users);
     } catch (error) { 
@@ -4460,13 +4481,41 @@ app.get('/api/transactions', authenticateJwt, async (req, res) => {
             queryParams.push(endDate);   // $3 é endDate
         }
 
-        // 3. Adicionar a ordenação
-        queryString += ` ORDER BY pt.created_at DESC;`;
+        // 3. Adicionar paginação (obrigatória para evitar sobrecarga)
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 100, 1000); // Máximo 1000 por página
+        const offset = (page - 1) * limit;
+        
+        queryString += ` ORDER BY pt.created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2};`;
+        queryParams.push(limit, offset);
 
         // 4. Executar a consulta usando a sintaxe compatível com o cliente postgres
         const transactions = await sqlTx.unsafe(queryString, queryParams);
+        
+        // 5. Buscar total para paginação
+        let countQuery = `
+            SELECT COUNT(*) as total
+            FROM pix_transactions pt
+            JOIN clicks c ON pt.click_id_internal = c.id
+            WHERE c.seller_id = $1
+        `;
+        const countParams = [sellerId];
+        if (hasDateFilter) {
+            countQuery += ` AND pt.created_at BETWEEN $2 AND $3`;
+            countParams.push(startDate, endDate);
+        }
+        const [countResult] = await sqlTx.unsafe(countQuery, countParams);
+        const total = parseInt(countResult.total);
 
-        res.status(200).json(transactions);
+        res.status(200).json({
+            transactions,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error("Erro ao buscar transações:", error); // Loga o erro completo no console
         res.status(500).json({ message: 'Erro ao buscar dados das transações.' });
@@ -5945,14 +5994,37 @@ app.get('/api/dispatches', authenticateJwt, async (req, res) => {
 app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
     const { id } = req.params;
     try {
+        // Adicionar paginação para evitar sobrecarga
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 100, 1000); // Máximo 1000 por página
+        const offset = (page - 1) * limit;
+        
         const details = await sqlTx`
             SELECT d.*, u.first_name, u.username
             FROM mass_send_details d
             LEFT JOIN telegram_chats u ON d.chat_id = u.chat_id
             WHERE d.mass_send_id = ${id}
-            ORDER BY d.sent_at;
+            ORDER BY d.sent_at
+            LIMIT ${limit} OFFSET ${offset};
         `;
-        res.status(200).json(details);
+        
+        // Buscar total para paginação
+        const [countResult] = await sqlTx`
+            SELECT COUNT(*) as total
+            FROM mass_send_details
+            WHERE mass_send_id = ${id}
+        `;
+        const total = parseInt(countResult.total);
+        
+        res.status(200).json({
+            details,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (error) {
         console.error("Erro ao buscar detalhes do disparo:", error);
         res.status(500).json({ message: 'Erro ao buscar detalhes.' });
@@ -6011,6 +6083,14 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         if (uniqueContacts.length === 0) {
           return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
         }
+        
+        // Limitar número máximo de contatos para evitar sobrecarga
+        const MAX_CONTACTS_PER_CAMPAIGN = 10000; // Máximo 10k contatos por campanha
+        if (uniqueContacts.length > MAX_CONTACTS_PER_CAMPAIGN) {
+            return res.status(400).json({ 
+                message: `Número máximo de contatos excedido. Máximo permitido: ${MAX_CONTACTS_PER_CAMPAIGN}. Encontrados: ${uniqueContacts.length}` 
+            });
+        }
     
             // --- MUDANÇA PRINCIPAL AQUI ---
             // 2. Calcular o total de trabalhos (Contatos * Passos)
@@ -6048,63 +6128,83 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 let messageCounter = 0;
                 const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
                 const qstashPromises = [];
+                
+                // Processar contatos em chunks para evitar sobrecarga de memória
+                const CONTACTS_CHUNK_SIZE = 500; // Processar 500 contatos por vez
+                const contactChunks = [];
+                for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
+                    contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
+                }
+                
+                console.log(`[DISPARO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks de ${CONTACTS_CHUNK_SIZE}`);
         
-                for (const contact of uniqueContacts) {
-                    const userVariables = {
-                        primeiro_nome: contact.first_name || '',
-                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                    };
-                    
-                    let currentStepDelay = 0; 
-        
-                    for (const step of flowSteps) {
-                        // Usa cache de steps processados ou processa individualmente se não estiver no cache
-                        const stepKey = JSON.stringify(step);
-                        let processedStep;
-                        if (processedStepsCache.has(stepKey)) {
-                            processedStep = processedStepsCache.get(stepKey);
-                        } else {
-                            // Fallback: processa individualmente se não estiver no cache
-                            processedStep = await processStepForQStash(step, sellerId);
-                        }
-                        
-                        const payload = {
-                            history_id: historyId,
-                            chat_id: contact.chat_id,
-                            bot_id: contact.bot_id_source,
-                            step_json: JSON.stringify(processedStep),
-                            variables_json: JSON.stringify(userVariables)
+                for (const contactChunk of contactChunks) {
+                    for (const contact of contactChunk) {
+                        const userVariables = {
+                            primeiro_nome: contact.first_name || '',
+                            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
                         };
-        
-                        const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
-        
-                        qstashPromises.push(
-                            qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                body: payload,
-                                delay: `${totalDelaySeconds}s`, 
-                                retries: 2,
-                                // Limitar concorrência no QStash para evitar sobrecarga
-                                headers: {
-                                    'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
-                                }
-                            })
-                        );
-                       
-                        const delayData = step.data || step; 
-                        if (step.type === 'delay') {
-                            currentStepDelay += (delayData.delayInSeconds || 1);
-                        } else {
-                            currentStepDelay += 1; 
+                        
+                        let currentStepDelay = 0; 
+            
+                        for (const step of flowSteps) {
+                            // Usa cache de steps processados ou processa individualmente se não estiver no cache
+                            const stepKey = JSON.stringify(step);
+                            let processedStep;
+                            if (processedStepsCache.has(stepKey)) {
+                                processedStep = processedStepsCache.get(stepKey);
+                            } else {
+                                // Fallback: processa individualmente se não estiver no cache
+                                processedStep = await processStepForQStash(step, sellerId);
+                            }
+                            
+                            const payload = {
+                                history_id: historyId,
+                                chat_id: contact.chat_id,
+                                bot_id: contact.bot_id_source,
+                                step_json: JSON.stringify(processedStep),
+                                variables_json: JSON.stringify(userVariables)
+                            };
+            
+                            const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
+            
+                            qstashPromises.push(
+                                qstashClient.publishJSON({
+                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                    body: payload,
+                                    delay: `${totalDelaySeconds}s`, 
+                                    retries: 2,
+                                    // Limitar concorrência no QStash para evitar sobrecarga
+                                    headers: {
+                                        'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
+                                    }
+                                })
+                            );
+                           
+                            const delayData = step.data || step; 
+                            if (step.type === 'delay') {
+                                currentStepDelay += (delayData.delayInSeconds || 1);
+                            } else {
+                                currentStepDelay += 1; 
+                            }
                         }
+                        messageCounter++; 
                     }
-                    messageCounter++; 
+                    
+                    // Processar promises deste chunk antes de continuar para o próximo
+                    // Isso evita acumular milhões de promises em memória
+                    if (qstashPromises.length > 0) {
+                        console.log(`[DISPARO] Processando chunk com ${qstashPromises.length} promises...`);
+                        await publishQStashInBatches(qstashPromises, 10, 500);
+                        qstashPromises.length = 0; // Limpar array para liberar memória
+                    }
                 }
         
-                // Processar promises em batches para evitar sobrecarga
-                // Batch reduzido (10) e delay maior (500ms) para evitar sobrecarga do banco
-                await publishQStashInBatches(qstashPromises, 10, 500);
+                // Processar promises restantes (se houver)
+                if (qstashPromises.length > 0) {
+                    await publishQStashInBatches(qstashPromises, 10, 500);
+                }
         
                 // Atualizar o status da campanha para "RUNNING"
                 await sqlWithRetry(
