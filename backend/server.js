@@ -236,6 +236,7 @@ app.post(
 app.post(
      '/api/worker/process-disparo',
      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+     workerDisparoRateLimitMiddleware, // Rate limiting para evitar sobrecarga simultânea
      async (req, res) => {
       try {
        // 1. Verificar a assinatura do QStash
@@ -391,6 +392,64 @@ function webhookRateLimitMiddleware(req, res, next) {
     }
     
     data.count++;
+    next();
+}
+
+// Rate limiting para worker de disparo (evita sobrecarga simultânea)
+const workerDisparoRateLimit = new Map();
+const WORKER_DISPARO_RATE_LIMIT_WINDOW = 10 * 1000; // 10 segundos
+const WORKER_DISPARO_MAX_CONCURRENT = 5; // Máximo 5 workers simultâneos
+
+function workerDisparoRateLimitMiddleware(req, res, next) {
+    const now = Date.now();
+    const key = 'worker_disparo';
+    
+    // Limpar entradas antigas
+    if (workerDisparoRateLimit.has(key)) {
+        const data = workerDisparoRateLimit.get(key);
+        if (now > data.resetTime) {
+            workerDisparoRateLimit.delete(key);
+        }
+    }
+    
+    // Contar requisições ativas
+    if (!workerDisparoRateLimit.has(key)) {
+        workerDisparoRateLimit.set(key, { 
+            active: 1, 
+            resetTime: now + WORKER_DISPARO_RATE_LIMIT_WINDOW 
+        });
+        
+        // Decrementar quando terminar
+        res.on('finish', () => {
+            if (workerDisparoRateLimit.has(key)) {
+                const d = workerDisparoRateLimit.get(key);
+                d.active = Math.max(0, d.active - 1);
+            }
+        });
+        
+        return next();
+    }
+    
+    const data = workerDisparoRateLimit.get(key);
+    
+    if (data.active >= WORKER_DISPARO_MAX_CONCURRENT) {
+        // Retornar 429 para QStash retry mais tarde
+        return res.status(429).json({ 
+            error: 'Too many concurrent workers', 
+            retryAfter: Math.ceil((data.resetTime - now) / 1000) 
+        });
+    }
+    
+    data.active++;
+    
+    // Decrementar quando terminar
+    res.on('finish', () => {
+        if (workerDisparoRateLimit.has(key)) {
+            const d = workerDisparoRateLimit.get(key);
+            d.active = Math.max(0, d.active - 1);
+        }
+    });
+    
     next();
 }
 
@@ -1179,15 +1238,24 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 }
 
 // Função para processar promises do QStash em batches para evitar sobrecarga
-async function publishQStashInBatches(promises, batchSize = 50, delayMs = 100) {
+async function publishQStashInBatches(promises, batchSize = 10, delayMs = 500) {
     const batches = [];
     for (let i = 0; i < promises.length; i += batchSize) {
         batches.push(promises.slice(i, i + batchSize));
     }
     
+    console.log(`[DISPARO] Processando ${promises.length} jobs em ${batches.length} batches de ${batchSize}`);
+    
     for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
-        await Promise.all(batch);
+        try {
+            await Promise.all(batch);
+            console.log(`[DISPARO] Batch ${i + 1}/${batches.length} concluído`);
+        } catch (error) {
+            console.error(`[DISPARO] Erro no batch ${i + 1}:`, error.message);
+            // Continuar com próximos batches mesmo se um falhar
+        }
+        
         // Adiciona delay entre batches, exceto no último
         if (delayMs > 0 && i < batches.length - 1) {
             await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -6010,7 +6078,11 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
                                 body: payload,
                                 delay: `${totalDelaySeconds}s`, 
-                                retries: 2 
+                                retries: 2,
+                                // Limitar concorrência no QStash para evitar sobrecarga
+                                headers: {
+                                    'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
+                                }
                             })
                         );
                        
@@ -6025,7 +6097,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
         
                 // Processar promises em batches para evitar sobrecarga
-                await publishQStashInBatches(qstashPromises, 50, 100);
+                // Batch reduzido (10) e delay maior (500ms) para evitar sobrecarga do banco
+                await publishQStashInBatches(qstashPromises, 10, 500);
         
                 // Atualizar o status da campanha para "RUNNING"
                 await sqlWithRetry(
