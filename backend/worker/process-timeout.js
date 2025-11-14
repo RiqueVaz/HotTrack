@@ -1273,6 +1273,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 // ==========================================================
 
 async function handler(req, res) {
+    // Verificar se requisição foi abortada antes de processar
+    if (req.aborted) {
+        return res.status(499).end(); // 499 = Client Closed Request
+    }
 
     if (req.method !== 'POST') {
         return res.status(405).json({ message: 'Method Not Allowed' });
@@ -1342,6 +1346,15 @@ async function handler(req, res) {
         }
 
     } catch (error) {
+        // Tratar requisições abortadas silenciosamente
+        if (error.message?.includes('request aborted') || 
+            error.message?.includes('aborted') ||
+            req.aborted ||
+            error.code === 'ECONNRESET' ||
+            error.code === 'EPIPE') {
+            return res.status(499).end(); // 499 = Client Closed Request
+        }
+        
         // Tratar especificamente CONNECT_TIMEOUT
         if (error.message?.includes('CONNECT_TIMEOUT') || error.message?.includes('write CONNECT_TIMEOUT')) {
             console.error(`[WORKER] CONNECT_TIMEOUT ao processar timeout para chat ${chat_id}. Pool pode estar esgotado.`);

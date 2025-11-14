@@ -130,6 +130,26 @@ const validateFlowActions = (nodes) => {
 
 const app = express();
 
+// Configurar timeouts para evitar requisições presas
+app.use((req, res, next) => {
+    // Timeout de 60 segundos para requisições
+    // Se a requisição demorar mais que isso, retorna timeout
+    req.setTimeout(60000, () => {
+        if (!res.headersSent) {
+            res.status(504).json({ error: 'Request timeout' });
+        }
+    });
+    
+    // Timeout de resposta também
+    res.setTimeout(60000, () => {
+        if (!res.headersSent) {
+            res.status(504).json({ error: 'Response timeout' });
+        }
+    });
+    
+    next();
+});
+
 const METRICS_IGNORED_PATHS = new Set(['/metrics']);
 
 const resolveRouteLabel = (req, statusCode) => {
@@ -251,6 +271,22 @@ app.post(
 app.use(express.json({ limit: '70mb' }));
 app.use(express.urlencoded({ extended: true, limit: '70mb' }));
 
+// Middleware para tratar requisições abortadas ANTES de processar
+app.use((req, res, next) => {
+    // Detectar se requisição foi abortada
+    req.on('aborted', () => {
+        // Cliente fechou conexão - não é um erro real
+        // Não fazer nada, apenas prevenir que o erro seja propagado
+    });
+    
+    // Verificar se já foi abortada antes de processar
+    if (req.aborted) {
+        return res.status(499).end(); // 499 = Client Closed Request
+    }
+    
+    next();
+});
+
 // Middleware JSON específico para uploads grandes via base64 (~70MB)
 const json70mb = express.json({ limit: '70mb' });
 
@@ -322,6 +358,39 @@ function rateLimitMiddleware(req, res, next) {
     
     // Incrementar contador
     rateLimitData.count++;
+    next();
+}
+
+// Rate limiting específico para webhook do Telegram (muitas requisições simultâneas)
+const webhookRateLimit = new Map();
+const WEBHOOK_RATE_LIMIT_WINDOW = 60 * 1000; // 1 minuto
+const WEBHOOK_RATE_LIMIT_MAX = 100; // 100 requisições por minuto por bot
+
+function webhookRateLimitMiddleware(req, res, next) {
+    const botId = req.params.botId;
+    if (!botId) return next();
+    
+    const key = `webhook_${botId}`;
+    const now = Date.now();
+    
+    if (!webhookRateLimit.has(key)) {
+        webhookRateLimit.set(key, { count: 1, resetTime: now + WEBHOOK_RATE_LIMIT_WINDOW });
+        return next();
+    }
+    
+    const data = webhookRateLimit.get(key);
+    
+    if (now > data.resetTime) {
+        webhookRateLimit.set(key, { count: 1, resetTime: now + WEBHOOK_RATE_LIMIT_WINDOW });
+        return next();
+    }
+    
+    if (data.count >= WEBHOOK_RATE_LIMIT_MAX) {
+        // Retornar 200 para não causar retry do Telegram, mas não processar
+        return res.status(200).json({ ok: true, message: 'Rate limit exceeded' });
+    }
+    
+    data.count++;
     next();
 }
 
@@ -5620,7 +5689,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     }
 }
 
-app.post('/api/webhook/telegram/:botId', async (req, res) => {
+app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req, res) => {
     const { botId } = req.params;
     // CORREÇÃO 1: Extrai o objeto 'message' do corpo da requisição logo no início.
     const { message } = req.body; 
@@ -8649,6 +8718,28 @@ app.get('*', (req, res) => {
     // Frontend routes
     return res.sendFile(path.join(__dirname, frontendPath, 'index.html'));
   }
+});
+
+// Error handler global para requisições abortadas e outros erros
+app.use((err, req, res, next) => {
+    // Ignorar erros de requisição abortada silenciosamente
+    if (err.message?.includes('request aborted') || 
+        err.message?.includes('aborted') ||
+        req.aborted ||
+        err.code === 'ECONNRESET' ||
+        err.code === 'EPIPE') {
+        // Cliente fechou conexão - não é um erro real do servidor
+        if (!res.headersSent) {
+            return res.status(499).end();
+        }
+        return;
+    }
+    
+    // Logar outros erros normalmente
+    console.error('Erro não tratado:', err.message);
+    if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 // Inicialização do servidor

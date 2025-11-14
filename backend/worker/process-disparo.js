@@ -189,7 +189,12 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 // ==========================================================
 
 async function handler(req, res) {
-      const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
+    // Verificar se requisição foi abortada antes de processar
+    if (req.aborted) {
+        return res.status(499).end(); // 499 = Client Closed Request
+    }
+    
+    const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
         // Log removido por segurança
     
       const step = JSON.parse(step_json);
@@ -549,6 +554,14 @@ async function handler(req, res) {
 
             res.status(200).send('Worker de disparo finalizado.');
     } catch (error) {
+        // Tratar requisições abortadas silenciosamente
+        if (error.message?.includes('request aborted') || 
+            error.message?.includes('aborted') ||
+            req.aborted ||
+            error.code === 'ECONNRESET' ||
+            error.code === 'EPIPE') {
+            return res.status(499).end(); // 499 = Client Closed Request
+        }
 
         logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
         // Tenta logar a falha mesmo se o processamento principal quebrar
