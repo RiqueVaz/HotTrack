@@ -1,10 +1,11 @@
 name: Auto-merge pushed branch -> homologation
 
+
 on:
-  push:
-    # dispara em qualquer branch; você pode filtrar se quiser
-    branches:
-      - '**'
+    push:
+      # dispara em qualquer branch; você pode filtrar se quiser
+      branches:
+        - '**'
 
 permissions:
   contents: write

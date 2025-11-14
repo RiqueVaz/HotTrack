@@ -487,6 +487,8 @@ const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
 const OASYFY_SPLIT_PRODUCER_ID = process.env.OASYFY_SPLIT_PRODUCER_ID;
 const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
+const PIXUP_SPLIT_USERNAME = process.env.PIXUP_SPLIT_USERNAME;
+const PARADISE_SPLIT_RECIPIENT_ID = process.env.PARADISE_SPLIT_RECIPIENT_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
@@ -495,6 +497,7 @@ const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Cache simples para evitar ultrapassar rate limit em consultas PushinPay (min. 1/min).
 const pushinpayLastCheckAt = new Map(); // key: provider_transaction_id, value: timestamp (ms)
 const wiinpayLastCheckAt = new Map();
+const paradiseLastCheckAt = new Map();
 
 const {
     getSyncPayAuthToken,
@@ -513,6 +516,8 @@ const {
     oasyfySplitProducerId: OASYFY_SPLIT_PRODUCER_ID,
     brpixSplitRecipientId: BRPIX_SPLIT_RECIPIENT_ID,
     wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
+    pixupSplitUsername: PIXUP_SPLIT_USERNAME,
+    paradiseSplitRecipientId: PARADISE_SPLIT_RECIPIENT_ID,
     hottrackApiUrl: process.env.HOTTRACK_API_URL,
 });
 
@@ -1480,6 +1485,39 @@ async function getWiinpayPaymentStatus(paymentId, apiKey) {
     const data = Array.isArray(response.data) ? response.data[0] : response.data;
     return parseWiinpayPayment(data);
 }
+
+async function getParadisePaymentStatus(transactionId, secretKey) {
+    if (!secretKey) {
+        throw new Error('Credenciais da Paradise não configuradas.');
+    }
+    
+    try {
+        const response = await axios.get(`https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`, {
+            headers: {
+                'X-API-Key': secretKey,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const data = response.data;
+        const status = String(data?.status || '').toLowerCase();
+        const customerData = data?.customer_data?.customer || {};
+
+        return {
+            status,
+            customer: {
+                name: customerData?.name || '',
+                document: customerData?.document || '',
+                email: customerData?.email || '',
+                phone: customerData?.phone || '',
+            },
+        };
+    } catch (error) {
+        const errorMessage = error.response?.data?.message || error.response?.data?.error || error.message;
+        console.error(`[Paradise Status] Erro ao consultar transação ${transactionId}:`, errorMessage);
+        throw new Error(`Erro ao consultar status na Paradise: ${errorMessage || 'Erro desconhecido'}`);
+    }
+}
 async function handleSuccessfulPayment(transaction_id, customerData) {
     try {
         const [transaction] = await sqlTx`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
@@ -1818,11 +1856,11 @@ app.put('/api/admin/sellers/:id/password', authenticateAdmin, async (req, res) =
 });
 app.put('/api/admin/sellers/:id/credentials', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key } = req.body;
+    const { pushinpay_token, cnpay_public_key, cnpay_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, paradise_secret_key, paradise_product_hash } = req.body;
     try {
         await sqlTx`
-            UPDATE sellers 
-            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}
+            UPDATE sellers
+            SET pushinpay_token = ${pushinpay_token}, cnpay_public_key = ${cnpay_public_key}, cnpay_secret_key = ${cnpay_secret_key}, wiinpay_api_key = ${wiinpay_api_key}, pixup_client_id = ${pixup_client_id || null}, pixup_client_secret = ${pixup_client_secret || null}, paradise_secret_key = ${paradise_secret_key || null}, paradise_product_hash = ${paradise_product_hash || null}
             WHERE id = ${id};`;
         res.status(200).json({ message: 'Credenciais alteradas com sucesso.' });
     } catch (error) {
@@ -2800,7 +2838,7 @@ app.post('/api/auth/logout', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, paradise_secret_key, paradise_product_hash, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
         const pixelsPromise = sqlTx`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sqlTx`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -3867,9 +3905,10 @@ app.delete('/api/checkouts/:checkoutId', authenticateJwt, async (req, res) => {
 app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     const { 
         pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key,
-        wiinpay_api_key,
+        wiinpay_api_key, pixup_client_id, pixup_client_secret,
         syncpay_client_id, syncpay_client_secret,
         brpix_secret_key, brpix_company_id,
+        paradise_secret_key, paradise_product_hash,
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
     } = req.body;
     try {
@@ -3880,10 +3919,14 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
             oasyfy_public_key = ${oasyfy_public_key || null}, 
             oasyfy_secret_key = ${oasyfy_secret_key || null},
             wiinpay_api_key = ${wiinpay_api_key || null},
+            pixup_client_id = ${pixup_client_id || null},
+            pixup_client_secret = ${pixup_client_secret || null},
             syncpay_client_id = ${syncpay_client_id || null},
             syncpay_client_secret = ${syncpay_client_secret || null},
             brpix_secret_key = ${brpix_secret_key || null},
             brpix_company_id = ${brpix_company_id || null},
+            paradise_secret_key = ${paradise_secret_key || null},
+            paradise_product_hash = ${paradise_product_hash || null},
             pix_provider_primary = ${pix_provider_primary || 'pushinpay'},
             pix_provider_secondary = ${pix_provider_secondary || null},
             pix_provider_tertiary = ${pix_provider_tertiary || null}
@@ -4387,6 +4430,20 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
                     } else {
                         console.warn(`[PIX Status] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
                     }
+                } else if (transaction.provider === 'paradise') {
+                    const paradiseSecretKey = seller.paradise_secret_key;
+                    if (paradiseSecretKey) {
+                        const now = Date.now();
+                        const last = paradiseLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            paradiseLastCheckAt.set(transaction.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[PIX Status] Seller ${seller.id} sem chave Paradise configurada para consulta.`);
+                    }
                 }
 
                 const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
@@ -4872,6 +4929,20 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         } else {
                             console.warn(`${logPrefix} Seller ${sellerId} sem chave WiinPay configurada.`);
+                        }
+                    } else if (transaction.provider === 'paradise') {
+                        const paradiseSecretKey = seller.paradise_secret_key;
+                        if (paradiseSecretKey) {
+                            const now = Date.now();
+                            const last = paradiseLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                paradiseLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        } else {
+                            console.warn(`${logPrefix} Seller ${sellerId} sem chave Paradise configurada.`);
                         }
                     }
                     
@@ -5983,6 +6054,97 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
     res.sendStatus(200);
   });
 
+app.post('/api/webhook/pixup', async (req, res) => {
+    // Responde imediatamente ao Pixup para evitar timeouts
+    res.sendStatus(200);
+
+    try {
+        // O webhook do Pixup envia os dados dentro de requestBody
+        const requestBody = req.body?.requestBody || req.body;
+        
+        if (!requestBody) {
+            console.warn('[Webhook Pixup] Payload sem requestBody:', JSON.stringify(req.body));
+            return;
+        }
+
+        const { transactionId, status, external_id, creditParty } = requestBody;
+        
+        if (!transactionId && !external_id) {
+            console.warn('[Webhook Pixup] Payload sem identificador de pagamento:', JSON.stringify(requestBody));
+            return;
+        }
+
+        const identifier = transactionId || external_id;
+        const normalized = String(status || '').toUpperCase();
+        const paidStatuses = new Set(['PAID', 'CONFIRMED', 'COMPLETED', 'APPROVED', 'SUCCESS']);
+        const canceledStatuses = new Set(['EXPIRED', 'CANCELLED', 'CANCELED', 'FAILED', 'REJECTED']);
+
+        // Processar PIX pago
+        if (paidStatuses.has(normalized)) {
+            try {
+                const [tx] = await sqlTx`
+                    SELECT pt.id, pt.status, pt.provider_transaction_id, c.seller_id 
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE (LOWER(pt.provider_transaction_id) = LOWER(${identifier}) OR pt.provider_transaction_id = ${external_id}) AND pt.provider = 'pixup'
+                `;
+
+                if (!tx) {
+                    console.error(`[Webhook Pixup] Transação não encontrada para ID ${identifier}.`);
+                    return;
+                }
+
+                if (tx.status === 'paid') {
+                    console.log(`[Webhook Pixup] Transação ${tx.id} já está paga. Ignorando duplicata.`);
+                    return;
+                }
+
+                console.log(`[Webhook Pixup] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
+                
+                // creditParty contém os dados do pagador (quem pagou)
+                // Documentação: creditParty { name, email, taxId }
+                const payerName = creditParty?.name || '';
+                const payerDocument = creditParty?.taxId || '';
+                const payerEmail = creditParty?.email || '';
+                
+                await handleSuccessfulPayment(tx.id, { 
+                    name: payerName, 
+                    document: payerDocument,
+                    email: payerEmail 
+                });
+                console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+            } catch (error) {
+                console.error('[Webhook Pixup] Erro ao processar pagamento:', error);
+            }
+        }
+        // Processar PIX cancelado/expirado
+        else if (canceledStatuses.has(normalized)) {
+            try {
+                console.log(`[Webhook Pixup] PIX cancelado/expirado - ID: ${identifier}, Status: ${status}`);
+                
+                const [tx] = await sqlTx`
+                    UPDATE pix_transactions 
+                    SET status = 'expired', updated_at = NOW() 
+                    WHERE (LOWER(provider_transaction_id) = LOWER(${identifier}) OR provider_transaction_id = ${external_id}) 
+                      AND provider = 'pixup' 
+                      AND status = 'pending'
+                    RETURNING id, status
+                `;
+                
+                if (tx) {
+                    console.log(`[Webhook Pixup] Transação ${identifier} (interna: ${tx.id}) marcada como expirada.`);
+                }
+            } catch (error) {
+                console.error('[Webhook Pixup] Erro ao marcar transação como expirada:', error.message);
+            }
+        } else {
+            console.log(`[Webhook Pixup] Status '${normalized}' não tratado. Payload:`, JSON.stringify(requestBody));
+        }
+    } catch (error) {
+        console.error('[Webhook Pixup] Erro inesperado ao processar payload:', error);
+    }
+});
+
 app.post('/api/webhook/cnpay', async (req, res) => {
 
   const transactionData = req.body.transaction;
@@ -6328,6 +6490,20 @@ async function checkPendingTransactions() {
                     } else {
                         console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
                     }
+                } else if (tx.provider === 'paradise') {
+                    const paradiseSecretKey = seller.paradise_secret_key;
+                    if (paradiseSecretKey) {
+                        const now = Date.now();
+                        const last = paradiseLastCheckAt.get(tx.provider_transaction_id) || 0;
+                        if (now - last >= 60_000) {
+                            const result = await getParadisePaymentStatus(tx.provider_transaction_id, paradiseSecretKey);
+                            providerStatus = result.status;
+                            customerData = result.customer || {};
+                            paradiseLastCheckAt.set(tx.provider_transaction_id, now);
+                        }
+                    } else {
+                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave Paradise configurada para consulta.`);
+                    }
                 }
                 
                 const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
@@ -6482,6 +6658,99 @@ app.post('/api/webhook/brpix', async (req, res) => {
     }
 
     res.sendStatus(200);
+});
+
+app.post('/api/webhook/paradise', async (req, res) => {
+    // Responde imediatamente ao Paradise para evitar timeouts
+    res.sendStatus(200);
+
+    try {
+        const payload = req.body;
+        
+        if (!payload) {
+            console.warn('[Webhook Paradise] Payload vazio:', JSON.stringify(req.body));
+            return;
+        }
+
+        const { transaction_id, external_id, status, customer } = payload;
+        
+        // Paradise pode enviar transaction_id (numérico) ou external_id (reference)
+        const identifier = transaction_id || external_id;
+        
+        if (!identifier) {
+            console.warn('[Webhook Paradise] Payload sem identificador de pagamento:', JSON.stringify(payload));
+            return;
+        }
+
+        const normalized = String(status || '').toLowerCase();
+        const paidStatuses = new Set(['approved', 'paid', 'completed', 'success']);
+        const canceledStatuses = new Set(['failed', 'expired', 'cancelled', 'canceled', 'refunded']);
+
+        // Processar PIX pago
+        if (paidStatuses.has(normalized)) {
+            try {
+                const [tx] = await sqlTx`
+                    SELECT pt.id, pt.status, pt.provider_transaction_id, c.seller_id 
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE (pt.provider_transaction_id = ${String(identifier)} OR pt.provider_transaction_id = ${external_id || ''}) AND pt.provider = 'paradise'
+                `;
+
+                if (!tx) {
+                    console.error(`[Webhook Paradise] Transação não encontrada para ID ${identifier}.`);
+                    return;
+                }
+
+                if (tx.status === 'paid') {
+                    console.log(`[Webhook Paradise] Transação ${tx.id} já está paga. Ignorando duplicata.`);
+                    return;
+                }
+
+                console.log(`[Webhook Paradise] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
+                
+                // Extrair dados do cliente do webhook
+                const payerName = customer?.name || '';
+                const payerDocument = customer?.document || '';
+                const payerEmail = customer?.email || '';
+                const payerPhone = customer?.phone || '';
+                
+                await handleSuccessfulPayment(tx.id, { 
+                    name: payerName, 
+                    document: payerDocument,
+                    email: payerEmail,
+                    phone: payerPhone
+                });
+                console.log(`[Webhook Paradise] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+            } catch (error) {
+                console.error('[Webhook Paradise] Erro ao processar pagamento:', error);
+            }
+        }
+        // Processar PIX cancelado/expirado/falhado
+        else if (canceledStatuses.has(normalized)) {
+            try {
+                console.log(`[Webhook Paradise] PIX cancelado/expirado/falhado - ID: ${identifier}, Status: ${status}`);
+                
+                const [tx] = await sqlTx`
+                    UPDATE pix_transactions 
+                    SET status = 'expired', updated_at = NOW() 
+                    WHERE (provider_transaction_id = ${String(identifier)} OR provider_transaction_id = ${external_id || ''}) 
+                      AND provider = 'paradise' 
+                      AND status = 'pending'
+                    RETURNING id, status
+                `;
+                
+                if (tx) {
+                    console.log(`[Webhook Paradise] Transação ${identifier} (interna: ${tx.id}) marcada como expirada.`);
+                }
+            } catch (error) {
+                console.error('[Webhook Paradise] Erro ao marcar transação como expirada:', error.message);
+            }
+        } else {
+            console.log(`[Webhook Paradise] Status '${normalized}' não tratado. Payload:`, JSON.stringify(payload));
+        }
+    } catch (error) {
+        console.error('[Webhook Paradise] Erro inesperado ao processar payload:', error);
+    }
 });
 
 // ==========================================================

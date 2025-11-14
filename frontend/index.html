@@ -2508,7 +2508,9 @@
                     { value: 'oasyfy', text: 'Oasy.fy' },
                     { value: 'syncpay', text: 'SyncPay' },
                     { value: 'brpix', text: 'BR PIX' },
-                    { value: 'wiinpay', text: 'WiinPay' }
+                    { value: 'wiinpay', text: 'WiinPay' },
+                    { value: 'pixup', text: 'Pixup' },
+                    { value: 'paradise', text: 'Paradise' }
                 ];
                 const createSelect = (name, selectedValue) => {
                     const options = providers.map(p => `<option value="${p.value}" ${p.value === selectedValue ? 'selected' : ''}>${p.text}</option>`).join('');
@@ -2567,6 +2569,22 @@
                                 </div>
                                 <label class="block mb-2 text-sm text-gray-400">API Key</label><input name="wiinpay_api_key" type="password" value="${settings.wiinpay_api_key || ''}" class="form-input w-full p-2">
                                 <p class="text-xs text-gray-500 mt-2">Use a chave fornecida pela WiinPay para gerar cobranças PIX.</p>
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">Pixup</h3><span id="status-indicator-pixup"></span></div>
+                                    <button type="button" data-provider="pixup" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">Client ID</label><input name="pixup_client_id" type="text" value="${settings.pixup_client_id || ''}" class="form-input w-full p-2">
+                                <label class="block mb-2 mt-3 text-sm text-gray-400">Client Secret</label><input name="pixup_client_secret" type="password" value="${settings.pixup_client_secret || ''}" class="form-input w-full p-2">
+                            </div>
+                            <div class="card p-6 rounded-lg">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div><h3 class="text-lg font-medium text-sky-400 inline-block">Paradise</h3><span id="status-indicator-paradise"></span></div>
+                                    <button type="button" data-provider="paradise" class="test-pix-btn btn btn-secondary text-xs py-1 px-3">Testar Conexão</button>
+                                </div>
+                                <label class="block mb-2 text-sm text-gray-400">Secret Key <span class="text-red-400">*</span></label><input name="paradise_secret_key" type="password" value="${settings.paradise_secret_key || ''}" class="form-input w-full p-2">
+                                <label class="block mb-2 mt-3 text-sm text-gray-400">Product Hash <span class="text-red-400">*</span></label><input name="paradise_product_hash" type="text" value="${settings.paradise_product_hash || ''}" class="form-input w-full p-2">
                             </div>
                              <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
@@ -9012,7 +9030,19 @@ function FlowEditorPage({
                 return prevEdges.filter((edge) => !connectedEdges.includes(edge));
             });
         }, [setEdges]);
-        const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, eds)), [setEdges]);
+        const onConnect = useCallback((params) => {
+            // Garante que cada handle só pode conectar a 1 nó
+            // Remove qualquer conexão existente do mesmo handle antes de adicionar nova
+            setEdges((eds) => {
+                // Remove todas as conexões existentes do mesmo source e sourceHandle
+                const filteredEdges = eds.filter(
+                    edge => !(edge.source === params.source && edge.sourceHandle === params.sourceHandle)
+                );
+                
+                // Adiciona a nova conexão
+                return addEdge({ ...params, type: 'smoothstep', animated: true, selectable: true }, filteredEdges);
+            });
+        }, [setEdges]);
         const onNodeClick = useCallback((_, node) => setSelectedNode(node), []);
         const onPaneClick = useCallback(() => { setSelectedNode(null); setSelectedEdge(null); }, []);
         const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
