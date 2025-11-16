@@ -595,6 +595,34 @@
             padding: 1.5rem;
         }
     
+        .hotbot-scope .tabs-container {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .hotbot-scope .tabs-container button {
+            padding: 0.75rem 1.5rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        
+        .hotbot-scope .tabs-container button:hover {
+            color: var(--text-primary);
+        }
+        
+        .hotbot-scope .tabs-container button.active {
+            color: var(--accent-primary);
+            border-bottom-color: var(--accent-primary);
+            font-weight: 600;
+        }
+    
         .hotbot-scope .step-actions-grid {
             display: flex;
             flex-wrap: wrap;
@@ -5516,10 +5544,8 @@ function generatePreviewHTML(data) {
                 bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
                 flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
                 chat: <LiveChatPage bots={bots} />,
-                contacts: <ContactsPage bots={bots} />,
                 media: <MediaLibraryPage />,
                 disparos: <DisparosPage bots={bots} />,
-                'disparos-history': <DisparosHistoryPage />,
                 'flow-editor': editingFlow ? (
                     <FlowEditorPage
                         flow={editingFlow}
@@ -5621,10 +5647,8 @@ function generatePreviewHTML(data) {
             bots: { name: 'Bots', icon: Icons.bots },
             flows: { name: 'Fluxos', icon: Icons.flows },
             chat: { name: 'Chat ao Vivo', icon: Icons.chat },
-            contacts: { name: 'Contatos', icon: Icons.contacts },
             media: { name: 'Biblioteca', icon: Icons.media },
             disparos: { name: 'Disparos', icon: Icons.disparos },
-            'disparos-history': { name: 'Histórico', icon: Icons.history },
         };
         return (
             <div className="hotbot-nav-bar">
@@ -6153,15 +6177,30 @@ function generatePreviewHTML(data) {
     
     function DisparosPage({ bots }) {
     const { useState, useEffect, useCallback } = window.React;
+    // Tab state
+    const [activeTab, setActiveTab] = useState('disparos');
+    
+    // Disparo states
     const [selectedBotIds, setSelectedBotIds] = useState([]);
     const [flowSteps, setFlowSteps] = useState([]);
     const [campaignName, setCampaignName] = useState('');
     const [contactCount, setContactCount] = useState(0);
     const [isSending, setIsSending] = useState(false);
     const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
-    // Use a state variable to hold the callback function for media selection
     const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
-    const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null); // ['image'] | ['video'] | ['audio'] | null
+    const [mediaAllowedTypes, setMediaAllowedTypes] = useState(null);
+    
+    // Hygiene states
+    const [isHygienized, setIsHygienized] = useState(false);
+    const [inactiveCount, setInactiveCount] = useState(0);
+    const [isValidating, setIsValidating] = useState(false);
+    const [inactiveChatIds, setInactiveChatIds] = useState([]);
+    
+    // Historico tab states
+    const [history, setHistory] = useState([]);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+    const [isChecking, setIsChecking] = useState(null);
+    
     const API_BASE_URL = App.state.API_BASE_URL;
     const buildPreviewSrc = (value) => {
         if (!value) return null;
@@ -6169,7 +6208,14 @@ function generatePreviewHTML(data) {
         return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
     };
 
-    // Fetch contact count when selected bots change
+    // Reset hygiene when bots change
+    useEffect(() => {
+        setIsHygienized(false);
+        setInactiveCount(0);
+        setInactiveChatIds([]);
+    }, [selectedBotIds]);
+
+    // Fetch contact count when selected bots change or after hygiene
     useEffect(() => {
         const fetchCount = async () => {
             if (selectedBotIds.length === 0) {
@@ -6177,23 +6223,76 @@ function generatePreviewHTML(data) {
                 return;
             }
             try {
-                // Use App.apiRequest from your new frontend structure
-                const response = await App.apiRequest('/api/bots/contacts-count', 'POST', { botIds: selectedBotIds });
+                const response = await App.apiRequest('/api/bots/contacts-count', 'POST', { 
+                    botIds: selectedBotIds,
+                    excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
+                });
                 setContactCount(response.count);
             } catch (error) {
                 console.error("Erro ao buscar contagem de contatos", error);
                 setContactCount(0);
-                // Use App.showToast for error display
                 App.showToast('Erro ao buscar contagem de contatos.', 'error');
             }
         };
         fetchCount();
-    }, [selectedBotIds]);
+    }, [selectedBotIds, inactiveChatIds]);
+
+    // Fetch history for historico tab
+    const fetchHistory = useCallback(() => {
+        App.apiRequest('/api/disparos/history', 'GET')
+            .then(res => setHistory(res))
+            .catch(() => console.error('Erro ao atualizar histórico.'));
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === 'historico') {
+            setIsLoadingHistory(true);
+            App.apiRequest('/api/disparos/history', 'GET')
+                .then(res => setHistory(res))
+                .catch(() => App.showToast('Erro ao carregar o histórico.', 'error'))
+                .finally(() => setIsLoadingHistory(false));
+            
+            const intervalId = setInterval(fetchHistory, 5000);
+            return () => clearInterval(intervalId);
+        }
+    }, [activeTab, fetchHistory]);
 
     const handleBotSelection = (botId) => {
         setSelectedBotIds(prev =>
             prev.includes(botId) ? prev.filter(id => id !== botId) : [...prev, botId]
         );
+    };
+
+    const handleHygienize = async () => {
+        if (selectedBotIds.length === 0) {
+            App.showToast('Selecione pelo menos um bot primeiro.', 'error');
+            return;
+        }
+        
+        setIsValidating(true);
+        setInactiveChatIds([]);
+        setInactiveCount(0);
+        
+        try {
+            let allInactive = [];
+            
+            for (const botId of selectedBotIds) {
+                const response = await App.apiRequest('/api/bots/validate-contacts', 'POST', { botId });
+                allInactive = [...allInactive, ...response.inactive_contacts];
+            }
+            
+            const uniqueInactiveChatIds = [...new Set(allInactive.map(c => c.chat_id))];
+            setInactiveChatIds(uniqueInactiveChatIds);
+            setInactiveCount(uniqueInactiveChatIds.length);
+            setIsHygienized(true);
+            
+            App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
+        } catch (error) {
+            console.error('Erro ao higienizar contatos:', error);
+            App.showToast('Erro ao higienizar contatos.', 'error');
+        } finally {
+            setIsValidating(false);
+        }
     };
 
     const addStep = (type) => {
@@ -6240,19 +6339,25 @@ function generatePreviewHTML(data) {
         App.showToast('Preencha o nome da campanha, selecione ao menos um bot e adicione uma ação ao fluxo.', 'error');
         return;
     }
+    if (!isHygienized) {
+        App.showToast('Por favor, higienize os contatos antes de enviar o disparo.', 'error');
+        return;
+    }
     setIsSending(true);
     try {
-        // Este payload está correto e envia 'flowSteps'
         const response = await App.apiRequest('/api/bots/mass-send', 'POST', { 
             campaignName, 
             botIds: selectedBotIds, 
-            flowSteps // <--- O backend agora espera por isso
+            flowSteps
         });
         App.showToast(response.message || 'Disparo agendado com sucesso!', 'success');
         setFlowSteps([]);
         setCampaignName('');
         setSelectedBotIds([]);
         setContactCount(0);
+        setIsHygienized(false);
+        setInactiveChatIds([]);
+        setInactiveCount(0);
     } catch (error) {
         App.showToast('Erro ao agendar disparo.', 'error');
         console.error("Erro submit disparo:", error);
@@ -6282,78 +6387,189 @@ function generatePreviewHTML(data) {
         }
     };
 
+    // Render functions for each tab
+    const renderDisparosTab = () => (
+        <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+            <form onSubmit={handleSubmit}>
+                {/* Campaign Info Card */}
+                <div className="card campaign-info-card">
+                    <div className="form-group">
+                        <label>1. Nome da Campanha</label>
+                        <input
+                            type="text"
+                            className="form-input"
+                            value={campaignName}
+                            onChange={e => setCampaignName(e.target.value)}
+                            placeholder="Ex: Lançamento VIP"
+                            required
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label>2. Selecione os Bots de Destino</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+                            {bots.map(bot => (
+                                <label key={bot.id} className="checkbox-group" style={{ marginBottom: 0 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedBotIds.includes(bot.id)}
+                                        onChange={() => handleBotSelection(bot.id)}
+                                    />
+                                    {bot.bot_name}
+                                </label>
+                            ))}
+                        </div>
+                        <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                            Total de contatos: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
+                        </p>
+                        
+                        {/* Hygiene Section */}
+                        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
+                            <button 
+                                type="button"
+                                onClick={handleHygienize} 
+                                disabled={selectedBotIds.length === 0 || isValidating}
+                                className="btn btn-secondary"
+                                style={{ marginBottom: '0.5rem' }}
+                            >
+                                {isValidating ? 'Validando...' : '🧹 Higienizar Contatos'}
+                            </button>
+                            {isHygienized && (
+                                <p style={{color: 'var(--success)', fontSize: '0.9rem', marginTop: '0.5rem'}}>
+                                    ✓ Higienização concluída ({inactiveCount} contatos inativos removidos da contagem)
+                                </p>
+                            )}
+                            {!isHygienized && selectedBotIds.length > 0 && (
+                                <p style={{color: 'var(--warning)', fontSize: '0.85rem', marginTop: '0.5rem'}}>
+                                    ⚠️ Higienize os contatos antes de disparar
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Flow Steps Card */}
+                <div className="card flow-steps-container">
+                    <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+                        3. Monte o Fluxo de Disparo
+                    </label>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                        Adicione as ações na ordem em que devem ser enviadas.
+                    </p>
+                    <div className="step-actions-grid">
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('message')}>+ Mensagem</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('image')}>+ Imagem</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('video')}>+ Vídeo</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('audio')}>+ Áudio</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('pix')}>+ Gerar PIX</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('check_pix')}>+ Verificar PIX</button>
+                    </div>
+                    <div>
+                        {flowSteps.map(renderStep)}
+                    </div>
+                    {flowSteps.length === 0 &&
+                        <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '1rem' }}>Nenhuma ação adicionada ainda.</p>
+                    }
+                </div>
+
+                {/* Submit Button */}
+                <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending || !isHygienized || selectedBotIds.length === 0}>
+                    {!isHygienized ? 'Higienize os contatos primeiro' : 
+                     isSending ? 'Agendando...' : 
+                     `Disparar para ${contactCount} contato(s)`}
+                </button>
+            </form>
+        </div>
+    );
+
+    const handleCheckConversions = async (historyId) => {
+        setIsChecking(historyId);
+        try {
+            const res = await App.apiRequest(`/api/disparos/check-conversions/${historyId}`, 'POST');
+            App.showToast(res.message, 'success');
+            fetchHistory();
+        } catch (error) {
+            App.showToast('Erro ao verificar: ' + (error.response?.data?.message || error.message), 'error');
+        } finally {
+            setIsChecking(null);
+        }
+    };
+    
+    const getStatusChip = (status) => {
+        const styles = {
+            PENDING: { background: '#a16207', color: '#fefce8' },
+            RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
+            COMPLETED: { background: '#166534', color: '#dcfce7' },
+            FAILED: { background: '#991b1b', color: '#fee2e2' }
+        };
+        return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{status}</span>
+    };
+
+    const renderHistoricoTab = () => {
+        return (
+            <div>
+                <div className="page-header" style={{ marginBottom: '1.5rem' }}>
+                    <h2>Histórico de Disparos</h2>
+                    <button className="btn btn-secondary" onClick={fetchHistory} disabled={isLoadingHistory}>Atualizar</button>
+                </div>
+                <div className="card">
+                    <table style={{width: '100%', borderCollapse: 'collapse', textAlign: 'left'}}>
+                        <thead>
+                            <tr style={{borderBottom: '1px solid var(--border-color)'}}>
+                                <th style={{padding: '1rem'}}>Campanha</th>
+                                <th style={{padding: '1rem'}}>Data</th>
+                                <th style={{padding: '1rem'}}>Status</th>
+                                <th style={{padding: '1rem'}}>Envios</th>
+                                <th style={{padding: '1rem'}}>Conversões</th>
+                                <th style={{padding: '1rem'}}>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {isLoadingHistory ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                             history.map(item => (
+                                <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
+                                    <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
+                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString()}</td>
+                                    <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
+                                    <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
+                                    <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
+                                    <td style={{padding: '1rem'}}>
+                                        <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                            {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                     {!isLoadingHistory && history.length === 0 && <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Nenhum disparo encontrado.</p>}
+                </div>
+            </div>
+        );
+    };
+
     return (
-        // Use container div provided by AppHotBot or similar
         <div style={{ padding: '0 1.5rem 1.5rem 1.5rem', height: '100%', overflowY: 'auto' }}>
-            {/* Render modal conditionally */}
             {isMediaModalOpen && <MediaLibraryModal onSelect={handleSelectMedia} onClose={() => setIsMediaModalOpen(false)} allowedTypes={mediaAllowedTypes} />}
 
-            <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <form onSubmit={handleSubmit}>
-                    {/* Campaign Info Card */}
-                    <div className="card campaign-info-card">
-                        <div className="form-group">
-                            <label>1. Nome da Campanha</label>
-                            <input
-                                type="text"
-                                className="form-input"
-                                value={campaignName}
-                                onChange={e => setCampaignName(e.target.value)}
-                                placeholder="Ex: Lançamento VIP"
-                                required
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label>2. Selecione os Bots de Destino</label>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
-                                {bots.map(bot => (
-                                    <label key={bot.id} className="checkbox-group" style={{ marginBottom: 0 }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedBotIds.includes(bot.id)}
-                                            onChange={() => handleBotSelection(bot.id)}
-                                        />
-                                        {bot.bot_name}
-                                    </label>
-                                ))}
-                            </div>
-                            <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                Total de contatos selecionados: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Flow Steps Card */}
-                    <div className="card flow-steps-container">
-                        <label style={{ display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
-                            3. Monte o Fluxo de Disparo
-                        </label>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                            Adicione as ações na ordem em que devem ser enviadas.
-                        </p>
-                        <div className="step-actions-grid">
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('message')}>+ Mensagem</button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('image')}>+ Imagem</button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('video')}>+ Vídeo</button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('audio')}>+ Áudio</button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('pix')}>+ Gerar PIX</button>
-                            {/* Keep check_pix if your CRON job handles it */}
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => addStep('check_pix')}>+ Verificar PIX</button>
-                        </div>
-                        <div>
-                            {flowSteps.map(renderStep)}
-                        </div>
-                        {flowSteps.length === 0 &&
-                            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '1rem' }}>Nenhuma ação adicionada ainda.</p>
-                        }
-                    </div>
-
-                    {/* Submit Button */}
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending}>
-                        {isSending ? 'Agendando...' : `Disparar para ${contactCount} contato(s)`}
-                    </button>
-                </form>
+            {/* Tabs Navigation */}
+            <div className="tabs-container">
+                <button 
+                    className={activeTab === 'disparos' ? 'active' : ''} 
+                    onClick={() => setActiveTab('disparos')}
+                >
+                    Novo Disparo
+                </button>
+                <button 
+                    className={activeTab === 'historico' ? 'active' : ''} 
+                    onClick={() => setActiveTab('historico')}
+                >
+                    Histórico
+                </button>
             </div>
+
+            {/* Tab Content */}
+            {activeTab === 'disparos' && renderDisparosTab()}
+            {activeTab === 'historico' && renderHistoricoTab()}
         </div>
     );
 }

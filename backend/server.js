@@ -7028,7 +7028,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
 
 // Endpoint 2: Contagem de contatos
 app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
-    const { botIds } = req.body;
+    const { botIds, excludeChatIds } = req.body;
     const sellerId = req.user.id;
 
     if (!botIds || !Array.isArray(botIds) || botIds.length === 0) {
@@ -7036,10 +7036,15 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 
     try {
-        const result = await sqlWithRetry(
-            `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`,
-            [sellerId, botIds]
-        );
+        let query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`;
+        let params = [sellerId, botIds];
+
+        if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+            query += ` AND chat_id NOT IN (${excludeChatIds.map((_, i) => `$${i + 3}`).join(',')})`;
+            params.push(...excludeChatIds);
+        }
+
+        const result = await sqlWithRetry(query, params);
         res.status(200).json({ count: parseInt(result[0].count, 10) });
     } catch (error) {
         console.error("Erro ao contar contatos:", error);
