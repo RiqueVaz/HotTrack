@@ -225,6 +225,11 @@ app.post(
       console.log("[WORKER] Assinatura válida. Processando a tarefa.");
       req.body = JSON.parse(bodyString);
       await processTimeoutWorker(req, res);
+      
+      // Verificar se o worker enviou resposta, se não, enviar uma padrão
+      if (!res.headersSent) {
+        res.status(200).json({ message: 'Worker processed successfully.' });
+      }
 
     } catch (error) {
       console.error("Erro crítico no handler do worker:", error);
@@ -260,6 +265,11 @@ app.post(
        console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
        req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
        await processDisparoWorker(req, res); // Chama o handler do worker
+       
+       // Verificar se o worker enviou resposta, se não, enviar uma padrão
+       if (!res.headersSent) {
+         res.status(200).json({ message: 'Worker de disparo processado com sucesso.' });
+       }
     
       } catch (error) {
        console.error("Erro crítico no handler do worker de disparo:", error);
