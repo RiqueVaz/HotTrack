@@ -321,13 +321,42 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     throw new Error('Vendedor não encontrado para gerar PIX.');
                 }
                 
-                // Gerar PIX usando a função existente
+                // Buscar ou criar click para associar a transação
+                let click = null;
+                let clickIdInternal = null;
+                
+                if (variables.click_id) {
+                    const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                    const [existingClick] = await sqlWithRetry(sqlTx`
+                        SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                    `);
+                    
+                    if (existingClick) {
+                        click = existingClick;
+                        clickIdInternal = existingClick.id;
+                    }
+                }
+                
+                // Se não encontrou click, criar um novo para tracking
+                if (!click) {
+                    const [newClick] = await sqlWithRetry(sqlTx`
+                        INSERT INTO clicks (seller_id, bot_id, ip_address, user_agent)
+                        VALUES (${sellerId}, ${botId}, NULL, 'Disparo Massivo')
+                        RETURNING *
+                    `);
+                    click = newClick;
+                    clickIdInternal = newClick.id;
+                    logger.debug(`${logPrefix} Click criado para disparo: ${clickIdInternal}`);
+                }
+                
+                // Gerar PIX usando a função existente com click_id_internal
                 const pixResult = await generatePixWithFallback(
                     seller,
                     valueInCents,
                     process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost',
                     seller.api_key,
-                    null // ip_address não disponível em disparos
+                    null, // ip_address não disponível em disparos
+                    clickIdInternal // Passar click_id_internal para tracking no dashboard
                 );
                 
                 if (pixResult && pixResult.qr_code_text) {
