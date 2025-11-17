@@ -8186,7 +8186,7 @@ function generatePreviewHTML(data) {
         };
     };
 
-    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts }) {
+    function EditorPanel({ selectedNode, setNodes, setEdges, setSelectedNode, availableFlows, openMediaLibrary, presselDomains, thankYouPages, hostedCheckouts, isDisparoFlow = false }) {
         const API_BASE_URL = App.state.API_BASE_URL;
         const buildPreviewSrc = (value) => {
             if (!value) return null;
@@ -9017,7 +9017,7 @@ function generatePreviewHTML(data) {
                     </div>
                     <div className="node-editor-modal-footer">
                         <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
+                            {!isDisparoFlow && !actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
@@ -9027,7 +9027,7 @@ function generatePreviewHTML(data) {
                                     Aguardar Resposta
                                 </label>
                             )}
-                            {nodeData.waitForReply && (
+                            {!isDisparoFlow && nodeData.waitForReply && (
                                 <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <label style={{fontSize: '0.85rem'}}>Tempo (min)</label>
                                     <input 
@@ -9172,11 +9172,11 @@ function FlowEditorPage({
                     <>
                         <div className={`node-header react-flow__node-trigger`}>
                             <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                🚀 Gatilho Inicial
+                                {isDisparoFlow ? '📤 Disparo Manual' : '🚀 Gatilho Inicial'}
                             </div>
                         </div>
                         <div className="node-content">
-                            Início do fluxo com click_id.
+                            {isDisparoFlow ? 'Disparo acionado manualmente quando executado.' : 'Início do fluxo com click_id.'}
                         </div>
                         <Handle type="source" position={Position.Bottom} id="a" isConnectable={isConnectable} />
                     </>
@@ -9446,16 +9446,17 @@ function FlowEditorPage({
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                // Para fluxos de disparo, se não houver nodes, criar um nó de ação inicial
+                // Para fluxos de disparo, se não houver nodes, criar um nó trigger inicial
                 const defaultNodes = isDisparoFlow 
-                    ? [{ id: 'action-1', type: 'action', position: { x: 250, y: 50 }, data: { actions: [] } }]
+                    ? [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }]
                     : initialNodes;
                 const nodesToSet = (flowContent.nodes || defaultNodes).map(node => {
                     const nodeData = node.data || {};
                     if (node.type === 'trigger') {
                         return {
                             ...node,
-                            data: nodeData
+                            data: nodeData,
+                            deletable: isDisparoFlow ? false : (node.deletable !== undefined ? node.deletable : false)
                         };
                     }
 
@@ -9476,10 +9477,8 @@ function FlowEditorPage({
                 setEdges(flowContent.edges || [], { skipDirty: true });
                 updateDirtyState(false);
                 
-                // Find the initial node (trigger node for normal flows, first action node for disparo flows)
-                const initialNode = isDisparoFlow 
-                    ? nodesToSet.find(node => node.type === 'action') 
-                    : nodesToSet.find(node => node.type === 'trigger');
+                // Find the initial node (trigger node for both normal and disparo flows)
+                const initialNode = nodesToSet.find(node => node.type === 'trigger');
                 
                 // If we have an initial node, center the view on it
                 if (initialNode && reactFlowInstance) {
@@ -9616,14 +9615,8 @@ function FlowEditorPage({
                 return false;
             }
 
-            // Validação específica para fluxos de disparo: não pode ter trigger
+            // Validação específica para fluxos de disparo
             if (isDisparoFlow) {
-                const hasTrigger = nodes.some(node => node.type === 'trigger');
-                if (hasTrigger) {
-                    alert('❌ Fluxos de disparo não podem ter nó do tipo trigger. Remova todos os triggers antes de salvar.');
-                    return false;
-                }
-                
                 const hasAction = nodes.some(node => node.type === 'action');
                 if (!hasAction) {
                     alert('❌ Fluxos de disparo devem ter pelo menos um nó de ação.');
@@ -9841,7 +9834,7 @@ function FlowEditorPage({
                             <div className="node-selector-modal-content">
                                 {nodeTypesList.filter(nodeType => {
                                     if (nodeType.category === 'Grupo') return false;
-                                    if (isDisparoFlow && nodeType.type === 'trigger') return false;
+                                    if (isDisparoFlow && nodeType.type === 'forward_flow') return false;
                                     return true;
                                 }).map(nodeType => (
                                     <button
@@ -9853,20 +9846,22 @@ function FlowEditorPage({
                                         <span>{nodeType.label}</span>
                                     </button>
                                 ))}
-                                <button
-                                    className="node-selector-button"
-                                    onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
-                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                                >
-                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <span className="node-selector-button-icon">👥</span>
-                                        <span>Gerenciar Grupos</span>
-                                    </span>
-                                    <span style={{ fontSize: '0.9rem' }}>
-                                        {isGroupMenuOpen ? '▾' : '▸'}
-                                    </span>
-                                </button>
-                                {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
+                                {!isDisparoFlow && (
+                                    <>
+                                        <button
+                                            className="node-selector-button"
+                                            onClick={() => setIsGroupMenuOpen(!isGroupMenuOpen)}
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                <span className="node-selector-button-icon">👥</span>
+                                                <span>Gerenciar Grupos</span>
+                                            </span>
+                                            <span style={{ fontSize: '0.9rem' }}>
+                                                {isGroupMenuOpen ? '▾' : '▸'}
+                                            </span>
+                                        </button>
+                                        {isGroupMenuOpen && nodeTypesList.filter(nodeType => nodeType.category === 'Grupo').map(nodeType => (
                                     <button
                                         key={nodeType.type}
                                         className="node-selector-button"
@@ -9877,11 +9872,13 @@ function FlowEditorPage({
                                         <span>{nodeType.label}</span>
                                     </button>
                                 ))}
+                                    </>
+                                )}
                             </div>
                         </div>
                     </div>
                 )}
-                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} presselDomains={presselDomains} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} />}
+                {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} presselDomains={presselDomains} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} isDisparoFlow={isDisparoFlow} />}
             </div>
         );
     }

@@ -227,7 +227,14 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
             break;
         }
         
-        if (currentNode.type === 'action') {
+        if (currentNode.type === 'trigger') {
+            // Trigger apenas passa para o próximo nó conectado
+            currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+            if (!currentNodeId) {
+                logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
+                break;
+            }
+        } else if (currentNode.type === 'action') {
             // Processar ações do nó
             const actions = currentNode.data?.actions || [];
             if (actions.length > 0) {

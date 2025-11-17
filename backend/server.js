@@ -2224,23 +2224,17 @@ app.get('/api/flows/:id/node-stats', authenticateJwt, async (req, res) => {
 // ENDPOINTS PARA DISPARO_FLOWS
 // ==========================================================
 
-// Função auxiliar para validar fluxo de disparo (não pode ter trigger)
+// Função auxiliar para validar fluxo de disparo (pode ter trigger, mas deve ter pelo menos uma ação)
 function validateDisparoFlow(nodesArray) {
     if (!Array.isArray(nodesArray)) {
         return { valid: false, message: 'Nodes deve ser um array.' };
     }
     
     if (nodesArray.length === 0) {
-        return { valid: false, message: 'Fluxo deve ter pelo menos um nó de ação.' };
+        return { valid: false, message: 'Fluxo deve ter pelo menos um nó.' };
     }
     
-    // Verificar se há algum nó do tipo trigger
-    const hasTrigger = nodesArray.some(node => node.type === 'trigger');
-    if (hasTrigger) {
-        return { valid: false, message: 'Fluxos de disparo não podem ter nó do tipo trigger.' };
-    }
-    
-    // Verificar se há pelo menos um nó de ação
+    // Verificar se há pelo menos um nó de ação (trigger é permitido mas não conta como ação)
     const hasAction = nodesArray.some(node => node.type === 'action');
     if (!hasAction) {
         return { valid: false, message: 'Fluxo deve ter pelo menos um nó de ação.' };
@@ -2276,8 +2270,8 @@ app.post('/api/disparo-flows', authenticateJwt, async (req, res) => {
     const { name, botId } = req.body;
     if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
     try {
-        // Criar fluxo inicial sem trigger - apenas com um nó de ação vazio
-        const initialFlow = { nodes: [{ id: 'action-1', type: 'action', position: { x: 250, y: 50 }, data: { actions: [] } }], edges: [] };
+        // Criar fluxo inicial com trigger (disparo manual)
+        const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }], edges: [] };
         const [newFlow] = await sqlWithRetry(`
             INSERT INTO disparo_flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, 
             [req.user.id, botId, name, JSON.stringify(initialFlow)]);
@@ -6426,17 +6420,23 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 console.log(`[DISPARO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks de ${CONTACTS_CHUNK_SIZE}`);
         
-                // Encontrar o primeiro nó de ação (pular trigger se existir)
+                // Encontrar o trigger (nó inicial do disparo)
                 let startNodeId = null;
-                for (const node of flowNodes) {
-                    if (node.type === 'action') {
-                        startNodeId = node.id;
-                        break;
+                const triggerNode = flowNodes.find(node => node.type === 'trigger');
+                
+                if (triggerNode) {
+                    // Se tem trigger, começar do trigger (ele passará para o próximo nó automaticamente)
+                    startNodeId = triggerNode.id;
+                } else {
+                    // Fallback: procurar primeiro nó de ação (compatibilidade com fluxos antigos)
+                    const actionNode = flowNodes.find(node => node.type === 'action');
+                    if (actionNode) {
+                        startNodeId = actionNode.id;
                     }
                 }
                 
                 if (!startNodeId) {
-                    console.error('[DISPARO] Nenhum nó de ação encontrado no fluxo!');
+                    console.error('[DISPARO] Nenhum nó inicial encontrado no fluxo!');
                     await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', historyId]);
                     return;
                 }
