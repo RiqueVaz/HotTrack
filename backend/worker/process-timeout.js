@@ -13,6 +13,7 @@ const { createPixService } = require('../shared/pix');
 const { sqlTx, sqlWithRetry } = require('../db');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
+const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -88,16 +89,21 @@ const normalizeChatIdentifier = (value) => {
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
+    
+    // Aplicar rate limiting proativo antes de fazer a requisição
+    const chatId = data?.chat_id || null;
+    await telegramRateLimiter.waitIfNeeded(botToken, chatId);
+    
     for (let i = 0; i < retries; i++) {
         try {
             const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
             return response.data;
         } catch (error) {
-            const chatId = data?.chat_id || 'unknown';
+            const errorChatId = data?.chat_id || 'unknown';
             
             // Tratamento para erro 403 (bot bloqueado)
             if (error.response && error.response.status === 403) {
-                console.warn(`[WORKER - Telegram API] O bot foi bloqueado pelo usuário. ChatID: ${chatId}`);
+                console.warn(`[WORKER - Telegram API] O bot foi bloqueado pelo usuário. ChatID: ${errorChatId}`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
@@ -106,7 +112,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 const retryAfter = parseInt(error.response.headers['retry-after'] || error.response.headers['Retry-After'] || '2');
                 const waitTime = retryAfter * 1000; // Converter para milissegundos
                 
-                console.warn(`[WORKER - Telegram API] Rate limit atingido (429). Aguardando ${retryAfter}s antes de retry. Method: ${method}, ChatID: ${chatId}`);
+                console.warn(`[WORKER - Telegram API] Rate limit atingido (429). Aguardando ${retryAfter}s antes de retry. Method: ${method}, ChatID: ${errorChatId}`);
                 
                 if (i < retries - 1) {
                     await new Promise(res => setTimeout(res, waitTime));
@@ -121,7 +127,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             // Tratamento específico para TOPIC_CLOSED
             if (error.response && error.response.status === 400 && 
                 error.response.data?.description?.includes('TOPIC_CLOSED')) {
-                console.warn(`[WORKER - Telegram API] Chat de grupo fechado. ChatID: ${chatId}`);
+                console.warn(`[WORKER - Telegram API] Chat de grupo fechado. ChatID: ${errorChatId}`);
                 return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_CLOSED' };
             }
 
@@ -131,7 +137,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 continue;
             }
 
-            console.error(`[WORKER - Telegram API ERROR] Method: ${method}, ChatID: ${chatId}:`, error.response?.data || error.message);
+            console.error(`[WORKER - Telegram API ERROR] Method: ${method}, ChatID: ${errorChatId}:`, error.response?.data || error.message);
             if (i < retries - 1) { 
                 await new Promise(res => setTimeout(res, delay * (i + 1))); 
             } else { 

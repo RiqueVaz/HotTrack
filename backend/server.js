@@ -1423,9 +1423,15 @@ async function generatePresselHTML(pressel, pixelIds) {
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
 // ==========================================================
+const telegramRateLimiter = require('./shared/telegram-rate-limiter');
+
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
+
+    // Aplicar rate limiting proativo antes de fazer a requisição
+    const chatId = data?.chat_id || null;
+    await telegramRateLimiter.waitIfNeeded(botToken, chatId);
 
     for (let i = 0; i < retries; i++) {
         try {
