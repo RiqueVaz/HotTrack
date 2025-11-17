@@ -3871,7 +3871,12 @@
             try {
                 const { startDate, endDate } = this.state.dateFilter;
                 const query = new URLSearchParams({ startDate: startDate || '', endDate: endDate || '' }).toString();
-                const transactions = await this.apiRequest(`/api/transactions?${query}`);
+                const response = await this.apiRequest(`/api/transactions?${query}`);
+                
+                // Extrair array de transações da resposta
+                // Compatibilidade: se for array direto (formato antigo) ou objeto com transactions (formato novo)
+                const transactions = Array.isArray(response) ? response : (response.transactions || []);
+                
                 this.state.data.transactions = transactions;
                 this.renderTransactionsTable();
             } catch (e) {
