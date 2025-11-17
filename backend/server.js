@@ -5153,7 +5153,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     );
                     logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
-                    logger.debug(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
+                    // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
+                    if (click.pressel_id || click.checkout_id) {
+                        await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
+                        logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
+                    }
                 } catch (error) {
                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido
@@ -7437,6 +7441,12 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
         );
 
         console.log(`[Manual PIX] Evento 'waiting_payment' enviado para Utmify para transação ${pixResult.transaction_id}`);
+
+        // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
+        if (click.pressel_id || click.checkout_id) {
+            await sendMetaEvent('InitiateCheckout', click, { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 }, null);
+            console.log(`[Manual PIX] Evento 'InitiateCheckout' enviado para Meta para transação ${pixResult.transaction_id}`);
+        }
 
         res.status(200).json({ message: 'PIX enviado ao usuário com sucesso.' });
     } catch (error) {
