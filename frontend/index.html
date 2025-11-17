@@ -174,6 +174,10 @@
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes shimmer { 
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
         .animate-fade-in { animation: fadeIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
         .table-custom th { color: var(--text-primary); }
         .table-custom th, .table-custom td { padding: 1rem; border-bottom: 1px solid var(--border-color); text-align: left; }
@@ -7514,33 +7518,64 @@ function generatePreviewHTML(data) {
                                         </tr>
                                         {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                             <tr>
-                                                <td colSpan="7" style={{padding: '0.5rem 1rem', background: 'var(--bg-secondary)'}}>
-                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
-                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)'}}>
-                                                            <span>
-                                                                <strong>Progresso:</strong> {item.processed_jobs || 0} de {item.total_jobs || 0} processados
-                                                            </span>
-                                                            <span style={{fontWeight: '600', color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#a16207'}}>
+                                                <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
+                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
+                                                                    Progresso:
+                                                                </span>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
+                                                                    {item.processed_jobs || 0} de {item.total_jobs || 0} processados
+                                                                </span>
+                                                            </div>
+                                                            <span style={{
+                                                                fontWeight: '700', 
+                                                                fontSize: '0.9rem',
+                                                                color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#fbbf24',
+                                                                textShadow: item.status === 'RUNNING' 
+                                                                    ? '0 0 8px rgba(56, 189, 248, 0.4)' 
+                                                                    : '0 0 8px rgba(251, 191, 36, 0.4)'
+                                                            }}>
                                                                 {progressPercentage}%
                                                             </span>
                                                         </div>
                                                         <div style={{
                                                             width: '100%',
-                                                            height: '8px',
-                                                            background: 'var(--bg-primary)',
-                                                            borderRadius: '4px',
+                                                            height: '12px',
+                                                            background: 'rgba(15, 23, 42, 0.6)',
+                                                            borderRadius: '6px',
                                                             overflow: 'hidden',
-                                                            position: 'relative'
+                                                            position: 'relative',
+                                                            border: '1px solid rgba(56, 189, 248, 0.1)',
+                                                            boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
                                                         }}>
                                                             <div style={{
                                                                 height: '100%',
                                                                 width: `${progressPercentage}%`,
                                                                 background: item.status === 'RUNNING' 
-                                                                    ? 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
-                                                                    : 'linear-gradient(90deg, #a16207, #ca8a04)',
-                                                                transition: 'width 0.3s ease',
-                                                                borderRadius: '4px'
-                                                            }}></div>
+                                                                    ? 'linear-gradient(90deg, #38bdf8 0%, #0ea5e9 50%, #0284c7 100%)'
+                                                                    : 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%)',
+                                                                transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                borderRadius: '6px',
+                                                                boxShadow: item.status === 'RUNNING'
+                                                                    ? '0 0 12px rgba(56, 189, 248, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                                                                    : '0 0 12px rgba(251, 191, 36, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
+                                                                position: 'relative',
+                                                                overflow: 'hidden'
+                                                            }}>
+                                                                {item.status === 'RUNNING' && (
+                                                                    <div style={{
+                                                                        position: 'absolute',
+                                                                        top: 0,
+                                                                        left: '-100%',
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
+                                                                        animation: 'shimmer 2s infinite'
+                                                                    }}></div>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </td>
@@ -7750,33 +7785,64 @@ function generatePreviewHTML(data) {
                                         </tr>
                                         {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                             <tr>
-                                                <td colSpan="7" style={{padding: '0.5rem 1rem', background: 'var(--bg-secondary)'}}>
-                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
-                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)'}}>
-                                                            <span>
-                                                                <strong>Progresso:</strong> {item.processed_jobs || 0} de {item.total_jobs || 0} processados
-                                                            </span>
-                                                            <span style={{fontWeight: '600', color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#a16207'}}>
+                                                <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
+                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
+                                                                    Progresso:
+                                                                </span>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
+                                                                    {item.processed_jobs || 0} de {item.total_jobs || 0} processados
+                                                                </span>
+                                                            </div>
+                                                            <span style={{
+                                                                fontWeight: '700', 
+                                                                fontSize: '0.9rem',
+                                                                color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#fbbf24',
+                                                                textShadow: item.status === 'RUNNING' 
+                                                                    ? '0 0 8px rgba(56, 189, 248, 0.4)' 
+                                                                    : '0 0 8px rgba(251, 191, 36, 0.4)'
+                                                            }}>
                                                                 {progressPercentage}%
                                                             </span>
                                                         </div>
                                                         <div style={{
                                                             width: '100%',
-                                                            height: '8px',
-                                                            background: 'var(--bg-primary)',
-                                                            borderRadius: '4px',
+                                                            height: '12px',
+                                                            background: 'rgba(15, 23, 42, 0.6)',
+                                                            borderRadius: '6px',
                                                             overflow: 'hidden',
-                                                            position: 'relative'
+                                                            position: 'relative',
+                                                            border: '1px solid rgba(56, 189, 248, 0.1)',
+                                                            boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
                                                         }}>
                                                             <div style={{
                                                                 height: '100%',
                                                                 width: `${progressPercentage}%`,
                                                                 background: item.status === 'RUNNING' 
-                                                                    ? 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
-                                                                    : 'linear-gradient(90deg, #a16207, #ca8a04)',
-                                                                transition: 'width 0.3s ease',
-                                                                borderRadius: '4px'
-                                                            }}></div>
+                                                                    ? 'linear-gradient(90deg, #38bdf8 0%, #0ea5e9 50%, #0284c7 100%)'
+                                                                    : 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%)',
+                                                                transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                borderRadius: '6px',
+                                                                boxShadow: item.status === 'RUNNING'
+                                                                    ? '0 0 12px rgba(56, 189, 248, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                                                                    : '0 0 12px rgba(251, 191, 36, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
+                                                                position: 'relative',
+                                                                overflow: 'hidden'
+                                                            }}>
+                                                                {item.status === 'RUNNING' && (
+                                                                    <div style={{
+                                                                        position: 'absolute',
+                                                                        top: 0,
+                                                                        left: '-100%',
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
+                                                                        animation: 'shimmer 2s infinite'
+                                                                    }}></div>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </td>
