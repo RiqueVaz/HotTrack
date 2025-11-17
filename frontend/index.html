@@ -1362,6 +1362,7 @@
 
         // --- REFRESH AUTOMÁTICO DE TOKEN ---
         tokenRefreshTimer: null,
+        isRefreshing: false, // Flag para evitar múltiplos refresh simultâneos
 
         decodeJWT(token) {
             try {
@@ -3406,8 +3407,8 @@
                     throw err;
                 }
                 return data;
-            } catch (error) {
-                 if (error instanceof Error) {
+            } catch (error) {
+                 if (error instanceof Error) {
                     const statusCode = error.status;
                     const errorCode = error.code;
                     const isAuthError = statusCode === 401 || statusCode === 403;
@@ -3418,29 +3419,39 @@
                         endpoint.includes('/api/auth/refresh') ||
                         endpoint.includes('/api/auth/logout');
 
+                    // Tentar refresh em TODOS os casos de 401/403, não apenas quando looksExpired
                     const canRetryAuth =
                         !skipAuthRetry &&
-                        statusCode === 401 &&
+                        (statusCode === 401 || statusCode === 403) &&
                         !endpoint.includes('/api/auth/refresh') &&
                         !endpoint.includes('/api/auth/logout') &&
                         !endpoint.includes('/api/sellers/login');
 
-                    const looksExpired =
-                        errorCode === 'ACCESS_TOKEN_EXPIRED' ||
-                        (typeof error.message === 'string' && error.message.toLowerCase().includes('expirado'));
-
-                    if (canRetryAuth && looksExpired) {
+                    if (canRetryAuth) {
+                        console.log(`[API] Tentando renovar token após erro ${statusCode}...`);
                         const refreshed = await this.tryRefreshToken();
                         if (refreshed) {
+                            console.log(`[API] Token renovado, repetindo requisição...`);
                             return this.apiRequest(endpoint, method, body, customHeaders, { ...options, skipAuthRetry: true });
+                        } else {
+                            console.warn(`[API] Falha ao renovar token após erro ${statusCode}.`);
                         }
                     }
 
-                    this.showToast(error.message, 'error'); // Mostra o toast (ex: "Token inválido: Access Denied")
+                    // Só mostrar toast e fazer logout se não conseguiu renovar
+                    const refreshToken = this.state.refreshToken || this.getRefreshToken();
+                    const shouldLogout = isAuthError && !isPublicRoute && !refreshToken;
                     
-                    if (isAuthError && !isPublicRoute) {
-                        console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'. Deslogando...`);
+                    if (shouldLogout) {
+                        console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}' e sem refresh token. Deslogando...`);
+                        this.showToast('Sessão expirada. Por favor, faça login novamente.', 'error');
                         await this.logout();
+                    } else if (isAuthError && !isPublicRoute) {
+                        // Se tem refresh token mas falhou, não mostra toast de erro genérico
+                        // O erro já foi tratado acima
+                        console.warn(`[API Auth Error] Status ${statusCode} no endpoint '${endpoint}'.`);
+                    } else {
+                        this.showToast(error.message, 'error');
                     }
                  } else {
                     console.error(`Network Error on ${method} ${endpoint}:`, error);
@@ -3451,15 +3462,31 @@
         },
 
         async tryRefreshToken() {
+            // Se já está fazendo refresh, aguarda o refresh em andamento
+            if (this.isRefreshing) {
+                console.log('[Auth] Refresh já em andamento, aguardando...');
+                // Aguarda até 5 segundos pelo refresh em andamento
+                let waitCount = 0;
+                while (this.isRefreshing && waitCount < 50) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    waitCount++;
+                }
+                // Verifica se o refresh foi bem-sucedido
+                const token = this.state.token || this.getToken();
+                return !!token;
+            }
+
             const refreshToken = this.state.refreshToken || this.getRefreshToken();
             if (!refreshToken) {
                 console.warn('[Auth] Nenhum refresh token disponível para renovar.');
                 return false;
             }
 
+            this.isRefreshing = true;
             const apiBaseUrl = this.state.API_BASE_URL || window.location.origin;
 
             try {
+                console.log('[Auth] Tentando renovar token...');
                 const response = await fetch(`${apiBaseUrl}/api/auth/refresh`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3475,23 +3502,31 @@
 
                 if (!response.ok) {
                     console.warn('[Auth] Falha ao renovar token:', data);
-                    if (data?.code === 'REFRESH_TOKEN_EXPIRED' || data?.code === 'REFRESH_TOKEN_INVALID') {
+                    if (data?.code === 'REFRESH_TOKEN_EXPIRED' || data?.code === 'REFRESH_TOKEN_INVALID' || data?.code === 'REFRESH_TOKEN_NOT_FOUND') {
+                        console.warn('[Auth] Refresh token inválido ou expirado, limpando tokens.');
                         this.clearAuthTokens();
                     }
                     return false;
                 }
 
-                if (data?.token) {
-                    this.setToken(data.token);
+                if (data?.token || data?.accessToken) {
+                    const newToken = data.token || data.accessToken;
+                    this.setToken(newToken);
+                    console.log('[Auth] Token renovado com sucesso.');
                 }
                 if (data?.refreshToken) {
                     this.setRefreshToken(data.refreshToken);
                 }
 
+                // Reagenda refresh automático após sucesso
+                this.scheduleTokenRefresh();
+
                 return true;
             } catch (error) {
                 console.error('[Auth] Erro ao tentar renovar token:', error);
                 return false;
+            } finally {
+                this.isRefreshing = false;
             }
         },
         
@@ -5415,23 +5450,36 @@ function generatePreviewHTML(data) {
                 const status = error?.response?.status;
                 const originalRequest = error?.config;
 
-                if (status === 401 && originalRequest && !originalRequest._retry) {
-                    originalRequest._retry = true;
-                    const refreshed = await App.tryRefreshToken();
-                    if (refreshed) {
-                        const token = App.state.token || App.getToken();
-                        if (token) {
-                            originalRequest.headers = originalRequest.headers || {};
-                            originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                // Tentar refresh em casos de 401 ou 403
+                if ((status === 401 || status === 403) && originalRequest && !originalRequest._retry) {
+                    // Evitar tentar refresh em rotas públicas ou de autenticação
+                    const isAuthRoute = 
+                        originalRequest.url?.includes('/api/auth/refresh') ||
+                        originalRequest.url?.includes('/api/auth/logout') ||
+                        originalRequest.url?.includes('/api/sellers/login');
+                    
+                    if (!isAuthRoute) {
+                        originalRequest._retry = true;
+                        console.log(`[Axios Interceptor] Tentando renovar token após erro ${status}...`);
+                        const refreshed = await App.tryRefreshToken();
+                        if (refreshed) {
+                            const token = App.state.token || App.getToken();
+                            if (token) {
+                                originalRequest.headers = originalRequest.headers || {};
+                                originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                                console.log(`[Axios Interceptor] Token renovado, repetindo requisição...`);
+                                return api(originalRequest);
+                            }
+                        } else {
+                            console.warn(`[Axios Interceptor] Falha ao renovar token após erro ${status}.`);
+                            // Só fazer logout se não houver refresh token disponível
+                            const refreshToken = App.state.refreshToken || App.getRefreshToken();
+                            if (!refreshToken) {
+                                console.warn(`[Axios Interceptor] Sem refresh token, deslogando...`);
+                                await App.logout();
+                            }
                         }
-                        return api(originalRequest);
                     }
-                    await App.logout();
-                    return Promise.reject(error);
-                }
-
-                if (status === 403) {
-                    await App.logout();
                 }
 
                 return Promise.reject(error);

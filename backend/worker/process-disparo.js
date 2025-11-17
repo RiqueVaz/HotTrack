@@ -474,7 +474,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
             } else if (action.type === 'action_pix') {
                 // Processar PIX - usar a mesma lógica do process-disparo original
                 const valueInCents = actionData.valueInCents || 100;
-                const pixMessage = await replaceVariables(actionData.pixMessage || 'Aqui está seu PIX:', variables);
+                const pixMessage = await replaceVariables(actionData.pixMessage || '', variables);
                 const pixButtonText = actionData.pixButtonText || '📋 Copiar Código';
                 
                 const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`);
@@ -527,7 +527,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         text: pixText,
                         parse_mode: 'Markdown',
                         reply_markup: {
-                            inline_keyboard: [[{ text: pixButtonText, callback_data: 'copy_pix' }]]
+                            inline_keyboard: [[{ text: pixButtonText, copy_text: { text: pixResult.qr_code_text } }]]
                         }
                     };
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
