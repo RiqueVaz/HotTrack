@@ -6321,8 +6321,25 @@ function generatePreviewHTML(data) {
                         console.error(`Erro ao buscar tags do bot ${botId}:`, error);
                     }
                 }
-                // Remover duplicatas por ID
-                const uniqueTags = Array.from(new Map(allTags.map(tag => [tag.id, tag])).values());
+                // Remover duplicatas por ID e também por título para tags automáticas
+                const seenIds = new Set();
+                const seenAutomaticTitles = new Set();
+                const uniqueTags = allTags.filter(tag => {
+                    // Para tags automáticas, verificar por título também
+                    if (tag.type === 'automatic' || tag.id === 'Pagante') {
+                        if (seenAutomaticTitles.has(tag.title)) {
+                            return false;
+                        }
+                        seenAutomaticTitles.add(tag.title);
+                        return true;
+                    }
+                    // Para tags custom, verificar por ID
+                    if (seenIds.has(tag.id)) {
+                        return false;
+                    }
+                    seenIds.add(tag.id);
+                    return true;
+                });
                 setAvailableTags(uniqueTags);
             } catch (error) {
                 console.error('Erro ao buscar tags:', error);
@@ -7321,7 +7338,12 @@ function generatePreviewHTML(data) {
         }, [tagContextMenu]);
         const tagFilterOptions = useMemo(() => {
             const automatic = [{ key: 'auto:Pagante', label: 'Pagante', variant: 'auto' }];
-            const custom = customTags.map(tag => ({
+            // Filtrar tags custom que têm o mesmo nome de tags automáticas para evitar duplicatas
+            const automaticTagNames = ['Pagante'];
+            const filteredCustomTags = customTags.filter(tag => 
+                !automaticTagNames.includes(tag.title)
+            );
+            const custom = filteredCustomTags.map(tag => ({
                 key: `custom:${tag.id}`,
                 label: tag.title,
                 variant: 'custom',
@@ -7407,7 +7429,9 @@ function generatePreviewHTML(data) {
             try {
                 const { data } = await api.get('/api/tags', { params: { botId: selectedBotId } });
                 const safeData = Array.isArray(data) ? data : [];
-                setCustomTags(safeData);
+                // Filtrar apenas tags custom (excluir tags automáticas)
+                const customOnlyTags = safeData.filter(tag => tag.type !== 'automatic' && tag.id !== 'Pagante');
+                setCustomTags(customOnlyTags);
                 setTagFilters(prev => prev.filter(key => {
                     if (!key.startsWith('custom:')) return true;
                     const tagId = Number(key.split(':')[1]);
@@ -7448,6 +7472,13 @@ function generatePreviewHTML(data) {
 
         const toggleLeadTag = async (tag, lead) => {
             if (!tag || !lead) return;
+            
+            // Prevenir adição/remoção de tags automáticas
+            if (tag.type === 'automatic' || tag.id === 'Pagante' || tag.title === 'Pagante') {
+                alert('Tags automáticas não podem ser adicionadas ou removidas manualmente.');
+                return;
+            }
+            
             const isAssigned = (lead.custom_tags || []).some(t => t.id === tag.id);
             try {
                 if (isAssigned) {
@@ -7469,7 +7500,8 @@ function generatePreviewHTML(data) {
                 }
             } catch (error) {
                 console.error("Erro ao atualizar tags do lead:", error);
-                alert('Erro ao atualizar tags do lead.');
+                const errorMessage = error.response?.data?.message || 'Erro ao atualizar tags do lead.';
+                alert(errorMessage);
             }
         };
 
@@ -7494,6 +7526,14 @@ function generatePreviewHTML(data) {
                 setTagError('Informe um título.');
                 return;
             }
+            
+            // Prevenir criação de tags com nomes de tags automáticas
+            const automaticTagNames = ['Pagante'];
+            if (automaticTagNames.includes(trimmedTitle)) {
+                setTagError(`Não é possível criar uma tag custom com o nome "${trimmedTitle}". Esta é uma tag automática do sistema.`);
+                return;
+            }
+            
             if (trimmedTitle.length > 12) {
                 setTagError('O título deve ter no máximo 12 caracteres.');
                 return;
@@ -7871,20 +7911,20 @@ function generatePreviewHTML(data) {
                             <p className="tag-context-empty">Crie tags para atribuí-las aos seus leads.</p>
                         ) : (
                             customTags.map(tag => {
-                                const isAssigned = (leadForContextMenu.custom_tags || []).some(t => t.id === tag.id);
-                                return (
-                                    <button
-                                        key={`context-${tag.id}`}
-                                        type="button"
-                                        className={`tag-context-item ${isAssigned ? 'active' : ''}`}
-                                        onClick={() => toggleLeadTag(tag, leadForContextMenu)}
-                                    >
-                                        <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
-                                        <span>{tag.title}</span>
-                                        {isAssigned && <span className="tag-context-check">✓</span>}
-                                    </button>
-                                );
-                            })
+                                    const isAssigned = (leadForContextMenu.custom_tags || []).some(t => t.id === tag.id);
+                                    return (
+                                        <button
+                                            key={`context-${tag.id}`}
+                                            type="button"
+                                            className={`tag-context-item ${isAssigned ? 'active' : ''}`}
+                                            onClick={() => toggleLeadTag(tag, leadForContextMenu)}
+                                        >
+                                            <span className="tag-color-dot" style={{ backgroundColor: tag.color }} />
+                                            <span>{tag.title}</span>
+                                            {isAssigned && <span className="tag-context-check">✓</span>}
+                                        </button>
+                                    );
+                                })
                         )}
                     </div>
                 )}

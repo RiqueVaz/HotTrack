@@ -2818,6 +2818,12 @@ app.get('/api/tags', authenticateJwt, async (req, res) => {
 
         const customTags = await sqlWithRetry(query, params);
         
+        // Filtrar tags custom que têm o mesmo nome de tags automáticas para evitar duplicatas
+        const automaticTagNames = ['Pagante'];
+        const filteredCustomTags = customTags.filter(tag => 
+            !automaticTagNames.includes(tag.title)
+        );
+        
         // Adicionar tags automáticas (Pagante)
         const automaticTags = [{
             id: 'Pagante',
@@ -2827,9 +2833,9 @@ app.get('/api/tags', authenticateJwt, async (req, res) => {
             type: 'automatic'
         }];
         
-        // Combinar tags custom com automáticas
+        // Combinar tags custom (filtradas) com automáticas
         const allTags = [
-            ...customTags.map(tag => ({ ...tag, type: 'custom' })),
+            ...filteredCustomTags.map(tag => ({ ...tag, type: 'custom' })),
             ...automaticTags
         ];
         
@@ -2847,6 +2853,12 @@ app.post('/api/tags', authenticateJwt, async (req, res) => {
 
     if (!trimmedTitle) {
         return res.status(400).json({ message: 'Título da tag é obrigatório.' });
+    }
+
+    // Prevenir criação de tags custom com nomes de tags automáticas
+    const automaticTagNames = ['Pagante'];
+    if (automaticTagNames.includes(trimmedTitle)) {
+        return res.status(400).json({ message: `Não é possível criar uma tag custom com o nome "${trimmedTitle}". Esta é uma tag automática do sistema.` });
     }
 
     if (trimmedTitle.length > TAG_TITLE_MAX_LENGTH) {
@@ -2917,6 +2929,12 @@ app.post('/api/leads/:botId/:chatId/tags', authenticateJwt, async (req, res) => 
     const { tagId } = req.body || {};
     const botId = parseInt(req.params.botId, 10);
     const chatId = req.params.chatId;
+    
+    // Verificar se é uma tag automática (string como "Pagante")
+    if (typeof tagId === 'string' && tagId === 'Pagante') {
+        return res.status(400).json({ message: 'Tags automáticas não podem ser adicionadas manualmente.' });
+    }
+    
     const parsedTagId = parseInt(tagId, 10);
 
     if (Number.isNaN(botId) || !chatId) {
