@@ -11,6 +11,8 @@ const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const { sqlTx, sqlWithRetry } = require('../db');
+const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
+const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -225,180 +227,29 @@ async function saveMessageToDb(sellerId, botId, message, senderType) {
     }
 }
 
+// Wrappers para funções de eventos que passam as dependências necessárias
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
-    console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
-    try {
-        let integrationId = null;
-
-        if (clickData.pressel_id) {
-            console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
-            const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
-            if (pressel) {
-                integrationId = pressel.utmify_integration_id;
-            }
-        } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
-        }
-
-        if (!integrationId) {
-            console.log(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
-            return;
-        }
-
-        console.log(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
-        const [integration] = await sqlTx`
-            SELECT api_token FROM utmify_integrations 
-            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
-        `;
-
-        if (!integration || !integration.api_token) {
-            console.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
-            return;
-        }
-
-        const utmifyApiToken = integration.api_token;
-        console.log(`[Utmify] Token encontrado. Montando payload...`);
-        
-        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
-        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
-        const payload = {
-            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
-            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
-            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
-            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
-            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
-            isTest: false
-        };
-
-        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
-
-    } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
-    }
+    return await sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx });
 }
+
 async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
-    try {
-        let presselPixels = [];
-        if (clickData.pressel_id) {
-            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
-        } else if (clickData.checkout_id) {
-            presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${clickData.checkout_id}`;
-        }
-
-        if (presselPixels.length === 0) {
-            console.log(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
-            return;
-        }
-
-        const userData = {
-            fbp: clickData.fbp || undefined,
-            fbc: clickData.fbc || undefined,
-            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
-        };
-
-        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
-            userData.client_ip_address = clickData.ip_address;
-        }
-        if (clickData.user_agent && clickData.user_agent.length > 10) { 
-            userData.client_user_agent = clickData.user_agent;
-        }
-
-        if (customerData?.name) {
-            const nameParts = customerData.name.trim().split(' ');
-            const firstName = nameParts[0].toLowerCase();
-            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
-            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
-            if (lastName) {
-                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
-            }
-        }
-
-        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
-        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
-        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
-        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
-
-        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
-        
-        for (const { pixel_config_id } of presselPixels) {
-            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
-            if (pixelConfig) {
-                const { pixel_id, meta_api_token } = pixelConfig;
-                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
-                
-                const payload = {
-                    data: [{
-                        event_name: eventName,
-                        event_time: Math.floor(Date.now() / 1000),
-                        event_id,
-                        user_data: userData,
-                        custom_data: {
-                            currency: 'BRL',
-                            value: transactionData.pix_value
-                        },
-                    }]
-                };
-                
-                if (eventName !== 'Purchase') {
-                    delete payload.data[0].custom_data.value;
-                }
-
-                console.log(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
-                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
-                console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
-
-                if (eventName === 'Purchase') {
-                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
-    }
+    return await sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx });
 }
 
+// Wrapper para handleSuccessfulPayment que passa as dependências necessárias
+// Worker não tem adminSubscription nem webpush, então passa null
 async function handleSuccessfulPayment(transaction_id, customerData) {
-    try {
-        const [transaction] = await sqlTx`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
-        if (!transaction) { 
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada ou não encontrada.`);
-            return; 
-        }
-
-        console.log(`[handleSuccessfulPayment] Processando pagamento para transação ${transaction_id}.`);
-
-        if (adminSubscription && webpush) {
-            const payload = JSON.stringify({
-                title: 'Nova Venda Paga!',
-                body: `Venda de R$ ${parseFloat(transaction.pix_value).toFixed(2)} foi confirmada.`,
-            });
-            webpush.sendNotification(adminSubscription, payload).catch(error => {
-                if (error.statusCode === 410) {
-                    console.log("Inscrição de notificação expirada. Removendo.");
-                    adminSubscription = null;
-                } else {
-                    console.warn("Falha ao enviar notificação push (não-crítico):", error.message);
-                }
-            });
-        }
-        
-        const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
-        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
-
-        if (click && seller) {
-            const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
-            const productData = { id: "prod_final", name: "Produto Vendido" };
-
-            await sendEventToUtmify('paid', click, transaction, seller, finalCustomerData, productData);
-            await sendMetaEvent('Purchase', click, transaction, finalCustomerData);
-        } else {
-            console.error(`[handleSuccessfulPayment] ERRO: Não foi possível encontrar dados do clique ou vendedor para a transação ${transaction_id}`);
-        }
-    } catch(error) {
-        console.error(`[handleSuccessfulPayment] ERRO CRÍTICO ao processar pagamento da transação ${transaction_id}:`, error);
-    }
+    return await handleSuccessfulPaymentShared({
+        transaction_id,
+        customerData,
+        sqlTx,
+        adminSubscription: null, // Worker não tem notificações push
+        webpush: null, // Worker não tem notificações push
+        sendEventToUtmify: (status, clickData, pixData, sellerData, customerData, productData) => 
+            sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
+        sendMetaEvent: (eventName, clickData, transactionData, customerData) => 
+            sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
+    });
 }
 
 function findNextNode(currentNodeId, handleId, edges) {

@@ -8,6 +8,7 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
@@ -183,6 +184,432 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
 // Funções de PIX (necessárias para o passo 'pix')
 
+// ==========================================================
+//           FUNÇÃO PARA PROCESSAR FLUXO COMPLETO DE DISPARO
+// ==========================================================
+
+// Função auxiliar para encontrar próximo nó
+function findNextNode(nodeId, handle, edges) {
+    const edge = edges.find(e => e.source === nodeId && e.sourceHandle === handle);
+    return edge ? edge.target : null;
+}
+
+// Função simplificada para processar fluxo de disparo
+// Esta função processa o fluxo completo começando do start_node_id
+async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId) {
+    const logPrefix = '[WORKER-DISPARO]';
+    logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
+    
+    let variables = { ...initialVariables };
+    let currentNodeId = startNodeId;
+    let safetyLock = 0;
+    let lastTransactionId = null; // Rastrear transaction_id para salvar no disparo_log
+    let logStatus = 'SENT';
+    let logDetails = 'Enviado com sucesso.';
+    const maxIterations = 50; // Proteção contra loops infinitos
+    
+    try {
+        // Atualizar variáveis com dados do usuário
+        const [user] = await sqlWithRetry(sqlTx`
+            SELECT first_name, last_name 
+            FROM telegram_chats 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
+            ORDER BY created_at DESC LIMIT 1`);
+        
+        if (user) {
+            variables.primeiro_nome = user.first_name || '';
+            variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+        }
+        
+        // Processar fluxo
+        while (currentNodeId && safetyLock < maxIterations) {
+            safetyLock++;
+            const currentNode = flowNodes.find(n => n.id === currentNodeId);
+            
+            if (!currentNode) {
+                logger.warn(`${logPrefix} Nó ${currentNodeId} não encontrado. Encerrando fluxo.`);
+                break;
+            }
+            
+            if (currentNode.type === 'trigger') {
+                // Trigger apenas passa para o próximo nó conectado
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                if (!currentNodeId) {
+                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
+                    break;
+                }
+            } else if (currentNode.type === 'action') {
+                // Processar ações do nó
+                const actions = currentNode.data?.actions || [];
+                if (actions.length > 0) {
+                    try {
+                        const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
+                        if (returnedTransactionId) {
+                            lastTransactionId = returnedTransactionId;
+                        }
+                    } catch (error) {
+                        logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
+                        logStatus = 'FAILED';
+                        logDetails = error.message.substring(0, 255);
+                        break;
+                    }
+                }
+                
+                // Encontrar próximo nó
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+            } else {
+                // Tipo de nó não suportado em disparos
+                logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
+                break;
+            }
+        }
+    } catch (error) {
+        logStatus = 'FAILED';
+        logDetails = error.message.substring(0, 255);
+        logger.error(`${logPrefix} Erro crítico ao processar fluxo:`, error);
+    }
+    
+    // Atualizar histórico e salvar disparo_log
+    if (historyId) {
+        try {
+            if (logStatus === 'FAILED') {
+                await sqlWithRetry(sqlTx`
+                    UPDATE disparo_history 
+                    SET processed_jobs = processed_jobs + 1,
+                        failure_count = failure_count + 1
+                    WHERE id = ${historyId}
+                `);
+            } else {
+                await sqlWithRetry(sqlTx`
+                    UPDATE disparo_history 
+                    SET processed_jobs = processed_jobs + 1
+                    WHERE id = ${historyId}
+                `);
+            }
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao atualizar histórico:`, error);
+        }
+        
+        // Salvar disparo_log
+        try {
+            await sqlWithRetry(
+                sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
+                       VALUES (${historyId}, ${chatId}, ${botId}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
+            );
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao salvar disparo_log:`, error);
+        }
+    }
+}
+
+// Funções para envio de eventos Meta e Utmify
+async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
+    logger.debug(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
+    try {
+        let integrationId = null;
+
+        if (clickData.pressel_id) {
+            logger.debug(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
+            const [pressel] = await sqlWithRetry(sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`);
+            if (pressel) {
+                integrationId = pressel.utmify_integration_id;
+            }
+        } else if (clickData.checkout_id) {
+            logger.debug(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
+        }
+
+        if (!integrationId) {
+            logger.debug(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
+            return;
+        }
+
+        logger.debug(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
+        const [integration] = await sqlTx`
+            SELECT api_token FROM utmify_integrations 
+            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
+        `;
+
+        if (!integration || !integration.api_token) {
+            logger.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
+            return;
+        }
+
+        const utmifyApiToken = integration.api_token;
+        logger.debug(`[Utmify] Token encontrado. Montando payload...`);
+        
+        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
+        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
+        const payload = {
+            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
+            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
+            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
+            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
+            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
+            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
+            isTest: false
+        };
+
+        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
+        logger.debug(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+
+    } catch (error) {
+        logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+    }
+}
+
+async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
+    try {
+        let presselPixels = [];
+        if (clickData.pressel_id) {
+            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+        } else if (clickData.checkout_id) {
+            // Verificar se é checkout hospedado (string) ou checkout antigo (integer)
+            const checkoutId = clickData.checkout_id;
+            if (String(checkoutId).startsWith('cko_')) {
+                // Buscar pixel_id do config do hosted_checkout
+                const [hostedCheckout] = await sqlTx`
+                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
+                    FROM hosted_checkouts 
+                    WHERE id = ${checkoutId}
+                `;
+                
+                if (hostedCheckout?.pixel_id) {
+                    // Converter pixel_id para o formato esperado
+                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
+                }
+            } else {
+                // É um checkout antigo (integer), usar a tabela checkout_pixels
+                presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+            }
+        }
+
+        if (presselPixels.length === 0) {
+            logger.debug(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
+            return;
+        }
+
+        const userData = {
+            fbp: clickData.fbp || undefined,
+            fbc: clickData.fbc || undefined,
+            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
+        };
+
+        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
+            userData.client_ip_address = clickData.ip_address;
+        }
+        if (clickData.user_agent && clickData.user_agent.length > 10) { 
+            userData.client_user_agent = clickData.user_agent;
+        }
+
+        if (customerData?.name) {
+            const nameParts = customerData.name.trim().split(' ');
+            const firstName = nameParts[0].toLowerCase();
+            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
+            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
+            if (lastName) {
+                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
+            }
+        }
+
+        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
+        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
+        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
+        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
+
+        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
+        
+        for (const { pixel_config_id } of presselPixels) {
+            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+            if (pixelConfig) {
+                const { pixel_id, meta_api_token } = pixelConfig;
+                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
+                
+                const payload = {
+                    data: [{
+                        event_name: eventName,
+                        event_time: Math.floor(Date.now() / 1000),
+                        event_id,
+                        user_data: userData,
+                        custom_data: {
+                            currency: 'BRL',
+                            value: transactionData.pix_value
+                        },
+                    }]
+                };
+                
+                if (eventName !== 'Purchase') {
+                    delete payload.data[0].custom_data.value;
+                }
+
+                logger.debug(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
+                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
+                logger.debug(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
+
+                if (eventName === 'Purchase') {
+                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                }
+            }
+        }
+    } catch (error) {
+        logger.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
+    }
+}
+
+// Função simplificada para processar ações em disparos
+async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
+    let lastPixTransactionId = null; // Rastrear último transaction_id gerado
+    
+    for (const action of actions) {
+        try {
+            const actionData = action.data || {};
+            
+            if (action.type === 'message') {
+                const text = await replaceVariables(actionData.text || '', variables);
+                if (text && text.trim()) {
+                    const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
+                    if (actionData.buttonText && actionData.buttonUrl) {
+                        payload.reply_markup = { inline_keyboard: [[{ text: actionData.buttonText, url: actionData.buttonUrl }]] };
+                    }
+                    await sendTelegramRequest(botToken, 'sendMessage', payload);
+                }
+            } else if (action.type === 'typing_action') {
+                const duration = actionData.durationInSeconds || 1;
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'typing' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+            } else if (['image', 'video', 'audio'].includes(action.type)) {
+                let fileId = actionData.fileId || actionData.file_id || actionData.imageUrl || actionData.videoUrl || actionData.audioUrl;
+                const caption = await replaceVariables(actionData.caption || '', variables);
+                
+                // Se tem mediaLibraryId, buscar da biblioteca
+                if (actionData.mediaLibraryId && !fileId) {
+                    const [media] = await sqlWithRetry(
+                        'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
+                        [actionData.mediaLibraryId]
+                    );
+                    if (media && media.file_id) {
+                        fileId = media.file_id;
+                    }
+                }
+                
+                if (fileId) {
+                    const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                    if (isLibraryFile) {
+                        await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                    } else {
+                        const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                        const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                        await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' });
+                    }
+                }
+            } else if (action.type === 'delay') {
+                const delaySeconds = actionData.delayInSeconds || 1;
+                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+            } else if (action.type === 'action_pix') {
+                // Processar PIX - usar a mesma lógica do process-disparo original
+                const valueInCents = actionData.valueInCents || 100;
+                const pixMessage = await replaceVariables(actionData.pixMessage || '', variables);
+                const pixButtonText = actionData.pixButtonText || '📋 Copiar Código';
+                
+                const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`);
+                if (!seller) {
+                    throw new Error('Vendedor não encontrado para gerar PIX.');
+                }
+                
+                // Buscar ou criar click para associar a transação
+                let click = null;
+                let clickIdInternal = null;
+                
+                if (variables.click_id) {
+                    const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                    const [existingClick] = await sqlWithRetry(sqlTx`
+                        SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                    `);
+                    
+                    if (existingClick) {
+                        click = existingClick;
+                        clickIdInternal = existingClick.id;
+                    }
+                }
+                
+                // Se não encontrou click, criar um novo para tracking
+                if (!click) {
+                    const [newClick] = await sqlWithRetry(sqlTx`
+                        INSERT INTO clicks (seller_id, bot_id, ip_address, user_agent)
+                        VALUES (${sellerId}, ${botId}, NULL, 'Disparo Massivo')
+                        RETURNING *
+                    `);
+                    click = newClick;
+                    clickIdInternal = newClick.id;
+                    logger.debug(`${logPrefix} Click criado para disparo: ${clickIdInternal}`);
+                }
+                
+                // Gerar PIX usando a função existente com click_id_internal
+                const pixResult = await generatePixWithFallback(
+                    seller,
+                    valueInCents,
+                    process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost',
+                    seller.api_key,
+                    null, // ip_address não disponível em disparos
+                    clickIdInternal // Passar click_id_internal para tracking no dashboard
+                );
+                
+                if (pixResult && pixResult.qr_code_text) {
+                    // Salvar transaction_id para retornar
+                    lastPixTransactionId = pixResult.transaction_id;
+                    
+                    const pixText = `${pixMessage}\n\n\`\`\`\n${pixResult.qr_code_text}\n\`\`\``;
+                    const payload = {
+                        chat_id: chatId,
+                        text: pixText,
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: pixButtonText, copy_text: { text: pixResult.qr_code_text } }]]
+                        }
+                    };
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    
+                    // Enviar eventos apenas se a mensagem foi enviada com sucesso
+                    if (sentMessage && sentMessage.ok) {
+                        // Buscar a transação completa para os eventos
+                        const [transaction] = await sqlWithRetry(sqlTx`
+                            SELECT * FROM pix_transactions WHERE id = ${pixResult.internal_transaction_id}
+                        `);
+                        
+                        if (transaction && click) {
+                            // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
+                            if (click.pressel_id || click.checkout_id) {
+                                await sendMetaEvent('InitiateCheckout', click, { id: transaction.id, pix_value: valueInCents / 100 }, null);
+                                logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para transação ${transaction.id}`);
+                            }
+                            
+                            // Enviar waiting_payment para Utmify
+                            const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                            const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
+                            await sendEventToUtmify(
+                                'waiting_payment',
+                                click,
+                                { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() },
+                                seller,
+                                customerDataForUtmify,
+                                productDataForUtmify
+                            );
+                            logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para transação ${transaction.id}`);
+                        }
+                    }
+                }
+            } else if (action.type === 'action_check_pix') {
+                // Verificar PIX - lógica simplificada (não implementada completamente para disparos)
+                logger.debug(`${logPrefix} Ação check_pix não suportada em disparos. Pulando.`);
+            }
+            // Outros tipos de ação podem ser adicionados aqui conforme necessário
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao processar ação ${action.type}:`, error);
+            // Continua processando outras ações mesmo se uma falhar
+        }
+    }
+    
+    return lastPixTransactionId; // Retornar último transaction_id ou null
+}
 
 // ==========================================================
 //           LÓGICA DO WORKER
@@ -194,398 +621,32 @@ async function handler(req, res) {
         return res.status(499).end(); // 499 = Client Closed Request
     }
     
-    const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
-        // Log removido por segurança
+    const { history_id, chat_id, bot_id, flow_nodes, flow_edges, start_node_id, variables_json } = req.body;
     
-      const step = JSON.parse(step_json);
-      const userVariables = JSON.parse(variables_json);
-
-       
-      let logStatus = 'SENT';
-        let logDetails = 'Enviado com sucesso.';
-      let lastTransactionId = null;
+    if (!flow_nodes || !flow_edges || !start_node_id) {
+        return res.status(400).json({ message: 'Formato inválido. Requer flow_nodes, flow_edges e start_node_id.' });
+    }
     
-      try {
-        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
+    try {
+        const flowNodes = JSON.parse(flow_nodes);
+        const flowEdges = JSON.parse(flow_edges);
+        const userVariables = JSON.parse(variables_json || '{}');
+        
+        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
-          throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
-        }
-         
-        const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
-            if (!seller) {
-                throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
-            }
-
-            // Busca o click_id mais recente para garantir que está atualizado
-            const [chat] = await sqlWithRetry(sqlTx`
-                SELECT click_id FROM telegram_chats 
-                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
-                ORDER BY created_at DESC LIMIT 1
-            `);
-            if (chat?.click_id) {
-                userVariables.click_id = chat.click_id;
-            }
-    
-          let response;
-            const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-    
-        try {
-            if (step.type === 'message') {
-                // (Lógica para enviar 'message' ... igual a antes)
-          const textToSend = await replaceVariables(step.text, userVariables);
-          let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
-          if (step.buttonText && step.buttonUrl) {
-            payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
-          }
-          response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
-        } else if (['image', 'video', 'audio'].includes(step.type)) {
-          const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
-          let fileIdentifier = step[urlMap[step.type]];
-          const caption = await replaceVariables(step.caption, userVariables);
-          
-          // Se o step tem mediaLibraryId, busca o file_id da biblioteca
-          if (step.mediaLibraryId) {
-            try {
-              const [media] = await sqlWithRetry(
-                'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
-                [step.mediaLibraryId]
-              );
-              if (media && media.file_id) {
-                fileIdentifier = media.file_id;
-                // Log removido por segurança
-              } else {
-                logger.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
-                throw new Error(`Arquivo da biblioteca não encontrado: ${step.mediaLibraryId}`);
-              }
-            } catch (error) {
-              logger.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
-              throw error;
-            }
-          }
-          
-          if (!fileIdentifier) {
-            throw new Error(`Nenhum file_id ou mediaLibraryId fornecido para o step ${step.type}`);
-          }
-          
-          const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
-          if (isLibraryFile) {
-            response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
-          } else {
-            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
-            const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
-            const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
-            response = await sendTelegramRequest(bot.bot_token, method, payload);
-          }
-        } else if (step.type === 'action_create_invite_link') {
-            if (!bot.telegram_supergroup_id) {
-                throw new Error('Supergrupo não configurado para este bot.');
-            }
-
-            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
-            if (!normalizedChatId) {
-                throw new Error('ID do supergrupo inválido para criação de convite.');
-            }
-
-            const userToUnban = step.userId || chat_id;
-            const normalizedUserId = normalizeChatIdentifier(userToUnban);
-
-            try {
-                const unbanResponse = await sendTelegramRequest(
-                    bot.bot_token,
-                    'unbanChatMember',
-                    {
-                        chat_id: normalizedChatId,
-                        user_id: normalizedUserId,
-                        only_if_banned: true
-                    }
-                );
-                if (unbanResponse?.ok) {
-                    logger.debug(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
-                } else if (unbanResponse && !unbanResponse.ok) {
-                    const desc = (unbanResponse.description || '').toLowerCase();
-                    if (desc.includes("can't remove chat owner")) {
-                        logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
-                    } else {
-                        logger.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
-                    }
-                }
-            } catch (unbanError) {
-                const message = (unbanError?.message || '').toLowerCase();
-                if (message.includes("can't remove chat owner")) {
-                    logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
-                } else {
-                    logger.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
-                }
-            }
-
-            const inviteNameRaw = (step.linkName || `Convite_${chat_id}_${Date.now()}`).toString().trim();
-            const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
-
-            const invitePayload = {
-                chat_id: normalizedChatId,
-                name: inviteName,
-                member_limit: 1,
-                creates_join_request: false
-            };
-
-            if (step.expireMinutes) {
-                invitePayload.expire_date = Math.floor(Date.now() / 1000) + (parseInt(step.expireMinutes, 10) * 60);
-            }
-
-            const inviteResponse = await sendTelegramRequest(bot.bot_token, 'createChatInviteLink', invitePayload);
-            if (!inviteResponse.ok) {
-                throw new Error(inviteResponse.description || 'Falha ao criar link de convite.');
-            }
-
-            userVariables.invite_link = inviteResponse.result.invite_link;
-            userVariables.invite_link_name = inviteResponse.result.name;
-            userVariables.invite_link_single_use = true;
-            userVariables.user_was_banned = false;
-            userVariables.banned_user_id = undefined;
-
-            const buttonText = (step.buttonText || DEFAULT_INVITE_BUTTON_TEXT).trim() || DEFAULT_INVITE_BUTTON_TEXT;
-            const template = (step.messageText || step.text || DEFAULT_INVITE_MESSAGE).trim() || DEFAULT_INVITE_MESSAGE;
-            const messageText = await replaceVariables(template, userVariables);
-            const messagePayload = {
-                chat_id: chat_id,
-                text: messageText,
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[{ text: buttonText, url: inviteResponse.result.invite_link }]]
-                }
-            };
-
-            const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', messagePayload);
-            if (messageResponse.ok) {
-                await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
-                response = messageResponse;
-            } else {
-                throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
-            }
-
-            logger.debug(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
-
-        } else if (step.type === 'action_remove_user_from_group') {
-            if (!bot.telegram_supergroup_id) {
-                throw new Error('Supergrupo não configurado para este bot.');
-            }
-
-            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
-            if (!normalizedChatId) {
-                throw new Error('ID do supergrupo inválido para banimento.');
-            }
-
-            const handleOwnerBanRestriction = () => {
-                logger.debug(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
-                userVariables.user_was_banned = false;
-                userVariables.banned_user_id = undefined;
-            };
-
-            const userToRemove = step.userId || chat_id;
-            const normalizedUserId = normalizeChatIdentifier(userToRemove);
-
-            let banResponse;
-            try {
-                banResponse = await sendTelegramRequest(
-                    bot.bot_token,
-                    'banChatMember',
-                    {
-                        chat_id: normalizedChatId,
-                        user_id: normalizedUserId,
-                        revoke_messages: step.deleteMessages || false
-                    }
-                );
-            } catch (banError) {
-                const errorDesc =
-                    banError?.response?.data?.description ||
-                    banError?.description ||
-                    banError?.message ||
-                    '';
-                if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
-                    handleOwnerBanRestriction();
-                    response = null;
-                } else {
-                    throw banError;
-                }
-            }
-
-            if (banResponse?.ok) {
-                logger.debug(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
-                userVariables.user_was_banned = true;
-                userVariables.banned_user_id = userToRemove;
-                userVariables.last_ban_at = new Date().toISOString();
-
-                const linkToRevoke = step.inviteLink || userVariables.invite_link;
-                if (linkToRevoke) {
-                    try {
-                        const revokeResponse = await sendTelegramRequest(
-                            bot.bot_token,
-                            'revokeChatInviteLink',
-                            {
-                                chat_id: normalizedChatId,
-                                invite_link: linkToRevoke
-                            }
-                        );
-                        if (revokeResponse.ok) {
-                            logger.debug(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
-                            userVariables.invite_link_revoked = true;
-                            delete userVariables.invite_link;
-                            delete userVariables.invite_link_name;
-                        } else {
-                            logger.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
-                        }
-                    } catch (revokeError) {
-                        logger.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
-                    }
-                }
-
-                if (step.sendMessage) {
-                    const messageText = await replaceVariables(
-                        step.messageText || 'Você foi removido do grupo.',
-                        userVariables
-                    );
-                    const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                        chat_id: chat_id,
-                        text: messageText,
-                        parse_mode: 'HTML'
-                    });
-                    if (messageResponse.ok) {
-                        await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
-                        response = messageResponse;
-                    } else {
-                        throw new Error(messageResponse.description || 'Falha ao enviar mensagem pós-banimento.');
-                    }
-                } else {
-                    response = null;
-                }
-            } else if (banResponse) {
-                const desc =
-                    (banResponse.description || '').toLowerCase();
-                if (desc.includes("can't remove chat owner")) {
-                    handleOwnerBanRestriction();
-                    response = null;
-                } else {
-                    throw new Error(banResponse.description || 'Falha ao remover usuário.');
-                }
-            }
-
-            } else if (step.type === 'pix') {
-                // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
-                if (!userVariables.click_id) {
-                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
-                }
-                const baseApiUrl = process.env.HOTTRACK_API_URL;
-                if (!baseApiUrl) {
-                    throw new Error('HOTTRACK_API_URL não configurada no worker.');
-                }
-                const cleanedClickId = userVariables.click_id.startsWith('/start ')
-                    ? userVariables.click_id.replace('/start ', '')
-                    : userVariables.click_id;
-                const apiResp = await axios.post(`${baseApiUrl}/api/pix/generate`, {
-                    click_id: cleanedClickId,
-                    value_cents: step.valueInCents
-                }, {
-                    headers: { 'x-api-key': seller.api_key }
-                });
-                const { transaction_id, qr_code_text } = apiResp.data;
-                lastTransactionId = transaction_id;
-                const messageText = await replaceVariables(step.pixMessage || "", userVariables);
-                const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
-                const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
-                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                    chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: qr_code_text } }]] }
-                });
-        } else if (step.type === 'check_pix' || step.type === 'delay') {
-                // Ignora ativamente esses passos, eles não enviam nada
-                logStatus = 'SKIPPED';
-                logDetails = `Passo ${step.type} ignorado pelo worker.`;
-                response = { ok: true, result: { message_id: `skip_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }};
-            }
-         
-          if (response && response.ok) {
-                    if (step.type !== 'delay' && step.type !== 'check_pix') {
-              await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
-                    }
-          } else if(response && !response.ok) {
-            throw new Error(response.description || 'Falha no Telegram');
-          }
-        } catch(e) {
-          logStatus = 'FAILED';
-                logDetails = e.message.substring(0, 255); 
-          logger.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
-        }
-    
-        // --- LÓGICA DE CONCLUSÃO ---
-        try {
-          // 1. Loga o resultado deste job
-          await sqlWithRetry(
-            sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
-                       VALUES (${history_id}, ${chat_id}, ${bot_id}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
-          );
-    
-          // 2. Atualiza a contagem de falhas (se houver) e de processados
-            let query;
-            if (logStatus === 'FAILED') {
-                query = sqlTx`UPDATE disparo_history
-                            SET processed_jobs = processed_jobs + 1,
-                                failure_count = failure_count + 1
-                            WHERE id = ${history_id}
-                            RETURNING processed_jobs, total_jobs, status`;
-            } else {
-                query = sqlTx`UPDATE disparo_history
-                            SET processed_jobs = processed_jobs + 1
-                            WHERE id = ${history_id}
-                            RETURNING processed_jobs, total_jobs, status`;
-            }
-          const [history] = await sqlWithRetry(query);
-    
-          // 3. Verifica se a campanha terminou
-          if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
-            logger.info(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
-            await sqlWithRetry(
-              sqlTx`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
-            );
-          }
-        } catch (dbError) {
-            logger.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
-        }
-            // --- FIM DA LÓGICA DE CONCLUSÃO ---
-
-            if (!res.headersSent) {
-                res.status(200).send('Worker de disparo finalizado.');
-            }
-    } catch (error) {
-        // Verificar se resposta já foi enviada antes de tentar enviar qualquer resposta
-        if (res.headersSent) {
-            logger.error('[WORKER-DISPARO] Erro após resposta já enviada:', error.message);
-            return;
+            throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
         }
         
-        // Tratar requisições abortadas silenciosamente
-        if (error.message?.includes('request aborted') || 
-            error.message?.includes('aborted') ||
-            req.aborted ||
-            error.code === 'ECONNRESET' ||
-            error.code === 'EPIPE') {
-            return res.status(499).end(); // 499 = Client Closed Request
-        }
-
-        logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
-        // Tenta logar a falha mesmo se o processamento principal quebrar
-        try {
-             await sqlWithRetry(
-                sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details) 
-                   VALUES (${history_id || 0}, ${chat_id || 0}, ${bot_id || 0}, 'FAILED', ${error.message.substring(0, 255)})`
-            );
-        } catch(logFailError) {
-            logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
-        }
+        await processDisparoFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, start_node_id, userVariables, flowNodes, flowEdges, history_id);
         
         if (!res.headersSent) {
-            res.status(500).send('Erro interno no worker de disparo.');
+            res.status(200).json({ message: 'Disparo processado com sucesso.' });
         }
-    
+    } catch (error) {
+        logger.error('[WORKER-DISPARO] Erro ao processar disparo:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Erro ao processar disparo.' });
+        }
     }
 }
 

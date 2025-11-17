@@ -24,6 +24,8 @@ const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
 const { sqlTx, sqlWithRetry } = require('./db');
+const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
+const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
 
 function parseJsonField(value, context) {
     if (value === null || value === undefined) {
@@ -280,6 +282,305 @@ app.post(
       }
      }
     );
+
+// Endpoint para processar disparos agendados (chamado pelo QStash)
+app.post(
+    '/api/worker/process-scheduled-disparo',
+    express.raw({ type: 'application/json' }),
+    async (req, res) => {
+        try {
+            // Verificar assinatura do QStash
+            const signature = req.headers["upstash-signature"];
+            const bodyString = req.body.toString();
+            
+            const isValid = await receiver.verify({
+                signature,
+                body: bodyString,
+            });
+            
+            if (!isValid) {
+                console.error("[WORKER-SCHEDULED-DISPARO] Verificação de assinatura do QStash falhou.");
+                return res.status(401).send("Invalid signature");
+            }
+            
+            const { history_id } = JSON.parse(bodyString);
+            
+            if (!history_id) {
+                return res.status(400).json({ message: 'history_id é obrigatório.' });
+            }
+            
+            // Buscar o histórico do disparo
+            const [history] = await sqlWithRetry(
+                'SELECT * FROM disparo_history WHERE id = $1',
+                [history_id]
+            );
+            
+            if (!history) {
+                return res.status(404).json({ message: 'Histórico de disparo não encontrado.' });
+            }
+            
+            // Validar que está com status SCHEDULED
+            if (history.status !== 'SCHEDULED') {
+                console.log(`[WORKER-SCHEDULED-DISPARO] Disparo ${history_id} não está agendado (status: ${history.status}). Ignorando.`);
+                return res.status(200).json({ message: 'Disparo já foi processado ou cancelado.' });
+            }
+            
+            // Buscar o fluxo de disparo
+            const [disparoFlow] = await sqlWithRetry(
+                'SELECT * FROM disparo_flows WHERE id = $1',
+                [history.disparo_flow_id]
+            );
+            
+            if (!disparoFlow) {
+                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+            }
+            
+            // Parse do fluxo
+            const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+            const flowNodes = flowData.nodes || [];
+            const flowEdges = flowData.edges || [];
+            
+            // Buscar contatos dos bots
+            const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
+            
+            // Extrair tagIds do flow_steps se existir
+            let tagIds = null;
+            if (history.flow_steps && typeof history.flow_steps === 'object') {
+                const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
+                if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
+                    tagIds = flowSteps.tagIds;
+                }
+            }
+            
+            // Separar tags custom de automáticas
+            let customTagIds = [];
+            let automaticTagNames = [];
+            if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+                tagIds.forEach(tagId => {
+                    if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                        customTagIds.push(parseInt(tagId));
+                    } else if (typeof tagId === 'string') {
+                        automaticTagNames.push(tagId);
+                    }
+                });
+            }
+            
+            let contacts;
+            const hasAnyTagFilter = customTagIds.length > 0 || automaticTagNames.length > 0;
+            
+            // Aplicar filtro por tags se existir
+            if (hasAnyTagFilter) {
+                // Validar tags custom
+                let validCustomTagIds = [];
+                if (customTagIds.length > 0) {
+                    const validTags = await sqlWithRetry(
+                        sqlTx`SELECT id FROM lead_custom_tags 
+                              WHERE id = ANY(${customTagIds}) 
+                                AND seller_id = ${history.seller_id} 
+                                AND bot_id = ANY(${botIds})`
+                    );
+                    
+                    if (validTags && validTags.length > 0) {
+                        validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+                    }
+                }
+                
+                // Validar tags automáticas
+                const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+                
+                // Construir query com CTEs - apenas usuários individuais (chat_id > 0)
+                let tagQuery = `
+                    WITH base_contacts AS (
+                        SELECT DISTINCT ON (tc.chat_id) 
+                            tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                        FROM telegram_chats tc
+                        WHERE tc.bot_id = ANY($1::int[]) 
+                            AND tc.seller_id = $2
+                            AND tc.chat_id > 0
+                        ORDER BY tc.chat_id, tc.created_at DESC
+                    )
+                `;
+                let tagParams = [botIds, history.seller_id];
+                let paramOffset = 3;
+                
+                // Adicionar filtros para tags custom
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                        GROUP BY lcta.chat_id
+                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                    )`;
+                    tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                    paramOffset += 2;
+                }
+                
+                // Adicionar filtros para tags automáticas (Pagante)
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += `,
+                    paid_contacts AS (
+                        SELECT DISTINCT tc.chat_id
+                        FROM telegram_chats tc
+                        JOIN clicks c ON c.click_id = tc.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc.bot_id = ANY($1::int[])
+                            AND tc.seller_id = $2
+                            AND tc.chat_id > 0
+                            AND pt.status = 'paid'
+                    )`;
+                }
+                
+                // Construir SELECT final
+                tagQuery += `
+                    SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+                    FROM base_contacts bc
+                `;
+                
+                // Adicionar JOINs apenas se necessário
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
+                
+                tagQuery += ` ORDER BY bc.chat_id`;
+                
+                contacts = await sqlWithRetry(tagQuery, tagParams);
+            } else {
+                // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
+                contacts = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${botIds}) 
+                            AND seller_id = ${history.seller_id}
+                            AND chat_id > 0
+                          ORDER BY chat_id, created_at DESC`
+                );
+            }
+            
+            const allContacts = new Map();
+            contacts.forEach(c => {
+                if (!allContacts.has(c.chat_id)) {
+                    allContacts.set(c.chat_id, { 
+                        chat_id: c.chat_id,
+                        first_name: c.first_name,
+                        last_name: c.last_name,
+                        username: c.username,
+                        click_id: c.click_id,
+                        bot_id_source: c.bot_id 
+                    });
+                }
+            });
+            const uniqueContacts = Array.from(allContacts.values());
+            
+            // Encontrar o trigger (nó inicial do disparo)
+            let startNodeId = null;
+            const triggerNode = flowNodes.find(node => node.type === 'trigger');
+            
+            if (triggerNode) {
+                startNodeId = triggerNode.id;
+            } else {
+                const actionNode = flowNodes.find(node => node.type === 'action');
+                if (actionNode) {
+                    startNodeId = actionNode.id;
+                }
+            }
+            
+            if (!startNodeId) {
+                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                return res.status(400).json({ message: 'Nenhum nó inicial encontrado no fluxo.' });
+            }
+            
+            // Atualizar status para RUNNING
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${history_id}`
+            );
+            
+            // Processar disparo em background (mesma lógica do processamento imediato)
+            (async () => {
+                try {
+                    let messageCounter = 0;
+                    const delayBetweenMessages = 1;
+                    const qstashPromises = [];
+                    const CONTACTS_CHUNK_SIZE = 500;
+                    const contactChunks = [];
+                    
+                    for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
+                        contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
+                    }
+                    
+                    console.log(`[DISPARO-AGENDADO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks`);
+                    
+                    for (const contactChunk of contactChunks) {
+                        for (const contact of contactChunk) {
+                            const userVariables = {
+                                primeiro_nome: contact.first_name || '',
+                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                            };
+                            
+                            const payload = {
+                                history_id: history_id,
+                                chat_id: contact.chat_id,
+                                bot_id: contact.bot_id_source,
+                                flow_nodes: JSON.stringify(flowNodes),
+                                flow_edges: JSON.stringify(flowEdges),
+                                start_node_id: startNodeId,
+                                variables_json: JSON.stringify(userVariables)
+                            };
+                            
+                            const totalDelaySeconds = messageCounter * delayBetweenMessages;
+                            
+                            qstashPromises.push(
+                                qstashClient.publishJSON({
+                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                    body: payload,
+                                    delay: `${totalDelaySeconds}s`, 
+                                    retries: 2,
+                                    headers: {
+                                        'Upstash-Concurrency': '5'
+                                    }
+                                })
+                            );
+                            
+                            messageCounter++; 
+                        }
+                        
+                        if (qstashPromises.length > 0) {
+                            console.log(`[DISPARO-AGENDADO] Processando chunk com ${qstashPromises.length} promises...`);
+                            await publishQStashInBatches(qstashPromises, 10, 500);
+                            qstashPromises.length = 0;
+                        }
+                    }
+                    
+                    if (qstashPromises.length > 0) {
+                        await publishQStashInBatches(qstashPromises, 10, 500);
+                    }
+                } catch (bgError) {
+                    console.error("Erro no processamento em background do disparo agendado:", bgError);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${history_id}`
+                    );
+                }
+            })();
+            
+            res.status(200).json({ message: 'Disparo agendado iniciado com sucesso.' });
+            
+        } catch (error) {
+            console.error("Erro crítico no processamento de disparo agendado:", error);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro interno ao processar disparo agendado.' });
+            }
+        }
+    }
+);
+
 // ==========================================================
 // FIM DA ROTA DO QSTASH
 // ==========================================================
@@ -1695,86 +1996,19 @@ async function getParadisePaymentStatus(transactionId, secretKey) {
         throw new Error(`Erro ao consultar status na Paradise: ${errorMessage || 'Erro desconhecido'}`);
     }
 }
+// Wrapper para handleSuccessfulPayment que passa as dependências necessárias
 async function handleSuccessfulPayment(transaction_id, customerData) {
-    try {
-        // Primeiro, buscar a transação para verificar status e meta_event_id
-        const [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE id = ${transaction_id}`;
-        if (!transaction) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} não encontrada.`);
-            return;
-        }
-
-        // Se já tem meta_event_id, eventos já foram enviados - evitar duplicação
-        if (transaction.status === 'paid' && transaction.meta_event_id) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada e eventos já enviados (meta_event_id: ${transaction.meta_event_id}). Ignorando.`);
-            return;
-        }
-
-        const wasAlreadyPaid = transaction.status === 'paid';
-        
-        // Se não estava paga, atualizar status de forma atômica
-        if (!wasAlreadyPaid) {
-            const [updated] = await sqlTx`
-                UPDATE pix_transactions 
-                SET status = 'paid', paid_at = NOW() 
-                WHERE id = ${transaction_id} AND status != 'paid' 
-                RETURNING *
-            `;
-            if (!updated) {
-                console.log(`[handleSuccessfulPayment] Não foi possível atualizar status da transação ${transaction_id}.`);
-                return;
-            }
-            transaction.status = 'paid';
-            transaction.paid_at = updated.paid_at || new Date();
-        } else {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já estava paga mas eventos não foram enviados. Enviando agora.`);
-            // Garantir que paid_at está definido
-            if (!transaction.paid_at) {
-                await sqlTx`UPDATE pix_transactions SET paid_at = NOW() WHERE id = ${transaction_id}`;
-                transaction.paid_at = new Date();
-            }
-        }
-
-        // Verificação final antes de enviar eventos (prevenir race condition)
-        // Se outra thread já enviou eventos enquanto processávamos, abortar
-        const [finalCheck] = await sqlTx`SELECT meta_event_id FROM pix_transactions WHERE id = ${transaction_id}`;
-        if (finalCheck.meta_event_id) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já tem meta_event_id (race condition detectada). Abortando envio duplicado.`);
-            return;
-        }
-
-        console.log(`[handleSuccessfulPayment] Processando pagamento para transação ${transaction_id}.`);
-
-        if (adminSubscription && webpush) {
-            const payload = JSON.stringify({
-                title: 'Nova Venda Paga!',
-                body: `Venda de R$ ${parseFloat(transaction.pix_value).toFixed(2)} foi confirmada.`,
-            });
-            webpush.sendNotification(adminSubscription, payload).catch(error => {
-                if (error.statusCode === 410) {
-                    console.log("Inscrição de notificação expirada. Removendo.");
-                    adminSubscription = null;
-                } else {
-                    console.warn("Falha ao enviar notificação push (não-crítico):", error.message);
-                }
-            });
-        }
-        
-        const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
-        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
-
-        if (click && seller) {
-            const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
-            const productData = { id: "prod_final", name: "Produto Vendido" };
-
-            await sendEventToUtmify('paid', click, transaction, seller, finalCustomerData, productData);
-            await sendMetaEvent('Purchase', click, transaction, finalCustomerData);
-        } else {
-            console.error(`[handleSuccessfulPayment] ERRO: Não foi possível encontrar dados do clique ou vendedor para a transação ${transaction_id}`);
-        }
-    } catch(error) {
-        console.error(`[handleSuccessfulPayment] ERRO CRÍTICO ao processar pagamento da transação ${transaction_id}:`, error);
-    }
+    return await handleSuccessfulPaymentShared({
+        transaction_id,
+        customerData,
+        sqlTx,
+        adminSubscription,
+        webpush,
+        sendEventToUtmify: (status, clickData, pixData, sellerData, customerData, productData) => 
+            sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
+        sendMetaEvent: (eventName, clickData, transactionData, customerData) => 
+            sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
+    });
 }
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO POR API KEY ---
@@ -2220,6 +2454,115 @@ app.get('/api/flows/:id/node-stats', authenticateJwt, async (req, res) => {
     }
 });
 
+// ==========================================================
+// ENDPOINTS PARA DISPARO_FLOWS
+// ==========================================================
+
+// Função auxiliar para validar fluxo de disparo (pode ter trigger, mas deve ter pelo menos uma ação)
+function validateDisparoFlow(nodesArray) {
+    if (!Array.isArray(nodesArray)) {
+        return { valid: false, message: 'Nodes deve ser um array.' };
+    }
+    
+    if (nodesArray.length === 0) {
+        return { valid: false, message: 'Fluxo deve ter pelo menos um nó.' };
+    }
+    
+    // Verificar se há pelo menos um nó de ação (trigger é permitido mas não conta como ação)
+    const hasAction = nodesArray.some(node => node.type === 'action');
+    if (!hasAction) {
+        return { valid: false, message: 'Fluxo deve ter pelo menos um nó de ação.' };
+    }
+    
+    return { valid: true };
+}
+
+app.get('/api/disparo-flows', authenticateJwt, async (req, res) => {
+    try {
+        const flows = await sqlWithRetry('SELECT * FROM disparo_flows WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
+        res.status(200).json(flows.map(f => ({ ...f, nodes: f.nodes || { nodes: [], edges: [] } })));
+    } catch (error) {
+        console.error('[Disparo Flows] Error:', error);
+        res.status(500).json({ message: 'Erro ao buscar os fluxos de disparo.' });
+    }
+});
+
+app.get('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const [flow] = await sqlWithRetry('SELECT * FROM disparo_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) {
+            return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        }
+        res.status(200).json({ ...flow, nodes: flow.nodes || { nodes: [], edges: [] } });
+    } catch (error) {
+        console.error('[Disparo Flow] Error:', error);
+        res.status(500).json({ message: 'Erro ao buscar o fluxo de disparo.' });
+    }
+});
+
+app.post('/api/disparo-flows', authenticateJwt, async (req, res) => {
+    const { name, botId } = req.body;
+    if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
+    try {
+        // Criar fluxo inicial com trigger (disparo manual)
+        const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }], edges: [] };
+        const [newFlow] = await sqlWithRetry(`
+            INSERT INTO disparo_flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, 
+            [req.user.id, botId, name, JSON.stringify(initialFlow)]);
+        res.status(201).json({ ...newFlow, nodes: newFlow.nodes || { nodes: [], edges: [] } });
+    } catch (error) {
+        console.error('[Disparo Flow Create] Error:', error);
+        res.status(500).json({ message: 'Erro ao criar o fluxo de disparo.' });
+    }
+});
+
+app.put('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    const { name, nodes } = req.body;
+    if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    
+    try {
+        // Parse e validar os nodes antes de salvar
+        const parsedNodes = JSON.parse(nodes);
+        const nodesArray = parsedNodes.nodes || [];
+        
+        // Validar que não há trigger e há pelo menos uma ação
+        const disparoValidation = validateDisparoFlow(nodesArray);
+        if (!disparoValidation.valid) {
+            logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${disparoValidation.message}`);
+            return res.status(400).json({ message: disparoValidation.message });
+        }
+        
+        // Validar se há links em campos de texto (mesma validação dos fluxos normais)
+        const validation = validateFlowActions(nodesArray);
+        if (!validation.valid) {
+            logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            return res.status(400).json({ message: validation.message });
+        }
+        
+        // Busca o fluxo para verificar se existe e pertence ao seller
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM disparo_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        
+        const [updated] = await sqlWithRetry('UPDATE disparo_flows SET name = $1, nodes = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
+        if (updated) res.status(200).json({ ...updated, nodes: updated.nodes || { nodes: [], edges: [] } });
+        else res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+    } catch (error) {
+        console.error('[Disparo Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo de disparo.' });
+    }
+});
+
+app.delete('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const [deleted] = await sqlWithRetry('DELETE FROM disparo_flows WHERE id = $1 AND seller_id = $2 RETURNING *;', [req.params.id, req.user.id]);
+        if (deleted) res.status(200).json({ message: 'Fluxo de disparo deletado com sucesso.' });
+        else res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+    } catch (error) {
+        console.error('[Disparo Flow Delete] Error:', error);
+        res.status(500).json({ message: 'Erro ao deletar o fluxo de disparo.' });
+    }
+});
+
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
     try {
         const { isActive } = req.body;
@@ -2412,10 +2755,32 @@ app.get('/api/tags', authenticateJwt, async (req, res) => {
 
         query += ' ORDER BY LOWER(title)';
 
-        const tags = await sqlWithRetry(query, params);
-        res.status(200).json(tags);
+        const customTags = await sqlWithRetry(query, params);
+        
+        // Filtrar tags custom que têm o mesmo nome de tags automáticas para evitar duplicatas
+        const automaticTagNames = ['Pagante'];
+        const filteredCustomTags = customTags.filter(tag => 
+            !automaticTagNames.includes(tag.title)
+        );
+        
+        // Adicionar tags automáticas (Pagante)
+        const automaticTags = [{
+            id: 'Pagante',
+            title: 'Pagante',
+            color: '#10b981', // verde
+            bot_id: botId ? parseInt(botId, 10) : null,
+            type: 'automatic'
+        }];
+        
+        // Combinar tags custom (filtradas) com automáticas
+        const allTags = [
+            ...filteredCustomTags.map(tag => ({ ...tag, type: 'custom' })),
+            ...automaticTags
+        ];
+        
+        res.status(200).json(allTags);
     } catch (error) {
-        console.error('Erro ao listar tags personalizadas:', error);
+        console.error('Erro ao listar tags:', error);
         res.status(500).json({ message: 'Erro ao listar tags.' });
     }
 });
@@ -2427,6 +2792,12 @@ app.post('/api/tags', authenticateJwt, async (req, res) => {
 
     if (!trimmedTitle) {
         return res.status(400).json({ message: 'Título da tag é obrigatório.' });
+    }
+
+    // Prevenir criação de tags custom com nomes de tags automáticas
+    const automaticTagNames = ['Pagante'];
+    if (automaticTagNames.includes(trimmedTitle)) {
+        return res.status(400).json({ message: `Não é possível criar uma tag custom com o nome "${trimmedTitle}". Esta é uma tag automática do sistema.` });
     }
 
     if (trimmedTitle.length > TAG_TITLE_MAX_LENGTH) {
@@ -2497,6 +2868,12 @@ app.post('/api/leads/:botId/:chatId/tags', authenticateJwt, async (req, res) => 
     const { tagId } = req.body || {};
     const botId = parseInt(req.params.botId, 10);
     const chatId = req.params.chatId;
+    
+    // Verificar se é uma tag automática (string como "Pagante")
+    if (typeof tagId === 'string' && tagId === 'Pagante') {
+        return res.status(400).json({ message: 'Tags automáticas não podem ser adicionadas manualmente.' });
+    }
+    
     const parsedTagId = parseInt(tagId, 10);
 
     if (Number.isNaN(botId) || !chatId) {
@@ -4702,47 +5079,45 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
             }
         }
 
-        // Se já está paga, verificar se eventos foram enviados antes de retornar
-        if (currentStatus === 'paid' && !transaction.meta_event_id) {
-            // Transação está paga mas eventos não foram enviados - tentar enviar
-            console.log(`[PIX Status] Transação ${transaction.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-            
-            // Se não temos customerData ainda, tentar buscar do provider
-            if (Object.keys(customerData).length === 0 && transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
-                try {
-                    if (transaction.provider === 'syncpay') {
-                        const syncPayToken = await getSyncPayAuthToken(seller);
-                        const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                        });
-                        customerData = response.data.payer || {};
-                    } else if (transaction.provider === 'pushinpay') {
-                        const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                        customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                    } else if (transaction.provider === 'wiinpay') {
-                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                        if (wiinpayApiKey) {
-                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
-                            customerData = result.customer || {};
-                        }
-                    } else if (transaction.provider === 'paradise') {
-                        const paradiseSecretKey = seller.paradise_secret_key;
-                        if (paradiseSecretKey) {
-                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
-                            customerData = result.customer || {};
-                        }
-                    }
-                    
-                    // Tentar enviar eventos mesmo que a transação já esteja paga
-                    if (Object.keys(customerData).length > 0) {
-                        await handleSuccessfulPayment(transaction.id, customerData);
-                    }
-                } catch (error) {
-                    console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
-                }
-            } else if (Object.keys(customerData).length > 0) {
-                // Temos customerData do bloco anterior, tentar enviar eventos
+        // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
+        if (currentStatus === 'paid') {
+            // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
+            if (Object.keys(customerData).length > 0) {
                 await handleSuccessfulPayment(transaction.id, customerData);
+            } else {
+                // Tentar buscar customerData do provider se possível
+                if (transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
+                    try {
+                        if (transaction.provider === 'syncpay') {
+                            const syncPayToken = await getSyncPayAuthToken(seller);
+                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                            });
+                            customerData = response.data.payer || {};
+                        } else if (transaction.provider === 'pushinpay') {
+                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                        } else if (transaction.provider === 'wiinpay') {
+                            const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                            if (wiinpayApiKey) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                customerData = result.customer || {};
+                            }
+                        } else if (transaction.provider === 'paradise') {
+                            const paradiseSecretKey = seller.paradise_secret_key;
+                            if (paradiseSecretKey) {
+                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                                customerData = result.customer || {};
+                            }
+                        }
+                        
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
+                        }
+                    } catch (error) {
+                        console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                    }
+                }
             }
         }
 
@@ -5185,12 +5560,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     let customerData = {};
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
 
-                    // Se já está paga, verificar se eventos foram enviados
+                    // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
                     if (transaction.status === 'paid') {
-                        // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                        if (!transaction.meta_event_id) {
-                            console.log(`[PIX][action_check_pix] Transação ${transactionId} está paga mas sem meta_event_id. Tentando buscar dados do provider e enviar eventos...`);
-                            
+                        // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
+                        if (Object.keys(customerData).length === 0) {
                             // Tentar buscar dados do cliente do provider
                             try {
                                 if (transaction.provider === 'pushinpay') {
@@ -5230,13 +5603,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                         }
                                     }
                                 }
-                                
-                                // Tentar enviar eventos mesmo que a transação já esteja paga
-                                await handleSuccessfulPayment(transaction.id, customerData);
-                                console.log(`[PIX][action_check_pix] Eventos enviados para transação ${transactionId} que já estava paga.`);
                             } catch (error) {
-                                console.error(`[PIX][action_check_pix] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                                console.error(`[PIX][action_check_pix] Erro ao buscar dados do cliente:`, error.message);
                             }
+                        }
+                        
+                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
                         }
                         return 'paid'; // Sinaliza para 'processFlow' seguir pelo handle 'a'
                     }
@@ -6223,16 +6597,71 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, flowSteps, campaignName } = req.body;
+      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, excludeChatIds } = req.body;
     
-      if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
-        return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
+      if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
+        return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
+      }
+    
+        // Validar scheduledAt se fornecido
+        let scheduledTimestamp = null;
+        let scheduledDate = null;
+        if (scheduledAt) {
+            try {
+                // scheduledAt vem como ISO string (UTC) do frontend
+                scheduledDate = new Date(scheduledAt);
+                if (isNaN(scheduledDate.getTime())) {
+                    return res.status(400).json({ message: 'Data/hora de agendamento inválida.' });
+                }
+                
+                // Adicionar margem de segurança de 2 minutos para evitar problemas de sincronização
+                const now = new Date();
+                const minScheduledTime = new Date(now.getTime() + 120000); // 2 minutos no futuro
+                
+                // Verificar se é no futuro (com margem de segurança)
+                if (scheduledDate <= minScheduledTime) {
+                    // Mostrar a data mínima permitida em formato legível (UTC)
+                    const minDateStr = minScheduledTime.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    const userSelectedStr = scheduledDate.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    return res.status(400).json({ 
+                        message: `A data/hora de agendamento deve ser no futuro. Você selecionou: ${userSelectedStr}. Data/hora mínima permitida: ${minDateStr}` 
+                    });
+                }
+                scheduledTimestamp = Math.floor(scheduledDate.getTime() / 1000); // Unix timestamp em segundos
+            } catch (error) {
+                return res.status(400).json({ message: 'Erro ao processar data/hora de agendamento.' });
+            }
       }
     
         let historyId; 
     
       try {
-            // 1. Verificar quais bots são válidos primeiro (otimização)
+            // 1. Buscar o fluxo de disparo
+        const [disparoFlow] = await sqlWithRetry(
+            'SELECT * FROM disparo_flows WHERE id = $1 AND seller_id = $2',
+            [disparoFlowId, sellerId]
+        );
+        
+        if (!disparoFlow) {
+            return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        }
+        
+        // Parse do fluxo
+        const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+        const flowNodes = flowData.nodes || [];
+        const flowEdges = flowData.edges || [];
+        
+        if (flowNodes.length === 0) {
+            return res.status(400).json({ message: 'O fluxo de disparo está vazio. Adicione pelo menos uma ação.' });
+        }
+        
+        // Verificar se há pelo menos um nó de ação (não trigger)
+        const actionNodes = flowNodes.filter(n => n.type === 'action');
+        if (actionNodes.length === 0) {
+            return res.status(400).json({ message: 'O fluxo de disparo deve ter pelo menos um nó de ação.' });
+        }
+        
+            // 2. Verificar quais bots são válidos primeiro (otimização)
         const validBotIds = [];
         for (const botId of botIds) {
             const [botCheck] = await sqlWithRetry(
@@ -6248,15 +6677,148 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             return res.status(404).json({ message: 'Nenhum bot válido encontrado.' });
         }
         
-        // 2. Buscar todos os contatos únicos em uma única query (otimização)
-        const allContacts = new Map();
-        const contacts = await sqlWithRetry(
-            sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                  FROM telegram_chats 
-                  WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
-                  ORDER BY chat_id, created_at DESC`
-        );
+        // 3. Buscar todos os contatos únicos em uma única query (otimização)
+        // Aplicar filtros: primeiro excluir inativos (excludeChatIds), depois filtrar por tags
         
+        // Separar tags custom (IDs numéricos) de tags automáticas (strings)
+        let customTagIds = [];
+        let automaticTagNames = [];
+        if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+            tagIds.forEach(tagId => {
+                if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                    customTagIds.push(parseInt(tagId));
+                } else if (typeof tagId === 'string') {
+                    automaticTagNames.push(tagId);
+                }
+            });
+        }
+        
+        // Validar tags custom se fornecido
+        let validCustomTagIds = [];
+        if (customTagIds.length > 0) {
+            const validTags = await sqlWithRetry(
+                sqlTx`SELECT id FROM lead_custom_tags 
+                      WHERE id = ANY(${customTagIds}) 
+                        AND seller_id = ${sellerId} 
+                        AND bot_id = ANY(${validBotIds})`
+            );
+            
+            if (validTags && validTags.length > 0) {
+                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+            }
+        }
+        
+        // Validar tags automáticas (atualmente só "Pagante" é suportada)
+        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+        
+        if (customTagIds.length > 0 && validCustomTagIds.length === 0 && automaticTagNames.length === 0) {
+            return res.status(400).json({ message: 'Nenhuma tag válida encontrada para os bots selecionados.' });
+        }
+        
+        const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+        
+        let contacts;
+        
+        // Se tem filtro de tags, usar query com JOIN e GROUP BY
+        if (hasAnyTagFilter) {
+            // Construir query base com CTEs para cada tipo de tag
+            let tagQuery = `
+                WITH base_contacts AS (
+                    SELECT DISTINCT ON (tc.chat_id) 
+                        tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                    FROM telegram_chats tc
+                    WHERE tc.bot_id = ANY($1::int[]) 
+                        AND tc.seller_id = $2
+                        AND tc.chat_id > 0
+            `;
+            let tagParams = [validBotIds, sellerId];
+            let paramOffset = 3;
+            
+            // Adicionar filtro de contatos inativos se houver
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+                tagParams.push(excludeChatIds);
+                paramOffset++;
+            }
+            
+            tagQuery += `
+                    ORDER BY tc.chat_id, tc.created_at DESC
+                )
+            `;
+            
+            // Adicionar filtros para tags custom
+            if (validCustomTagIds.length > 0) {
+                tagQuery += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    GROUP BY lcta.chat_id
+                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                )`;
+                tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+            
+            // Adicionar filtros para tags automáticas (Pagante)
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += `,
+                paid_contacts AS (
+                    SELECT DISTINCT tc.chat_id
+                    FROM telegram_chats tc
+                    JOIN clicks c ON c.click_id = tc.click_id
+                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                    WHERE tc.bot_id = ANY($1::int[])
+                        AND tc.seller_id = $2
+                        AND tc.chat_id > 0
+                        AND pt.status = 'paid'
+                )`;
+            }
+            
+            // Construir SELECT final com JOINs condicionais
+            tagQuery += `
+                SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+                FROM base_contacts bc
+            `;
+            
+            // Adicionar JOINs apenas se necessário
+            if (validCustomTagIds.length > 0) {
+                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+            
+            tagQuery += ` ORDER BY bc.chat_id`;
+            
+            contacts = await sqlWithRetry(tagQuery, tagParams);
+        } else {
+            // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                contacts = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${validBotIds}) 
+                            AND seller_id = ${sellerId}
+                            AND chat_id > 0
+                            AND chat_id != ALL(${excludeChatIds})
+                          ORDER BY chat_id, created_at DESC`
+                );
+            } else {
+                contacts = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${validBotIds}) 
+                            AND seller_id = ${sellerId}
+                            AND chat_id > 0
+                          ORDER BY chat_id, created_at DESC`
+                );
+            }
+        }
+        
+        const allContacts = new Map();
         contacts.forEach(c => {
             if (!allContacts.has(c.chat_id)) {
                 allContacts.set(c.chat_id, { 
@@ -6284,31 +6846,73 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         }
     
             // --- MUDANÇA PRINCIPAL AQUI ---
-            // 2. Calcular o total de trabalhos (Contatos * Passos)
-            const total_jobs_to_queue = uniqueContacts.length * flowSteps.length;
+            // 4. Calcular o total de trabalhos (1 trabalho por contato - o fluxo completo será processado)
+            const total_jobs_to_queue = uniqueContacts.length;
             if (total_jobs_to_queue === 0) {
-                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos ou 0 passos).' });
+                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos).' });
             }
     
-        // 3. Criar o registro mestre da campanha com os totais corretos
+        // 5. Criar o registro mestre da campanha com os totais corretos
+        const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
+        // Salvar tagIds no flow_steps como metadata (incluindo custom e automáticas)
+        const allTagIds = [...(validCustomTagIds || []), ...(validAutomaticTags || [])];
+        const flowStepsMetadata = allTagIds.length > 0 ? { tagIds: allTagIds } : null;
         const [history] = await sqlWithRetry(
           sqlTx`INSERT INTO disparo_history (
-                    seller_id, campaign_name, bot_ids, flow_steps, 
+                    seller_id, campaign_name, bot_ids, disparo_flow_id, 
                     status, total_sent, failure_count, 
-                    total_jobs, processed_jobs
+                    total_jobs, processed_jobs, scheduled_at, flow_steps
                    ) 
                    VALUES (
-                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 
-                    'PENDING', ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0
+                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
+                    ${statusToSet}, ${uniqueContacts.length}, 0, 
+                    ${total_jobs_to_queue}, 0, ${scheduledTimestamp ? scheduledDate : null}, ${flowStepsMetadata ? JSON.stringify(flowStepsMetadata) : null}
                    ) 
                    RETURNING id`
         );
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
-    
-        // 4. Processar todos os steps em batch ANTES do loop (otimização)
-        const processedStepsCache = await processStepsForQStashBatch(flowSteps, sellerId);
+        
+        // Se for agendado, criar tarefa única no QStash para processar depois
+        if (scheduledTimestamp) {
+            try {
+                // QStash para agendamento único usa 'delay' com formato relativo (ex: "30s", "5m")
+                // Precisamos calcular o delay em segundos a partir do timestamp absoluto
+                const now = Math.floor(Date.now() / 1000); // Unix timestamp atual em segundos
+                const delaySeconds = scheduledTimestamp - now;
+                
+                if (delaySeconds <= 0) {
+                    return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
+                }
+                
+                const qstashResponse = await qstashClient.publishJSON({
+                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
+                    body: { history_id: historyId },
+                    delay: `${delaySeconds}s`, // Delay relativo em segundos
+                    retries: 2,
+                    method: "POST"
+                });
+                
+                // Salvar o scheduled_message_id
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
+                );
+                
+                // scheduledDate está em UTC (vem do frontend como ISO string)
+                // Converter para horário local do Brasil para exibição
+                const displayDate = new Date(scheduledDate.getTime());
+                res.status(202).json({ 
+                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
+                });
+                return; // Não processar imediatamente
+            } catch (qstashError) {
+                console.error("Erro ao agendar disparo no QStash:", qstashError);
+                console.error("Detalhes do erro:", JSON.stringify(qstashError, null, 2));
+                // Se falhar ao agendar, deletar o registro e retornar erro
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
+                return res.status(500).json({ message: 'Erro ao agendar o disparo. Tente novamente.' });
+            }
+        }
         
         // 5. Retornar resposta HTTP imediatamente e processar em background
         res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
@@ -6329,6 +6933,27 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 console.log(`[DISPARO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks de ${CONTACTS_CHUNK_SIZE}`);
         
+                // Encontrar o trigger (nó inicial do disparo)
+                let startNodeId = null;
+                const triggerNode = flowNodes.find(node => node.type === 'trigger');
+                
+                if (triggerNode) {
+                    // Se tem trigger, começar do trigger (ele passará para o próximo nó automaticamente)
+                    startNodeId = triggerNode.id;
+                } else {
+                    // Fallback: procurar primeiro nó de ação (compatibilidade com fluxos antigos)
+                    const actionNode = flowNodes.find(node => node.type === 'action');
+                    if (actionNode) {
+                        startNodeId = actionNode.id;
+                    }
+                }
+                
+                if (!startNodeId) {
+                    console.error('[DISPARO] Nenhum nó inicial encontrado no fluxo!');
+                    await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', historyId]);
+                    return;
+                }
+        
                 for (const contactChunk of contactChunks) {
                     for (const contact of contactChunk) {
                         const userVariables = {
@@ -6337,49 +6962,31 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
                         };
                         
-                        let currentStepDelay = 0; 
+                        const payload = {
+                            history_id: historyId,
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            variables_json: JSON.stringify(userVariables)
+                        };
             
-                        for (const step of flowSteps) {
-                            // Usa cache de steps processados ou processa individualmente se não estiver no cache
-                            const stepKey = JSON.stringify(step);
-                            let processedStep;
-                            if (processedStepsCache.has(stepKey)) {
-                                processedStep = processedStepsCache.get(stepKey);
-                            } else {
-                                // Fallback: processa individualmente se não estiver no cache
-                                processedStep = await processStepForQStash(step, sellerId);
-                            }
-                            
-                            const payload = {
-                                history_id: historyId,
-                                chat_id: contact.chat_id,
-                                bot_id: contact.bot_id_source,
-                                step_json: JSON.stringify(processedStep),
-                                variables_json: JSON.stringify(userVariables)
-                            };
+                        const totalDelaySeconds = messageCounter * delayBetweenMessages;
             
-                            const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
-            
-                            qstashPromises.push(
-                                qstashClient.publishJSON({
-                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                    body: payload,
-                                    delay: `${totalDelaySeconds}s`, 
-                                    retries: 2,
-                                    // Limitar concorrência no QStash para evitar sobrecarga
-                                    headers: {
-                                        'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
-                                    }
-                                })
-                            );
-                           
-                            const delayData = step.data || step; 
-                            if (step.type === 'delay') {
-                                currentStepDelay += (delayData.delayInSeconds || 1);
-                            } else {
-                                currentStepDelay += 1; 
-                            }
-                        }
+                        qstashPromises.push(
+                            qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                body: payload,
+                                delay: `${totalDelaySeconds}s`, 
+                                retries: 2,
+                                // Limitar concorrência no QStash para evitar sobrecarga
+                                headers: {
+                                    'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
+                                }
+                            })
+                        );
+                       
                         messageCounter++; 
                     }
                     
@@ -6438,42 +7045,26 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
     
     // Processar PIX pago
     if (paidStatuses.has(normalized)) {
-      try {
-        const [tx] = await sqlTx`
-                  SELECT pt.id, pt.status, pt.provider_transaction_id, pt.meta_event_id, c.seller_id 
-                  FROM pix_transactions pt 
-                  JOIN clicks c ON pt.click_id_internal = c.id 
-                  WHERE LOWER(pt.provider_transaction_id) = LOWER(${id}) AND pt.provider = 'pushinpay'
-              `;
-        
-        if (!tx) {
-            console.error(`[Webhook PushinPay] ERRO: Transação não encontrada! provider_transaction_id='${id}', provider='pushinpay'`);
-            const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'pushinpay'`;
-            console.error(`[Webhook PushinPay] Total de transações PushinPay no banco: ${countResult[0].total}`);
-            return res.sendStatus(200);
-        }
-        
-        // Se já está paga, verificar se eventos foram enviados
-        if (tx.status === 'paid') {
-            // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-            if (!tx.meta_event_id) {
-                console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-            } else {
-                console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) já processada e eventos enviados. Ignorando webhook duplicado.`);
+        try {
+            const [tx] = await sqlTx`
+                SELECT pt.id 
+                FROM pix_transactions pt 
+                WHERE LOWER(pt.provider_transaction_id) = LOWER(${id}) AND pt.provider = 'pushinpay'
+            `;
+            
+            if (!tx) {
+                console.error(`[Webhook PushinPay] ERRO: Transação não encontrada! provider_transaction_id='${id}', provider='pushinpay'`);
+                return res.sendStatus(200);
             }
-            return res.sendStatus(200);
+            
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
+            await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+            console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada.`);
+            
+        } catch (error) { 
+            console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
+            console.error(`[Webhook PushinPay] Stack:`, error.stack);
         }
-        
-        console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) encontrada. Status atual: '${tx.status}'. Processando pagamento...`);
-        
-        await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-        console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada com sucesso!`);
-        
-      } catch (error) { 
-              console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
-              console.error(`[Webhook PushinPay] Stack:`, error.stack);
-          }
     } 
     // Processar PIX cancelado/expirado
     else if (canceledStatuses.has(normalized)) {
@@ -6528,9 +7119,8 @@ app.post('/api/webhook/pixup', async (req, res) => {
         if (paidStatuses.has(normalized)) {
             try {
                 const [tx] = await sqlTx`
-                    SELECT pt.id, pt.status, pt.provider_transaction_id, pt.meta_event_id, c.seller_id 
+                    SELECT pt.id 
                     FROM pix_transactions pt 
-                    JOIN clicks c ON pt.click_id_internal = c.id 
                     WHERE (LOWER(pt.provider_transaction_id) = LOWER(${identifier}) OR pt.provider_transaction_id = ${external_id}) AND pt.provider = 'pixup'
                 `;
 
@@ -6550,22 +7140,9 @@ app.post('/api/webhook/pixup', async (req, res) => {
                     email: payerEmail 
                 };
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook Pixup] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, customerData);
-                    } else {
-                        console.log(`[Webhook Pixup] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return;
-                }
-
-                console.log(`[Webhook Pixup] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
-                
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, customerData);
-                console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+                console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook Pixup] Erro ao processar pagamento:', error);
             }
@@ -6616,30 +7193,16 @@ app.post('/api/webhook/cnpay', async (req, res) => {
     try {
       console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
             
-      const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
+      const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'cnpay'`;
       
       if (!tx) {
           console.error(`[Webhook CNPay] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='cnpay'`);
-          const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'cnpay'`;
-          console.error(`[Webhook CNPay] Total de transações CNPay no banco: ${countResult[0].total}`);
           return res.sendStatus(200);
       }
       
-      // Se já está paga, verificar se eventos foram enviados
-      if (tx.status === 'paid') {
-        // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-        if (!tx.meta_event_id) {
-          console.log(`[Webhook CNPay] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-          await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-        } else {
-          console.log(`[Webhook CNPay] Transação ${tx.id} já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-        }
-        return res.sendStatus(200);
-      }
-      
-      console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+      // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
       await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-      console.log(`[Webhook CNPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+      console.log(`[Webhook CNPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
       
     } catch (error) { 
       console.error(`[Webhook CNPay] ERRO CRÍTICO:`, error);
@@ -6669,30 +7232,16 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
         try {
             console.log(`[Webhook Oasy.fy] Processando pagamento para transactionId: ${transactionId}`);
             
-            const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'oasyfy'`;
+            const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'oasyfy'`;
             
             if (!tx) {
                 console.error(`[Webhook Oasy.fy] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='oasyfy'`);
-                const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'oasyfy'`;
-                console.error(`[Webhook Oasy.fy] Total de transações Oasyfy no banco: ${countResult[0].total}`);
                 return res.sendStatus(200);
             }
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook Oasy.fy] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-                } else {
-                    console.log(`[Webhook Oasy.fy] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paid' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-            
-            console.log(`[Webhook Oasy.fy] Transação encontrada. ID interno: ${tx.id}, Status atual: '${tx.status}'. Processando...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-            console.log(`[Webhook Oasy.fy] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook Oasy.fy] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
             
         } catch (error) { 
             console.error(`[Webhook Oasy.fy] ERRO CRÍTICO:`, error);
@@ -6719,8 +7268,9 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
         if (paidStatuses.has(normalizedStatus)) {
             try {
                 const [tx] = await sqlTx`
-                    SELECT * FROM pix_transactions 
-                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) AND provider = 'wiinpay'
+                    SELECT pt.id 
+                    FROM pix_transactions pt 
+                    WHERE LOWER(pt.provider_transaction_id) = LOWER(${parsed.id}) AND pt.provider = 'wiinpay'
                 `;
 
                 if (!tx) {
@@ -6728,20 +7278,9 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
                     return res.sendStatus(200);
                 }
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook WiinPay] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, parsed.customer || {});
-                    } else {
-                        console.log(`[Webhook WiinPay] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return res.sendStatus(200);
-                }
-
-                console.log(`[Webhook WiinPay] Processando transação ${parsed.id} (interna: ${tx.id}) com status '${normalizedStatus}'.`);
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, parsed.customer || {});
+                console.log(`[Webhook WiinPay] ✓ Transação ${parsed.id} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook WiinPay] Erro ao processar pagamento:', error);
             }
@@ -6769,155 +7308,13 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
     }
     res.sendStatus(200);
 });
+// Wrappers para funções de eventos que passam as dependências necessárias
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
-    console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
-    try {
-        let integrationId = null;
-
-        if (clickData.pressel_id) {
-            console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
-            const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
-            if (pressel) {
-                integrationId = pressel.utmify_integration_id;
-            }
-        } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
-        }
-
-        if (!integrationId) {
-            console.log(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
-            return;
-        }
-
-        const [integration] = await sqlTx`
-            SELECT api_token FROM utmify_integrations 
-            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
-        `;
-
-        if (!integration || !integration.api_token) {
-            console.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
-            return;
-        }
-
-        const utmifyApiToken = integration.api_token;
-        
-        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
-        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
-        const payload = {
-            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
-            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
-            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
-            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
-            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
-            isTest: false
-        };
-
-        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
-
-    } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
-    }
+    return await sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx });
 }
+
 async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
-    try {
-        let presselPixels = [];
-        if (clickData.pressel_id) {
-            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
-        } else if (clickData.checkout_id) {
-            // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
-            const checkoutId = clickData.checkout_id;
-            
-            // Se começa com 'cko_', é um hosted_checkout (UUID)
-            if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
-                // Buscar pixel_id do config do hosted_checkout
-                const [hostedCheckout] = await sqlTx`
-                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
-                    FROM hosted_checkouts 
-                    WHERE id = ${checkoutId}
-                `;
-                
-                if (hostedCheckout?.pixel_id) {
-                    // Converter pixel_id para o formato esperado
-                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
-                }
-            } else {
-                // É um checkout antigo (integer), usar a tabela checkout_pixels
-                presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
-            }
-        }
-
-        if (presselPixels.length === 0) {
-            console.log(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
-            return;
-        }
-
-        const userData = {
-            fbp: clickData.fbp || undefined,
-            fbc: clickData.fbc || undefined,
-            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
-        };
-
-        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
-            userData.client_ip_address = clickData.ip_address;
-        }
-        if (clickData.user_agent && clickData.user_agent.length > 10) { 
-            userData.client_user_agent = clickData.user_agent;
-        }
-
-        if (customerData?.name) {
-            const nameParts = customerData.name.trim().split(' ');
-            const firstName = nameParts[0].toLowerCase();
-            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
-            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
-            if (lastName) {
-                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
-            }
-        }
-
-        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
-        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
-        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
-        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
-
-        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
-        
-        for (const { pixel_config_id } of presselPixels) {
-            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
-            if (pixelConfig) {
-                const { pixel_id, meta_api_token } = pixelConfig;
-                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
-                
-                const payload = {
-                    data: [{
-                        event_name: eventName,
-                        event_time: Math.floor(Date.now() / 1000),
-                        event_id,
-                        user_data: userData,
-                        custom_data: {
-                            currency: 'BRL',
-                            value: transactionData.pix_value
-                        },
-                    }]
-                };
-                
-                if (eventName !== 'Purchase') {
-                    delete payload.data[0].custom_data.value;
-                }
-
-                console.log(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
-                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
-                console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
-
-                if (eventName === 'Purchase') {
-                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
-    }
+    return await sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx });
 }
 async function checkPendingTransactions() {
     try {
@@ -7027,36 +7424,20 @@ app.post('/api/webhook/syncpay', async (req, res) => {
             
             // CORREÇÃO: Buscar por 'id' OU 'identifier' (SyncPay pode enviar um ou outro)
             const [tx] = await sqlTx`
-                SELECT * FROM pix_transactions 
-                WHERE (provider_transaction_id = ${transactionId} OR provider_transaction_id = ${identifier}) 
-                AND provider = 'syncpay'
+                SELECT pt.id 
+                FROM pix_transactions pt 
+                WHERE (pt.provider_transaction_id = ${transactionId} OR pt.provider_transaction_id = ${identifier}) 
+                AND pt.provider = 'syncpay'
             `;
 
             if (!tx) {
                 console.error(`[Webhook SyncPay] ERRO: Transação não encontrada! Tentou buscar id='${transactionId}' ou identifier='${identifier}', provider='syncpay'`);
-                const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'syncpay'`;
-                console.error(`[Webhook SyncPay] Total de transações SyncPay no banco: ${countResult[0].total}`);
-                // Logar todas as transações SyncPay recentes para debug
-                const recentTx = await sqlTx`SELECT provider_transaction_id FROM pix_transactions WHERE provider = 'syncpay' ORDER BY created_at DESC LIMIT 5`;
-                console.error(`[Webhook SyncPay] Últimas 5 transaction IDs no banco:`, recentTx.map(t => t.provider_transaction_id));
                 return res.sendStatus(200);
             }
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook SyncPay] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
-                } else {
-                    console.log(`[Webhook SyncPay] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-            
-            console.log(`[Webhook SyncPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
-            console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
         } else {
             console.log(`[Webhook SyncPay] Status '${status}' não é considerado pago. Ignorando.`);
         }
@@ -7087,12 +7468,10 @@ app.post('/api/webhook/brpix', async (req, res) => {
     const normalizedEvent = String(event).toLowerCase();
 
     try {
-        const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+        const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'brpix'`;
 
         if (!tx) {
             console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
-            const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
-            console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
             return res.sendStatus(200);
         }
 
@@ -7100,21 +7479,9 @@ app.post('/api/webhook/brpix', async (req, res) => {
             const customerDocument = customer?.document?.number || customer?.document || customer?.cpf || null;
             const customerData = { name: customer?.name, document: customerDocument, email: customer?.email };
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, customerData);
-                } else {
-                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-
-            console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, customerData);
-            console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
         } else if (normalizedEvent === 'transaction.created') {
             if (tx.status === 'paid') {
                 console.log(`[Webhook BRPix] Evento 'created' ignorado: transação ${transactionId} já está paga.`);
@@ -7203,22 +7570,9 @@ app.post('/api/webhook/paradise', async (req, res) => {
                     phone: payerPhone
                 };
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook Paradise] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, customerData);
-                    } else {
-                        console.log(`[Webhook Paradise] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return;
-                }
-
-                console.log(`[Webhook Paradise] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
-                
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, customerData);
-                console.log(`[Webhook Paradise] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+                console.log(`[Webhook Paradise] ✓ Transação ${identifier} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook Paradise] Erro ao processar pagamento:', error);
             }
@@ -7269,7 +7623,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
 
 // Endpoint 2: Contagem de contatos
 app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
-    const { botIds } = req.body;
+    const { botIds, excludeChatIds, tagIds } = req.body;
     const sellerId = req.user.id;
 
     if (!botIds || !Array.isArray(botIds) || botIds.length === 0) {
@@ -7277,10 +7631,119 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 
     try {
-        const result = await sqlWithRetry(
-            `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`,
-            [sellerId, botIds]
-        );
+        // Separar tags custom (IDs numéricos) de tags automáticas (strings)
+        let customTagIds = [];
+        let automaticTagNames = [];
+        if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+            tagIds.forEach(tagId => {
+                if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                    customTagIds.push(parseInt(tagId));
+                } else if (typeof tagId === 'string') {
+                    automaticTagNames.push(tagId);
+                }
+            });
+        }
+        
+        // Validar tags custom se fornecido
+        let validCustomTagIds = [];
+        if (customTagIds.length > 0) {
+            const validTags = await sqlWithRetry(
+                sqlTx`SELECT id FROM lead_custom_tags 
+                      WHERE id = ANY(${customTagIds}) 
+                        AND seller_id = ${sellerId} 
+                        AND bot_id = ANY(${botIds})`
+            );
+            
+            if (validTags && validTags.length > 0) {
+                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+            }
+        }
+        
+        // Validar tags automáticas (atualmente só "Pagante" é suportada)
+        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+        
+        const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+        
+        let query;
+        let params;
+        
+        // Se tem filtro de tags, usar query com CTEs
+        if (hasAnyTagFilter) {
+            query = `
+                WITH base_contacts AS (
+                    SELECT DISTINCT chat_id
+                    FROM telegram_chats
+                    WHERE bot_id = ANY($1::int[]) 
+                        AND seller_id = $2
+                        AND chat_id > 0
+            `;
+            params = [botIds, sellerId];
+            let paramOffset = 3;
+            
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                query += ` AND chat_id != ALL($${paramOffset}::bigint[])`;
+                params.push(excludeChatIds);
+                paramOffset++;
+            }
+            
+            query += `)`;
+            
+            // Adicionar filtros para tags custom
+            if (validCustomTagIds.length > 0) {
+                query += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    GROUP BY lcta.chat_id
+                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                )`;
+                params.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+            
+            // Adicionar filtros para tags automáticas (Pagante)
+            if (validAutomaticTags.includes('Pagante')) {
+                query += `,
+                paid_contacts AS (
+                    SELECT DISTINCT tc.chat_id
+                    FROM telegram_chats tc
+                    JOIN clicks c ON c.click_id = tc.click_id
+                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                    WHERE tc.bot_id = ANY($1::int[])
+                        AND tc.seller_id = $2
+                        AND tc.chat_id > 0
+                        AND pt.status = 'paid'
+                )`;
+            }
+            
+            // Construir SELECT final com JOINs condicionais
+            query += `
+                SELECT COUNT(DISTINCT bc.chat_id)
+                FROM base_contacts bc
+            `;
+            
+            // Adicionar JOINs apenas se necessário
+            if (validCustomTagIds.length > 0) {
+                query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+        } else {
+            // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
+            query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[]) AND chat_id > 0`;
+            params = [sellerId, botIds];
+            
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                query += ` AND chat_id NOT IN (${excludeChatIds.map((_, i) => `$${i + 3}`).join(',')})`;
+                params.push(...excludeChatIds);
+            }
+        }
+
+        const result = await sqlWithRetry(query, params);
         res.status(200).json({ count: parseInt(result[0].count, 10) });
     } catch (error) {
         console.error("Erro ao contar contatos:", error);
@@ -7303,16 +7766,23 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
             return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
         }
 
-        const contacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
-        if (contacts.length === 0) {
+        // Buscar apenas usuários individuais (chat_id > 0) e grupos/canais (chat_id < 0)
+        const allContacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
+        if (allContacts.length === 0) {
             return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
         }
 
-        const inactiveContacts = [];
+        // Separar usuários individuais de grupos/canais
+        const individualUsers = allContacts.filter(c => c.chat_id > 0);
+        const groupsAndChannels = allContacts.filter(c => c.chat_id < 0);
+        
+        // Grupos/canais são automaticamente considerados inativos para disparos
+        const inactiveContacts = [...groupsAndChannels];
         const BATCH_SIZE = 30; 
 
-        for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-            const batch = contacts.slice(i, i + BATCH_SIZE);
+        // Validar apenas usuários individuais (grupos/canais já foram adicionados como inativos)
+        for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+            const batch = individualUsers.slice(i, i + BATCH_SIZE);
             const promises = batch.map(contact => 
                 sendTelegramRequest(bot.bot_token, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
                     .catch(error => {
@@ -7324,7 +7794,7 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
 
             await Promise.all(promises);
 
-            if (i + BATCH_SIZE < contacts.length) {
+            if (i + BATCH_SIZE < individualUsers.length) {
                 await new Promise(resolve => setTimeout(resolve, 1100));
             }
         }
@@ -8543,6 +9013,43 @@ app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
 // Endpoint 22: Histórico de disparos
 app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = (page - 1) * limit;
+
+        // Corrigir automaticamente campanhas presas em RUNNING que já foram concluídas
+        // Caso 1: Campanhas com todos os jobs processados (processed_jobs >= total_jobs)
+        await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND processed_jobs >= total_jobs 
+            AND total_jobs > 0
+        `, [req.user.id]);
+
+        // Caso 2: Campanhas com total_jobs = 0 que estão em RUNNING há mais de 1 hora
+        // (provavelmente falharam na criação ou nunca tiveram contatos)
+        await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND total_jobs = 0 
+            AND created_at < NOW() - INTERVAL '1 hour'
+        `, [req.user.id]);
+
+        // Contar total de registros
+        const [{ count }] = await sqlWithRetry(`
+            SELECT COUNT(*) as count
+            FROM disparo_history h
+            WHERE h.seller_id = $1
+        `, [req.user.id]);
+
+        const total = parseInt(count);
+        const totalPages = Math.ceil(total / limit);
+
+        // Buscar dados paginados
         const history = await sqlWithRetry(`
             SELECT 
                 h.*,
@@ -8552,13 +9059,67 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
             WHERE 
                 h.seller_id = $1
             ORDER BY 
-                h.created_at DESC;
-        `, [req.user.id]);
-        res.status(200).json(history);
+                h.created_at DESC
+            LIMIT $2 OFFSET $3
+        `, [req.user.id, limit, offset]);
+
+        res.status(200).json({
+            data: history,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages
+            }
+        });
     } catch (error) {
+        console.error('Erro ao buscar histórico de disparos:', error);
         res.status(500).json({ message: 'Erro ao buscar histórico de disparos.' });
     }
 });
+
+// Endpoint para corrigir campanhas presas em execução (manual)
+app.post('/api/disparos/fix-stuck-campaigns', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        
+        // Corrigir campanhas do usuário logado que estão presas
+        // Caso 1: Campanhas com todos os jobs processados
+        const result1 = await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND processed_jobs >= total_jobs 
+            AND total_jobs > 0
+            RETURNING id, campaign_name, processed_jobs, total_jobs
+        `, [sellerId]);
+
+        // Caso 2: Campanhas com total_jobs = 0 que estão em RUNNING há mais de 1 hora
+        const result2 = await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND total_jobs = 0 
+            AND created_at < NOW() - INTERVAL '1 hour'
+            RETURNING id, campaign_name, processed_jobs, total_jobs
+        `, [sellerId]);
+
+        const result = [...result1, ...result2];
+
+        const fixedCount = result.length;
+        
+        res.status(200).json({ 
+            message: `${fixedCount} campanha(s) corrigida(s) com sucesso.`,
+            fixed: result
+        });
+    } catch (error) {
+        console.error('Erro ao corrigir campanhas presas:', error);
+        res.status(500).json({ message: 'Erro ao corrigir campanhas presas.' });
+    }
+});
+
 // Endpoint 23: Verificar conversões de disparos (modificado)
 app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (req, res) => {
     const { historyId } = req.params;
@@ -8584,33 +9145,28 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
                     continue;
                 }
 
-                // Se já está paga, verificar se eventos foram enviados
+                // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
                 if (transaction.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!transaction.meta_event_id) {
-                        console.log(`[Check Conversions] Transação ${transaction.id} está paga mas sem meta_event_id. Tentando buscar dados do provider e enviar eventos...`);
-                        
-                        // Tentar buscar dados do cliente do provider
-                        let customerData = {};
-                        try {
-                            if (transaction.provider === 'syncpay') {
-                                const syncPayToken = await getSyncPayAuthToken(seller);
-                                const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                                    headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                                });
-                                customerData = response.data.payer || {};
-                            } else if (transaction.provider === 'pushinpay') {
-                                const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                                customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                            }
-                            
-                            // Tentar enviar eventos mesmo que a transação já esteja paga
-                            if (Object.keys(customerData).length > 0) {
-                                await handleSuccessfulPayment(transaction.id, customerData);
-                            }
-                        } catch (error) {
-                            console.error(`[Check Conversions] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                    // Tentar buscar dados do cliente do provider se possível
+                    let customerData = {};
+                    try {
+                        if (transaction.provider === 'syncpay') {
+                            const syncPayToken = await getSyncPayAuthToken(seller);
+                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                            });
+                            customerData = response.data.payer || {};
+                        } else if (transaction.provider === 'pushinpay') {
+                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
                         }
+                        
+                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
+                        }
+                    } catch (error) {
+                        console.error(`[Check Conversions] Erro ao tentar enviar eventos para transação já paga:`, error.message);
                     }
                     
                     await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
