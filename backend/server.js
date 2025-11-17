@@ -2180,6 +2180,121 @@ app.get('/api/flows/:id/node-stats', authenticateJwt, async (req, res) => {
     }
 });
 
+// ==========================================================
+// ENDPOINTS PARA DISPARO_FLOWS
+// ==========================================================
+
+// Função auxiliar para validar fluxo de disparo (não pode ter trigger)
+function validateDisparoFlow(nodesArray) {
+    if (!Array.isArray(nodesArray)) {
+        return { valid: false, message: 'Nodes deve ser um array.' };
+    }
+    
+    if (nodesArray.length === 0) {
+        return { valid: false, message: 'Fluxo deve ter pelo menos um nó de ação.' };
+    }
+    
+    // Verificar se há algum nó do tipo trigger
+    const hasTrigger = nodesArray.some(node => node.type === 'trigger');
+    if (hasTrigger) {
+        return { valid: false, message: 'Fluxos de disparo não podem ter nó do tipo trigger.' };
+    }
+    
+    // Verificar se há pelo menos um nó de ação
+    const hasAction = nodesArray.some(node => node.type === 'action');
+    if (!hasAction) {
+        return { valid: false, message: 'Fluxo deve ter pelo menos um nó de ação.' };
+    }
+    
+    return { valid: true };
+}
+
+app.get('/api/disparo-flows', authenticateJwt, async (req, res) => {
+    try {
+        const flows = await sqlWithRetry('SELECT * FROM disparo_flows WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
+        res.status(200).json(flows.map(f => ({ ...f, nodes: f.nodes || { nodes: [], edges: [] } })));
+    } catch (error) {
+        console.error('[Disparo Flows] Error:', error);
+        res.status(500).json({ message: 'Erro ao buscar os fluxos de disparo.' });
+    }
+});
+
+app.get('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const [flow] = await sqlWithRetry('SELECT * FROM disparo_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) {
+            return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        }
+        res.status(200).json({ ...flow, nodes: flow.nodes || { nodes: [], edges: [] } });
+    } catch (error) {
+        console.error('[Disparo Flow] Error:', error);
+        res.status(500).json({ message: 'Erro ao buscar o fluxo de disparo.' });
+    }
+});
+
+app.post('/api/disparo-flows', authenticateJwt, async (req, res) => {
+    const { name, botId } = req.body;
+    if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
+    try {
+        // Criar fluxo inicial sem trigger - apenas com um nó de ação vazio
+        const initialFlow = { nodes: [{ id: 'action-1', type: 'action', position: { x: 250, y: 50 }, data: { actions: [] } }], edges: [] };
+        const [newFlow] = await sqlWithRetry(`
+            INSERT INTO disparo_flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, 
+            [req.user.id, botId, name, JSON.stringify(initialFlow)]);
+        res.status(201).json({ ...newFlow, nodes: newFlow.nodes || { nodes: [], edges: [] } });
+    } catch (error) {
+        console.error('[Disparo Flow Create] Error:', error);
+        res.status(500).json({ message: 'Erro ao criar o fluxo de disparo.' });
+    }
+});
+
+app.put('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    const { name, nodes } = req.body;
+    if (!name || !nodes) return res.status(400).json({ message: 'Nome e estrutura de nós são obrigatórios.' });
+    
+    try {
+        // Parse e validar os nodes antes de salvar
+        const parsedNodes = JSON.parse(nodes);
+        const nodesArray = parsedNodes.nodes || [];
+        
+        // Validar que não há trigger e há pelo menos uma ação
+        const disparoValidation = validateDisparoFlow(nodesArray);
+        if (!disparoValidation.valid) {
+            logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${disparoValidation.message}`);
+            return res.status(400).json({ message: disparoValidation.message });
+        }
+        
+        // Validar se há links em campos de texto (mesma validação dos fluxos normais)
+        const validation = validateFlowActions(nodesArray);
+        if (!validation.valid) {
+            logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
+            return res.status(400).json({ message: validation.message });
+        }
+        
+        // Busca o fluxo para verificar se existe e pertence ao seller
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM disparo_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        
+        const [updated] = await sqlWithRetry('UPDATE disparo_flows SET name = $1, nodes = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', [name, nodes, req.params.id, req.user.id]);
+        if (updated) res.status(200).json({ ...updated, nodes: updated.nodes || { nodes: [], edges: [] } });
+        else res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+    } catch (error) {
+        console.error('[Disparo Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo de disparo.' });
+    }
+});
+
+app.delete('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const [deleted] = await sqlWithRetry('DELETE FROM disparo_flows WHERE id = $1 AND seller_id = $2 RETURNING *;', [req.params.id, req.user.id]);
+        if (deleted) res.status(200).json({ message: 'Fluxo de disparo deletado com sucesso.' });
+        else res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+    } catch (error) {
+        console.error('[Disparo Flow Delete] Error:', error);
+        res.status(500).json({ message: 'Erro ao deletar o fluxo de disparo.' });
+    }
+});
+
 app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
     try {
         const { isActive } = req.body;
@@ -6042,16 +6157,41 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, flowSteps, campaignName } = req.body;
+      const { botIds, disparoFlowId, campaignName } = req.body;
     
-      if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !Array.isArray(flowSteps) || flowSteps.length === 0 || !campaignName) {
-        return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e pelo menos um passo no fluxo são obrigatórios.' });
+      if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
+        return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
       }
     
         let historyId; 
     
       try {
-            // 1. Verificar quais bots são válidos primeiro (otimização)
+            // 1. Buscar o fluxo de disparo
+        const [disparoFlow] = await sqlWithRetry(
+            'SELECT * FROM disparo_flows WHERE id = $1 AND seller_id = $2',
+            [disparoFlowId, sellerId]
+        );
+        
+        if (!disparoFlow) {
+            return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+        }
+        
+        // Parse do fluxo
+        const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+        const flowNodes = flowData.nodes || [];
+        const flowEdges = flowData.edges || [];
+        
+        if (flowNodes.length === 0) {
+            return res.status(400).json({ message: 'O fluxo de disparo está vazio. Adicione pelo menos uma ação.' });
+        }
+        
+        // Verificar se há pelo menos um nó de ação (não trigger)
+        const actionNodes = flowNodes.filter(n => n.type === 'action');
+        if (actionNodes.length === 0) {
+            return res.status(400).json({ message: 'O fluxo de disparo deve ter pelo menos um nó de ação.' });
+        }
+        
+            // 2. Verificar quais bots são válidos primeiro (otimização)
         const validBotIds = [];
         for (const botId of botIds) {
             const [botCheck] = await sqlWithRetry(
@@ -6067,7 +6207,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             return res.status(404).json({ message: 'Nenhum bot válido encontrado.' });
         }
         
-        // 2. Buscar todos os contatos únicos em uma única query (otimização)
+        // 3. Buscar todos os contatos únicos em uma única query (otimização)
         const allContacts = new Map();
         const contacts = await sqlWithRetry(
             sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
@@ -6103,21 +6243,21 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         }
     
             // --- MUDANÇA PRINCIPAL AQUI ---
-            // 2. Calcular o total de trabalhos (Contatos * Passos)
-            const total_jobs_to_queue = uniqueContacts.length * flowSteps.length;
+            // 4. Calcular o total de trabalhos (1 trabalho por contato - o fluxo completo será processado)
+            const total_jobs_to_queue = uniqueContacts.length;
             if (total_jobs_to_queue === 0) {
-                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos ou 0 passos).' });
+                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos).' });
             }
     
-        // 3. Criar o registro mestre da campanha com os totais corretos
+        // 5. Criar o registro mestre da campanha com os totais corretos
         const [history] = await sqlWithRetry(
           sqlTx`INSERT INTO disparo_history (
-                    seller_id, campaign_name, bot_ids, flow_steps, 
+                    seller_id, campaign_name, bot_ids, disparo_flow_id, 
                     status, total_sent, failure_count, 
                     total_jobs, processed_jobs
                    ) 
                    VALUES (
-                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${JSON.stringify(flowSteps)}, 
+                    ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
                     'PENDING', ${uniqueContacts.length}, 0, 
                     ${total_jobs_to_queue}, 0
                    ) 
@@ -6125,9 +6265,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         );
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
-    
-        // 4. Processar todos os steps em batch ANTES do loop (otimização)
-        const processedStepsCache = await processStepsForQStashBatch(flowSteps, sellerId);
         
         // 5. Retornar resposta HTTP imediatamente e processar em background
         res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
@@ -6148,6 +6285,21 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 console.log(`[DISPARO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks de ${CONTACTS_CHUNK_SIZE}`);
         
+                // Encontrar o primeiro nó de ação (pular trigger se existir)
+                let startNodeId = null;
+                for (const node of flowNodes) {
+                    if (node.type === 'action') {
+                        startNodeId = node.id;
+                        break;
+                    }
+                }
+                
+                if (!startNodeId) {
+                    console.error('[DISPARO] Nenhum nó de ação encontrado no fluxo!');
+                    await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', historyId]);
+                    return;
+                }
+        
                 for (const contactChunk of contactChunks) {
                     for (const contact of contactChunk) {
                         const userVariables = {
@@ -6156,49 +6308,31 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
                         };
                         
-                        let currentStepDelay = 0; 
+                        const payload = {
+                            history_id: historyId,
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            variables_json: JSON.stringify(userVariables)
+                        };
             
-                        for (const step of flowSteps) {
-                            // Usa cache de steps processados ou processa individualmente se não estiver no cache
-                            const stepKey = JSON.stringify(step);
-                            let processedStep;
-                            if (processedStepsCache.has(stepKey)) {
-                                processedStep = processedStepsCache.get(stepKey);
-                            } else {
-                                // Fallback: processa individualmente se não estiver no cache
-                                processedStep = await processStepForQStash(step, sellerId);
-                            }
-                            
-                            const payload = {
-                                history_id: historyId,
-                                chat_id: contact.chat_id,
-                                bot_id: contact.bot_id_source,
-                                step_json: JSON.stringify(processedStep),
-                                variables_json: JSON.stringify(userVariables)
-                            };
+                        const totalDelaySeconds = messageCounter * delayBetweenMessages;
             
-                            const totalDelaySeconds = (messageCounter * delayBetweenMessages) + currentStepDelay;
-            
-                            qstashPromises.push(
-                                qstashClient.publishJSON({
-                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                    body: payload,
-                                    delay: `${totalDelaySeconds}s`, 
-                                    retries: 2,
-                                    // Limitar concorrência no QStash para evitar sobrecarga
-                                    headers: {
-                                        'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
-                                    }
-                                })
-                            );
-                           
-                            const delayData = step.data || step; 
-                            if (step.type === 'delay') {
-                                currentStepDelay += (delayData.delayInSeconds || 1);
-                            } else {
-                                currentStepDelay += 1; 
-                            }
-                        }
+                        qstashPromises.push(
+                            qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                body: payload,
+                                delay: `${totalDelaySeconds}s`, 
+                                retries: 2,
+                                // Limitar concorrência no QStash para evitar sobrecarga
+                                headers: {
+                                    'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
+                                }
+                            })
+                        );
+                       
                         messageCounter++; 
                     }
                     

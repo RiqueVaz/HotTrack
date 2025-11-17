@@ -183,6 +183,176 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
 // Funções de PIX (necessárias para o passo 'pix')
 
+// ==========================================================
+//           FUNÇÃO PARA PROCESSAR FLUXO COMPLETO DE DISPARO
+// ==========================================================
+
+// Função auxiliar para encontrar próximo nó
+function findNextNode(nodeId, handle, edges) {
+    const edge = edges.find(e => e.source === nodeId && e.sourceHandle === handle);
+    return edge ? edge.target : null;
+}
+
+// Função simplificada para processar fluxo de disparo
+// Esta função processa o fluxo completo começando do start_node_id
+async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId) {
+    const logPrefix = '[WORKER-DISPARO]';
+    logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
+    
+    let variables = { ...initialVariables };
+    let currentNodeId = startNodeId;
+    let safetyLock = 0;
+    const maxIterations = 50; // Proteção contra loops infinitos
+    
+    // Atualizar variáveis com dados do usuário
+    const [user] = await sqlWithRetry(sqlTx`
+        SELECT first_name, last_name 
+        FROM telegram_chats 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
+        ORDER BY created_at DESC LIMIT 1`);
+    
+    if (user) {
+        variables.primeiro_nome = user.first_name || '';
+        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+    }
+    
+    // Processar fluxo
+    while (currentNodeId && safetyLock < maxIterations) {
+        safetyLock++;
+        const currentNode = flowNodes.find(n => n.id === currentNodeId);
+        
+        if (!currentNode) {
+            logger.warn(`${logPrefix} Nó ${currentNodeId} não encontrado. Encerrando fluxo.`);
+            break;
+        }
+        
+        if (currentNode.type === 'action') {
+            // Processar ações do nó
+            const actions = currentNode.data?.actions || [];
+            if (actions.length > 0) {
+                try {
+                    // Importar processActions do server.js ou criar versão local
+                    // Por enquanto, vamos processar ações básicas aqui
+                    await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
+                } catch (error) {
+                    logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
+                    break;
+                }
+            }
+            
+            // Encontrar próximo nó
+            currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+        } else {
+            // Tipo de nó não suportado em disparos
+            logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
+            break;
+        }
+    }
+    
+    // Atualizar histórico
+    if (historyId) {
+        try {
+            await sqlWithRetry(sqlTx`
+                UPDATE disparo_history 
+                SET processed_jobs = processed_jobs + 1 
+                WHERE id = ${historyId}
+            `);
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao atualizar histórico:`, error);
+        }
+    }
+}
+
+// Função simplificada para processar ações em disparos
+async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
+    for (const action of actions) {
+        try {
+            const actionData = action.data || {};
+            
+            if (action.type === 'message') {
+                const text = await replaceVariables(actionData.text || '', variables);
+                if (text && text.trim()) {
+                    const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
+                    if (actionData.buttonText && actionData.buttonUrl) {
+                        payload.reply_markup = { inline_keyboard: [[{ text: actionData.buttonText, url: actionData.buttonUrl }]] };
+                    }
+                    await sendTelegramRequest(botToken, 'sendMessage', payload);
+                }
+            } else if (action.type === 'typing_action') {
+                const duration = actionData.durationInSeconds || 1;
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'typing' });
+                await new Promise(resolve => setTimeout(resolve, duration * 1000));
+            } else if (['image', 'video', 'audio'].includes(action.type)) {
+                let fileId = actionData.fileId || actionData.file_id || actionData.imageUrl || actionData.videoUrl || actionData.audioUrl;
+                const caption = await replaceVariables(actionData.caption || '', variables);
+                
+                // Se tem mediaLibraryId, buscar da biblioteca
+                if (actionData.mediaLibraryId && !fileId) {
+                    const [media] = await sqlWithRetry(
+                        'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
+                        [actionData.mediaLibraryId]
+                    );
+                    if (media && media.file_id) {
+                        fileId = media.file_id;
+                    }
+                }
+                
+                if (fileId) {
+                    const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                    if (isLibraryFile) {
+                        await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                    } else {
+                        const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                        const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                        await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' });
+                    }
+                }
+            } else if (action.type === 'delay') {
+                const delaySeconds = actionData.delayInSeconds || 1;
+                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+            } else if (action.type === 'action_pix') {
+                // Processar PIX - usar a mesma lógica do process-disparo original
+                const valueInCents = actionData.valueInCents || 100;
+                const pixMessage = await replaceVariables(actionData.pixMessage || 'Aqui está seu PIX:', variables);
+                const pixButtonText = actionData.pixButtonText || '📋 Copiar Código';
+                
+                const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`);
+                if (!seller) {
+                    throw new Error('Vendedor não encontrado para gerar PIX.');
+                }
+                
+                // Gerar PIX usando a função existente
+                const pixResult = await generatePixWithFallback(
+                    seller,
+                    valueInCents,
+                    process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost',
+                    seller.api_key,
+                    null // ip_address não disponível em disparos
+                );
+                
+                if (pixResult && pixResult.qr_code_text) {
+                    const pixText = `${pixMessage}\n\n\`\`\`\n${pixResult.qr_code_text}\n\`\`\``;
+                    const payload = {
+                        chat_id: chatId,
+                        text: pixText,
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: pixButtonText, callback_data: 'copy_pix' }]]
+                        }
+                    };
+                    await sendTelegramRequest(botToken, 'sendMessage', payload);
+                }
+            } else if (action.type === 'action_check_pix') {
+                // Verificar PIX - lógica simplificada (não implementada completamente para disparos)
+                logger.debug(`${logPrefix} Ação check_pix não suportada em disparos. Pulando.`);
+            }
+            // Outros tipos de ação podem ser adicionados aqui conforme necessário
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao processar ação ${action.type}:`, error);
+            // Continua processando outras ações mesmo se uma falhar
+        }
+    }
+}
 
 // ==========================================================
 //           LÓGICA DO WORKER
@@ -194,11 +364,48 @@ async function handler(req, res) {
         return res.status(499).end(); // 499 = Client Closed Request
     }
     
-    const { history_id, chat_id, bot_id, step_json, variables_json } = req.body;
-        // Log removido por segurança
+    const { history_id, chat_id, bot_id, step_json, variables_json, flow_nodes, flow_edges, start_node_id } = req.body;
     
-      const step = JSON.parse(step_json);
-      const userVariables = JSON.parse(variables_json);
+    // Verificar se é novo formato (fluxo completo) ou formato antigo (step_json)
+    const isNewFormat = flow_nodes && flow_edges && start_node_id;
+    
+    if (isNewFormat) {
+        // NOVO FORMATO: Processar fluxo completo
+        try {
+            const flowNodes = JSON.parse(flow_nodes);
+            const flowEdges = JSON.parse(flow_edges);
+            const userVariables = JSON.parse(variables_json || '{}');
+            
+            const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+            if (!bot || !bot.bot_token) {
+                throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
+            }
+            
+            // Importar processFlow do server.js (ou criar versão local)
+            // Por enquanto, vamos criar uma versão simplificada que chama processFlow
+            // Nota: Precisamos importar processFlow ou criar uma versão adaptada
+            
+            // Por enquanto, vamos usar uma abordagem diferente: chamar o endpoint interno
+            // ou criar uma função processFlowDisparo local
+            
+            // Por simplicidade, vamos criar uma função local que processa o fluxo
+            await processDisparoFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, start_node_id, userVariables, flowNodes, flowEdges, history_id);
+            
+            if (!res.headersSent) {
+                res.status(200).json({ message: 'Disparo processado com sucesso.' });
+            }
+        } catch (error) {
+            logger.error('[WORKER-DISPARO] Erro ao processar fluxo completo:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro ao processar disparo.' });
+            }
+        }
+        return;
+    }
+    
+    // FORMATO ANTIGO: Processar step individual (compatibilidade)
+    const step = JSON.parse(step_json);
+    const userVariables = JSON.parse(variables_json);
 
        
       let logStatus = 'SENT';
