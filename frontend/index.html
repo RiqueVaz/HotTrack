@@ -6337,27 +6337,17 @@ function generatePreviewHTML(data) {
 
     // Fetch disparo flows for management tab
     const fetchDisparoFlowsList = useCallback(async () => {
-        if (!selectedBotIdFlows) {
-            setDisparoFlowsList([]);
-            return;
-        }
         setIsLoadingFlowsList(true);
         try {
             const flows = await App.apiRequest('/api/disparo-flows', 'GET');
-            setDisparoFlowsList(flows.filter(f => f.bot_id == selectedBotIdFlows));
+            setDisparoFlowsList(flows);
         } catch (error) {
             console.error('Erro ao buscar fluxos de disparo:', error);
             App.showToast('Erro ao carregar fluxos de disparo.', 'error');
         } finally {
             setIsLoadingFlowsList(false);
         }
-    }, [selectedBotIdFlows]);
-
-    useEffect(() => {
-        if (bots.length > 0 && !selectedBotIdFlows) {
-            setSelectedBotIdFlows(bots[0].id);
-        }
-    }, [bots, selectedBotIdFlows]);
+    }, []);
 
     useEffect(() => {
         if (activeTab === 'fluxos-disparo') {
@@ -6414,15 +6404,17 @@ function generatePreviewHTML(data) {
     };
 
     const handleCreateDisparoFlowFromTab = async () => {
-        if (!selectedBotIdFlows) {
-            App.showToast('Selecione um bot primeiro.', 'error');
+        if (bots.length === 0) {
+            App.showToast('Nenhum bot disponível.', 'error');
             return;
         }
         const name = prompt('Nome do novo fluxo de disparo:');
         if (!name) return;
         
+        // Usar o primeiro bot disponível para criar o fluxo
+        const botId = bots[0].id;
         try {
-            const newFlow = await App.apiRequest('/api/disparo-flows', 'POST', { name, botId: selectedBotIdFlows });
+            const newFlow = await App.apiRequest('/api/disparo-flows', 'POST', { name, botId });
             setEditingDisparoFlow(newFlow);
             await fetchDisparoFlowsList();
         } catch (error) {
@@ -6720,24 +6712,10 @@ function generatePreviewHTML(data) {
                     <button 
                         className="btn btn-primary" 
                         onClick={handleCreateDisparoFlowFromTab} 
-                        disabled={!selectedBotIdFlows}
+                        disabled={bots.length === 0}
                     >
                         + Novo Fluxo de Disparo
                     </button>
-                </div>
-                <div className="form-group" style={{maxWidth: '400px', marginBottom: '2rem'}}>
-                    <label htmlFor="botSelectFlows">Selecione um Bot</label>
-                    <select 
-                        id="botSelectFlows" 
-                        className="form-select" 
-                        value={selectedBotIdFlows} 
-                        onChange={e => setSelectedBotIdFlows(e.target.value)}
-                    >
-                        <option value="">-- Selecione --</option>
-                        {bots.map(b => (
-                            <option key={b.id} value={b.id}>{b.bot_name}</option>
-                        ))}
-                    </select>
                 </div>
                 {isLoadingFlowsList ? (
                     <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Carregando...</p>
@@ -6769,8 +6747,8 @@ function generatePreviewHTML(data) {
                                 </div>
                             </div>
                         ))}
-                        {disparoFlowsList.length === 0 && selectedBotIdFlows && (
-                            <p style={{color: 'var(--text-secondary)'}}>Nenhum fluxo de disparo criado para este bot.</p>
+                        {disparoFlowsList.length === 0 && (
+                            <p style={{color: 'var(--text-secondary)'}}>Nenhum fluxo de disparo criado ainda.</p>
                         )}
                     </div>
                 )}
