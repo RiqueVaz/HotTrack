@@ -6608,10 +6608,12 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         let scheduledDate = null;
         if (scheduledAt) {
             try {
+                // scheduledAt vem como ISO string (UTC) do frontend
                 scheduledDate = new Date(scheduledAt);
                 if (isNaN(scheduledDate.getTime())) {
                     return res.status(400).json({ message: 'Data/hora de agendamento inválida.' });
                 }
+                
                 // Adicionar margem de segurança de 2 minutos para evitar problemas de sincronização
                 const now = new Date();
                 const minScheduledTime = new Date(now.getTime() + 120000); // 2 minutos no futuro
@@ -6874,11 +6876,19 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         // Se for agendado, criar tarefa única no QStash para processar depois
         if (scheduledTimestamp) {
             try {
-                // Usar scheduleAt com ISO string para agendamento absoluto
+                // QStash para agendamento único usa 'delay' com formato relativo (ex: "30s", "5m")
+                // Precisamos calcular o delay em segundos a partir do timestamp absoluto
+                const now = Math.floor(Date.now() / 1000); // Unix timestamp atual em segundos
+                const delaySeconds = scheduledTimestamp - now;
+                
+                if (delaySeconds <= 0) {
+                    return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
+                }
+                
                 const qstashResponse = await qstashClient.publishJSON({
                     url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
                     body: { history_id: historyId },
-                    scheduleAt: scheduledDate.toISOString(), // ISO string para agendamento absoluto
+                    delay: `${delaySeconds}s`, // Delay relativo em segundos
                     retries: 2,
                     method: "POST"
                 });
@@ -6888,12 +6898,16 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
                 );
                 
+                // scheduledDate está em UTC (vem do frontend como ISO string)
+                // Converter para horário local do Brasil para exibição
+                const displayDate = new Date(scheduledDate.getTime());
                 res.status(202).json({ 
-                    message: `Disparo "${campaignName}" agendado para ${scheduledDate.toLocaleString('pt-BR')} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
+                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
                 });
                 return; // Não processar imediatamente
             } catch (qstashError) {
                 console.error("Erro ao agendar disparo no QStash:", qstashError);
+                console.error("Detalhes do erro:", JSON.stringify(qstashError, null, 2));
                 // Se falhar ao agendar, deletar o registro e retornar erro
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
                 return res.status(500).json({ message: 'Erro ao agendar o disparo. Tente novamente.' });
