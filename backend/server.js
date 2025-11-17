@@ -5366,7 +5366,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         // Encontrou um nó válido (não é trigger)
                         logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
                         // Passa os dados do fluxo de destino para o processFlow recursivo
-                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
+                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
                         break;
                     }
                     
@@ -5664,7 +5664,7 @@ async function incrementNodeExecutionCount(flowId, nodeId) {
     }
 }
 
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
@@ -5707,7 +5707,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         // Usa os dados do fluxo fornecido (do forward_flow)
         nodes = flowNodes;
         edges = flowEdges;
-        logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+        if (flowId) {
+            currentFlowId = flowId; // Usa o flowId fornecido para rastreamento
+            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (ID: ${flowId}, ${nodes.length} nós, ${edges.length} arestas).`);
+        } else {
+            // Tenta buscar o flowId do banco usando bot_id e nodes fornecidos
+            // Como não temos uma forma direta de identificar o fluxo pelos nodes, deixa null
+            // O contador não funcionará neste caso, mas o fluxo continuará funcionando
+            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido sem flowId (${nodes.length} nós, ${edges.length} arestas). Contador de execução não será atualizado.`);
+        }
     } else {
         // Busca o fluxo ativo do banco
         const [flow] = await sqlTx`
@@ -5797,16 +5805,35 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             await incrementNodeExecutionCount(currentFlowId, currentNode.id);
         }
 
+        // Determina flow_id para salvar no estado
+        let flowIdToSave = currentFlowId;
+        if (!flowIdToSave) {
+            // Se não tem currentFlowId, tenta buscar do fluxo ativo do bot
+            try {
+                const [activeFlow] = await sqlTx`
+                    SELECT id FROM flows 
+                    WHERE bot_id = ${botId} AND is_active = TRUE 
+                    ORDER BY updated_at DESC LIMIT 1
+                `;
+                if (activeFlow) {
+                    flowIdToSave = activeFlow.id;
+                }
+            } catch (e) {
+                // Ignora erro, deixa flowIdToSave como null
+            }
+        }
+
         // Salva o estado atual (não está esperando input... ainda)
         await sqlTx`
-            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
-            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL)
+            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
+            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL, ${flowIdToSave})
             ON CONFLICT (chat_id, bot_id)
             DO UPDATE SET 
                 current_node_id = EXCLUDED.current_node_id, 
                 variables = EXCLUDED.variables, 
                 waiting_for_input = false, 
-                scheduled_message_id = NULL;
+                scheduled_message_id = NULL,
+                flow_id = EXCLUDED.flow_id;
         `;
 
         if (currentNode.type === 'trigger') {
@@ -5910,6 +5937,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                     });
                     
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                    // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
                     await sqlTx`
                         UPDATE user_flow_states 
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
@@ -6040,14 +6068,15 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 }
 
         // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
-        const [userState] = await sqlTx`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        const [userState] = await sqlTx`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input, flow_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
         // LOG: Estado encontrado
         logger.debug(`[Webhook] Estado encontrado para ${chatId}:`, userState ? {
             current_node_id: userState.current_node_id,
             waiting_for_input: userState.waiting_for_input,
             has_scheduled_message: !!userState.scheduled_message_id,
-            variables_type: typeof userState.variables
+            variables_type: typeof userState.variables,
+            flow_id: userState.flow_id
         } : 'NENHUM');
         
         if (userState && userState.waiting_for_input) {
@@ -6071,8 +6100,18 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
             
             logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
 
-            // Continua o fluxo a partir do próximo nó.
-            const [flow] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
+            // Busca o fluxo correto: se houver flow_id no estado, usa esse fluxo específico
+            // Caso contrário, usa o fluxo ativo do bot (comportamento padrão)
+            let flow;
+            if (userState.flow_id) {
+                logger.debug(`[Webhook] Buscando fluxo específico pelo flow_id: ${userState.flow_id}`);
+                const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE id = ${userState.flow_id}`;
+                flow = flowResult;
+            } else {
+                logger.debug(`[Webhook] Buscando fluxo ativo do bot (fallback)`);
+                const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
+                flow = flowResult;
+            }
             logger.debug(`[Webhook] Flow encontrado:`, flow ? 'SIM' : 'NÃO');
             
             if (flow && flow.nodes) {
@@ -6104,10 +6143,11 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
                     }
                     
-                    logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}`);
+                    logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}, flow_id: ${userState.flow_id || 'null'}`);
                     
                     try {
-                        await processFlow(chatId, botId, botToken, sellerId, nextNodeId, parsedVariables);
+                        // Passa nodes, edges e flow_id para garantir que o fluxo correto continue sendo usado
+                        await processFlow(chatId, botId, botToken, sellerId, nextNodeId, parsedVariables, nodes, edges, userState.flow_id);
                         logger.debug(`[Webhook] Fluxo continuado com sucesso para ${chatId}`);
                     } catch (error) {
                         logger.error(`[Webhook] Erro ao continuar fluxo para ${chatId}:`, error);
