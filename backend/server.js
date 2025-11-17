@@ -6855,14 +6855,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         if (uniqueContacts.length === 0) {
           return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
         }
-        
-        // Limitar número máximo de contatos para evitar sobrecarga
-        const MAX_CONTACTS_PER_CAMPAIGN = 10000; // Máximo 10k contatos por campanha
-        if (uniqueContacts.length > MAX_CONTACTS_PER_CAMPAIGN) {
-            return res.status(400).json({ 
-                message: `Número máximo de contatos excedido. Máximo permitido: ${MAX_CONTACTS_PER_CAMPAIGN}. Encontrados: ${uniqueContacts.length}` 
-            });
-        }
     
             // --- MUDANÇA PRINCIPAL AQUI ---
             // 4. Calcular o total de trabalhos (1 trabalho por contato - o fluxo completo será processado)
@@ -7813,17 +7805,6 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
             WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
             ORDER BY chat_id, created_at DESC
         `;
-        
-        // Limite máximo de 10k contatos
-        const MAX_CONTACTS = 10000;
-        if (allContacts.length > MAX_CONTACTS) {
-            if (!res.headersSent && !res.writableEnded) {
-                return res.status(400).json({ 
-                    message: `Número máximo de contatos excedido. Máximo permitido: ${MAX_CONTACTS}. Encontrados: ${allContacts.length}` 
-                });
-            }
-            return;
-        }
 
         if (allContacts.length === 0) {
             if (!res.headersSent && !res.writableEnded) {
