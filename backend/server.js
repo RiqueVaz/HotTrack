@@ -341,12 +341,122 @@ app.post(
             
             // Buscar contatos dos bots
             const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
-            const contacts = await sqlWithRetry(
-                sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                      FROM telegram_chats 
-                      WHERE bot_id = ANY(${botIds}) AND seller_id = ${history.seller_id}
-                      ORDER BY chat_id, created_at DESC`
-            );
+            
+            // Extrair tagIds do flow_steps se existir
+            let tagIds = null;
+            if (history.flow_steps && typeof history.flow_steps === 'object') {
+                const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
+                if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
+                    tagIds = flowSteps.tagIds;
+                }
+            }
+            
+            // Separar tags custom de automáticas
+            let customTagIds = [];
+            let automaticTagNames = [];
+            if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+                tagIds.forEach(tagId => {
+                    if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                        customTagIds.push(parseInt(tagId));
+                    } else if (typeof tagId === 'string') {
+                        automaticTagNames.push(tagId);
+                    }
+                });
+            }
+            
+            let contacts;
+            const hasAnyTagFilter = customTagIds.length > 0 || automaticTagNames.length > 0;
+            
+            // Aplicar filtro por tags se existir
+            if (hasAnyTagFilter) {
+                // Validar tags custom
+                let validCustomTagIds = [];
+                if (customTagIds.length > 0) {
+                    const validTags = await sqlWithRetry(
+                        sqlTx`SELECT id FROM lead_custom_tags 
+                              WHERE id = ANY(${customTagIds}) 
+                                AND seller_id = ${history.seller_id} 
+                                AND bot_id = ANY(${botIds})`
+                    );
+                    
+                    if (validTags && validTags.length > 0) {
+                        validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+                    }
+                }
+                
+                // Validar tags automáticas
+                const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+                
+                // Construir query com CTEs
+                let tagQuery = `
+                    WITH base_contacts AS (
+                        SELECT DISTINCT ON (tc.chat_id) 
+                            tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                        FROM telegram_chats tc
+                        WHERE tc.bot_id = ANY($1::int[]) 
+                            AND tc.seller_id = $2
+                        ORDER BY tc.chat_id, tc.created_at DESC
+                    )
+                `;
+                let tagParams = [botIds, history.seller_id];
+                let paramOffset = 3;
+                
+                // Adicionar filtros para tags custom
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                        GROUP BY lcta.chat_id
+                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                    )`;
+                    tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                    paramOffset += 2;
+                }
+                
+                // Adicionar filtros para tags automáticas (Pagante)
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += `,
+                    paid_contacts AS (
+                        SELECT DISTINCT tc.chat_id
+                        FROM telegram_chats tc
+                        JOIN clicks c ON c.click_id = tc.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc.bot_id = ANY($1::int[])
+                            AND tc.seller_id = $2
+                            AND pt.status = 'paid'
+                    )`;
+                }
+                
+                // Construir SELECT final
+                tagQuery += `
+                    SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+                    FROM base_contacts bc
+                `;
+                
+                // Adicionar JOINs apenas se necessário
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
+                
+                tagQuery += ` ORDER BY bc.chat_id`;
+                
+                contacts = await sqlWithRetry(tagQuery, tagParams);
+            } else {
+                // Sem filtro de tags
+                contacts = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${botIds}) AND seller_id = ${history.seller_id}
+                          ORDER BY chat_id, created_at DESC`
+                );
+            }
             
             const allContacts = new Map();
             contacts.forEach(c => {
@@ -2706,10 +2816,26 @@ app.get('/api/tags', authenticateJwt, async (req, res) => {
 
         query += ' ORDER BY LOWER(title)';
 
-        const tags = await sqlWithRetry(query, params);
-        res.status(200).json(tags);
+        const customTags = await sqlWithRetry(query, params);
+        
+        // Adicionar tags automáticas (Pagante)
+        const automaticTags = [{
+            id: 'Pagante',
+            title: 'Pagante',
+            color: '#10b981', // verde
+            bot_id: botId ? parseInt(botId, 10) : null,
+            type: 'automatic'
+        }];
+        
+        // Combinar tags custom com automáticas
+        const allTags = [
+            ...customTags.map(tag => ({ ...tag, type: 'custom' })),
+            ...automaticTags
+        ];
+        
+        res.status(200).json(allTags);
     } catch (error) {
-        console.error('Erro ao listar tags personalizadas:', error);
+        console.error('Erro ao listar tags:', error);
         res.status(500).json({ message: 'Erro ao listar tags.' });
     }
 });
@@ -6477,7 +6603,7 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, disparoFlowId, campaignName, scheduledAt } = req.body;
+      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, excludeChatIds } = req.body;
     
       if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
         return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
@@ -6500,7 +6626,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             } catch (error) {
                 return res.status(400).json({ message: 'Erro ao processar data/hora de agendamento.' });
             }
-        }
+      }
     
         let historyId; 
     
@@ -6547,14 +6673,142 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         }
         
         // 3. Buscar todos os contatos únicos em uma única query (otimização)
-        const allContacts = new Map();
-        const contacts = await sqlWithRetry(
+        // Aplicar filtros: primeiro excluir inativos (excludeChatIds), depois filtrar por tags
+        
+        // Separar tags custom (IDs numéricos) de tags automáticas (strings)
+        let customTagIds = [];
+        let automaticTagNames = [];
+        if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+            tagIds.forEach(tagId => {
+                if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                    customTagIds.push(parseInt(tagId));
+                } else if (typeof tagId === 'string') {
+                    automaticTagNames.push(tagId);
+                }
+            });
+        }
+        
+        // Validar tags custom se fornecido
+        let validCustomTagIds = [];
+        if (customTagIds.length > 0) {
+            const validTags = await sqlWithRetry(
+                sqlTx`SELECT id FROM lead_custom_tags 
+                      WHERE id = ANY(${customTagIds}) 
+                        AND seller_id = ${sellerId} 
+                        AND bot_id = ANY(${validBotIds})`
+            );
+            
+            if (validTags && validTags.length > 0) {
+                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+            }
+        }
+        
+        // Validar tags automáticas (atualmente só "Pagante" é suportada)
+        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+        
+        if (customTagIds.length > 0 && validCustomTagIds.length === 0 && automaticTagNames.length === 0) {
+            return res.status(400).json({ message: 'Nenhuma tag válida encontrada para os bots selecionados.' });
+        }
+        
+        const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+        
+        let contacts;
+        
+        // Se tem filtro de tags, usar query com JOIN e GROUP BY
+        if (hasAnyTagFilter) {
+            // Construir query base com CTEs para cada tipo de tag
+            let tagQuery = `
+                WITH base_contacts AS (
+                    SELECT DISTINCT ON (tc.chat_id) 
+                        tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                    FROM telegram_chats tc
+                    WHERE tc.bot_id = ANY($1::int[]) 
+                        AND tc.seller_id = $2
+            `;
+            let tagParams = [validBotIds, sellerId];
+            let paramOffset = 3;
+            
+            // Adicionar filtro de contatos inativos se houver
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+                tagParams.push(excludeChatIds);
+                paramOffset++;
+            }
+            
+            tagQuery += `
+                    ORDER BY tc.chat_id, tc.created_at DESC
+                )
+            `;
+            
+            // Adicionar filtros para tags custom
+            if (validCustomTagIds.length > 0) {
+                tagQuery += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    GROUP BY lcta.chat_id
+                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                )`;
+                tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+            
+            // Adicionar filtros para tags automáticas (Pagante)
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += `,
+                paid_contacts AS (
+                    SELECT DISTINCT tc.chat_id
+                    FROM telegram_chats tc
+                    JOIN clicks c ON c.click_id = tc.click_id
+                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                    WHERE tc.bot_id = ANY($1::int[])
+                        AND tc.seller_id = $2
+                        AND pt.status = 'paid'
+                )`;
+            }
+            
+            // Construir SELECT final com JOINs condicionais
+            tagQuery += `
+                SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+                FROM base_contacts bc
+            `;
+            
+            // Adicionar JOINs apenas se necessário
+            if (validCustomTagIds.length > 0) {
+                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+            
+            tagQuery += ` ORDER BY bc.chat_id`;
+            
+            contacts = await sqlWithRetry(tagQuery, tagParams);
+        } else {
+            // Query simples sem filtro de tags
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                contacts = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${validBotIds}) 
+                            AND seller_id = ${sellerId}
+                            AND chat_id != ALL(${excludeChatIds})
+                          ORDER BY chat_id, created_at DESC`
+                );
+            } else {
+                contacts = await sqlWithRetry(
             sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
                   FROM telegram_chats 
                   WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
                   ORDER BY chat_id, created_at DESC`
         );
+            }
+        }
         
+        const allContacts = new Map();
         contacts.forEach(c => {
             if (!allContacts.has(c.chat_id)) {
                 allContacts.set(c.chat_id, { 
@@ -6590,16 +6844,19 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     
         // 5. Criar o registro mestre da campanha com os totais corretos
         const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
+        // Salvar tagIds no flow_steps como metadata (incluindo custom e automáticas)
+        const allTagIds = [...(validCustomTagIds || []), ...(validAutomaticTags || [])];
+        const flowStepsMetadata = allTagIds.length > 0 ? { tagIds: allTagIds } : null;
         const [history] = await sqlWithRetry(
           sqlTx`INSERT INTO disparo_history (
                     seller_id, campaign_name, bot_ids, disparo_flow_id, 
                     status, total_sent, failure_count, 
-                    total_jobs, processed_jobs, scheduled_at
+                    total_jobs, processed_jobs, scheduled_at, flow_steps
                    ) 
                    VALUES (
                     ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
                     ${statusToSet}, ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0, ${scheduledDate}
+                    ${total_jobs_to_queue}, 0, ${scheduledDate}, ${flowStepsMetadata ? JSON.stringify(flowStepsMetadata) : null}
                    ) 
                    RETURNING id`
         );
@@ -7596,7 +7853,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
 
 // Endpoint 2: Contagem de contatos
 app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
-    const { botIds, excludeChatIds } = req.body;
+    const { botIds, excludeChatIds, tagIds } = req.body;
     const sellerId = req.user.id;
 
     if (!botIds || !Array.isArray(botIds) || botIds.length === 0) {
@@ -7604,12 +7861,114 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 
     try {
-        let query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`;
-        let params = [sellerId, botIds];
+        // Separar tags custom (IDs numéricos) de tags automáticas (strings)
+        let customTagIds = [];
+        let automaticTagNames = [];
+        if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+            tagIds.forEach(tagId => {
+                if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                    customTagIds.push(parseInt(tagId));
+                } else if (typeof tagId === 'string') {
+                    automaticTagNames.push(tagId);
+                }
+            });
+        }
+        
+        // Validar tags custom se fornecido
+        let validCustomTagIds = [];
+        if (customTagIds.length > 0) {
+            const validTags = await sqlWithRetry(
+                sqlTx`SELECT id FROM lead_custom_tags 
+                      WHERE id = ANY(${customTagIds}) 
+                        AND seller_id = ${sellerId} 
+                        AND bot_id = ANY(${botIds})`
+            );
+            
+            if (validTags && validTags.length > 0) {
+                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+            }
+        }
+        
+        // Validar tags automáticas (atualmente só "Pagante" é suportada)
+        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+        
+        const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+        
+        let query;
+        let params;
+        
+        // Se tem filtro de tags, usar query com CTEs
+        if (hasAnyTagFilter) {
+            query = `
+                WITH base_contacts AS (
+                    SELECT DISTINCT chat_id
+                    FROM telegram_chats
+                    WHERE bot_id = ANY($1::int[]) 
+                        AND seller_id = $2
+            `;
+            params = [botIds, sellerId];
+            let paramOffset = 3;
+            
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                query += ` AND chat_id != ALL($${paramOffset}::bigint[])`;
+                params.push(excludeChatIds);
+                paramOffset++;
+            }
+            
+            query += `)`;
+            
+            // Adicionar filtros para tags custom
+            if (validCustomTagIds.length > 0) {
+                query += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    GROUP BY lcta.chat_id
+                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                )`;
+                params.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+            
+            // Adicionar filtros para tags automáticas (Pagante)
+            if (validAutomaticTags.includes('Pagante')) {
+                query += `,
+                paid_contacts AS (
+                    SELECT DISTINCT tc.chat_id
+                    FROM telegram_chats tc
+                    JOIN clicks c ON c.click_id = tc.click_id
+                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                    WHERE tc.bot_id = ANY($1::int[])
+                        AND tc.seller_id = $2
+                        AND pt.status = 'paid'
+                )`;
+            }
+            
+            // Construir SELECT final com JOINs condicionais
+            query += `
+                SELECT COUNT(DISTINCT bc.chat_id)
+                FROM base_contacts bc
+            `;
+            
+            // Adicionar JOINs apenas se necessário
+            if (validCustomTagIds.length > 0) {
+                query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+        } else {
+            // Query simples sem filtro de tags
+            query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`;
+            params = [sellerId, botIds];
 
         if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
             query += ` AND chat_id NOT IN (${excludeChatIds.map((_, i) => `$${i + 3}`).join(',')})`;
             params.push(...excludeChatIds);
+            }
         }
 
         const result = await sqlWithRetry(query, params);

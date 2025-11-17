@@ -6258,6 +6258,9 @@ function generatePreviewHTML(data) {
     const [isSending, setIsSending] = useState(false);
     const [isScheduled, setIsScheduled] = useState(false);
     const [scheduledDateTime, setScheduledDateTime] = useState('');
+    const [selectedTagIds, setSelectedTagIds] = useState([]);
+    const [availableTags, setAvailableTags] = useState([]);
+    const [isLoadingTags, setIsLoadingTags] = useState(false);
     
     // Disparo flow states
     const [disparoFlows, setDisparoFlows] = useState([]);
@@ -6288,14 +6291,50 @@ function generatePreviewHTML(data) {
         return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
     };
 
-    // Reset hygiene when bots change
+    // Reset hygiene and tags when bots change
     useEffect(() => {
         setIsHygienized(false);
         setInactiveCount(0);
         setInactiveChatIds([]);
+        setSelectedTagIds([]);
+        setAvailableTags([]);
+    }, [selectedBotIds]);
+    
+    // Fetch available tags when bots change
+    useEffect(() => {
+        const fetchTags = async () => {
+            if (selectedBotIds.length === 0) {
+                setAvailableTags([]);
+                return;
+            }
+            
+            setIsLoadingTags(true);
+            try {
+                const allTags = [];
+                for (const botId of selectedBotIds) {
+                    try {
+                        const tags = await App.apiRequest(`/api/tags?botId=${botId}`, 'GET');
+                        if (Array.isArray(tags)) {
+                            allTags.push(...tags);
+                        }
+                    } catch (error) {
+                        console.error(`Erro ao buscar tags do bot ${botId}:`, error);
+                    }
+                }
+                // Remover duplicatas por ID
+                const uniqueTags = Array.from(new Map(allTags.map(tag => [tag.id, tag])).values());
+                setAvailableTags(uniqueTags);
+            } catch (error) {
+                console.error('Erro ao buscar tags:', error);
+                setAvailableTags([]);
+            } finally {
+                setIsLoadingTags(false);
+            }
+        };
+        fetchTags();
     }, [selectedBotIds]);
 
-    // Fetch contact count when selected bots change or after hygiene
+    // Fetch contact count when selected bots change, after hygiene, or when tags change
     useEffect(() => {
         const fetchCount = async () => {
             if (selectedBotIds.length === 0) {
@@ -6303,10 +6342,17 @@ function generatePreviewHTML(data) {
                 return;
             }
             try {
-                const response = await App.apiRequest('/api/bots/contacts-count', 'POST', { 
+                const requestBody = { 
                     botIds: selectedBotIds,
                     excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
-                });
+                };
+                
+                // Adicionar tagIds apenas se higienização foi feita e tags foram selecionadas
+                if (isHygienized && selectedTagIds.length > 0) {
+                    requestBody.tagIds = selectedTagIds;
+                }
+                
+                const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
                 setContactCount(response.count);
             } catch (error) {
                 console.error("Erro ao buscar contagem de contatos", error);
@@ -6315,7 +6361,7 @@ function generatePreviewHTML(data) {
             }
         };
         fetchCount();
-    }, [selectedBotIds, inactiveChatIds]);
+    }, [selectedBotIds, inactiveChatIds, selectedTagIds, isHygienized]);
 
     // Fetch disparo flows
     const fetchDisparoFlows = useCallback(async () => {
@@ -6540,8 +6586,14 @@ function generatePreviewHTML(data) {
         const requestBody = { 
             campaignName, 
             botIds: selectedBotIds, 
-            disparoFlowId: selectedDisparoFlowId
+            disparoFlowId: selectedDisparoFlowId,
+            excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
         };
+        
+        // Adicionar tagIds se tags foram selecionadas
+        if (selectedTagIds.length > 0) {
+            requestBody.tagIds = selectedTagIds;
+        }
         
         // Adicionar scheduledAt se agendamento estiver ativado
         if (isScheduled && scheduledDateTime) {
@@ -6561,6 +6613,7 @@ function generatePreviewHTML(data) {
         setInactiveCount(0);
         setIsScheduled(false);
         setScheduledDateTime('');
+        setSelectedTagIds([]);
     } catch (error) {
         App.showToast(error.response?.data?.message || 'Erro ao agendar disparo.', 'error');
         console.error("Erro submit disparo:", error);
@@ -6647,6 +6700,93 @@ function generatePreviewHTML(data) {
                                 </p>
                             )}
                         </div>
+                        
+                        {/* Tag Filter Section - Only show after hygiene */}
+                        {isHygienized && availableTags.length > 0 && (
+                            <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
+                                <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
+                                    🏷️ Filtrar por Tags (Opcional)
+                                </label>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                                    Selecione as tags para filtrar os contatos. Apenas contatos com TODAS as tags selecionadas serão incluídos.
+                                </p>
+                                {isLoadingTags ? (
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Carregando tags...</p>
+                                ) : (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        {availableTags.map(tag => (
+                                            <label 
+                                                key={tag.id}
+                                                style={{ 
+                                                    display: 'flex', 
+                                                    alignItems: 'center', 
+                                                    gap: '0.5rem',
+                                                    padding: '0.5rem 0.75rem',
+                                                    borderRadius: '6px',
+                                                    background: selectedTagIds.includes(tag.id) 
+                                                        ? `linear-gradient(135deg, ${tag.color}20 0%, ${tag.color}10 100%)`
+                                                        : 'var(--bg-primary)',
+                                                    border: selectedTagIds.includes(tag.id) 
+                                                        ? `2px solid ${tag.color}` 
+                                                        : '1px solid var(--border-color)',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s',
+                                                    fontSize: '0.9rem'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    if (!selectedTagIds.includes(tag.id)) {
+                                                        e.currentTarget.style.borderColor = tag.color;
+                                                        e.currentTarget.style.background = `${tag.color}10`;
+                                                    }
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    if (!selectedTagIds.includes(tag.id)) {
+                                                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                                                        e.currentTarget.style.background = 'var(--bg-primary)';
+                                                    }
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedTagIds.includes(tag.id)}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            setSelectedTagIds([...selectedTagIds, tag.id]);
+                                                        } else {
+                                                            setSelectedTagIds(selectedTagIds.filter(id => id !== tag.id));
+                                                        }
+                                                    }}
+                                                    style={{ 
+                                                        width: '16px', 
+                                                        height: '16px', 
+                                                        cursor: 'pointer',
+                                                        accentColor: tag.color
+                                                    }}
+                                                />
+                                                <span 
+                                                    style={{ 
+                                                        fontWeight: selectedTagIds.includes(tag.id) ? '600' : '500',
+                                                        color: selectedTagIds.includes(tag.id) ? tag.color : 'var(--text-primary)'
+                                                    }}
+                                                >
+                                                    {tag.title}
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                                {selectedTagIds.length > 0 && (
+                                    <p style={{ 
+                                        color: 'var(--accent-primary)', 
+                                        fontSize: '0.85rem', 
+                                        marginTop: '0.75rem',
+                                        fontWeight: '500'
+                                    }}>
+                                        {selectedTagIds.length} tag(s) selecionada(s)
+                                    </p>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
 
