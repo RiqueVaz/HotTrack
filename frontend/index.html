@@ -1357,6 +1357,12 @@
                 startDate: null,
                 endDate: null
             },
+            transactionsPagination: {
+                page: 1,
+                totalPages: 1,
+                total: 0,
+                limit: 100
+            },
             revenueChart: null,
         },
 
@@ -2601,7 +2607,21 @@
                 <div class="animate-fade-in">
                     <div class="mb-6"><h1 class="text-3xl font-bold text-white">Histórico de Transações</h1><p class="text-slate-400">Visualize todas as transações de PIX geradas e pagas.</p></div>
                     ${this.dateFilterComponent('transactions')}
-                    <div class="card p-6 rounded-lg"><div id="transactions-table-container" class="overflow-x-auto"><table class="table-custom w-full text-sm"><thead><tr><th>Status</th><th>Valor</th><th>Origem</th><th>Provedor PIX</th><th>Data</th></tr></thead><tbody id="transactions-table-body"><tr><td colspan="5" class="text-center text-gray-500 py-8">Carregando transações...</td></tr></tbody></table></div></div>
+                    <div class="card p-6 rounded-lg">
+                        <div id="transactions-table-container" class="overflow-x-auto">
+                            <table class="table-custom w-full text-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Status</th><th>Valor</th><th>Origem</th><th>Provedor PIX</th><th>Data</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="transactions-table-body">
+                                    <tr><td colspan="5" class="text-center text-gray-500 py-8">Carregando transações...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="transactions-pagination-container"></div>
+                    </div>
                 </div>`;
             },
             settings() {
@@ -3863,22 +3883,38 @@
             }
         },
 
-        async fetchTransactions() {
+        async fetchTransactions(page = this.state.transactionsPagination.page) {
             const tableBody = document.getElementById('transactions-table-body');
             if (!tableBody) { console.warn("Transactions table body not found."); return; }
             tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 py-8">Carregando transações...</td></tr>';
 
             try {
                 const { startDate, endDate } = this.state.dateFilter;
-                const query = new URLSearchParams({ startDate: startDate || '', endDate: endDate || '' }).toString();
-                const response = await this.apiRequest(`/api/transactions?${query}`);
+                const queryParams = new URLSearchParams({ 
+                    startDate: startDate || '', 
+                    endDate: endDate || '',
+                    page: page,
+                    limit: this.state.transactionsPagination.limit
+                });
+                const response = await this.apiRequest(`/api/transactions?${queryParams.toString()}`);
                 
                 // Extrair array de transações da resposta
                 // Compatibilidade: se for array direto (formato antigo) ou objeto com transactions (formato novo)
                 const transactions = Array.isArray(response) ? response : (response.transactions || []);
                 
+                // Salvar informações de paginação
+                if (response.pagination) {
+                    this.state.transactionsPagination = {
+                        page: response.pagination.page,
+                        totalPages: response.pagination.totalPages,
+                        total: response.pagination.total,
+                        limit: response.pagination.limit
+                    };
+                }
+                
                 this.state.data.transactions = transactions;
                 this.renderTransactionsTable();
+                this.renderTransactionsPagination();
             } catch (e) {
                 console.error("Erro ao buscar transações:", e);
                 if (tableBody) tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-red-400 py-8">Erro ao carregar transações.</td></tr>';
@@ -3905,6 +3941,40 @@
             } else {
                 tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 py-8">Nenhuma transação encontrada para o período selecionado.</td></tr>';
             }
+        },
+
+        renderTransactionsPagination() {
+            const pagination = this.state.transactionsPagination;
+            if (pagination.totalPages <= 1) {
+                const container = document.getElementById('transactions-pagination-container');
+                if (container) container.innerHTML = '';
+                return;
+            }
+            
+            const container = document.getElementById('transactions-pagination-container');
+            if (!container) return;
+            
+            container.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding: 1rem;">
+                    <button 
+                        class="btn btn-secondary" 
+                        onclick="App.fetchTransactions(${pagination.page - 1})"
+                        ${pagination.page === 1 ? 'disabled' : ''}
+                    >
+                        Anterior
+                    </button>
+                    <span style="color: var(--text-secondary);">
+                        Página ${pagination.page} de ${pagination.totalPages} (${pagination.total} total)
+                    </span>
+                    <button 
+                        class="btn btn-secondary" 
+                        onclick="App.fetchTransactions(${pagination.page + 1})"
+                        ${pagination.page === pagination.totalPages ? 'disabled' : ''}
+                    >
+                        Próximo
+                    </button>
+                </div>
+            `;
         },
 
        handleFilterChange(page, period, customStartDate, customEndDate) {
@@ -3961,7 +4031,10 @@
             }
 
             if (page === 'dashboard') this.fetchDashboardMetrics();
-            else if (page === 'transactions') this.fetchTransactions();
+            else if (page === 'transactions') {
+                this.state.transactionsPagination.page = 1;
+                this.fetchTransactions(1);
+            }
         },
         
         renderRevenueChart() {
@@ -6478,7 +6551,7 @@ function generatePreviewHTML(data) {
     }, [activeTab, fetchDisparoFlowsList]);
 
     // Fetch history for historico tab
-    const fetchHistory = useCallback((page = currentPage, showToast = false) => {
+    const fetchHistory = useCallback((page = 1, showToast = false) => {
         setIsLoadingHistory(true);
         App.apiRequest(`/api/disparos/history?page=${page}&limit=${itemsPerPage}`, 'GET')
             .then(res => {
@@ -6506,7 +6579,7 @@ function generatePreviewHTML(data) {
                 }
             })
             .finally(() => setIsLoadingHistory(false));
-    }, [currentPage, itemsPerPage]);
+    }, [itemsPerPage]);
 
     useEffect(() => {
         if (activeTab === 'historico') {
