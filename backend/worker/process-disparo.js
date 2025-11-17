@@ -204,73 +204,100 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     let currentNodeId = startNodeId;
     let safetyLock = 0;
     let lastTransactionId = null; // Rastrear transaction_id para salvar no disparo_log
+    let logStatus = 'SENT';
+    let logDetails = 'Enviado com sucesso.';
     const maxIterations = 50; // Proteção contra loops infinitos
     
-    // Atualizar variáveis com dados do usuário
-    const [user] = await sqlWithRetry(sqlTx`
-        SELECT first_name, last_name 
-        FROM telegram_chats 
-        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
-        ORDER BY created_at DESC LIMIT 1`);
-    
-    if (user) {
-        variables.primeiro_nome = user.first_name || '';
-        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
-    }
-    
-    // Processar fluxo
-    while (currentNodeId && safetyLock < maxIterations) {
-        safetyLock++;
-        const currentNode = flowNodes.find(n => n.id === currentNodeId);
+    try {
+        // Atualizar variáveis com dados do usuário
+        const [user] = await sqlWithRetry(sqlTx`
+            SELECT first_name, last_name 
+            FROM telegram_chats 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
+            ORDER BY created_at DESC LIMIT 1`);
         
-        if (!currentNode) {
-            logger.warn(`${logPrefix} Nó ${currentNodeId} não encontrado. Encerrando fluxo.`);
-            break;
+        if (user) {
+            variables.primeiro_nome = user.first_name || '';
+            variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
         }
         
-        if (currentNode.type === 'trigger') {
-            // Trigger apenas passa para o próximo nó conectado
-            currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
-            if (!currentNodeId) {
-                logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
+        // Processar fluxo
+        while (currentNodeId && safetyLock < maxIterations) {
+            safetyLock++;
+            const currentNode = flowNodes.find(n => n.id === currentNodeId);
+            
+            if (!currentNode) {
+                logger.warn(`${logPrefix} Nó ${currentNodeId} não encontrado. Encerrando fluxo.`);
                 break;
             }
-        } else if (currentNode.type === 'action') {
-            // Processar ações do nó
-            const actions = currentNode.data?.actions || [];
-            if (actions.length > 0) {
-                try {
-                    // Importar processActions do server.js ou criar versão local
-                    // Por enquanto, vamos processar ações básicas aqui
-                    const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
-                    if (returnedTransactionId) {
-                        lastTransactionId = returnedTransactionId;
-                    }
-                } catch (error) {
-                    logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
+            
+            if (currentNode.type === 'trigger') {
+                // Trigger apenas passa para o próximo nó conectado
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                if (!currentNodeId) {
+                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
                     break;
                 }
+            } else if (currentNode.type === 'action') {
+                // Processar ações do nó
+                const actions = currentNode.data?.actions || [];
+                if (actions.length > 0) {
+                    try {
+                        const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
+                        if (returnedTransactionId) {
+                            lastTransactionId = returnedTransactionId;
+                        }
+                    } catch (error) {
+                        logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
+                        logStatus = 'FAILED';
+                        logDetails = error.message.substring(0, 255);
+                        break;
+                    }
+                }
+                
+                // Encontrar próximo nó
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+            } else {
+                // Tipo de nó não suportado em disparos
+                logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
+                break;
             }
-            
-            // Encontrar próximo nó
-            currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
-        } else {
-            // Tipo de nó não suportado em disparos
-            logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
-            break;
         }
+    } catch (error) {
+        logStatus = 'FAILED';
+        logDetails = error.message.substring(0, 255);
+        logger.error(`${logPrefix} Erro crítico ao processar fluxo:`, error);
     }
     
-    // Atualizar histórico
+    // Atualizar histórico e salvar disparo_log
     if (historyId) {
         try {
-            await sqlWithRetry(sqlTx`
-                UPDATE disparo_history 
-                SET processed_jobs = processed_jobs + 1 
-                WHERE id = ${historyId}
-            `);
+            if (logStatus === 'FAILED') {
+                await sqlWithRetry(sqlTx`
+                    UPDATE disparo_history 
+                    SET processed_jobs = processed_jobs + 1,
+                        failure_count = failure_count + 1
+                    WHERE id = ${historyId}
+                `);
+            } else {
+                await sqlWithRetry(sqlTx`
+                    UPDATE disparo_history 
+                    SET processed_jobs = processed_jobs + 1
+                    WHERE id = ${historyId}
+                `);
+            }
         } catch (error) {
             logger.error(`${logPrefix} Erro ao atualizar histórico:`, error);
+        }
+        
+        // Salvar disparo_log
+        try {
+            await sqlWithRetry(
+                sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
+                       VALUES (${historyId}, ${chatId}, ${botId}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
+            );
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao salvar disparo_log:`, error);
         }
     }
 }
@@ -594,435 +621,32 @@ async function handler(req, res) {
         return res.status(499).end(); // 499 = Client Closed Request
     }
     
-    const { history_id, chat_id, bot_id, step_json, variables_json, flow_nodes, flow_edges, start_node_id } = req.body;
+    const { history_id, chat_id, bot_id, flow_nodes, flow_edges, start_node_id, variables_json } = req.body;
     
-    // Verificar se é novo formato (fluxo completo) ou formato antigo (step_json)
-    const isNewFormat = flow_nodes && flow_edges && start_node_id;
-    
-    if (isNewFormat) {
-        // NOVO FORMATO: Processar fluxo completo
-        try {
-            const flowNodes = JSON.parse(flow_nodes);
-            const flowEdges = JSON.parse(flow_edges);
-            const userVariables = JSON.parse(variables_json || '{}');
-            
-            const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
-            if (!bot || !bot.bot_token) {
-                throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
-            }
-            
-            // Importar processFlow do server.js (ou criar versão local)
-            // Por enquanto, vamos criar uma versão simplificada que chama processFlow
-            // Nota: Precisamos importar processFlow ou criar uma versão adaptada
-            
-            // Por enquanto, vamos usar uma abordagem diferente: chamar o endpoint interno
-            // ou criar uma função processFlowDisparo local
-            
-            // Por simplicidade, vamos criar uma função local que processa o fluxo
-            await processDisparoFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, start_node_id, userVariables, flowNodes, flowEdges, history_id);
-            
-            if (!res.headersSent) {
-                res.status(200).json({ message: 'Disparo processado com sucesso.' });
-            }
-        } catch (error) {
-            logger.error('[WORKER-DISPARO] Erro ao processar fluxo completo:', error);
-            if (!res.headersSent) {
-                res.status(500).json({ message: 'Erro ao processar disparo.' });
-            }
-        }
-        return;
+    if (!flow_nodes || !flow_edges || !start_node_id) {
+        return res.status(400).json({ message: 'Formato inválido. Requer flow_nodes, flow_edges e start_node_id.' });
     }
     
-    // FORMATO ANTIGO: Processar step individual (compatibilidade)
-    const step = JSON.parse(step_json);
-    const userVariables = JSON.parse(variables_json);
-
-       
-      let logStatus = 'SENT';
-        let logDetails = 'Enviado com sucesso.';
-      let lastTransactionId = null;
-    
-      try {
-        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token, telegram_supergroup_id FROM telegram_bots WHERE id = ${bot_id}`);
+    try {
+        const flowNodes = JSON.parse(flow_nodes);
+        const flowEdges = JSON.parse(flow_edges);
+        const userVariables = JSON.parse(variables_json || '{}');
+        
+        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
-          throw new Error(`[WORKER-DISPARO] Bot com ID ${bot_id} não encontrado ou sem token.`);
-        }
-         
-        const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${bot.seller_id}`);
-            if (!seller) {
-                throw new Error(`[WORKER-DISPARO] Vendedor com ID ${bot.seller_id} não encontrado.`);
-            }
-
-            // Busca o click_id mais recente para garantir que está atualizado
-            const [chat] = await sqlWithRetry(sqlTx`
-                SELECT click_id FROM telegram_chats 
-                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id} AND click_id IS NOT NULL 
-                ORDER BY created_at DESC LIMIT 1
-            `);
-            if (chat?.click_id) {
-                userVariables.click_id = chat.click_id;
-            }
-    
-          let response;
-            const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-    
-        try {
-            if (step.type === 'message') {
-                // (Lógica para enviar 'message' ... igual a antes)
-          const textToSend = await replaceVariables(step.text, userVariables);
-          let payload = { chat_id: chat_id, text: textToSend, parse_mode: 'HTML' };
-          if (step.buttonText && step.buttonUrl) {
-            payload.reply_markup = { inline_keyboard: [[{ text: step.buttonText, url: step.buttonUrl }]] };
-          }
-          response = await sendTelegramRequest(bot.bot_token, 'sendMessage', payload);
-        } else if (['image', 'video', 'audio'].includes(step.type)) {
-          const urlMap = { image: 'fileUrl', video: 'fileUrl', audio: 'fileUrl' };
-          let fileIdentifier = step[urlMap[step.type]];
-          const caption = await replaceVariables(step.caption, userVariables);
-          
-          // Se o step tem mediaLibraryId, busca o file_id da biblioteca
-          if (step.mediaLibraryId) {
-            try {
-              const [media] = await sqlWithRetry(
-                'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
-                [step.mediaLibraryId]
-              );
-              if (media && media.file_id) {
-                fileIdentifier = media.file_id;
-                // Log removido por segurança
-              } else {
-                logger.error(`[WORKER-DISPARO] Arquivo da biblioteca não encontrado: mediaLibraryId ${step.mediaLibraryId}`);
-                throw new Error(`Arquivo da biblioteca não encontrado: ${step.mediaLibraryId}`);
-              }
-            } catch (error) {
-              logger.error(`[WORKER-DISPARO] Erro ao buscar arquivo da biblioteca:`, error);
-              throw error;
-            }
-          }
-          
-          if (!fileIdentifier) {
-            throw new Error(`Nenhum file_id ou mediaLibraryId fornecido para o step ${step.type}`);
-          }
-          
-          const isLibraryFile = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC'));
-          if (isLibraryFile) {
-            response = await sendMediaAsProxy(bot.bot_token, chat_id, fileIdentifier, step.type, caption);
-          } else {
-            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[step.type];
-            const field = { image: 'photo', video: 'video', audio: 'voice' }[step.type];
-            const payload = { chat_id: chat_id, [field]: fileIdentifier, caption: caption, parse_mode: 'HTML' };
-            response = await sendTelegramRequest(bot.bot_token, method, payload);
-          }
-        } else if (step.type === 'action_create_invite_link') {
-            if (!bot.telegram_supergroup_id) {
-                throw new Error('Supergrupo não configurado para este bot.');
-            }
-
-            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
-            if (!normalizedChatId) {
-                throw new Error('ID do supergrupo inválido para criação de convite.');
-            }
-
-            const userToUnban = step.userId || chat_id;
-            const normalizedUserId = normalizeChatIdentifier(userToUnban);
-
-            try {
-                const unbanResponse = await sendTelegramRequest(
-                    bot.bot_token,
-                    'unbanChatMember',
-                    {
-                        chat_id: normalizedChatId,
-                        user_id: normalizedUserId,
-                        only_if_banned: true
-                    }
-                );
-                if (unbanResponse?.ok) {
-                    logger.debug(`[WORKER-DISPARO] Usuário ${userToUnban} desbanido antes da criação do convite.`);
-                } else if (unbanResponse && !unbanResponse.ok) {
-                    const desc = (unbanResponse.description || '').toLowerCase();
-                    if (desc.includes("can't remove chat owner")) {
-                        logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
-                    } else {
-                        logger.warn(`[WORKER-DISPARO] Não foi possível desbanir usuário ${userToUnban}: ${unbanResponse.description}`);
-                    }
-                }
-            } catch (unbanError) {
-                const message = (unbanError?.message || '').toLowerCase();
-                if (message.includes("can't remove chat owner")) {
-                    logger.debug(`[WORKER-DISPARO] Tentativa de desbanir o proprietário do grupo ignorada.`);
-                } else {
-                    logger.warn(`[WORKER-DISPARO] Erro ao tentar desbanir usuário ${userToUnban}:`, unbanError.message);
-                }
-            }
-
-            const inviteNameRaw = (step.linkName || `Convite_${chat_id}_${Date.now()}`).toString().trim();
-            const inviteName = inviteNameRaw ? inviteNameRaw.slice(0, 32) : `Convite_${Date.now()}`;
-
-            const invitePayload = {
-                chat_id: normalizedChatId,
-                name: inviteName,
-                member_limit: 1,
-                creates_join_request: false
-            };
-
-            if (step.expireMinutes) {
-                invitePayload.expire_date = Math.floor(Date.now() / 1000) + (parseInt(step.expireMinutes, 10) * 60);
-            }
-
-            const inviteResponse = await sendTelegramRequest(bot.bot_token, 'createChatInviteLink', invitePayload);
-            if (!inviteResponse.ok) {
-                throw new Error(inviteResponse.description || 'Falha ao criar link de convite.');
-            }
-
-            userVariables.invite_link = inviteResponse.result.invite_link;
-            userVariables.invite_link_name = inviteResponse.result.name;
-            userVariables.invite_link_single_use = true;
-            userVariables.user_was_banned = false;
-            userVariables.banned_user_id = undefined;
-
-            const buttonText = (step.buttonText || DEFAULT_INVITE_BUTTON_TEXT).trim() || DEFAULT_INVITE_BUTTON_TEXT;
-            const template = (step.messageText || step.text || DEFAULT_INVITE_MESSAGE).trim() || DEFAULT_INVITE_MESSAGE;
-            const messageText = await replaceVariables(template, userVariables);
-            const messagePayload = {
-                chat_id: chat_id,
-                text: messageText,
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[{ text: buttonText, url: inviteResponse.result.invite_link }]]
-                }
-            };
-
-            const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', messagePayload);
-            if (messageResponse.ok) {
-                await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
-                response = messageResponse;
-            } else {
-                throw new Error(messageResponse.description || 'Falha ao enviar mensagem do convite.');
-            }
-
-            logger.debug(`[WORKER-DISPARO] Link de convite criado: ${userVariables.invite_link}`);
-
-        } else if (step.type === 'action_remove_user_from_group') {
-            if (!bot.telegram_supergroup_id) {
-                throw new Error('Supergrupo não configurado para este bot.');
-            }
-
-            const normalizedChatId = normalizeChatIdentifier(bot.telegram_supergroup_id);
-            if (!normalizedChatId) {
-                throw new Error('ID do supergrupo inválido para banimento.');
-            }
-
-            const handleOwnerBanRestriction = () => {
-                logger.debug(`[WORKER-DISPARO] Tentativa de banir o proprietário do grupo ignorada.`);
-                userVariables.user_was_banned = false;
-                userVariables.banned_user_id = undefined;
-            };
-
-            const userToRemove = step.userId || chat_id;
-            const normalizedUserId = normalizeChatIdentifier(userToRemove);
-
-            let banResponse;
-            try {
-                banResponse = await sendTelegramRequest(
-                    bot.bot_token,
-                    'banChatMember',
-                    {
-                        chat_id: normalizedChatId,
-                        user_id: normalizedUserId,
-                        revoke_messages: step.deleteMessages || false
-                    }
-                );
-            } catch (banError) {
-                const errorDesc =
-                    banError?.response?.data?.description ||
-                    banError?.description ||
-                    banError?.message ||
-                    '';
-                if (errorDesc.toLowerCase().includes("can't remove chat owner")) {
-                    handleOwnerBanRestriction();
-                    response = null;
-                } else {
-                    throw banError;
-                }
-            }
-
-            if (banResponse?.ok) {
-                logger.debug(`[WORKER-DISPARO] Usuário ${userToRemove} removido e banido do grupo.`);
-                userVariables.user_was_banned = true;
-                userVariables.banned_user_id = userToRemove;
-                userVariables.last_ban_at = new Date().toISOString();
-
-                const linkToRevoke = step.inviteLink || userVariables.invite_link;
-                if (linkToRevoke) {
-                    try {
-                        const revokeResponse = await sendTelegramRequest(
-                            bot.bot_token,
-                            'revokeChatInviteLink',
-                            {
-                                chat_id: normalizedChatId,
-                                invite_link: linkToRevoke
-                            }
-                        );
-                        if (revokeResponse.ok) {
-                            logger.debug(`[WORKER-DISPARO] Link de convite revogado: ${linkToRevoke}`);
-                            userVariables.invite_link_revoked = true;
-                            delete userVariables.invite_link;
-                            delete userVariables.invite_link_name;
-                        } else {
-                            logger.warn(`[WORKER-DISPARO] Falha ao revogar link ${linkToRevoke}: ${revokeResponse.description}`);
-                        }
-                    } catch (revokeError) {
-                        logger.warn(`[WORKER-DISPARO] Erro ao revogar link ${linkToRevoke}:`, revokeError.message);
-                    }
-                }
-
-                if (step.sendMessage) {
-                    const messageText = await replaceVariables(
-                        step.messageText || 'Você foi removido do grupo.',
-                        userVariables
-                    );
-                    const messageResponse = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                        chat_id: chat_id,
-                        text: messageText,
-                        parse_mode: 'HTML'
-                    });
-                    if (messageResponse.ok) {
-                        await saveMessageToDb(bot.seller_id, bot_id, messageResponse.result, 'bot', userVariables);
-                        response = messageResponse;
-                    } else {
-                        throw new Error(messageResponse.description || 'Falha ao enviar mensagem pós-banimento.');
-                    }
-                } else {
-                    response = null;
-                }
-            } else if (banResponse) {
-                const desc =
-                    (banResponse.description || '').toLowerCase();
-                if (desc.includes("can't remove chat owner")) {
-                    handleOwnerBanRestriction();
-                    response = null;
-                } else {
-                    throw new Error(banResponse.description || 'Falha ao remover usuário.');
-                }
-            }
-
-            } else if (step.type === 'pix') {
-                // Delegar ao endpoint central para garantir eventos (InitiateCheckout e waiting_payment)
-                if (!userVariables.click_id) {
-                    throw new Error(`Ignorando passo PIX para chat ${chat_id} por falta de click_id nas variáveis.`);
-                }
-                const baseApiUrl = process.env.HOTTRACK_API_URL;
-                if (!baseApiUrl) {
-                    throw new Error('HOTTRACK_API_URL não configurada no worker.');
-                }
-                const cleanedClickId = userVariables.click_id.startsWith('/start ')
-                    ? userVariables.click_id.replace('/start ', '')
-                    : userVariables.click_id;
-                const apiResp = await axios.post(`${baseApiUrl}/api/pix/generate`, {
-                    click_id: cleanedClickId,
-                    value_cents: step.valueInCents
-                }, {
-                    headers: { 'x-api-key': seller.api_key }
-                });
-                const { transaction_id, qr_code_text } = apiResp.data;
-                lastTransactionId = transaction_id;
-                const messageText = await replaceVariables(step.pixMessage || "", userVariables);
-                const buttonText = await replaceVariables(step.pixButtonText || "📋 Copiar", userVariables);
-                const textToSend = `<pre>${qr_code_text}</pre>\n\n${messageText}`;
-                response = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
-                    chat_id: chat_id, text: textToSend, parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: qr_code_text } }]] }
-                });
-        } else if (step.type === 'check_pix' || step.type === 'delay') {
-                // Ignora ativamente esses passos, eles não enviam nada
-                logStatus = 'SKIPPED';
-                logDetails = `Passo ${step.type} ignorado pelo worker.`;
-                response = { ok: true, result: { message_id: `skip_${Date.now()}`, chat: { id: chat_id }, from: { id: 'worker' } }};
-            }
-         
-          if (response && response.ok) {
-                    if (step.type !== 'delay' && step.type !== 'check_pix') {
-              await saveMessageToDb(bot.seller_id, bot_id, response.result, 'bot', userVariables);
-                    }
-          } else if(response && !response.ok) {
-            throw new Error(response.description || 'Falha no Telegram');
-          }
-        } catch(e) {
-          logStatus = 'FAILED';
-                logDetails = e.message.substring(0, 255); 
-          logger.error(`[WORKER-DISPARO] Falha ao processar job para chat ${chat_id}: ${e.message}`);
-        }
-    
-        // --- LÓGICA DE CONCLUSÃO ---
-        try {
-          // 1. Loga o resultado deste job
-          await sqlWithRetry(
-            sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
-                       VALUES (${history_id}, ${chat_id}, ${bot_id}, ${logStatus}, ${logDetails}, ${lastTransactionId})`
-          );
-    
-          // 2. Atualiza a contagem de falhas (se houver) e de processados
-            let query;
-            if (logStatus === 'FAILED') {
-                query = sqlTx`UPDATE disparo_history
-                            SET processed_jobs = processed_jobs + 1,
-                                failure_count = failure_count + 1
-                            WHERE id = ${history_id}
-                            RETURNING processed_jobs, total_jobs, status`;
-            } else {
-                query = sqlTx`UPDATE disparo_history
-                            SET processed_jobs = processed_jobs + 1
-                            WHERE id = ${history_id}
-                            RETURNING processed_jobs, total_jobs, status`;
-            }
-          const [history] = await sqlWithRetry(query);
-    
-          // 3. Verifica se a campanha terminou
-          if (history && history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs) {
-            logger.info(`[WORKER-DISPARO] Campanha ${history_id} concluída! Marcando como COMPLETED.`);
-            await sqlWithRetry(
-              sqlTx`UPDATE disparo_history SET status = 'COMPLETED' WHERE id = ${history_id}`
-            );
-          }
-        } catch (dbError) {
-            logger.error(`[WORKER-DISPARO] FALHA CRÍTICA ao logar no DB (History ${history_id}):`, dbError);
-        }
-            // --- FIM DA LÓGICA DE CONCLUSÃO ---
-
-            if (!res.headersSent) {
-                res.status(200).send('Worker de disparo finalizado.');
-            }
-    } catch (error) {
-        // Verificar se resposta já foi enviada antes de tentar enviar qualquer resposta
-        if (res.headersSent) {
-            logger.error('[WORKER-DISPARO] Erro após resposta já enviada:', error.message);
-            return;
+            throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
         }
         
-        // Tratar requisições abortadas silenciosamente
-        if (error.message?.includes('request aborted') || 
-            error.message?.includes('aborted') ||
-            req.aborted ||
-            error.code === 'ECONNRESET' ||
-            error.code === 'EPIPE') {
-            return res.status(499).end(); // 499 = Client Closed Request
-        }
-
-        logger.error('[WORKER-DISPARO] Erro crítico ao processar job:', error);
-        // Tenta logar a falha mesmo se o processamento principal quebrar
-        try {
-             await sqlWithRetry(
-                sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details) 
-                   VALUES (${history_id || 0}, ${chat_id || 0}, ${bot_id || 0}, 'FAILED', ${error.message.substring(0, 255)})`
-            );
-        } catch(logFailError) {
-            logger.error('[WORKER-DISPARO] Falha ao logar a falha crítica:', logFailError);
-        }
+        await processDisparoFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, start_node_id, userVariables, flowNodes, flowEdges, history_id);
         
         if (!res.headersSent) {
-            res.status(500).send('Erro interno no worker de disparo.');
+            res.status(200).json({ message: 'Disparo processado com sucesso.' });
         }
-    
+    } catch (error) {
+        logger.error('[WORKER-DISPARO] Erro ao processar disparo:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Erro ao processar disparo.' });
+        }
     }
 }
 
