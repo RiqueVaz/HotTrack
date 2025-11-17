@@ -6404,6 +6404,10 @@ function generatePreviewHTML(data) {
     const [inactiveCount, setInactiveCount] = useState(0);
     const [isValidating, setIsValidating] = useState(false);
     const [inactiveChatIds, setInactiveChatIds] = useState([]);
+    const [showProgressModal, setShowProgressModal] = useState(false);
+    const [validationProgress, setValidationProgress] = useState(null);
+    const [validationId, setValidationId] = useState(null);
+    const [pollingInterval, setPollingInterval] = useState(null);
     
     // Historico tab states
     const [history, setHistory] = useState([]);
@@ -6680,24 +6684,89 @@ function generatePreviewHTML(data) {
         setInactiveCount(0);
         
         try {
-            let allInactive = [];
+            // Usar botIds (array) para suportar múltiplos bots de uma vez
+            const response = await App.apiRequest('/api/bots/validate-contacts', 'POST', { botIds: selectedBotIds });
             
-            for (const botId of selectedBotIds) {
-                const response = await App.apiRequest('/api/bots/validate-contacts', 'POST', { botId });
-                allInactive = [...allInactive, ...response.inactive_contacts];
+            // Verificar se response existe e se é resposta assíncrona
+            if (!response) {
+                setIsValidating(false);
+                App.showToast('Resposta inválida do servidor.', 'error');
+                return;
             }
             
-            const uniqueInactiveChatIds = [...new Set(allInactive.map(c => c.chat_id))];
-            setInactiveChatIds(uniqueInactiveChatIds);
-            setInactiveCount(uniqueInactiveChatIds.length);
-            setIsHygienized(true);
-            
-            App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos (usuários bloqueados, grupos, canais e supergrupos) removidos.`, 'success');
+            // Verificar se é resposta assíncrona (status 202 ou tem validation_id)
+            if (response.validation_id) {
+                // Validação assíncrona iniciada - mostrar modal de progresso
+                const vId = response.validation_id;
+                setValidationId(vId);
+                setShowProgressModal(true);
+                setValidationProgress({ status: 'PENDING', progress_percentage: 0, processed_contacts: 0, total_contacts: response.total_contacts || 0 });
+                App.showToast('Validação iniciada. Processando em background...', 'success');
+                
+                // Iniciar polling
+                const interval = setInterval(async () => {
+                    try {
+                        const statusResponse = await App.apiRequest(`/api/bots/validate-contacts/${vId}`, 'GET');
+                        
+                        if (!statusResponse) {
+                            return;
+                        }
+                        
+                        const status = statusResponse;
+                        setValidationProgress(status);
+                        
+                        // Parar polling se completou ou falhou
+                        if (status.status === 'COMPLETED' || status.status === 'FAILED') {
+                            clearInterval(interval);
+                            setPollingInterval(null);
+                            
+                            if (status.status === 'COMPLETED') {
+                                const inactiveContacts = Array.isArray(status.inactive_contacts) ? status.inactive_contacts : [];
+                                const uniqueInactiveChatIds = [...new Set(inactiveContacts.map(c => c && c.chat_id ? c.chat_id : null).filter(id => id !== null))];
+                                setInactiveChatIds(uniqueInactiveChatIds);
+                                setInactiveCount(uniqueInactiveChatIds.length);
+                                setIsHygienized(true);
+                                setIsValidating(false);
+                                
+                                // Fechar modal após 1 segundo
+                                setTimeout(() => {
+                                    setShowProgressModal(false);
+                                }, 1000);
+                                
+                                App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
+                            } else {
+                                setIsValidating(false);
+                                setTimeout(() => {
+                                    setShowProgressModal(false);
+                                }, 1000);
+                                App.showToast('Erro na validação: ' + (status.error_message || 'Erro desconhecido'), 'error');
+                            }
+                        }
+                    } catch (statusError) {
+                        console.error('Erro ao consultar status da validação:', statusError);
+                    }
+                }, 2000); // Polling a cada 2 segundos
+                
+                setPollingInterval(interval);
+            } else if (response.inactive_contacts !== undefined) {
+                // Resposta síncrona (fallback para casos sem muitos contatos)
+                const inactiveContacts = Array.isArray(response.inactive_contacts) ? response.inactive_contacts : [];
+                const uniqueInactiveChatIds = [...new Set(inactiveContacts.map(c => c && c.chat_id ? c.chat_id : null).filter(id => id !== null))];
+                setInactiveChatIds(uniqueInactiveChatIds);
+                setInactiveCount(uniqueInactiveChatIds.length);
+                setIsHygienized(true);
+                setIsValidating(false);
+                
+                App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
+            } else {
+                // Resposta inesperada
+                setIsValidating(false);
+                App.showToast('Resposta inesperada do servidor.', 'error');
+            }
         } catch (error) {
             console.error('Erro ao higienizar contatos:', error);
-            App.showToast('Erro ao higienizar contatos.', 'error');
-        } finally {
             setIsValidating(false);
+            App.showToast('Erro ao higienizar contatos.', 'error');
         }
     };
 
@@ -6892,6 +6961,106 @@ function generatePreviewHTML(data) {
                                 </p>
                             )}
                         </div>
+                        
+                        {/* Modal de Progresso */}
+                        {showProgressModal && validationProgress && (
+                            <div style={{
+                                position: 'fixed',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'rgba(0, 0, 0, 0.7)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 10000
+                            }}>
+                                <div style={{
+                                    background: 'var(--bg-primary)',
+                                    borderRadius: '12px',
+                                    padding: '2rem',
+                                    maxWidth: '500px',
+                                    width: '90%',
+                                    boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)'
+                                }}>
+                                    <h3 style={{ marginTop: 0, marginBottom: '1.5rem', color: 'var(--text-primary)' }}>
+                                        Validando Contatos
+                                    </h3>
+                                    
+                                    <div style={{ marginBottom: '1rem' }}>
+                                        <div style={{
+                                            width: '100%',
+                                            height: '24px',
+                                            background: 'var(--bg-secondary)',
+                                            borderRadius: '12px',
+                                            overflow: 'hidden',
+                                            position: 'relative'
+                                        }}>
+                                            <div style={{
+                                                height: '100%',
+                                                width: `${validationProgress.progress_percentage || 0}%`,
+                                                background: validationProgress.status === 'FAILED' 
+                                                    ? 'var(--error)' 
+                                                    : validationProgress.status === 'COMPLETED'
+                                                    ? 'var(--success)'
+                                                    : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))',
+                                                transition: 'width 0.3s ease',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                color: 'white',
+                                                fontSize: '0.75rem',
+                                                fontWeight: '600'
+                                            }}>
+                                                {validationProgress.progress_percentage}%
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                        <strong>Status:</strong> {
+                                            validationProgress.status === 'PENDING' ? 'Aguardando início...' :
+                                            validationProgress.status === 'RUNNING' ? 'Validando contatos...' :
+                                            validationProgress.status === 'COMPLETED' ? 'Concluído!' :
+                                            'Erro'
+                                        }
+                                    </p>
+                                    
+                                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                        <strong>Progresso:</strong> {validationProgress.processed_contacts || 0} de {validationProgress.total_contacts || 0} contatos
+                                    </p>
+                                    
+                                    {validationProgress.status === 'COMPLETED' && validationProgress.inactive_contacts && (
+                                        <p style={{ color: 'var(--success)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                            <strong>Contatos inativos removidos</strong>
+                                        </p>
+                                    )}
+                                    
+                                    {validationProgress.status === 'FAILED' && validationProgress.error_message && (
+                                        <p style={{ color: 'var(--error)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                            <strong>Erro:</strong> {validationProgress.error_message}
+                                        </p>
+                                    )}
+                                    
+                                    {(validationProgress.status === 'COMPLETED' || validationProgress.status === 'FAILED') && (
+                                        <button 
+                                            className="btn btn-primary"
+                                            onClick={() => {
+                                                setShowProgressModal(false);
+                                                if (pollingInterval) {
+                                                    clearInterval(pollingInterval);
+                                                    setPollingInterval(null);
+                                                }
+                                            }}
+                                            style={{ width: '100%' }}
+                                        >
+                                            Fechar
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                         
                         {/* Tag Filter Section - Only show after hygiene */}
                         {isHygienized && availableTags.length > 0 && (
@@ -8496,12 +8665,25 @@ function generatePreviewHTML(data) {
         const [selectedBotId, setSelectedBotId] = useState('');
         const [isLoading, setIsLoading] = useState(false);
         const [inactiveContacts, setInactiveContacts] = useState(null);
+        const [showProgressModal, setShowProgressModal] = useState(false);
+        const [validationProgress, setValidationProgress] = useState(null);
+        const [validationId, setValidationId] = useState(null);
+        const [pollingInterval, setPollingInterval] = useState(null);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) {
                 setSelectedBotId(bots[0].id);
             }
         }, [bots]);
+
+        // Limpar polling quando componente desmontar ou validação completar
+        useEffect(() => {
+            return () => {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            };
+        }, [pollingInterval]);
 
         const handleValidate = async () => {
             if (!selectedBotId) {
@@ -8510,16 +8692,65 @@ function generatePreviewHTML(data) {
             }
             setIsLoading(true);
             setInactiveContacts(null);
+            setValidationProgress(null);
+            setValidationId(null);
+            
             try {
                 const response = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
-                setInactiveContacts(response.data.inactive_contacts);
-                 if (response.data.inactive_contacts.length === 0) {
-                    alert('Nenhum contato inativo encontrado!');
+                
+                // Verificar se é resposta assíncrona (status 202)
+                if (response.status === 202 || response.data.validation_id) {
+                    const vId = response.data.validation_id;
+                    setValidationId(vId);
+                    setShowProgressModal(true);
+                    setValidationProgress({ status: 'PENDING', progress_percentage: 0, processed_contacts: 0, total_contacts: response.data.total_contacts || 0 });
+                    App.showToast('Validação iniciada. Processando em background...', 'success');
+                    
+                    // Iniciar polling
+                    const interval = setInterval(async () => {
+                        try {
+                            const statusResponse = await api.get(`/api/bots/validate-contacts/${vId}`);
+                            const status = statusResponse.data;
+                            setValidationProgress(status);
+                            
+                            // Parar polling se completou ou falhou
+                            if (status.status === 'COMPLETED' || status.status === 'FAILED') {
+                                clearInterval(interval);
+                                setPollingInterval(null);
+                                
+                                if (status.status === 'COMPLETED') {
+                                    setInactiveContacts(status.inactive_contacts || []);
+                                    setIsLoading(false);
+                                    setTimeout(() => {
+                                        setShowProgressModal(false);
+                                        if (status.inactive_contacts && status.inactive_contacts.length === 0) {
+                                            alert('Nenhum contato inativo encontrado!');
+                                        }
+                                    }, 1000);
+                                } else {
+                                    setIsLoading(false);
+                                    setShowProgressModal(false);
+                                    alert('Erro na validação: ' + (status.error_message || 'Erro desconhecido'));
+                                }
+                            }
+                        } catch (pollError) {
+                            console.error('Erro ao consultar status da validação:', pollError);
+                        }
+                    }, 2000); // Polling a cada 2 segundos
+                    
+                    setPollingInterval(interval);
+                } else {
+                    // Resposta síncrona (fallback para casos sem muitos contatos)
+                    setInactiveContacts(response.data.inactive_contacts || []);
+                    setIsLoading(false);
+                    if (!response.data.inactive_contacts || response.data.inactive_contacts.length === 0) {
+                        alert('Nenhum contato inativo encontrado!');
+                    }
                 }
             } catch (error) {
-                alert('Erro ao validar contatos: ' + (error.response?.data?.message || 'Falha na validação.'));
-            } finally {
                 setIsLoading(false);
+                setShowProgressModal(false);
+                alert('Erro ao validar contatos: ' + (error.response?.data?.message || 'Falha na validação.'));
             }
         };
 
@@ -8560,6 +8791,105 @@ function generatePreviewHTML(data) {
                     <button className="btn btn-primary" onClick={handleValidate} disabled={isLoading || !selectedBotId}>
                         {isLoading ? 'Validando...' : 'Validar Contatos Ativos'}
                     </button>
+                    
+                    {/* Modal de Progresso */}
+                    {showProgressModal && validationProgress && (
+                        <div style={{
+                            position: 'fixed',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'rgba(0, 0, 0, 0.7)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 10000
+                        }}>
+                            <div style={{
+                                background: 'var(--bg-primary)',
+                                padding: '2rem',
+                                borderRadius: '12px',
+                                maxWidth: '500px',
+                                width: '90%',
+                                boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+                            }}>
+                                <h3 style={{marginTop: 0, marginBottom: '1.5rem'}}>Validando Contatos</h3>
+                                
+                                {/* Barra de Progresso */}
+                                <div style={{
+                                    width: '100%',
+                                    height: '30px',
+                                    background: 'var(--bg-secondary)',
+                                    borderRadius: '15px',
+                                    overflow: 'hidden',
+                                    marginBottom: '1rem',
+                                    position: 'relative'
+                                }}>
+                                    <div style={{
+                                        width: `${validationProgress.progress_percentage}%`,
+                                        height: '100%',
+                                        background: validationProgress.status === 'FAILED' 
+                                            ? 'var(--danger)' 
+                                            : validationProgress.status === 'COMPLETED'
+                                            ? 'var(--success)'
+                                            : 'linear-gradient(90deg, var(--primary), var(--primary-light))',
+                                        transition: 'width 0.3s ease',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: 'white',
+                                        fontWeight: 'bold',
+                                        fontSize: '0.85rem'
+                                    }}>
+                                        {validationProgress.progress_percentage}%
+                                    </div>
+                                </div>
+                                
+                                {/* Informações de Progresso */}
+                                <div style={{marginBottom: '1rem'}}>
+                                    <p style={{margin: '0.5rem 0', color: 'var(--text-secondary)'}}>
+                                        <strong>Status:</strong> {
+                                            validationProgress.status === 'PENDING' ? 'Aguardando início...' :
+                                            validationProgress.status === 'RUNNING' ? 'Validando contatos...' :
+                                            validationProgress.status === 'COMPLETED' ? 'Concluído!' :
+                                            'Erro na validação'
+                                        }
+                                    </p>
+                                    <p style={{margin: '0.5rem 0', color: 'var(--text-secondary)'}}>
+                                        <strong>Progresso:</strong> {validationProgress.processed_contacts} de {validationProgress.total_contacts} contatos
+                                    </p>
+                                    {validationProgress.status === 'COMPLETED' && validationProgress.inactive_contacts && (
+                                        <p style={{margin: '0.5rem 0', color: 'var(--success)'}}>
+                                            <strong>Contatos inativos encontrados:</strong> {validationProgress.inactive_contacts.length}
+                                        </p>
+                                    )}
+                                    {validationProgress.status === 'FAILED' && validationProgress.error_message && (
+                                        <p style={{margin: '0.5rem 0', color: 'var(--danger)'}}>
+                                            <strong>Erro:</strong> {validationProgress.error_message}
+                                        </p>
+                                    )}
+                                </div>
+                                
+                                {/* Botão Fechar (apenas quando completar ou falhar) */}
+                                {(validationProgress.status === 'COMPLETED' || validationProgress.status === 'FAILED') && (
+                                    <button 
+                                        className="btn btn-primary" 
+                                        onClick={() => {
+                                            setShowProgressModal(false);
+                                            if (pollingInterval) {
+                                                clearInterval(pollingInterval);
+                                                setPollingInterval(null);
+                                            }
+                                        }}
+                                        style={{width: '100%'}}
+                                    >
+                                        Fechar
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
                     
                     {inactiveContacts && (
                         <div style={{marginTop: '2rem'}}>

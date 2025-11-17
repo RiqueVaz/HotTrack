@@ -7770,33 +7770,62 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 });
 
-// Endpoint 3: Validação de contatos
+// Endpoint 3: Validação de contatos (assíncrono) - Suporta múltiplos bots
 app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
-    const { botId } = req.body;
+    const { botId, botIds } = req.body; // Suporta botId (único) ou botIds (array)
     const sellerId = req.user.id;
 
-    if (!botId) {
-        // Verificar se headers já foram enviados antes de enviar resposta
+    // Normalizar para array de botIds
+    let validBotIds = [];
+    if (botIds && Array.isArray(botIds) && botIds.length > 0) {
+        validBotIds = botIds;
+    } else if (botId) {
+        validBotIds = [botId];
+    } else {
         if (!res.headersSent && !res.writableEnded) {
-            return res.status(400).json({ message: 'ID do bot é obrigatório.' });
+            return res.status(400).json({ message: 'ID do bot ou lista de bot IDs é obrigatório.' });
         }
         return;
     }
 
     try {
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [botId, sellerId]);
-        if (!bot || !bot.bot_token) {
-            // Verificar se headers já foram enviados antes de enviar resposta
+        // Validar que todos os bots pertencem ao seller
+        const botChecks = await sqlTx`
+            SELECT id, bot_token FROM telegram_bots 
+            WHERE id = ANY(${validBotIds}) AND seller_id = ${sellerId}
+        `;
+        
+        if (botChecks.length === 0) {
             if (!res.headersSent && !res.writableEnded) {
-                return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
+                return res.status(404).json({ message: 'Nenhum bot válido encontrado.' });
             }
             return;
         }
 
-        // Buscar apenas usuários individuais (chat_id > 0) e grupos/canais (chat_id < 0)
-        const allContacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
+        // Criar mapa de bot_id -> bot_token para uso durante validação
+        const botTokenMap = new Map();
+        botChecks.forEach(b => botTokenMap.set(b.id, b.bot_token));
+
+        // Buscar contatos de todos os bots selecionados
+        const allContacts = await sqlTx`
+            SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, bot_id
+            FROM telegram_chats 
+            WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
+            ORDER BY chat_id, created_at DESC
+        `;
+        
+        // Limite máximo de 10k contatos
+        const MAX_CONTACTS = 10000;
+        if (allContacts.length > MAX_CONTACTS) {
+            if (!res.headersSent && !res.writableEnded) {
+                return res.status(400).json({ 
+                    message: `Número máximo de contatos excedido. Máximo permitido: ${MAX_CONTACTS}. Encontrados: ${allContacts.length}` 
+                });
+            }
+            return;
+        }
+
         if (allContacts.length === 0) {
-            // Verificar se headers já foram enviados antes de enviar resposta
             if (!res.headersSent && !res.writableEnded) {
                 return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
             }
@@ -7807,54 +7836,216 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
         const individualUsers = allContacts.filter(c => c.chat_id > 0);
         const groupsAndChannels = allContacts.filter(c => c.chat_id < 0);
         
-        // Grupos/canais são automaticamente considerados inativos para disparos
-        const inactiveContacts = [...groupsAndChannels];
-        const BATCH_SIZE = 30; 
+        // Criar registro de validação
+        const [validationJob] = await sqlTx`
+            INSERT INTO contact_validation_jobs (
+                seller_id, bot_ids, status, total_contacts, processed_contacts, inactive_contacts
+            ) VALUES (
+                ${sellerId}, ${JSON.stringify(validBotIds)}, 'PENDING', ${allContacts.length}, 0, ${JSON.stringify(groupsAndChannels)}
+            ) RETURNING id
+        `;
 
-        // Validar apenas usuários individuais (grupos/canais já foram adicionados como inativos)
-        for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
-            // Verificar se headers já foram enviados (timeout pode ter ocorrido)
-            if (res.headersSent || res.writableEnded) {
-                console.log('[Validate Contacts] Processamento interrompido: resposta já foi enviada (possível timeout).');
-                return;
-            }
-            
-            const batch = individualUsers.slice(i, i + BATCH_SIZE);
-            const promises = batch.map(contact => 
-                sendTelegramRequest(bot.bot_token, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
-                    .catch(error => {
-                        if (error.response && (error.response.status === 403 || error.response.status === 400)) {
-                            inactiveContacts.push(contact);
-                        }
-                    })
-            );
+        const validationId = validationJob.id;
 
-            await Promise.all(promises);
-
-            if (i + BATCH_SIZE < individualUsers.length) {
-                await new Promise(resolve => setTimeout(resolve, 1100));
-            }
-        }
-
-        // Verificar se headers já foram enviados antes de enviar resposta final
+        // Responder imediatamente
         if (!res.headersSent && !res.writableEnded) {
-            res.status(200).json({ inactive_contacts: inactiveContacts });
-        } else {
-            console.log('[Validate Contacts] Resposta não enviada: headers já foram enviados (possível timeout).');
+            res.status(202).json({ 
+                message: 'Validação iniciada. Processando em background...',
+                validation_id: validationId,
+                total_contacts: allContacts.length
+            });
         }
+
+        // Processar em background
+        (async () => {
+            try {
+                // Atualizar status para RUNNING
+                await sqlTx`
+                    UPDATE contact_validation_jobs 
+                    SET status = 'RUNNING', updated_at = NOW() 
+                    WHERE id = ${validationId}
+                `;
+
+                const inactiveContacts = [...groupsAndChannels];
+                const BATCH_SIZE = 30;
+
+                // Validar apenas usuários individuais
+                for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+                    const batch = individualUsers.slice(i, i + BATCH_SIZE);
+                    const batchInactive = [];
+                    
+                    const promises = batch.map(contact => {
+                        // Usar o bot_token do bot associado ao contato
+                        const botToken = botTokenMap.get(contact.bot_id);
+                        if (!botToken) {
+                            // Se não encontrar o token, considerar inativo
+                            batchInactive.push(contact);
+                            return Promise.resolve();
+                        }
+                        
+                        return sendTelegramRequest(botToken, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
+                            .catch(error => {
+                                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
+                                    batchInactive.push(contact);
+                                }
+                            });
+                    });
+
+                    await Promise.all(promises);
+                    
+                    // Adicionar contatos inativos encontrados neste batch
+                    inactiveContacts.push(...batchInactive);
+                    
+                    // Atualizar progresso no banco
+                    const processedCount = Math.min(i + BATCH_SIZE, individualUsers.length);
+                    await sqlTx`
+                        UPDATE contact_validation_jobs 
+                        SET processed_contacts = ${processedCount}, 
+                            inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                            updated_at = NOW()
+                        WHERE id = ${validationId}
+                    `;
+
+                    // Delay entre batches (exceto no último)
+                    if (i + BATCH_SIZE < individualUsers.length) {
+                        await new Promise(resolve => setTimeout(resolve, 1100));
+                    }
+                }
+
+                // Finalizar validação
+                await sqlTx`
+                    UPDATE contact_validation_jobs 
+                    SET status = 'COMPLETED', 
+                        processed_contacts = ${individualUsers.length},
+                        inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = ${validationId}
+                `;
+
+                console.log(`[Validate Contacts] Validação ${validationId} concluída. ${inactiveContacts.length} contatos inativos encontrados.`);
+
+            } catch (bgError) {
+                console.error(`[Validate Contacts] Erro no processamento em background da validação ${validationId}:`, bgError);
+                try {
+                    await sqlTx`
+                        UPDATE contact_validation_jobs 
+                        SET status = 'FAILED', 
+                            error_message = ${bgError.message || 'Erro desconhecido'},
+                            updated_at = NOW()
+                        WHERE id = ${validationId}
+                    `;
+                } catch (updateError) {
+                    console.error(`[Validate Contacts] Erro ao atualizar status para FAILED:`, updateError);
+                }
+            }
+        })();
 
     } catch (error) {
-        console.error("Erro ao validar contatos:", error);
-        // Verificar se headers já foram enviados antes de enviar resposta de erro
+        console.error("Erro ao iniciar validação de contatos:", error);
         if (!res.headersSent && !res.writableEnded) {
             try {
-                res.status(500).json({ message: 'Erro interno ao validar contatos.' });
+                res.status(500).json({ message: 'Erro interno ao iniciar validação de contatos.' });
             } catch (err) {
-                // Ignora erro se headers já foram enviados entre as verificações
                 if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
                     console.error('Erro ao enviar resposta de erro em validate-contacts:', err);
                 }
             }
+        }
+    }
+});
+
+// Endpoint para consultar status da validação
+app.get('/api/bots/validate-contacts/:validationId', authenticateJwt, async (req, res) => {
+    const { validationId } = req.params;
+    const sellerId = req.user.id;
+
+    try {
+        const [job] = await sqlTx`
+            SELECT * FROM contact_validation_jobs 
+            WHERE id = ${validationId} AND seller_id = ${sellerId}
+        `;
+
+        if (!job) {
+            return res.status(404).json({ message: 'Validação não encontrada.' });
+        }
+
+        const progressPercentage = job.total_contacts > 0 
+            ? Math.round((job.processed_contacts / job.total_contacts) * 100)
+            : 0;
+
+        // Parse bot_ids se for string
+        const botIds = Array.isArray(job.bot_ids) ? job.bot_ids : JSON.parse(job.bot_ids || '[]');
+        
+        const response = {
+            id: job.id,
+            bot_ids: botIds,
+            status: job.status,
+            total_contacts: job.total_contacts,
+            processed_contacts: job.processed_contacts,
+            progress_percentage: progressPercentage,
+            inactive_contacts: job.status === 'COMPLETED' ? job.inactive_contacts : null,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            completed_at: job.completed_at,
+            error_message: job.error_message
+        };
+
+        res.status(200).json(response);
+
+    } catch (error) {
+        console.error("Erro ao consultar status da validação:", error);
+        if (!res.headersSent && !res.writableEnded) {
+            res.status(500).json({ message: 'Erro interno ao consultar status da validação.' });
+        }
+    }
+});
+
+// Endpoint para listar validações do seller
+app.get('/api/bots/validate-contacts/list', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+
+    try {
+        const jobs = await sqlTx`
+            SELECT id, bot_ids, status, total_contacts, processed_contacts, 
+                   inactive_contacts, created_at, updated_at, completed_at, error_message
+            FROM contact_validation_jobs 
+            WHERE seller_id = ${sellerId}
+            ORDER BY created_at DESC
+            LIMIT 50
+        `;
+
+        const jobsWithProgress = jobs.map(job => {
+            const progressPercentage = job.total_contacts > 0 
+                ? Math.round((job.processed_contacts / job.total_contacts) * 100)
+                : 0;
+            
+            // Parse bot_ids se for string
+            const botIds = Array.isArray(job.bot_ids) ? job.bot_ids : JSON.parse(job.bot_ids || '[]');
+            
+            return {
+                id: job.id,
+                bot_ids: botIds,
+                status: job.status,
+                total_contacts: job.total_contacts,
+                processed_contacts: job.processed_contacts,
+                progress_percentage: progressPercentage,
+                inactive_count: job.status === 'COMPLETED' && job.inactive_contacts 
+                    ? (Array.isArray(job.inactive_contacts) ? job.inactive_contacts.length : 0)
+                    : null,
+                created_at: job.created_at,
+                updated_at: job.updated_at,
+                completed_at: job.completed_at,
+                error_message: job.error_message
+            };
+        });
+
+        res.status(200).json({ validations: jobsWithProgress });
+
+    } catch (error) {
+        console.error("Erro ao listar validações:", error);
+        if (!res.headersSent && !res.writableEnded) {
+            res.status(500).json({ message: 'Erro interno ao listar validações.' });
         }
     }
 });
