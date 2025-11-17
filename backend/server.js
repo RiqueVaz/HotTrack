@@ -9013,6 +9013,10 @@ app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
 // Endpoint 22: Histórico de disparos
 app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = (page - 1) * limit;
+
         // Corrigir automaticamente campanhas presas em RUNNING que já foram concluídas
         // Caso 1: Campanhas com todos os jobs processados (processed_jobs >= total_jobs)
         await sqlWithRetry(`
@@ -9035,6 +9039,17 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
             AND created_at < NOW() - INTERVAL '1 hour'
         `, [req.user.id]);
 
+        // Contar total de registros
+        const [{ count }] = await sqlWithRetry(`
+            SELECT COUNT(*) as count
+            FROM disparo_history h
+            WHERE h.seller_id = $1
+        `, [req.user.id]);
+
+        const total = parseInt(count);
+        const totalPages = Math.ceil(total / limit);
+
+        // Buscar dados paginados
         const history = await sqlWithRetry(`
             SELECT 
                 h.*,
@@ -9044,9 +9059,19 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
             WHERE 
                 h.seller_id = $1
             ORDER BY 
-                h.created_at DESC;
-        `, [req.user.id]);
-        res.status(200).json(history);
+                h.created_at DESC
+            LIMIT $2 OFFSET $3
+        `, [req.user.id, limit, offset]);
+
+        res.status(200).json({
+            data: history,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages
+            }
+        });
     } catch (error) {
         console.error('Erro ao buscar histórico de disparos:', error);
         res.status(500).json({ message: 'Erro ao buscar histórico de disparos.' });

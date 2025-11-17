@@ -6331,6 +6331,10 @@ function generatePreviewHTML(data) {
     const [history, setHistory] = useState([]);
     const [isLoadingHistory, setIsLoadingHistory] = useState(true);
     const [isChecking, setIsChecking] = useState(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [totalItems, setTotalItems] = useState(0);
+    const [itemsPerPage, setItemsPerPage] = useState(20);
     
     const API_BASE_URL = App.state.API_BASE_URL;
     const buildPreviewSrc = (value) => {
@@ -6469,11 +6473,23 @@ function generatePreviewHTML(data) {
     }, [activeTab, fetchDisparoFlowsList]);
 
     // Fetch history for historico tab
-    const fetchHistory = useCallback((showToast = true) => {
+    const fetchHistory = useCallback((page = currentPage, showToast = false) => {
         setIsLoadingHistory(true);
-        App.apiRequest('/api/disparos/history', 'GET')
+        App.apiRequest(`/api/disparos/history?page=${page}&limit=${itemsPerPage}`, 'GET')
             .then(res => {
-                setHistory(res);
+                // Compatibilidade com resposta antiga e nova
+                if (res.data && res.pagination) {
+                    setHistory(res.data);
+                    setCurrentPage(res.pagination.page);
+                    setTotalPages(res.pagination.totalPages);
+                    setTotalItems(res.pagination.total);
+                } else {
+                    // Resposta antiga (array direto)
+                    setHistory(res);
+                    setCurrentPage(1);
+                    setTotalPages(1);
+                    setTotalItems(res.length);
+                }
                 if (showToast) {
                     App.showToast('Histórico atualizado com sucesso!', 'success');
                 }
@@ -6485,17 +6501,30 @@ function generatePreviewHTML(data) {
                 }
             })
             .finally(() => setIsLoadingHistory(false));
-    }, []);
+    }, [currentPage, itemsPerPage]);
 
     useEffect(() => {
         if (activeTab === 'historico') {
+            setCurrentPage(1);
             setIsLoadingHistory(true);
-            App.apiRequest('/api/disparos/history', 'GET')
-                .then(res => setHistory(res))
+            App.apiRequest(`/api/disparos/history?page=1&limit=${itemsPerPage}`, 'GET')
+                .then(res => {
+                    if (res.data && res.pagination) {
+                        setHistory(res.data);
+                        setCurrentPage(res.pagination.page);
+                        setTotalPages(res.pagination.totalPages);
+                        setTotalItems(res.pagination.total);
+                    } else {
+                        setHistory(res);
+                        setCurrentPage(1);
+                        setTotalPages(1);
+                        setTotalItems(res.length);
+                    }
+                })
                 .catch(() => App.showToast('Erro ao carregar o histórico.', 'error'))
                 .finally(() => setIsLoadingHistory(false));
         }
-    }, [activeTab]);
+    }, [activeTab, itemsPerPage]);
 
     const handleCreateDisparoFlow = async () => {
         if (selectedBotIds.length === 0) {
@@ -7054,7 +7083,7 @@ function generatePreviewHTML(data) {
         try {
             const res = await App.apiRequest(`/api/disparos/check-conversions/${historyId}`, 'POST');
             App.showToast(res.message, 'success');
-            fetchHistory();
+            fetchHistory(currentPage, false);
         } catch (error) {
             App.showToast('Erro ao verificar: ' + (error.response?.data?.message || error.message), 'error');
         } finally {
@@ -7132,12 +7161,38 @@ function generatePreviewHTML(data) {
         );
     };
 
+    const renderPagination = () => {
+        if (totalPages <= 1) return null;
+        
+        return (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.5rem', padding: '1rem' }}>
+                <button 
+                    className="btn btn-secondary" 
+                    onClick={() => fetchHistory(currentPage - 1, false)}
+                    disabled={currentPage === 1 || isLoadingHistory}
+                >
+                    Anterior
+                </button>
+                <span style={{ color: 'var(--text-secondary)' }}>
+                    Página {currentPage} de {totalPages} ({totalItems} total)
+                </span>
+                <button 
+                    className="btn btn-secondary" 
+                    onClick={() => fetchHistory(currentPage + 1, false)}
+                    disabled={currentPage === totalPages || isLoadingHistory}
+                >
+                    Próximo
+                </button>
+            </div>
+        );
+    };
+
     const renderHistoricoTab = () => {
         return (
             <div>
                 <div className="page-header" style={{ marginBottom: '1.5rem' }}>
                     <h2>Histórico de Disparos</h2>
-                    <button className="btn btn-secondary" onClick={fetchHistory} disabled={isLoadingHistory}>Atualizar</button>
+                    <button className="btn btn-secondary" onClick={() => fetchHistory(currentPage, true)} disabled={isLoadingHistory}>Atualizar</button>
                 </div>
                 <div className="card">
                     <table style={{width: '100%', borderCollapse: 'collapse', textAlign: 'left'}}>
@@ -7181,6 +7236,7 @@ function generatePreviewHTML(data) {
                     </table>
                      {!isLoadingHistory && history.length === 0 && <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Nenhum disparo encontrado.</p>}
                 </div>
+                {renderPagination()}
             </div>
         );
     };
