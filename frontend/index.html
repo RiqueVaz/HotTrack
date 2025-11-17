@@ -6604,10 +6604,21 @@ function generatePreviewHTML(data) {
             App.showToast('Por favor, selecione uma data e hora para o agendamento.', 'error');
             return;
         }
+        // Criar data a partir do valor do input (que está em horário local)
         const scheduledDate = new Date(scheduledDateTime);
         const now = new Date();
-        if (scheduledDate <= now) {
-            App.showToast('A data/hora de agendamento deve ser no futuro.', 'error');
+        // Adicionar margem de segurança de 2 minutos
+        const minScheduledTime = new Date(now.getTime() + 120000);
+        
+        if (scheduledDate <= minScheduledTime) {
+            const minDateStr = minScheduledTime.toLocaleString('pt-BR', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            App.showToast(`A data/hora de agendamento deve ser no futuro. Data/hora mínima: ${minDateStr}`, 'error');
             return;
         }
     }
@@ -6931,7 +6942,16 @@ function generatePreviewHTML(data) {
                                         className="form-input"
                                         value={scheduledDateTime}
                                         onChange={e => setScheduledDateTime(e.target.value)}
-                                        min={new Date().toISOString().slice(0, 16)}
+                                        min={(() => {
+                                            const now = new Date();
+                                            // Converter para horário local no formato YYYY-MM-DDTHH:mm
+                                            const year = now.getFullYear();
+                                            const month = String(now.getMonth() + 1).padStart(2, '0');
+                                            const day = String(now.getDate()).padStart(2, '0');
+                                            const hours = String(now.getHours()).padStart(2, '0');
+                                            const minutes = String(now.getMinutes()).padStart(2, '0');
+                                            return `${year}-${month}-${day}T${hours}:${minutes}`;
+                                        })()}
                                         required={isScheduled}
                                         style={{
                                             fontSize: '1rem',

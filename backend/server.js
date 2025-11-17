@@ -6612,9 +6612,18 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 if (isNaN(scheduledDate.getTime())) {
                     return res.status(400).json({ message: 'Data/hora de agendamento inválida.' });
                 }
-                // Verificar se é no futuro
-                if (scheduledDate <= new Date()) {
-                    return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
+                // Adicionar margem de segurança de 2 minutos para evitar problemas de sincronização
+                const now = new Date();
+                const minScheduledTime = new Date(now.getTime() + 120000); // 2 minutos no futuro
+                
+                // Verificar se é no futuro (com margem de segurança)
+                if (scheduledDate <= minScheduledTime) {
+                    // Mostrar a data mínima permitida em formato legível (UTC)
+                    const minDateStr = minScheduledTime.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    const userSelectedStr = scheduledDate.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                    return res.status(400).json({ 
+                        message: `A data/hora de agendamento deve ser no futuro. Você selecionou: ${userSelectedStr}. Data/hora mínima permitida: ${minDateStr}` 
+                    });
                 }
                 scheduledTimestamp = Math.floor(scheduledDate.getTime() / 1000); // Unix timestamp em segundos
             } catch (error) {
