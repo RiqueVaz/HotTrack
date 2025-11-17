@@ -6256,6 +6256,8 @@ function generatePreviewHTML(data) {
     const [campaignName, setCampaignName] = useState('');
     const [contactCount, setContactCount] = useState(0);
     const [isSending, setIsSending] = useState(false);
+    const [isScheduled, setIsScheduled] = useState(false);
+    const [scheduledDateTime, setScheduledDateTime] = useState('');
     
     // Disparo flow states
     const [disparoFlows, setDisparoFlows] = useState([]);
@@ -6520,13 +6522,35 @@ function generatePreviewHTML(data) {
         App.showToast('Por favor, higienize os contatos antes de enviar o disparo.', 'error');
         return;
     }
+    // Validar agendamento se ativado
+    if (isScheduled) {
+        if (!scheduledDateTime) {
+            App.showToast('Por favor, selecione uma data e hora para o agendamento.', 'error');
+            return;
+        }
+        const scheduledDate = new Date(scheduledDateTime);
+        const now = new Date();
+        if (scheduledDate <= now) {
+            App.showToast('A data/hora de agendamento deve ser no futuro.', 'error');
+            return;
+        }
+    }
     setIsSending(true);
     try {
-        const response = await App.apiRequest('/api/bots/mass-send', 'POST', { 
+        const requestBody = { 
             campaignName, 
             botIds: selectedBotIds, 
             disparoFlowId: selectedDisparoFlowId
-        });
+        };
+        
+        // Adicionar scheduledAt se agendamento estiver ativado
+        if (isScheduled && scheduledDateTime) {
+            // Converter para ISO string (UTC)
+            const scheduledDate = new Date(scheduledDateTime);
+            requestBody.scheduledAt = scheduledDate.toISOString();
+        }
+        
+        const response = await App.apiRequest('/api/bots/mass-send', 'POST', requestBody);
         App.showToast(response.message || 'Disparo agendado com sucesso!', 'success');
         setCampaignName('');
         setSelectedBotIds([]);
@@ -6535,8 +6559,10 @@ function generatePreviewHTML(data) {
         setIsHygienized(false);
         setInactiveChatIds([]);
         setInactiveCount(0);
+        setIsScheduled(false);
+        setScheduledDateTime('');
     } catch (error) {
-        App.showToast('Erro ao agendar disparo.', 'error');
+        App.showToast(error.response?.data?.message || 'Erro ao agendar disparo.', 'error');
         console.error("Erro submit disparo:", error);
     } finally {
         setIsSending(false);
@@ -6671,10 +6697,118 @@ function generatePreviewHTML(data) {
                     )}
                 </div>
 
+                {/* Scheduling Section */}
+                <div className="card" style={{ marginTop: '1.5rem', border: isScheduled ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)' }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '0.75rem', 
+                            cursor: 'pointer',
+                            padding: '0.5rem',
+                            borderRadius: '6px',
+                            transition: 'background-color 0.2s',
+                            marginBottom: isScheduled ? '1rem' : '0'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={isScheduled}
+                                onChange={e => {
+                                    setIsScheduled(e.target.checked);
+                                    if (!e.target.checked) {
+                                        setScheduledDateTime('');
+                                    }
+                                }}
+                                style={{ 
+                                    width: '18px', 
+                                    height: '18px', 
+                                    cursor: 'pointer',
+                                    accentColor: 'var(--accent-primary)'
+                                }}
+                            />
+                            <span style={{ 
+                                fontWeight: '600', 
+                                fontSize: '1rem',
+                                color: isScheduled ? 'var(--accent-primary)' : 'var(--text-primary)',
+                                transition: 'color 0.2s'
+                            }}>
+                                ⏰ Agendar disparo
+                            </span>
+                        </label>
+                        {isScheduled && (
+                            <div style={{ 
+                                marginTop: '1rem', 
+                                padding: '1.25rem', 
+                                background: 'var(--bg-secondary)',
+                                borderRadius: '8px',
+                                border: '1px solid var(--accent-primary)',
+                                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+                            }}>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label style={{ 
+                                        fontWeight: '600', 
+                                        marginBottom: '0.5rem',
+                                        display: 'block',
+                                        color: 'var(--text-primary)'
+                                    }}>
+                                        Data e Hora do Agendamento
+                                    </label>
+                                    <input
+                                        type="datetime-local"
+                                        className="form-input"
+                                        value={scheduledDateTime}
+                                        onChange={e => setScheduledDateTime(e.target.value)}
+                                        min={new Date().toISOString().slice(0, 16)}
+                                        required={isScheduled}
+                                        style={{
+                                            fontSize: '1rem',
+                                            padding: '0.75rem',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: '6px'
+                                        }}
+                                    />
+                                    {scheduledDateTime && (
+                                        <p style={{ 
+                                            marginTop: '0.75rem', 
+                                            color: 'var(--accent-primary)', 
+                                            fontSize: '0.9rem',
+                                            fontWeight: '500',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem'
+                                        }}>
+                                            <span>📅</span>
+                                            <span>Agendado para: {new Date(scheduledDateTime).toLocaleString('pt-BR', { 
+                                                day: '2-digit', 
+                                                month: '2-digit', 
+                                                year: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit'
+                                            })}</span>
+                                        </p>
+                                    )}
+                                    <p style={{ 
+                                        marginTop: scheduledDateTime ? '0.5rem' : '0.75rem', 
+                                        color: 'var(--text-secondary)', 
+                                        fontSize: '0.85rem',
+                                        lineHeight: '1.4'
+                                    }}>
+                                        O disparo será executado automaticamente na data/hora selecionada.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
                 {/* Submit Button */}
-                <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem' }} disabled={isSending || !isHygienized || selectedBotIds.length === 0}>
+                <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem' }} disabled={isSending || !isHygienized || selectedBotIds.length === 0}>
                     {!isHygienized ? 'Higienize os contatos primeiro' : 
-                     isSending ? 'Agendando...' : 
+                     isSending ? (isScheduled ? 'Agendando...' : 'Disparando...') : 
+                     isScheduled ? `Agendar para ${contactCount} contato(s)` :
                      `Disparar para ${contactCount} contato(s)`}
                 </button>
             </form>
@@ -6697,11 +6831,19 @@ function generatePreviewHTML(data) {
     const getStatusChip = (status) => {
         const styles = {
             PENDING: { background: '#a16207', color: '#fefce8' },
+            SCHEDULED: { background: '#7c3aed', color: '#ede9fe' },
             RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
             COMPLETED: { background: '#166534', color: '#dcfce7' },
             FAILED: { background: '#991b1b', color: '#fee2e2' }
         };
-        return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{status}</span>
+        const labels = {
+            PENDING: 'Pendente',
+            SCHEDULED: 'Agendado',
+            RUNNING: 'Em Execução',
+            COMPLETED: 'Concluído',
+            FAILED: 'Falhou'
+        };
+        return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{labels[status] || status}</span>
     };
 
     const renderDisparoFlowsTab = () => {
@@ -6895,11 +7037,19 @@ function generatePreviewHTML(data) {
         const getStatusChip = (status) => {
             const styles = {
                 PENDING: { background: '#a16207', color: '#fefce8' },
+                SCHEDULED: { background: '#7c3aed', color: '#ede9fe' },
                 RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
                 COMPLETED: { background: '#166534', color: '#dcfce7' },
                 FAILED: { background: '#991b1b', color: '#fee2e2' }
             };
-            return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{status}</span>
+            const labels = {
+                PENDING: 'Pendente',
+                SCHEDULED: 'Agendado',
+                RUNNING: 'Em Execução',
+                COMPLETED: 'Concluído',
+                FAILED: 'Falhou'
+            };
+            return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{labels[status] || status}</span>
         }
 
         return (
@@ -6910,7 +7060,8 @@ function generatePreviewHTML(data) {
                         <thead>
                             <tr style={{borderBottom: '1px solid var(--border-color)'}}>
                                 <th style={{padding: '1rem'}}>Campanha</th>
-                                <th style={{padding: '1rem'}}>Data</th>
+                                <th style={{padding: '1rem'}}>Data Criação</th>
+                                <th style={{padding: '1rem'}}>Agendado Para</th>
                                 <th style={{padding: '1rem'}}>Status</th>
                                 <th style={{padding: '1rem'}}>Envios</th>
                                 <th style={{padding: '1rem'}}>Conversões</th>
@@ -6918,11 +7069,20 @@ function generatePreviewHTML(data) {
                             </tr>
                         </thead>
                         <tbody>
-                            {isLoading ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                            {isLoading ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
                              history.map(item => (
                                 <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
                                     <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
-                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString()}</td>
+                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
+                                    <td style={{padding: '1rem'}}>
+                                        {item.scheduled_at ? (
+                                            <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
+                                                {new Date(item.scheduled_at).toLocaleString('pt-BR')}
+                                            </span>
+                                        ) : (
+                                            <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                                        )}
+                                    </td>
                                     <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
                                     <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
                                     <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>

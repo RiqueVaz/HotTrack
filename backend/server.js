@@ -280,6 +280,191 @@ app.post(
       }
      }
     );
+
+// Endpoint para processar disparos agendados (chamado pelo QStash)
+app.post(
+    '/api/worker/process-scheduled-disparo',
+    express.raw({ type: 'application/json' }),
+    async (req, res) => {
+        try {
+            // Verificar assinatura do QStash
+            const signature = req.headers["upstash-signature"];
+            const bodyString = req.body.toString();
+            
+            const isValid = await receiver.verify({
+                signature,
+                body: bodyString,
+            });
+            
+            if (!isValid) {
+                console.error("[WORKER-SCHEDULED-DISPARO] Verificação de assinatura do QStash falhou.");
+                return res.status(401).send("Invalid signature");
+            }
+            
+            const { history_id } = JSON.parse(bodyString);
+            
+            if (!history_id) {
+                return res.status(400).json({ message: 'history_id é obrigatório.' });
+            }
+            
+            // Buscar o histórico do disparo
+            const [history] = await sqlWithRetry(
+                'SELECT * FROM disparo_history WHERE id = $1',
+                [history_id]
+            );
+            
+            if (!history) {
+                return res.status(404).json({ message: 'Histórico de disparo não encontrado.' });
+            }
+            
+            // Validar que está com status SCHEDULED
+            if (history.status !== 'SCHEDULED') {
+                console.log(`[WORKER-SCHEDULED-DISPARO] Disparo ${history_id} não está agendado (status: ${history.status}). Ignorando.`);
+                return res.status(200).json({ message: 'Disparo já foi processado ou cancelado.' });
+            }
+            
+            // Buscar o fluxo de disparo
+            const [disparoFlow] = await sqlWithRetry(
+                'SELECT * FROM disparo_flows WHERE id = $1',
+                [history.disparo_flow_id]
+            );
+            
+            if (!disparoFlow) {
+                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
+            }
+            
+            // Parse do fluxo
+            const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+            const flowNodes = flowData.nodes || [];
+            const flowEdges = flowData.edges || [];
+            
+            // Buscar contatos dos bots
+            const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
+            const contacts = await sqlWithRetry(
+                sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                      FROM telegram_chats 
+                      WHERE bot_id = ANY(${botIds}) AND seller_id = ${history.seller_id}
+                      ORDER BY chat_id, created_at DESC`
+            );
+            
+            const allContacts = new Map();
+            contacts.forEach(c => {
+                if (!allContacts.has(c.chat_id)) {
+                    allContacts.set(c.chat_id, { 
+                        chat_id: c.chat_id,
+                        first_name: c.first_name,
+                        last_name: c.last_name,
+                        username: c.username,
+                        click_id: c.click_id,
+                        bot_id_source: c.bot_id 
+                    });
+                }
+            });
+            const uniqueContacts = Array.from(allContacts.values());
+            
+            // Encontrar o trigger (nó inicial do disparo)
+            let startNodeId = null;
+            const triggerNode = flowNodes.find(node => node.type === 'trigger');
+            
+            if (triggerNode) {
+                startNodeId = triggerNode.id;
+            } else {
+                const actionNode = flowNodes.find(node => node.type === 'action');
+                if (actionNode) {
+                    startNodeId = actionNode.id;
+                }
+            }
+            
+            if (!startNodeId) {
+                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                return res.status(400).json({ message: 'Nenhum nó inicial encontrado no fluxo.' });
+            }
+            
+            // Atualizar status para RUNNING
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${history_id}`
+            );
+            
+            // Processar disparo em background (mesma lógica do processamento imediato)
+            (async () => {
+                try {
+                    let messageCounter = 0;
+                    const delayBetweenMessages = 1;
+                    const qstashPromises = [];
+                    const CONTACTS_CHUNK_SIZE = 500;
+                    const contactChunks = [];
+                    
+                    for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
+                        contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
+                    }
+                    
+                    console.log(`[DISPARO-AGENDADO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks`);
+                    
+                    for (const contactChunk of contactChunks) {
+                        for (const contact of contactChunk) {
+                            const userVariables = {
+                                primeiro_nome: contact.first_name || '',
+                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                            };
+                            
+                            const payload = {
+                                history_id: history_id,
+                                chat_id: contact.chat_id,
+                                bot_id: contact.bot_id_source,
+                                flow_nodes: JSON.stringify(flowNodes),
+                                flow_edges: JSON.stringify(flowEdges),
+                                start_node_id: startNodeId,
+                                variables_json: JSON.stringify(userVariables)
+                            };
+                            
+                            const totalDelaySeconds = messageCounter * delayBetweenMessages;
+                            
+                            qstashPromises.push(
+                                qstashClient.publishJSON({
+                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
+                                    body: payload,
+                                    delay: `${totalDelaySeconds}s`, 
+                                    retries: 2,
+                                    headers: {
+                                        'Upstash-Concurrency': '5'
+                                    }
+                                })
+                            );
+                            
+                            messageCounter++; 
+                        }
+                        
+                        if (qstashPromises.length > 0) {
+                            console.log(`[DISPARO-AGENDADO] Processando chunk com ${qstashPromises.length} promises...`);
+                            await publishQStashInBatches(qstashPromises, 10, 500);
+                            qstashPromises.length = 0;
+                        }
+                    }
+                    
+                    if (qstashPromises.length > 0) {
+                        await publishQStashInBatches(qstashPromises, 10, 500);
+                    }
+                } catch (bgError) {
+                    console.error("Erro no processamento em background do disparo agendado:", bgError);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${history_id}`
+                    );
+                }
+            })();
+            
+            res.status(200).json({ message: 'Disparo agendado iniciado com sucesso.' });
+            
+        } catch (error) {
+            console.error("Erro crítico no processamento de disparo agendado:", error);
+            if (!res.headersSent) {
+                res.status(500).json({ message: 'Erro interno ao processar disparo agendado.' });
+            }
+        }
+    }
+);
+
 // ==========================================================
 // FIM DA ROTA DO QSTASH
 // ==========================================================
@@ -6292,11 +6477,30 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, disparoFlowId, campaignName } = req.body;
+      const { botIds, disparoFlowId, campaignName, scheduledAt } = req.body;
     
       if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
         return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
       }
+    
+        // Validar scheduledAt se fornecido
+        let scheduledTimestamp = null;
+        let scheduledDate = null;
+        if (scheduledAt) {
+            try {
+                scheduledDate = new Date(scheduledAt);
+                if (isNaN(scheduledDate.getTime())) {
+                    return res.status(400).json({ message: 'Data/hora de agendamento inválida.' });
+                }
+                // Verificar se é no futuro
+                if (scheduledDate <= new Date()) {
+                    return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
+                }
+                scheduledTimestamp = Math.floor(scheduledDate.getTime() / 1000); // Unix timestamp em segundos
+            } catch (error) {
+                return res.status(400).json({ message: 'Erro ao processar data/hora de agendamento.' });
+            }
+        }
     
         let historyId; 
     
@@ -6385,21 +6589,50 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             }
     
         // 5. Criar o registro mestre da campanha com os totais corretos
+        const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
         const [history] = await sqlWithRetry(
           sqlTx`INSERT INTO disparo_history (
                     seller_id, campaign_name, bot_ids, disparo_flow_id, 
                     status, total_sent, failure_count, 
-                    total_jobs, processed_jobs
+                    total_jobs, processed_jobs, scheduled_at
                    ) 
                    VALUES (
                     ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
-                    'PENDING', ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0
+                    ${statusToSet}, ${uniqueContacts.length}, 0, 
+                    ${total_jobs_to_queue}, 0, ${scheduledDate}
                    ) 
                    RETURNING id`
         );
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
+        
+        // Se for agendado, criar tarefa única no QStash para processar depois
+        if (scheduledTimestamp) {
+            try {
+                const qstashResponse = await qstashClient.publishJSON({
+                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
+                    body: { history_id: historyId },
+                    schedule: scheduledTimestamp, // Unix timestamp em segundos
+                    retries: 2,
+                    method: "POST"
+                });
+                
+                // Salvar o scheduled_message_id
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
+                );
+                
+                res.status(202).json({ 
+                    message: `Disparo "${campaignName}" agendado para ${scheduledDate.toLocaleString('pt-BR')} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
+                });
+                return; // Não processar imediatamente
+            } catch (qstashError) {
+                console.error("Erro ao agendar disparo no QStash:", qstashError);
+                // Se falhar ao agendar, deletar o registro e retornar erro
+                await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
+                return res.status(500).json({ message: 'Erro ao agendar o disparo. Tente novamente.' });
+            }
+        }
         
         // 5. Retornar resposta HTTP imediatamente e processar em background
         res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
