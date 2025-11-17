@@ -132,7 +132,7 @@ function createPixService({
     }
   }
 
-  async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address) {
+  async function generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal = null) {
     let pixData;
     let acquirer = 'Não identificado';
     const commission_rate = seller.commission_rate || 0.0500;
@@ -609,6 +609,19 @@ function createPixService({
       const customerPhone = clientPayload.phone?.replace(/\D/g, '') || '11999999999'; // Remove caracteres não numéricos
       const customerDocument = clientPayload.document?.number?.replace(/\D/g, '') || '21376710773'; // Remove caracteres não numéricos
 
+      // Buscar dados do click para tracking se click_id_internal for fornecido
+      let clickData = null;
+      if (click_id_internal) {
+        try {
+          const [click] = await sql`SELECT utm_source, utm_medium, utm_campaign, utm_content, utm_term FROM clicks WHERE id = ${click_id_internal}`;
+          if (click) {
+            clickData = click;
+          }
+        } catch (error) {
+          console.warn(`[Paradise] Erro ao buscar dados do click ${click_id_internal} para tracking:`, error.message);
+        }
+      }
+
       const payload = {
         amount: amount,
         description: `PIX HotTrack #${reference}`,
@@ -622,6 +635,19 @@ function createPixService({
         },
         postback_url: `https://${preferredHost}/api/webhook/paradise`,
       };
+
+      // Adicionar objeto tracking se houver dados do click
+      if (clickData && (clickData.utm_source || clickData.utm_medium || clickData.utm_campaign || clickData.utm_content || clickData.utm_term)) {
+        payload.tracking = {
+          utm_source: clickData.utm_source || null,
+          utm_medium: clickData.utm_medium || null,
+          utm_campaign: clickData.utm_campaign || null,
+          utm_content: clickData.utm_content || null,
+          utm_term: clickData.utm_term || null,
+          src: null, // Campo não existe na tabela clicks
+          sck: null, // Campo não existe na tabela clicks
+        };
+      }
 
       // Implementar split seguindo o padrão dos outros gateways
       // Apenas a comissão do SaaS vai para PARADISE_SPLIT_RECIPIENT_ID (do .env)
@@ -723,7 +749,7 @@ function createPixService({
 
     for (const provider of providerOrder) {
       try {
-        const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address);
+        const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal);
         console.log(
           '[PIX][generatePixWithFallback] provider=%s transaction_id=%s qr_len=%s',
           pixResult.provider,
