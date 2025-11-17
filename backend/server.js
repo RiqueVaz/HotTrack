@@ -1697,10 +1697,50 @@ async function getParadisePaymentStatus(transactionId, secretKey) {
 }
 async function handleSuccessfulPayment(transaction_id, customerData) {
     try {
-        const [transaction] = await sqlTx`UPDATE pix_transactions SET status = 'paid', paid_at = NOW() WHERE id = ${transaction_id} AND status != 'paid' RETURNING *`;
-        if (!transaction) { 
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada ou não encontrada.`);
-            return; 
+        // Primeiro, buscar a transação para verificar status e meta_event_id
+        const [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE id = ${transaction_id}`;
+        if (!transaction) {
+            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} não encontrada.`);
+            return;
+        }
+
+        // Se já tem meta_event_id, eventos já foram enviados - evitar duplicação
+        if (transaction.status === 'paid' && transaction.meta_event_id) {
+            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada e eventos já enviados (meta_event_id: ${transaction.meta_event_id}). Ignorando.`);
+            return;
+        }
+
+        const wasAlreadyPaid = transaction.status === 'paid';
+        
+        // Se não estava paga, atualizar status de forma atômica
+        if (!wasAlreadyPaid) {
+            const [updated] = await sqlTx`
+                UPDATE pix_transactions 
+                SET status = 'paid', paid_at = NOW() 
+                WHERE id = ${transaction_id} AND status != 'paid' 
+                RETURNING *
+            `;
+            if (!updated) {
+                console.log(`[handleSuccessfulPayment] Não foi possível atualizar status da transação ${transaction_id}.`);
+                return;
+            }
+            transaction.status = 'paid';
+            transaction.paid_at = updated.paid_at || new Date();
+        } else {
+            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já estava paga mas eventos não foram enviados. Enviando agora.`);
+            // Garantir que paid_at está definido
+            if (!transaction.paid_at) {
+                await sqlTx`UPDATE pix_transactions SET paid_at = NOW() WHERE id = ${transaction_id}`;
+                transaction.paid_at = new Date();
+            }
+        }
+
+        // Verificação final antes de enviar eventos (prevenir race condition)
+        // Se outra thread já enviou eventos enquanto processávamos, abortar
+        const [finalCheck] = await sqlTx`SELECT meta_event_id FROM pix_transactions WHERE id = ${transaction_id}`;
+        if (finalCheck.meta_event_id) {
+            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já tem meta_event_id (race condition detectada). Abortando envio duplicado.`);
+            return;
         }
 
         console.log(`[handleSuccessfulPayment] Processando pagamento para transação ${transaction_id}.`);
