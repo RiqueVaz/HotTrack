@@ -7100,7 +7100,8 @@ function generatePreviewHTML(data) {
                         <thead>
                             <tr style={{borderBottom: '1px solid var(--border-color)'}}>
                                 <th style={{padding: '1rem'}}>Campanha</th>
-                                <th style={{padding: '1rem'}}>Data</th>
+                                <th style={{padding: '1rem'}}>Data Criação</th>
+                                <th style={{padding: '1rem'}}>Agendado Para</th>
                                 <th style={{padding: '1rem'}}>Status</th>
                                 <th style={{padding: '1rem'}}>Envios</th>
                                 <th style={{padding: '1rem'}}>Conversões</th>
@@ -7108,11 +7109,20 @@ function generatePreviewHTML(data) {
                             </tr>
                         </thead>
                         <tbody>
-                            {isLoadingHistory ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                            {isLoadingHistory ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
                              history.map(item => (
                                 <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
                                     <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
-                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString()}</td>
+                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
+                                    <td style={{padding: '1rem'}}>
+                                        {item.scheduled_at ? (
+                                            <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
+                                                {new Date(item.scheduled_at).toLocaleString('pt-BR')}
+                                            </span>
+                                        ) : (
+                                            <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                                        )}
+                                    </td>
                                     <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
                                     <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
                                     <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>

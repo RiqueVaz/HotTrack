@@ -6864,7 +6864,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                    VALUES (
                     ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
                     ${statusToSet}, ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0, ${scheduledDate}, ${flowStepsMetadata ? JSON.stringify(flowStepsMetadata) : null}
+                    ${total_jobs_to_queue}, 0, ${scheduledTimestamp ? scheduledDate : null}, ${flowStepsMetadata ? JSON.stringify(flowStepsMetadata) : null}
                    ) 
                    RETURNING id`
         );
@@ -6874,10 +6874,11 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         // Se for agendado, criar tarefa única no QStash para processar depois
         if (scheduledTimestamp) {
             try {
+                // Usar scheduleAt com ISO string para agendamento absoluto
                 const qstashResponse = await qstashClient.publishJSON({
                     url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
                     body: { history_id: historyId },
-                    schedule: scheduledTimestamp, // Unix timestamp em segundos
+                    scheduleAt: scheduledDate.toISOString(), // ISO string para agendamento absoluto
                     retries: 2,
                     method: "POST"
                 });
