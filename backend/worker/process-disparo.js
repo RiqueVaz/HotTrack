@@ -92,6 +92,23 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
+            // Tratamento para erro 429 (Too Many Requests)
+            if (error.response && error.response.status === 429) {
+                const retryAfter = parseInt(error.response.headers['retry-after'] || error.response.headers['Retry-After'] || '2');
+                const waitTime = retryAfter * 1000; // Converter para milissegundos
+                
+                logger.warn(`[WORKER-DISPARO] Rate limit atingido (429). Aguardando ${retryAfter}s antes de retry. Method: ${method}, ChatID: ${chatId}`);
+                
+                if (i < retries - 1) {
+                    await new Promise(res => setTimeout(res, waitTime));
+                    continue; // Tentar novamente após esperar
+                } else {
+                    // Se esgotou as tentativas, retornar erro
+                    logger.error(`[WORKER-DISPARO] Rate limit persistente após ${retries} tentativas. Method: ${method}`);
+                    return { ok: false, error_code: 429, description: 'Too Many Requests: Rate limit exceeded' };
+                }
+            }
+
             // Tratamento específico para TOPIC_CLOSED
             if (error.response && error.response.status === 400 && 
                 error.response.data?.description?.includes('TOPIC_CLOSED')) {

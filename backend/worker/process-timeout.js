@@ -93,8 +93,50 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
             return response.data;
         } catch (error) {
-            console.error(`[WORKER - Telegram API ERROR] Method: ${method}:`, error.response?.data || error.message);
-            if (i < retries - 1) { await new Promise(res => setTimeout(res, delay * (i + 1))); } else { throw error; }
+            const chatId = data?.chat_id || 'unknown';
+            
+            // Tratamento para erro 403 (bot bloqueado)
+            if (error.response && error.response.status === 403) {
+                console.warn(`[WORKER - Telegram API] O bot foi bloqueado pelo usuário. ChatID: ${chatId}`);
+                return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+            }
+
+            // Tratamento para erro 429 (Too Many Requests)
+            if (error.response && error.response.status === 429) {
+                const retryAfter = parseInt(error.response.headers['retry-after'] || error.response.headers['Retry-After'] || '2');
+                const waitTime = retryAfter * 1000; // Converter para milissegundos
+                
+                console.warn(`[WORKER - Telegram API] Rate limit atingido (429). Aguardando ${retryAfter}s antes de retry. Method: ${method}, ChatID: ${chatId}`);
+                
+                if (i < retries - 1) {
+                    await new Promise(res => setTimeout(res, waitTime));
+                    continue; // Tentar novamente após esperar
+                } else {
+                    // Se esgotou as tentativas, retornar erro
+                    console.error(`[WORKER - Telegram API ERROR] Rate limit persistente após ${retries} tentativas. Method: ${method}`);
+                    return { ok: false, error_code: 429, description: 'Too Many Requests: Rate limit exceeded' };
+                }
+            }
+
+            // Tratamento específico para TOPIC_CLOSED
+            if (error.response && error.response.status === 400 && 
+                error.response.data?.description?.includes('TOPIC_CLOSED')) {
+                console.warn(`[WORKER - Telegram API] Chat de grupo fechado. ChatID: ${chatId}`);
+                return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_CLOSED' };
+            }
+
+            const isRetryable = error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.message.includes('socket hang up');
+            if (isRetryable && i < retries - 1) {
+                await new Promise(res => setTimeout(res, delay * (i + 1)));
+                continue;
+            }
+
+            console.error(`[WORKER - Telegram API ERROR] Method: ${method}, ChatID: ${chatId}:`, error.response?.data || error.message);
+            if (i < retries - 1) { 
+                await new Promise(res => setTimeout(res, delay * (i + 1))); 
+            } else { 
+                throw error; 
+            }
         }
     }
 }
