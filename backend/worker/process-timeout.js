@@ -1073,10 +1073,30 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido sem flowId (${nodes.length} nós, ${edges.length} arestas). Contador de execução não será atualizado.`);
         }
     } else {
-        // Busca o fluxo ativo do banco
-        const [flow] = await sqlWithRetry(sqlTx`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`);
+        // Busca o fluxo do banco
+        // Primeiro tenta buscar pelo flow_id do estado, se disponível
+        let flow = null;
+        const [userStateForFlow] = await sqlWithRetry(sqlTx`SELECT flow_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
+        
+        if (userStateForFlow && userStateForFlow.flow_id) {
+            // Busca o fluxo específico usando flow_id do estado
+            const [flowResult] = await sqlWithRetry(sqlTx`SELECT * FROM flows WHERE id = ${userStateForFlow.flow_id}`);
+            if (flowResult && flowResult.nodes) {
+                flow = flowResult;
+                console.log(`${logPrefix} [Flow Engine] Usando fluxo do estado (ID: ${userStateForFlow.flow_id}).`);
+            }
+        }
+        
+        // Se não encontrou pelo flow_id do estado, busca o fluxo ativo do bot
+        if (!flow) {
+            const [flowResult] = await sqlWithRetry(sqlTx`SELECT * FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`);
+            if (flowResult && flowResult.nodes) {
+                flow = flowResult;
+            }
+        }
+        
         if (!flow || !flow.nodes) {
-            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo ativo encontrado para o bot ID ${botId}.`);
+            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo encontrado para o bot ID ${botId}.`);
             return;
         }
         currentFlowId = flow.id; // Armazena o ID do fluxo para rastreamento
@@ -1174,15 +1194,34 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
         }
 
+        // Determina flow_id para salvar no estado
+        let flowIdToSave = currentFlowId;
+        if (!flowIdToSave) {
+            // Se não tem currentFlowId, tenta buscar do fluxo ativo do bot
+            try {
+                const [activeFlow] = await sqlWithRetry(sqlTx`
+                    SELECT id FROM flows 
+                    WHERE bot_id = ${botId} AND is_active = TRUE 
+                    ORDER BY updated_at DESC LIMIT 1
+                `);
+                if (activeFlow) {
+                    flowIdToSave = activeFlow.id;
+                }
+            } catch (e) {
+                // Ignora erro, deixa flowIdToSave como null
+            }
+        }
+
         await sqlWithRetry(sqlTx`
-            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id)
-            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL)
+            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
+            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variables)}, false, NULL, ${flowIdToSave})
             ON CONFLICT (chat_id, bot_id)
             DO UPDATE SET 
                 current_node_id = EXCLUDED.current_node_id, 
                 variables = EXCLUDED.variables, 
                 waiting_for_input = false, 
-                scheduled_message_id = NULL;
+                scheduled_message_id = NULL,
+                flow_id = EXCLUDED.flow_id;
         `);
 
         if (currentNode.type === 'trigger') {
@@ -1225,6 +1264,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         method: "POST"
                     });
                     
+                    // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                    // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
                     await sqlWithRetry(sqlTx`
                         UPDATE user_flow_states 
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
@@ -1304,7 +1345,7 @@ async function handler(req, res) {
         // 3. *** VERIFICAÇÃO CRÍTICA ***
         // Verifica se o estado atual corresponde ao esperado
         const [currentState] = await sqlWithRetry(sqlTx`
-            SELECT waiting_for_input, scheduled_message_id, current_node_id 
+            SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id 
             FROM user_flow_states 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
@@ -1333,13 +1374,33 @@ async function handler(req, res) {
         // o 'processFlow' saberá que deve encerrar o fluxo.
         if (target_node_id) {
             try {
+                // Busca o fluxo correto usando flow_id do estado, se disponível
+                let flowNodes = null;
+                let flowEdges = null;
+                let flowIdForProcess = null;
+                
+                if (currentState.flow_id) {
+                    const [flow] = await sqlWithRetry(sqlTx`
+                        SELECT nodes FROM flows WHERE id = ${currentState.flow_id}
+                    `);
+                    if (flow && flow.nodes) {
+                        const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                        flowNodes = flowData.nodes || [];
+                        flowEdges = flowData.edges || [];
+                        flowIdForProcess = currentState.flow_id;
+                    }
+                }
+                
                 await processFlow(
                     chat_id, 
                     bot_id, 
                     botToken, 
                     sellerId, 
                     target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
-                    variables
+                    variables,
+                    flowNodes,
+                    flowEdges,
+                    flowIdForProcess
                 );
                 // Verificar se resposta já foi enviada antes de enviar
                 if (!res.headersSent) {
