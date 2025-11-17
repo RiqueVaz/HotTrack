@@ -4662,6 +4662,50 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
             }
         }
 
+        // Se já está paga, verificar se eventos foram enviados antes de retornar
+        if (currentStatus === 'paid' && !transaction.meta_event_id) {
+            // Transação está paga mas eventos não foram enviados - tentar enviar
+            console.log(`[PIX Status] Transação ${transaction.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
+            
+            // Se não temos customerData ainda, tentar buscar do provider
+            if (Object.keys(customerData).length === 0 && transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
+                try {
+                    if (transaction.provider === 'syncpay') {
+                        const syncPayToken = await getSyncPayAuthToken(seller);
+                        const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                        });
+                        customerData = response.data.payer || {};
+                    } else if (transaction.provider === 'pushinpay') {
+                        const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                        customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                    } else if (transaction.provider === 'wiinpay') {
+                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                        if (wiinpayApiKey) {
+                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                            customerData = result.customer || {};
+                        }
+                    } else if (transaction.provider === 'paradise') {
+                        const paradiseSecretKey = seller.paradise_secret_key;
+                        if (paradiseSecretKey) {
+                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                            customerData = result.customer || {};
+                        }
+                    }
+                    
+                    // Tentar enviar eventos mesmo que a transação já esteja paga
+                    if (Object.keys(customerData).length > 0) {
+                        await handleSuccessfulPayment(transaction.id, customerData);
+                    }
+                } catch (error) {
+                    console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                }
+            } else if (Object.keys(customerData).length > 0) {
+                // Temos customerData do bloco anterior, tentar enviar eventos
+                await handleSuccessfulPayment(transaction.id, customerData);
+            }
+        }
+
         if (currentStatus === 'paid') {
             let redirectUrl = null;
             // Se veio de checkout hospedado, tenta buscar URL de sucesso no config
