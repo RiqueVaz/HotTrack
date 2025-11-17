@@ -203,6 +203,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     let variables = { ...initialVariables };
     let currentNodeId = startNodeId;
     let safetyLock = 0;
+    let lastTransactionId = null; // Rastrear transaction_id para salvar no disparo_log
     const maxIterations = 50; // Proteção contra loops infinitos
     
     // Atualizar variáveis com dados do usuário
@@ -241,7 +242,10 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                 try {
                     // Importar processActions do server.js ou criar versão local
                     // Por enquanto, vamos processar ações básicas aqui
-                    await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
+                    const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
+                    if (returnedTransactionId) {
+                        lastTransactionId = returnedTransactionId;
+                    }
                 } catch (error) {
                     logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
                     break;
@@ -426,6 +430,8 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
 
 // Função simplificada para processar ações em disparos
 async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
+    let lastPixTransactionId = null; // Rastrear último transaction_id gerado
+    
     for (const action of actions) {
         try {
             const actionData = action.data || {};
@@ -521,6 +527,9 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 );
                 
                 if (pixResult && pixResult.qr_code_text) {
+                    // Salvar transaction_id para retornar
+                    lastPixTransactionId = pixResult.transaction_id;
+                    
                     const pixText = `${pixMessage}\n\n\`\`\`\n${pixResult.qr_code_text}\n\`\`\``;
                     const payload = {
                         chat_id: chatId,
@@ -571,6 +580,8 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
             // Continua processando outras ações mesmo se uma falhar
         }
     }
+    
+    return lastPixTransactionId; // Retornar último transaction_id ou null
 }
 
 // ==========================================================
