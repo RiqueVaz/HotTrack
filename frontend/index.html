@@ -6421,10 +6421,22 @@ function generatePreviewHTML(data) {
     }, [activeTab, fetchDisparoFlowsList]);
 
     // Fetch history for historico tab
-    const fetchHistory = useCallback(() => {
+    const fetchHistory = useCallback((showToast = true) => {
+        setIsLoadingHistory(true);
         App.apiRequest('/api/disparos/history', 'GET')
-            .then(res => setHistory(res))
-            .catch(() => console.error('Erro ao atualizar histórico.'));
+            .then(res => {
+                setHistory(res);
+                if (showToast) {
+                    App.showToast('Histórico atualizado com sucesso!', 'success');
+                }
+            })
+            .catch(() => {
+                console.error('Erro ao atualizar histórico.');
+                if (showToast) {
+                    App.showToast('Erro ao atualizar histórico.', 'error');
+                }
+            })
+            .finally(() => setIsLoadingHistory(false));
     }, []);
 
     useEffect(() => {
@@ -6435,7 +6447,8 @@ function generatePreviewHTML(data) {
                 .catch(() => App.showToast('Erro ao carregar o histórico.', 'error'))
                 .finally(() => setIsLoadingHistory(false));
             
-            const intervalId = setInterval(fetchHistory, 5000);
+            // Intervalo automático sem toast (silencioso)
+            const intervalId = setInterval(() => fetchHistory(false), 5000);
             return () => clearInterval(intervalId);
         }
     }, [activeTab, fetchHistory]);
@@ -7160,10 +7173,22 @@ function generatePreviewHTML(data) {
         const [isLoading, setIsLoading] = useState(true);
         const [isChecking, setIsChecking] = useState(null);
 
-        const fetchHistory = useCallback(() => {
+        const fetchHistory = useCallback((showToast = true) => {
+            setIsLoading(true);
             api.get('/api/disparos/history')
-                .then(res => setHistory(res.data))
-                .catch(() => console.error('Erro ao atualizar histórico.'));
+                .then(res => {
+                    setHistory(res.data);
+                    if (showToast) {
+                        App.showToast('Histórico atualizado com sucesso!', 'success');
+                    }
+                })
+                .catch(() => {
+                    console.error('Erro ao atualizar histórico.');
+                    if (showToast) {
+                        App.showToast('Erro ao atualizar histórico.', 'error');
+                    }
+                })
+                .finally(() => setIsLoading(false));
         }, []);
 
         useEffect(() => {
@@ -7173,7 +7198,8 @@ function generatePreviewHTML(data) {
                 .catch(() => alert('Erro ao carregar o histórico.'))
                 .finally(() => setIsLoading(false));
             
-            const intervalId = setInterval(fetchHistory, 5000);
+            // Intervalo automático sem toast (silencioso)
+            const intervalId = setInterval(() => fetchHistory(false), 5000);
 
             return () => clearInterval(intervalId);
         }, [fetchHistory]);
