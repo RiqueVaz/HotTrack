@@ -6528,7 +6528,7 @@ function generatePreviewHTML(data) {
             setInactiveCount(uniqueInactiveChatIds.length);
             setIsHygienized(true);
             
-            App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
+            App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos (usuários bloqueados, grupos, canais e supergrupos) removidos.`, 'success');
         } catch (error) {
             console.error('Erro ao higienizar contatos:', error);
             App.showToast('Erro ao higienizar contatos.', 'error');
@@ -6708,7 +6708,7 @@ function generatePreviewHTML(data) {
                             </button>
                             {isHygienized && (
                                 <p style={{color: 'var(--success)', fontSize: '0.9rem', marginTop: '0.5rem'}}>
-                                    ✓ Higienização concluída ({inactiveCount} contatos inativos removidos da contagem)
+                                    ✓ Higienização concluída ({inactiveCount} contatos inativos removidos: usuários bloqueados, grupos, canais e supergrupos)
                                 </p>
                             )}
                             {!isHygienized && selectedBotIds.length > 0 && (
@@ -9558,10 +9558,12 @@ function FlowEditorPage({
                 <>
                 <Handle type="target" position={Position.Top} isConnectable={isConnectable}  />
                     <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`} style={{ position: 'relative' }}>
-                        {/* Badge de contagem de execuções */}
-                        <div className="node-execution-badge" title={`Este node foi executado ${executionCount} vez${executionCount !== 1 ? 'es' : ''}`}>
-                            {formatCount(executionCount)}
-                        </div>
+                        {/* Badge de contagem de execuções - apenas para fluxos normais */}
+                        {!isDisparoFlow && (
+                            <div className="node-execution-badge" title={`Este node foi executado ${executionCount} vez${executionCount !== 1 ? 'es' : ''}`}>
+                                {formatCount(executionCount)}
+                            </div>
+                        )}
                         <div className="action-badge">
                             {actions.length > 0 ? (
                                 <>
@@ -9653,7 +9655,7 @@ function FlowEditorPage({
                     })()}
                 </>
             );
-        }, [nodeStats, formatCount]);
+        }, [nodeStats, formatCount, isDisparoFlow]);
 
         const nodeTypes = useMemo(() => ({ trigger: CustomNode, action: CustomNode }), [CustomNode]);
 
@@ -9850,16 +9852,19 @@ function FlowEditorPage({
                    .catch(console.error);
             }
             
-            // Buscar estatísticas de execução dos nodes
-            if (flow?.id) {
+            // Buscar estatísticas de execução dos nodes (apenas para fluxos normais, não disparos)
+            if (flow?.id && !isDisparoFlow) {
                 api.get(`/api/flows/${flow.id}/node-stats`)
                    .then(res => setNodeStats(res.data || {}))
                    .catch(err => {
                        console.error('Erro ao buscar estatísticas dos nodes:', err);
                        setNodeStats({});
                    });
+            } else {
+                // Para fluxos de disparo, não buscar estatísticas
+                setNodeStats({});
             }
-        }, [flow, reactFlowInstance, setEdges, setNodes]);
+        }, [flow, reactFlowInstance, setEdges, setNodes, isDisparoFlow]);
         
         // Carregar domínios das pressels
         useEffect(() => {

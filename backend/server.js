@@ -389,7 +389,7 @@ app.post(
                 // Validar tags automáticas
                 const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
                 
-                // Construir query com CTEs
+                // Construir query com CTEs - apenas usuários individuais (chat_id > 0)
                 let tagQuery = `
                     WITH base_contacts AS (
                         SELECT DISTINCT ON (tc.chat_id) 
@@ -397,6 +397,7 @@ app.post(
                         FROM telegram_chats tc
                         WHERE tc.bot_id = ANY($1::int[]) 
                             AND tc.seller_id = $2
+                            AND tc.chat_id > 0
                         ORDER BY tc.chat_id, tc.created_at DESC
                     )
                 `;
@@ -429,6 +430,7 @@ app.post(
                         JOIN pix_transactions pt ON pt.click_id_internal = c.id
                         WHERE tc.bot_id = ANY($1::int[])
                             AND tc.seller_id = $2
+                            AND tc.chat_id > 0
                             AND pt.status = 'paid'
                     )`;
                 }
@@ -451,11 +453,13 @@ app.post(
                 
                 contacts = await sqlWithRetry(tagQuery, tagParams);
             } else {
-                // Sem filtro de tags
+                // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
                 contacts = await sqlWithRetry(
                     sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
                           FROM telegram_chats 
-                          WHERE bot_id = ANY(${botIds}) AND seller_id = ${history.seller_id}
+                          WHERE bot_id = ANY(${botIds}) 
+                            AND seller_id = ${history.seller_id}
+                            AND chat_id > 0
                           ORDER BY chat_id, created_at DESC`
                 );
             }
@@ -6714,6 +6718,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     FROM telegram_chats tc
                     WHERE tc.bot_id = ANY($1::int[]) 
                         AND tc.seller_id = $2
+                        AND tc.chat_id > 0
             `;
             let tagParams = [validBotIds, sellerId];
             let paramOffset = 3;
@@ -6756,6 +6761,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     JOIN pix_transactions pt ON pt.click_id_internal = c.id
                     WHERE tc.bot_id = ANY($1::int[])
                         AND tc.seller_id = $2
+                        AND tc.chat_id > 0
                         AND pt.status = 'paid'
                 )`;
             }
@@ -6778,23 +6784,26 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             
             contacts = await sqlWithRetry(tagQuery, tagParams);
         } else {
-            // Query simples sem filtro de tags
+            // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
             if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
                 contacts = await sqlWithRetry(
                     sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
                           FROM telegram_chats 
                           WHERE bot_id = ANY(${validBotIds}) 
                             AND seller_id = ${sellerId}
+                            AND chat_id > 0
                             AND chat_id != ALL(${excludeChatIds})
                           ORDER BY chat_id, created_at DESC`
                 );
             } else {
                 contacts = await sqlWithRetry(
-            sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                  FROM telegram_chats 
-                  WHERE bot_id = ANY(${validBotIds}) AND seller_id = ${sellerId}
-                  ORDER BY chat_id, created_at DESC`
-        );
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${validBotIds}) 
+                            AND seller_id = ${sellerId}
+                            AND chat_id > 0
+                          ORDER BY chat_id, created_at DESC`
+                );
             }
         }
         
@@ -7642,6 +7651,7 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
                     FROM telegram_chats
                     WHERE bot_id = ANY($1::int[]) 
                         AND seller_id = $2
+                        AND chat_id > 0
             `;
             params = [botIds, sellerId];
             let paramOffset = 3;
@@ -7680,6 +7690,7 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
                     JOIN pix_transactions pt ON pt.click_id_internal = c.id
                     WHERE tc.bot_id = ANY($1::int[])
                         AND tc.seller_id = $2
+                        AND tc.chat_id > 0
                         AND pt.status = 'paid'
                 )`;
             }
@@ -7698,13 +7709,13 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
                 query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
             }
         } else {
-            // Query simples sem filtro de tags
-            query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[])`;
+            // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
+            query = `SELECT COUNT(DISTINCT chat_id) FROM telegram_chats WHERE seller_id = $1 AND bot_id = ANY($2::int[]) AND chat_id > 0`;
             params = [sellerId, botIds];
-
-        if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
-            query += ` AND chat_id NOT IN (${excludeChatIds.map((_, i) => `$${i + 3}`).join(',')})`;
-            params.push(...excludeChatIds);
+            
+            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+                query += ` AND chat_id NOT IN (${excludeChatIds.map((_, i) => `$${i + 3}`).join(',')})`;
+                params.push(...excludeChatIds);
             }
         }
 
@@ -7731,16 +7742,23 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
             return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
         }
 
-        const contacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
-        if (contacts.length === 0) {
+        // Buscar apenas usuários individuais (chat_id > 0) e grupos/canais (chat_id < 0)
+        const allContacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
+        if (allContacts.length === 0) {
             return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
         }
 
-        const inactiveContacts = [];
+        // Separar usuários individuais de grupos/canais
+        const individualUsers = allContacts.filter(c => c.chat_id > 0);
+        const groupsAndChannels = allContacts.filter(c => c.chat_id < 0);
+        
+        // Grupos/canais são automaticamente considerados inativos para disparos
+        const inactiveContacts = [...groupsAndChannels];
         const BATCH_SIZE = 30; 
 
-        for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-            const batch = contacts.slice(i, i + BATCH_SIZE);
+        // Validar apenas usuários individuais (grupos/canais já foram adicionados como inativos)
+        for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+            const batch = individualUsers.slice(i, i + BATCH_SIZE);
             const promises = batch.map(contact => 
                 sendTelegramRequest(bot.bot_token, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
                     .catch(error => {
@@ -7752,7 +7770,7 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
 
             await Promise.all(promises);
 
-            if (i + BATCH_SIZE < contacts.length) {
+            if (i + BATCH_SIZE < individualUsers.length) {
                 await new Promise(resolve => setTimeout(resolve, 1100));
             }
         }
