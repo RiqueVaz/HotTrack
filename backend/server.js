@@ -8989,6 +8989,28 @@ app.post('/api/flows/import-paid', authenticateJwt, async (req, res) => {
 // Endpoint 22: Histórico de disparos
 app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
     try {
+        // Corrigir automaticamente campanhas presas em RUNNING que já foram concluídas
+        // Caso 1: Campanhas com todos os jobs processados (processed_jobs >= total_jobs)
+        await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND processed_jobs >= total_jobs 
+            AND total_jobs > 0
+        `, [req.user.id]);
+
+        // Caso 2: Campanhas com total_jobs = 0 que estão em RUNNING há mais de 1 hora
+        // (provavelmente falharam na criação ou nunca tiveram contatos)
+        await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND total_jobs = 0 
+            AND created_at < NOW() - INTERVAL '1 hour'
+        `, [req.user.id]);
+
         const history = await sqlWithRetry(`
             SELECT 
                 h.*,
@@ -9002,9 +9024,53 @@ app.get('/api/disparos/history', authenticateJwt, async (req, res) => {
         `, [req.user.id]);
         res.status(200).json(history);
     } catch (error) {
+        console.error('Erro ao buscar histórico de disparos:', error);
         res.status(500).json({ message: 'Erro ao buscar histórico de disparos.' });
     }
 });
+
+// Endpoint para corrigir campanhas presas em execução (manual)
+app.post('/api/disparos/fix-stuck-campaigns', authenticateJwt, async (req, res) => {
+    try {
+        const sellerId = req.user.id;
+        
+        // Corrigir campanhas do usuário logado que estão presas
+        // Caso 1: Campanhas com todos os jobs processados
+        const result1 = await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND processed_jobs >= total_jobs 
+            AND total_jobs > 0
+            RETURNING id, campaign_name, processed_jobs, total_jobs
+        `, [sellerId]);
+
+        // Caso 2: Campanhas com total_jobs = 0 que estão em RUNNING há mais de 1 hora
+        const result2 = await sqlWithRetry(`
+            UPDATE disparo_history 
+            SET status = 'COMPLETED' 
+            WHERE seller_id = $1 
+            AND status = 'RUNNING' 
+            AND total_jobs = 0 
+            AND created_at < NOW() - INTERVAL '1 hour'
+            RETURNING id, campaign_name, processed_jobs, total_jobs
+        `, [sellerId]);
+
+        const result = [...result1, ...result2];
+
+        const fixedCount = result.length;
+        
+        res.status(200).json({ 
+            message: `${fixedCount} campanha(s) corrigida(s) com sucesso.`,
+            fixed: result
+        });
+    } catch (error) {
+        console.error('Erro ao corrigir campanhas presas:', error);
+        res.status(500).json({ message: 'Erro ao corrigir campanhas presas.' });
+    }
+});
+
 // Endpoint 23: Verificar conversões de disparos (modificado)
 app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (req, res) => {
     const { historyId } = req.params;
