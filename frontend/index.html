@@ -1360,6 +1360,77 @@
             revenueChart: null,
         },
 
+        // --- REFRESH AUTOMÁTICO DE TOKEN ---
+        tokenRefreshTimer: null,
+
+        decodeJWT(token) {
+            try {
+                if (!token) return null;
+                const parts = token.split('.');
+                if (parts.length !== 3) return null;
+                const payload = parts[1];
+                const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+                return decoded;
+            } catch (error) {
+                console.warn('[Auth] Erro ao decodificar JWT:', error);
+                return null;
+            }
+        },
+
+        scheduleTokenRefresh() {
+            // Cancela timer anterior se existir
+            this.cancelTokenRefresh();
+
+            const token = this.state.token || this.getToken();
+            if (!token) {
+                return; // Sem token, não há o que agendar
+            }
+
+            const decoded = this.decodeJWT(token);
+            if (!decoded || !decoded.exp) {
+                console.warn('[Auth] Token inválido ou sem expiração, não será agendado refresh automático.');
+                return;
+            }
+
+            const expirationTime = decoded.exp * 1000; // Converte para milliseconds
+            const now = Date.now();
+            const timeUntilExpiration = expirationTime - now;
+            
+            // Agenda refresh 2 minutos antes da expiração (120000 ms)
+            const refreshDelay = Math.max(0, timeUntilExpiration - 120000);
+
+            if (refreshDelay <= 0) {
+                // Token já expirou ou está muito próximo, tenta refresh imediatamente
+                console.log('[Auth] Token próximo da expiração, fazendo refresh imediato.');
+                this.tryRefreshToken().then(success => {
+                    if (success) {
+                        this.scheduleTokenRefresh(); // Reagenda após refresh bem-sucedido
+                    }
+                });
+                return;
+            }
+
+            console.log(`[Auth] Refresh automático agendado para ${Math.round(refreshDelay / 1000)} segundos (${Math.round(refreshDelay / 60000)} minutos).`);
+
+            this.tokenRefreshTimer = setTimeout(async () => {
+                console.log('[Auth] Executando refresh automático de token...');
+                const success = await this.tryRefreshToken();
+                if (success) {
+                    // Reagenda próximo refresh após sucesso
+                    this.scheduleTokenRefresh();
+                } else {
+                    console.warn('[Auth] Refresh automático falhou, sistema reativo assumirá.');
+                }
+            }, refreshDelay);
+        },
+
+        cancelTokenRefresh() {
+            if (this.tokenRefreshTimer) {
+                clearTimeout(this.tokenRefreshTimer);
+                this.tokenRefreshTimer = null;
+            }
+        },
+
         // --- SEGURANÇA: Função para obter token de forma segura ---
         getToken() {
             let token = sessionStorage.getItem(ACCESS_TOKEN_KEY);
