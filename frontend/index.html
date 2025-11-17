@@ -6657,15 +6657,6 @@ function generatePreviewHTML(data) {
                                     <option key={flow.id} value={flow.id}>{flow.name}</option>
                                 ))}
                             </select>
-                            <button 
-                                type="button" 
-                                className="btn btn-secondary" 
-                                onClick={handleCreateDisparoFlow}
-                                disabled={selectedBotIds.length === 0}
-                                title="Criar novo fluxo"
-                            >
-                                + Novo
-                            </button>
                             {selectedDisparoFlowId && (
                                 <button 
                                     type="button" 
