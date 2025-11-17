@@ -6494,12 +6494,8 @@ function generatePreviewHTML(data) {
                 .then(res => setHistory(res))
                 .catch(() => App.showToast('Erro ao carregar o histórico.', 'error'))
                 .finally(() => setIsLoadingHistory(false));
-            
-            // Intervalo automático sem toast (silencioso)
-            const intervalId = setInterval(() => fetchHistory(false), 5000);
-            return () => clearInterval(intervalId);
         }
-    }, [activeTab, fetchHistory]);
+    }, [activeTab]);
 
     const handleCreateDisparoFlow = async () => {
         if (selectedBotIds.length === 0) {
@@ -7275,12 +7271,7 @@ function generatePreviewHTML(data) {
                 .then(res => setHistory(res.data))
                 .catch(() => alert('Erro ao carregar o histórico.'))
                 .finally(() => setIsLoading(false));
-            
-            // Intervalo automático sem toast (silencioso)
-            const intervalId = setInterval(() => fetchHistory(false), 5000);
-
-            return () => clearInterval(intervalId);
-        }, [fetchHistory]);
+        }, []);
         
         const handleCheckConversions = async (historyId) => {
             setIsChecking(historyId);
