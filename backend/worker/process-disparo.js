@@ -8,6 +8,7 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
@@ -263,6 +264,159 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     }
 }
 
+// Funções para envio de eventos Meta e Utmify
+async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
+    logger.debug(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
+    try {
+        let integrationId = null;
+
+        if (clickData.pressel_id) {
+            logger.debug(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
+            const [pressel] = await sqlWithRetry(sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`);
+            if (pressel) {
+                integrationId = pressel.utmify_integration_id;
+            }
+        } else if (clickData.checkout_id) {
+            logger.debug(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
+        }
+
+        if (!integrationId) {
+            logger.debug(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
+            return;
+        }
+
+        logger.debug(`[Utmify] Integração vinculada ID: ${integrationId}. Buscando token...`);
+        const [integration] = await sqlTx`
+            SELECT api_token FROM utmify_integrations 
+            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
+        `;
+
+        if (!integration || !integration.api_token) {
+            logger.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
+            return;
+        }
+
+        const utmifyApiToken = integration.api_token;
+        logger.debug(`[Utmify] Token encontrado. Montando payload...`);
+        
+        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
+        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
+        const payload = {
+            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
+            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
+            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
+            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
+            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
+            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
+            isTest: false
+        };
+
+        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
+        logger.debug(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+
+    } catch (error) {
+        logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+    }
+}
+
+async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
+    try {
+        let presselPixels = [];
+        if (clickData.pressel_id) {
+            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+        } else if (clickData.checkout_id) {
+            // Verificar se é checkout hospedado (string) ou checkout antigo (integer)
+            const checkoutId = clickData.checkout_id;
+            if (String(checkoutId).startsWith('cko_')) {
+                // Buscar pixel_id do config do hosted_checkout
+                const [hostedCheckout] = await sqlTx`
+                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
+                    FROM hosted_checkouts 
+                    WHERE id = ${checkoutId}
+                `;
+                
+                if (hostedCheckout?.pixel_id) {
+                    // Converter pixel_id para o formato esperado
+                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
+                }
+            } else {
+                // É um checkout antigo (integer), usar a tabela checkout_pixels
+                presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+            }
+        }
+
+        if (presselPixels.length === 0) {
+            logger.debug(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
+            return;
+        }
+
+        const userData = {
+            fbp: clickData.fbp || undefined,
+            fbc: clickData.fbc || undefined,
+            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
+        };
+
+        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
+            userData.client_ip_address = clickData.ip_address;
+        }
+        if (clickData.user_agent && clickData.user_agent.length > 10) { 
+            userData.client_user_agent = clickData.user_agent;
+        }
+
+        if (customerData?.name) {
+            const nameParts = customerData.name.trim().split(' ');
+            const firstName = nameParts[0].toLowerCase();
+            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
+            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
+            if (lastName) {
+                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
+            }
+        }
+
+        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
+        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
+        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
+        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
+
+        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
+        
+        for (const { pixel_config_id } of presselPixels) {
+            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+            if (pixelConfig) {
+                const { pixel_id, meta_api_token } = pixelConfig;
+                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
+                
+                const payload = {
+                    data: [{
+                        event_name: eventName,
+                        event_time: Math.floor(Date.now() / 1000),
+                        event_id,
+                        user_data: userData,
+                        custom_data: {
+                            currency: 'BRL',
+                            value: transactionData.pix_value
+                        },
+                    }]
+                };
+                
+                if (eventName !== 'Purchase') {
+                    delete payload.data[0].custom_data.value;
+                }
+
+                logger.debug(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
+                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
+                logger.debug(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
+
+                if (eventName === 'Purchase') {
+                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                }
+            }
+        }
+    } catch (error) {
+        logger.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
+    }
+}
+
 // Função simplificada para processar ações em disparos
 async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
     for (const action of actions) {
@@ -369,7 +523,36 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             inline_keyboard: [[{ text: pixButtonText, callback_data: 'copy_pix' }]]
                         }
                     };
-                    await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    
+                    // Enviar eventos apenas se a mensagem foi enviada com sucesso
+                    if (sentMessage && sentMessage.ok) {
+                        // Buscar a transação completa para os eventos
+                        const [transaction] = await sqlWithRetry(sqlTx`
+                            SELECT * FROM pix_transactions WHERE id = ${pixResult.internal_transaction_id}
+                        `);
+                        
+                        if (transaction && click) {
+                            // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
+                            if (click.pressel_id || click.checkout_id) {
+                                await sendMetaEvent('InitiateCheckout', click, { id: transaction.id, pix_value: valueInCents / 100 }, null);
+                                logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para transação ${transaction.id}`);
+                            }
+                            
+                            // Enviar waiting_payment para Utmify
+                            const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                            const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
+                            await sendEventToUtmify(
+                                'waiting_payment',
+                                click,
+                                { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() },
+                                seller,
+                                customerDataForUtmify,
+                                productDataForUtmify
+                            );
+                            logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para transação ${transaction.id}`);
+                        }
+                    }
                 }
             } else if (action.type === 'action_check_pix') {
                 // Verificar PIX - lógica simplificada (não implementada completamente para disparos)
