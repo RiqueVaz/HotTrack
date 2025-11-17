@@ -174,6 +174,10 @@
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes shimmer { 
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
         .animate-fade-in { animation: fadeIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
         .table-custom th { color: var(--text-primary); }
         .table-custom th, .table-custom td { padding: 1rem; border-bottom: 1px solid var(--border-color); text-align: left; }
@@ -6417,6 +6421,7 @@ function generatePreviewHTML(data) {
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
     const [itemsPerPage, setItemsPerPage] = useState(20);
+    const [disparoPollingInterval, setDisparoPollingInterval] = useState(null);
     
     const API_BASE_URL = App.state.API_BASE_URL;
     const buildPreviewSrc = (value) => {
@@ -6584,6 +6589,33 @@ function generatePreviewHTML(data) {
             })
             .finally(() => setIsLoadingHistory(false));
     }, [itemsPerPage]);
+
+    // Polling para disparos em execução
+    useEffect(() => {
+        // Verificar se há disparos em execução
+        const hasRunningDisparos = history.some(item => 
+            item.status === 'RUNNING' || item.status === 'PENDING'
+        );
+
+        if (hasRunningDisparos && activeTab === 'historico') {
+            // Iniciar polling a cada 4 segundos
+            const interval = setInterval(() => {
+                fetchHistory(currentPage, false); // Atualizar sem toast
+            }, 4000);
+            
+            setDisparoPollingInterval(interval);
+            
+            return () => {
+                clearInterval(interval);
+            };
+        } else {
+            // Limpar intervalo se não há disparos em execução
+            if (disparoPollingInterval) {
+                clearInterval(disparoPollingInterval);
+                setDisparoPollingInterval(null);
+            }
+        }
+    }, [history, activeTab, currentPage, fetchHistory, disparoPollingInterval]);
 
     useEffect(() => {
         if (activeTab === 'historico') {
@@ -7456,29 +7488,102 @@ function generatePreviewHTML(data) {
                         </thead>
                         <tbody>
                             {isLoadingHistory ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
-                             history.map(item => (
-                                <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
-                                    <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
-                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
-                                    <td style={{padding: '1rem'}}>
-                                        {item.scheduled_at ? (
-                                            <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
-                                                {new Date(item.scheduled_at).toLocaleString('pt-BR')}
-                                            </span>
-                                        ) : (
-                                            <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                             history.map(item => {
+                                const progressPercentage = item.total_jobs > 0 
+                                    ? Math.round((item.processed_jobs / item.total_jobs) * 100)
+                                    : 0;
+                                
+                                return (
+                                    <React.Fragment key={item.id}>
+                                        <tr style={{borderBottom: '1px solid var(--border-color)'}}>
+                                            <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
+                                            <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
+                                            <td style={{padding: '1rem'}}>
+                                                {item.scheduled_at ? (
+                                                    <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
+                                                        {new Date(item.scheduled_at).toLocaleString('pt-BR')}
+                                                    </span>
+                                                ) : (
+                                                    <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                                                )}
+                                            </td>
+                                            <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
+                                            <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
+                                            <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
+                                            <td style={{padding: '1rem'}}>
+                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                        {(item.status === 'RUNNING' || item.status === 'PENDING') && (
+                                            <tr>
+                                                <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
+                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
+                                                                    Progresso:
+                                                                </span>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
+                                                                    {item.processed_jobs || 0} de {item.total_jobs || 0} processados
+                                                                </span>
+                                                            </div>
+                                                            <span style={{
+                                                                fontWeight: '700', 
+                                                                fontSize: '0.9rem',
+                                                                color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#fbbf24',
+                                                                textShadow: item.status === 'RUNNING' 
+                                                                    ? '0 0 8px rgba(56, 189, 248, 0.4)' 
+                                                                    : '0 0 8px rgba(251, 191, 36, 0.4)'
+                                                            }}>
+                                                                {progressPercentage}%
+                                                            </span>
+                                                        </div>
+                                                        <div style={{
+                                                            width: '100%',
+                                                            height: '12px',
+                                                            background: 'rgba(15, 23, 42, 0.6)',
+                                                            borderRadius: '6px',
+                                                            overflow: 'hidden',
+                                                            position: 'relative',
+                                                            border: '1px solid rgba(56, 189, 248, 0.1)',
+                                                            boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
+                                                        }}>
+                                                            <div style={{
+                                                                height: '100%',
+                                                                width: `${progressPercentage}%`,
+                                                                background: item.status === 'RUNNING' 
+                                                                    ? 'linear-gradient(90deg, #38bdf8 0%, #0ea5e9 50%, #0284c7 100%)'
+                                                                    : 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%)',
+                                                                transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                borderRadius: '6px',
+                                                                boxShadow: item.status === 'RUNNING'
+                                                                    ? '0 0 12px rgba(56, 189, 248, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                                                                    : '0 0 12px rgba(251, 191, 36, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
+                                                                position: 'relative',
+                                                                overflow: 'hidden'
+                                                            }}>
+                                                                {item.status === 'RUNNING' && (
+                                                                    <div style={{
+                                                                        position: 'absolute',
+                                                                        top: 0,
+                                                                        left: '-100%',
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
+                                                                        animation: 'shimmer 2s infinite'
+                                                                    }}></div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
                                         )}
-                                    </td>
-                                    <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
-                                    <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
-                                    <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
-                                    <td style={{padding: '1rem'}}>
-                                        <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                            {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
+                                    </React.Fragment>
+                                );
+                            })}
                         </tbody>
                     </table>
                      {!isLoadingHistory && history.length === 0 && <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Nenhum disparo encontrado.</p>}
@@ -7549,6 +7654,7 @@ function generatePreviewHTML(data) {
         const [history, setHistory] = useState([]);
         const [isLoading, setIsLoading] = useState(true);
         const [isChecking, setIsChecking] = useState(null);
+        const [pollingInterval, setPollingInterval] = useState(null);
 
         const fetchHistory = useCallback((showToast = true) => {
             setIsLoading(true);
@@ -7575,6 +7681,30 @@ function generatePreviewHTML(data) {
                 .catch(() => alert('Erro ao carregar o histórico.'))
                 .finally(() => setIsLoading(false));
         }, []);
+
+        // Polling para disparos em execução
+        useEffect(() => {
+            const hasRunningDisparos = history.some(item => 
+                item.status === 'RUNNING' || item.status === 'PENDING'
+            );
+
+            if (hasRunningDisparos) {
+                const interval = setInterval(() => {
+                    fetchHistory(false); // Atualizar sem toast
+                }, 4000);
+                
+                setPollingInterval(interval);
+                
+                return () => {
+                    clearInterval(interval);
+                };
+            } else {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    setPollingInterval(null);
+                }
+            }
+        }, [history, fetchHistory, pollingInterval]);
         
         const handleCheckConversions = async (historyId) => {
             setIsChecking(historyId);
@@ -7625,29 +7755,102 @@ function generatePreviewHTML(data) {
                         </thead>
                         <tbody>
                             {isLoading ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
-                             history.map(item => (
-                                <tr key={item.id} style={{borderBottom: '1px solid var(--border-color)'}}>
-                                    <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
-                                    <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
-                                    <td style={{padding: '1rem'}}>
-                                        {item.scheduled_at ? (
-                                            <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
-                                                {new Date(item.scheduled_at).toLocaleString('pt-BR')}
-                                            </span>
-                                        ) : (
-                                            <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                             history.map(item => {
+                                const progressPercentage = item.total_jobs > 0 
+                                    ? Math.round((item.processed_jobs / item.total_jobs) * 100)
+                                    : 0;
+                                
+                                return (
+                                    <React.Fragment key={item.id}>
+                                        <tr style={{borderBottom: '1px solid var(--border-color)'}}>
+                                            <td style={{padding: '1rem', fontWeight: '600'}}>{item.campaign_name}</td>
+                                            <td style={{padding: '1rem'}}>{new Date(item.created_at).toLocaleString('pt-BR')}</td>
+                                            <td style={{padding: '1rem'}}>
+                                                {item.scheduled_at ? (
+                                                    <span style={{color: 'var(--accent-primary)', fontWeight: '600'}}>
+                                                        {new Date(item.scheduled_at).toLocaleString('pt-BR')}
+                                                    </span>
+                                                ) : (
+                                                    <span style={{color: 'var(--text-secondary)'}}>Imediato</span>
+                                                )}
+                                            </td>
+                                            <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
+                                            <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
+                                            <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
+                                            <td style={{padding: '1rem'}}>
+                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                        {(item.status === 'RUNNING' || item.status === 'PENDING') && (
+                                            <tr>
+                                                <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
+                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
+                                                                    Progresso:
+                                                                </span>
+                                                                <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
+                                                                    {item.processed_jobs || 0} de {item.total_jobs || 0} processados
+                                                                </span>
+                                                            </div>
+                                                            <span style={{
+                                                                fontWeight: '700', 
+                                                                fontSize: '0.9rem',
+                                                                color: item.status === 'RUNNING' ? 'var(--accent-primary)' : '#fbbf24',
+                                                                textShadow: item.status === 'RUNNING' 
+                                                                    ? '0 0 8px rgba(56, 189, 248, 0.4)' 
+                                                                    : '0 0 8px rgba(251, 191, 36, 0.4)'
+                                                            }}>
+                                                                {progressPercentage}%
+                                                            </span>
+                                                        </div>
+                                                        <div style={{
+                                                            width: '100%',
+                                                            height: '12px',
+                                                            background: 'rgba(15, 23, 42, 0.6)',
+                                                            borderRadius: '6px',
+                                                            overflow: 'hidden',
+                                                            position: 'relative',
+                                                            border: '1px solid rgba(56, 189, 248, 0.1)',
+                                                            boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
+                                                        }}>
+                                                            <div style={{
+                                                                height: '100%',
+                                                                width: `${progressPercentage}%`,
+                                                                background: item.status === 'RUNNING' 
+                                                                    ? 'linear-gradient(90deg, #38bdf8 0%, #0ea5e9 50%, #0284c7 100%)'
+                                                                    : 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%)',
+                                                                transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                borderRadius: '6px',
+                                                                boxShadow: item.status === 'RUNNING'
+                                                                    ? '0 0 12px rgba(56, 189, 248, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+                                                                    : '0 0 12px rgba(251, 191, 36, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
+                                                                position: 'relative',
+                                                                overflow: 'hidden'
+                                                            }}>
+                                                                {item.status === 'RUNNING' && (
+                                                                    <div style={{
+                                                                        position: 'absolute',
+                                                                        top: 0,
+                                                                        left: '-100%',
+                                                                        width: '100%',
+                                                                        height: '100%',
+                                                                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
+                                                                        animation: 'shimmer 2s infinite'
+                                                                    }}></div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
                                         )}
-                                    </td>
-                                    <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
-                                    <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
-                                    <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
-                                    <td style={{padding: '1rem'}}>
-                                        <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                            {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
+                                    </React.Fragment>
+                                );
+                            })}
                         </tbody>
                     </table>
                      {!isLoading && history.length === 0 && <p style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>Nenhum disparo encontrado.</p>}
