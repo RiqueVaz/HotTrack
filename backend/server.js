@@ -5366,7 +5366,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         // Encontrou um nó válido (não é trigger)
                         logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
                         // Passa os dados do fluxo de destino para o processFlow recursivo
-                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges);
+                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
                         break;
                     }
                     
@@ -5664,7 +5664,7 @@ async function incrementNodeExecutionCount(flowId, nodeId) {
     }
 }
 
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
 
@@ -5707,7 +5707,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         // Usa os dados do fluxo fornecido (do forward_flow)
         nodes = flowNodes;
         edges = flowEdges;
-        logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (${nodes.length} nós, ${edges.length} arestas).`);
+        if (flowId) {
+            currentFlowId = flowId; // Usa o flowId fornecido para rastreamento
+            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (ID: ${flowId}, ${nodes.length} nós, ${edges.length} arestas).`);
+        } else {
+            // Tenta buscar o flowId do banco usando bot_id e nodes fornecidos
+            // Como não temos uma forma direta de identificar o fluxo pelos nodes, deixa null
+            // O contador não funcionará neste caso, mas o fluxo continuará funcionando
+            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido sem flowId (${nodes.length} nós, ${edges.length} arestas). Contador de execução não será atualizado.`);
+        }
     } else {
         // Busca o fluxo ativo do banco
         const [flow] = await sqlTx`
