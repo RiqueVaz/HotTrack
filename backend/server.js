@@ -137,15 +137,31 @@ app.use((req, res, next) => {
     // Timeout de 60 segundos para requisições
     // Se a requisição demorar mais que isso, retorna timeout
     req.setTimeout(60000, () => {
-        if (!res.headersSent) {
-            res.status(504).json({ error: 'Request timeout' });
+        // Verificação dupla para evitar race condition: verifica headersSent antes e depois
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(504).json({ error: 'Request timeout' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar timeout de requisição:', err);
+                }
+            }
         }
     });
     
     // Timeout de resposta também
     res.setTimeout(60000, () => {
-        if (!res.headersSent) {
-            res.status(504).json({ error: 'Response timeout' });
+        // Verificação dupla para evitar race condition: verifica headersSent antes e depois
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(504).json({ error: 'Response timeout' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar timeout de resposta:', err);
+                }
+            }
         }
     });
     
@@ -6542,7 +6558,10 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
     
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
+        // IMPORTANTE: Não tentar enviar resposta HTTP aqui - já foi enviada na linha 6374
+        // Qualquer tentativa de enviar resposta causaria ERR_HTTP_HEADERS_SENT
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
+        // Apenas log do erro - resposta já foi enviada ao Telegram
     }
 });
 
@@ -7757,19 +7776,31 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
 
     if (!botId) {
-        return res.status(400).json({ message: 'ID do bot é obrigatório.' });
+        // Verificar se headers já foram enviados antes de enviar resposta
+        if (!res.headersSent && !res.writableEnded) {
+            return res.status(400).json({ message: 'ID do bot é obrigatório.' });
+        }
+        return;
     }
 
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [botId, sellerId]);
         if (!bot || !bot.bot_token) {
-            return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
+            // Verificar se headers já foram enviados antes de enviar resposta
+            if (!res.headersSent && !res.writableEnded) {
+                return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
+            }
+            return;
         }
 
         // Buscar apenas usuários individuais (chat_id > 0) e grupos/canais (chat_id < 0)
         const allContacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
         if (allContacts.length === 0) {
-            return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
+            // Verificar se headers já foram enviados antes de enviar resposta
+            if (!res.headersSent && !res.writableEnded) {
+                return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
+            }
+            return;
         }
 
         // Separar usuários individuais de grupos/canais
@@ -7782,6 +7813,12 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
 
         // Validar apenas usuários individuais (grupos/canais já foram adicionados como inativos)
         for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+            // Verificar se headers já foram enviados (timeout pode ter ocorrido)
+            if (res.headersSent || res.writableEnded) {
+                console.log('[Validate Contacts] Processamento interrompido: resposta já foi enviada (possível timeout).');
+                return;
+            }
+            
             const batch = individualUsers.slice(i, i + BATCH_SIZE);
             const promises = batch.map(contact => 
                 sendTelegramRequest(bot.bot_token, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
@@ -7799,11 +7836,26 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
             }
         }
 
-        res.status(200).json({ inactive_contacts: inactiveContacts });
+        // Verificar se headers já foram enviados antes de enviar resposta final
+        if (!res.headersSent && !res.writableEnded) {
+            res.status(200).json({ inactive_contacts: inactiveContacts });
+        } else {
+            console.log('[Validate Contacts] Resposta não enviada: headers já foram enviados (possível timeout).');
+        }
 
     } catch (error) {
         console.error("Erro ao validar contatos:", error);
-        res.status(500).json({ message: 'Erro interno ao validar contatos.' });
+        // Verificar se headers já foram enviados antes de enviar resposta de erro
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(500).json({ message: 'Erro interno ao validar contatos.' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar resposta de erro em validate-contacts:', err);
+                }
+            }
+        }
     }
 });
 
@@ -9852,6 +9904,13 @@ app.get('*', (req, res) => {
 
 // Error handler global para requisições abortadas e outros erros
 app.use((err, req, res, next) => {
+    // Se headers já foram enviados (ex: webhook que respondeu imediatamente), não tentar enviar resposta
+    if (res.headersSent || res.writableEnded) {
+        // Apenas log do erro, não tentar enviar resposta HTTP
+        console.error('Erro após resposta já enviada:', err.message);
+        return;
+    }
+    
     // Ignorar erros de requisição abortada silenciosamente
     if (err.message?.includes('request aborted') || 
         err.message?.includes('aborted') ||
