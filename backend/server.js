@@ -7776,19 +7776,31 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
 
     if (!botId) {
-        return res.status(400).json({ message: 'ID do bot é obrigatório.' });
+        // Verificar se headers já foram enviados antes de enviar resposta
+        if (!res.headersSent && !res.writableEnded) {
+            return res.status(400).json({ message: 'ID do bot é obrigatório.' });
+        }
+        return;
     }
 
     try {
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [botId, sellerId]);
         if (!bot || !bot.bot_token) {
-            return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
+            // Verificar se headers já foram enviados antes de enviar resposta
+            if (!res.headersSent && !res.writableEnded) {
+                return res.status(404).json({ message: 'Bot não encontrado ou sem token configurado.' });
+            }
+            return;
         }
 
         // Buscar apenas usuários individuais (chat_id > 0) e grupos/canais (chat_id < 0)
         const allContacts = await sqlWithRetry('SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username FROM telegram_chats WHERE bot_id = $1', [botId]);
         if (allContacts.length === 0) {
-            return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
+            // Verificar se headers já foram enviados antes de enviar resposta
+            if (!res.headersSent && !res.writableEnded) {
+                return res.status(200).json({ inactive_contacts: [], message: 'Nenhum contato para validar.' });
+            }
+            return;
         }
 
         // Separar usuários individuais de grupos/canais
@@ -7801,6 +7813,12 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
 
         // Validar apenas usuários individuais (grupos/canais já foram adicionados como inativos)
         for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+            // Verificar se headers já foram enviados (timeout pode ter ocorrido)
+            if (res.headersSent || res.writableEnded) {
+                console.log('[Validate Contacts] Processamento interrompido: resposta já foi enviada (possível timeout).');
+                return;
+            }
+            
             const batch = individualUsers.slice(i, i + BATCH_SIZE);
             const promises = batch.map(contact => 
                 sendTelegramRequest(bot.bot_token, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
@@ -7818,11 +7836,26 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
             }
         }
 
-        res.status(200).json({ inactive_contacts: inactiveContacts });
+        // Verificar se headers já foram enviados antes de enviar resposta final
+        if (!res.headersSent && !res.writableEnded) {
+            res.status(200).json({ inactive_contacts: inactiveContacts });
+        } else {
+            console.log('[Validate Contacts] Resposta não enviada: headers já foram enviados (possível timeout).');
+        }
 
     } catch (error) {
         console.error("Erro ao validar contatos:", error);
-        res.status(500).json({ message: 'Erro interno ao validar contatos.' });
+        // Verificar se headers já foram enviados antes de enviar resposta de erro
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(500).json({ message: 'Erro interno ao validar contatos.' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar resposta de erro em validate-contacts:', err);
+                }
+            }
+        }
     }
 });
 
