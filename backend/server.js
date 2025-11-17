@@ -137,15 +137,31 @@ app.use((req, res, next) => {
     // Timeout de 60 segundos para requisições
     // Se a requisição demorar mais que isso, retorna timeout
     req.setTimeout(60000, () => {
-        if (!res.headersSent) {
-            res.status(504).json({ error: 'Request timeout' });
+        // Verificação dupla para evitar race condition: verifica headersSent antes e depois
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(504).json({ error: 'Request timeout' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar timeout de requisição:', err);
+                }
+            }
         }
     });
     
     // Timeout de resposta também
     res.setTimeout(60000, () => {
-        if (!res.headersSent) {
-            res.status(504).json({ error: 'Response timeout' });
+        // Verificação dupla para evitar race condition: verifica headersSent antes e depois
+        if (!res.headersSent && !res.writableEnded) {
+            try {
+                res.status(504).json({ error: 'Response timeout' });
+            } catch (err) {
+                // Ignora erro se headers já foram enviados entre as verificações
+                if (err.code !== 'ERR_HTTP_HEADERS_SENT') {
+                    console.error('Erro ao enviar timeout de resposta:', err);
+                }
+            }
         }
     });
     
@@ -6542,7 +6558,10 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
     
     } catch (error) {
         // Este catch agora só pegará erros realmente inesperados no fluxo principal.
+        // IMPORTANTE: Não tentar enviar resposta HTTP aqui - já foi enviada na linha 6374
+        // Qualquer tentativa de enviar resposta causaria ERR_HTTP_HEADERS_SENT
         console.error("Erro GERAL e INESPERADO ao processar webhook do Telegram:", error);
+        // Apenas log do erro - resposta já foi enviada ao Telegram
     }
 });
 
@@ -9852,6 +9871,13 @@ app.get('*', (req, res) => {
 
 // Error handler global para requisições abortadas e outros erros
 app.use((err, req, res, next) => {
+    // Se headers já foram enviados (ex: webhook que respondeu imediatamente), não tentar enviar resposta
+    if (res.headersSent || res.writableEnded) {
+        // Apenas log do erro, não tentar enviar resposta HTTP
+        console.error('Erro após resposta já enviada:', err.message);
+        return;
+    }
+    
     // Ignorar erros de requisição abortada silenciosamente
     if (err.message?.includes('request aborted') || 
         err.message?.includes('aborted') ||
