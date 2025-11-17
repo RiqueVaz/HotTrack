@@ -24,6 +24,8 @@ const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
 const { sqlTx, sqlWithRetry } = require('./db');
+const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
+const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
 
 function parseJsonField(value, context) {
     if (value === null || value === undefined) {
@@ -1695,86 +1697,19 @@ async function getParadisePaymentStatus(transactionId, secretKey) {
         throw new Error(`Erro ao consultar status na Paradise: ${errorMessage || 'Erro desconhecido'}`);
     }
 }
+// Wrapper para handleSuccessfulPayment que passa as dependências necessárias
 async function handleSuccessfulPayment(transaction_id, customerData) {
-    try {
-        // Primeiro, buscar a transação para verificar status e meta_event_id
-        const [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE id = ${transaction_id}`;
-        if (!transaction) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} não encontrada.`);
-            return;
-        }
-
-        // Se já tem meta_event_id, eventos já foram enviados - evitar duplicação
-        if (transaction.status === 'paid' && transaction.meta_event_id) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já processada e eventos já enviados (meta_event_id: ${transaction.meta_event_id}). Ignorando.`);
-            return;
-        }
-
-        const wasAlreadyPaid = transaction.status === 'paid';
-        
-        // Se não estava paga, atualizar status de forma atômica
-        if (!wasAlreadyPaid) {
-            const [updated] = await sqlTx`
-                UPDATE pix_transactions 
-                SET status = 'paid', paid_at = NOW() 
-                WHERE id = ${transaction_id} AND status != 'paid' 
-                RETURNING *
-            `;
-            if (!updated) {
-                console.log(`[handleSuccessfulPayment] Não foi possível atualizar status da transação ${transaction_id}.`);
-                return;
-            }
-            transaction.status = 'paid';
-            transaction.paid_at = updated.paid_at || new Date();
-        } else {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já estava paga mas eventos não foram enviados. Enviando agora.`);
-            // Garantir que paid_at está definido
-            if (!transaction.paid_at) {
-                await sqlTx`UPDATE pix_transactions SET paid_at = NOW() WHERE id = ${transaction_id}`;
-                transaction.paid_at = new Date();
-            }
-        }
-
-        // Verificação final antes de enviar eventos (prevenir race condition)
-        // Se outra thread já enviou eventos enquanto processávamos, abortar
-        const [finalCheck] = await sqlTx`SELECT meta_event_id FROM pix_transactions WHERE id = ${transaction_id}`;
-        if (finalCheck.meta_event_id) {
-            console.log(`[handleSuccessfulPayment] Transação ${transaction_id} já tem meta_event_id (race condition detectada). Abortando envio duplicado.`);
-            return;
-        }
-
-        console.log(`[handleSuccessfulPayment] Processando pagamento para transação ${transaction_id}.`);
-
-        if (adminSubscription && webpush) {
-            const payload = JSON.stringify({
-                title: 'Nova Venda Paga!',
-                body: `Venda de R$ ${parseFloat(transaction.pix_value).toFixed(2)} foi confirmada.`,
-            });
-            webpush.sendNotification(adminSubscription, payload).catch(error => {
-                if (error.statusCode === 410) {
-                    console.log("Inscrição de notificação expirada. Removendo.");
-                    adminSubscription = null;
-                } else {
-                    console.warn("Falha ao enviar notificação push (não-crítico):", error.message);
-                }
-            });
-        }
-        
-        const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
-        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
-
-        if (click && seller) {
-            const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
-            const productData = { id: "prod_final", name: "Produto Vendido" };
-
-            await sendEventToUtmify('paid', click, transaction, seller, finalCustomerData, productData);
-            await sendMetaEvent('Purchase', click, transaction, finalCustomerData);
-        } else {
-            console.error(`[handleSuccessfulPayment] ERRO: Não foi possível encontrar dados do clique ou vendedor para a transação ${transaction_id}`);
-        }
-    } catch(error) {
-        console.error(`[handleSuccessfulPayment] ERRO CRÍTICO ao processar pagamento da transação ${transaction_id}:`, error);
-    }
+    return await handleSuccessfulPaymentShared({
+        transaction_id,
+        customerData,
+        sqlTx,
+        adminSubscription,
+        webpush,
+        sendEventToUtmify: (status, clickData, pixData, sellerData, customerData, productData) => 
+            sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
+        sendMetaEvent: (eventName, clickData, transactionData, customerData) => 
+            sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
+    });
 }
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO POR API KEY ---
@@ -4702,47 +4637,45 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
             }
         }
 
-        // Se já está paga, verificar se eventos foram enviados antes de retornar
-        if (currentStatus === 'paid' && !transaction.meta_event_id) {
-            // Transação está paga mas eventos não foram enviados - tentar enviar
-            console.log(`[PIX Status] Transação ${transaction.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-            
-            // Se não temos customerData ainda, tentar buscar do provider
-            if (Object.keys(customerData).length === 0 && transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
-                try {
-                    if (transaction.provider === 'syncpay') {
-                        const syncPayToken = await getSyncPayAuthToken(seller);
-                        const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                        });
-                        customerData = response.data.payer || {};
-                    } else if (transaction.provider === 'pushinpay') {
-                        const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                        customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                    } else if (transaction.provider === 'wiinpay') {
-                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                        if (wiinpayApiKey) {
-                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
-                            customerData = result.customer || {};
-                        }
-                    } else if (transaction.provider === 'paradise') {
-                        const paradiseSecretKey = seller.paradise_secret_key;
-                        if (paradiseSecretKey) {
-                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
-                            customerData = result.customer || {};
-                        }
-                    }
-                    
-                    // Tentar enviar eventos mesmo que a transação já esteja paga
-                    if (Object.keys(customerData).length > 0) {
-                        await handleSuccessfulPayment(transaction.id, customerData);
-                    }
-                } catch (error) {
-                    console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
-                }
-            } else if (Object.keys(customerData).length > 0) {
-                // Temos customerData do bloco anterior, tentar enviar eventos
+        // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
+        if (currentStatus === 'paid') {
+            // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
+            if (Object.keys(customerData).length > 0) {
                 await handleSuccessfulPayment(transaction.id, customerData);
+            } else {
+                // Tentar buscar customerData do provider se possível
+                if (transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
+                    try {
+                        if (transaction.provider === 'syncpay') {
+                            const syncPayToken = await getSyncPayAuthToken(seller);
+                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                            });
+                            customerData = response.data.payer || {};
+                        } else if (transaction.provider === 'pushinpay') {
+                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
+                        } else if (transaction.provider === 'wiinpay') {
+                            const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                            if (wiinpayApiKey) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                customerData = result.customer || {};
+                            }
+                        } else if (transaction.provider === 'paradise') {
+                            const paradiseSecretKey = seller.paradise_secret_key;
+                            if (paradiseSecretKey) {
+                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                                customerData = result.customer || {};
+                            }
+                        }
+                        
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
+                        }
+                    } catch (error) {
+                        console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                    }
+                }
             }
         }
 
@@ -5185,12 +5118,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     let customerData = {};
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
 
-                    // Se já está paga, verificar se eventos foram enviados
+                    // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
                     if (transaction.status === 'paid') {
-                        // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                        if (!transaction.meta_event_id) {
-                            console.log(`[PIX][action_check_pix] Transação ${transactionId} está paga mas sem meta_event_id. Tentando buscar dados do provider e enviar eventos...`);
-                            
+                        // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
+                        if (Object.keys(customerData).length === 0) {
                             // Tentar buscar dados do cliente do provider
                             try {
                                 if (transaction.provider === 'pushinpay') {
@@ -5230,13 +5161,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                         }
                                     }
                                 }
-                                
-                                // Tentar enviar eventos mesmo que a transação já esteja paga
-                                await handleSuccessfulPayment(transaction.id, customerData);
-                                console.log(`[PIX][action_check_pix] Eventos enviados para transação ${transactionId} que já estava paga.`);
                             } catch (error) {
-                                console.error(`[PIX][action_check_pix] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                                console.error(`[PIX][action_check_pix] Erro ao buscar dados do cliente:`, error.message);
                             }
+                        }
+                        
+                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
                         }
                         return 'paid'; // Sinaliza para 'processFlow' seguir pelo handle 'a'
                     }
@@ -6438,42 +6370,26 @@ app.post('/api/webhook/pushinpay', async (req, res) => {
     
     // Processar PIX pago
     if (paidStatuses.has(normalized)) {
-      try {
-        const [tx] = await sqlTx`
-                  SELECT pt.id, pt.status, pt.provider_transaction_id, pt.meta_event_id, c.seller_id 
-                  FROM pix_transactions pt 
-                  JOIN clicks c ON pt.click_id_internal = c.id 
-                  WHERE LOWER(pt.provider_transaction_id) = LOWER(${id}) AND pt.provider = 'pushinpay'
-              `;
-        
-        if (!tx) {
-            console.error(`[Webhook PushinPay] ERRO: Transação não encontrada! provider_transaction_id='${id}', provider='pushinpay'`);
-            const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'pushinpay'`;
-            console.error(`[Webhook PushinPay] Total de transações PushinPay no banco: ${countResult[0].total}`);
-            return res.sendStatus(200);
-        }
-        
-        // Se já está paga, verificar se eventos foram enviados
-        if (tx.status === 'paid') {
-            // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-            if (!tx.meta_event_id) {
-                console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-            } else {
-                console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) já processada e eventos enviados. Ignorando webhook duplicado.`);
+        try {
+            const [tx] = await sqlTx`
+                SELECT pt.id 
+                FROM pix_transactions pt 
+                WHERE LOWER(pt.provider_transaction_id) = LOWER(${id}) AND pt.provider = 'pushinpay'
+            `;
+            
+            if (!tx) {
+                console.error(`[Webhook PushinPay] ERRO: Transação não encontrada! provider_transaction_id='${id}', provider='pushinpay'`);
+                return res.sendStatus(200);
             }
-            return res.sendStatus(200);
+            
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
+            await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
+            console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada.`);
+            
+        } catch (error) { 
+            console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
+            console.error(`[Webhook PushinPay] Stack:`, error.stack);
         }
-        
-        console.log(`[Webhook PushinPay] Transação ${id} (interna: ${tx.id}) encontrada. Status atual: '${tx.status}'. Processando pagamento...`);
-        
-        await handleSuccessfulPayment(tx.id, { name: payer_name, document: payer_national_registration });
-        console.log(`[Webhook PushinPay] ✓ Transação ${id} (interna: ${tx.id}) processada com sucesso!`);
-        
-      } catch (error) { 
-              console.error(`[Webhook PushinPay] ERRO CRÍTICO:`, error.response?.data || error.message);
-              console.error(`[Webhook PushinPay] Stack:`, error.stack);
-          }
     } 
     // Processar PIX cancelado/expirado
     else if (canceledStatuses.has(normalized)) {
@@ -6528,9 +6444,8 @@ app.post('/api/webhook/pixup', async (req, res) => {
         if (paidStatuses.has(normalized)) {
             try {
                 const [tx] = await sqlTx`
-                    SELECT pt.id, pt.status, pt.provider_transaction_id, pt.meta_event_id, c.seller_id 
+                    SELECT pt.id 
                     FROM pix_transactions pt 
-                    JOIN clicks c ON pt.click_id_internal = c.id 
                     WHERE (LOWER(pt.provider_transaction_id) = LOWER(${identifier}) OR pt.provider_transaction_id = ${external_id}) AND pt.provider = 'pixup'
                 `;
 
@@ -6550,22 +6465,9 @@ app.post('/api/webhook/pixup', async (req, res) => {
                     email: payerEmail 
                 };
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook Pixup] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, customerData);
-                    } else {
-                        console.log(`[Webhook Pixup] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return;
-                }
-
-                console.log(`[Webhook Pixup] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
-                
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, customerData);
-                console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+                console.log(`[Webhook Pixup] ✓ Transação ${identifier} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook Pixup] Erro ao processar pagamento:', error);
             }
@@ -6616,30 +6518,16 @@ app.post('/api/webhook/cnpay', async (req, res) => {
     try {
       console.log(`[Webhook CNPay] Processando pagamento para transactionId: ${transactionId}`);
             
-      const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'cnpay'`;
+      const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'cnpay'`;
       
       if (!tx) {
           console.error(`[Webhook CNPay] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='cnpay'`);
-          const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'cnpay'`;
-          console.error(`[Webhook CNPay] Total de transações CNPay no banco: ${countResult[0].total}`);
           return res.sendStatus(200);
       }
       
-      // Se já está paga, verificar se eventos foram enviados
-      if (tx.status === 'paid') {
-        // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-        if (!tx.meta_event_id) {
-          console.log(`[Webhook CNPay] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-          await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-        } else {
-          console.log(`[Webhook CNPay] Transação ${tx.id} já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-        }
-        return res.sendStatus(200);
-      }
-      
-      console.log(`[Webhook CNPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+      // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
       await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-      console.log(`[Webhook CNPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+      console.log(`[Webhook CNPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
       
     } catch (error) { 
       console.error(`[Webhook CNPay] ERRO CRÍTICO:`, error);
@@ -6669,30 +6557,16 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
         try {
             console.log(`[Webhook Oasy.fy] Processando pagamento para transactionId: ${transactionId}`);
             
-            const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'oasyfy'`;
+            const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'oasyfy'`;
             
             if (!tx) {
                 console.error(`[Webhook Oasy.fy] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='oasyfy'`);
-                const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'oasyfy'`;
-                console.error(`[Webhook Oasy.fy] Total de transações Oasyfy no banco: ${countResult[0].total}`);
                 return res.sendStatus(200);
             }
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook Oasy.fy] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-                } else {
-                    console.log(`[Webhook Oasy.fy] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paid' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-            
-            console.log(`[Webhook Oasy.fy] Transação encontrada. ID interno: ${tx.id}, Status atual: '${tx.status}'. Processando...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.cpf });
-            console.log(`[Webhook Oasy.fy] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook Oasy.fy] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
             
         } catch (error) { 
             console.error(`[Webhook Oasy.fy] ERRO CRÍTICO:`, error);
@@ -6719,8 +6593,9 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
         if (paidStatuses.has(normalizedStatus)) {
             try {
                 const [tx] = await sqlTx`
-                    SELECT * FROM pix_transactions 
-                    WHERE LOWER(provider_transaction_id) = LOWER(${parsed.id}) AND provider = 'wiinpay'
+                    SELECT pt.id 
+                    FROM pix_transactions pt 
+                    WHERE LOWER(pt.provider_transaction_id) = LOWER(${parsed.id}) AND pt.provider = 'wiinpay'
                 `;
 
                 if (!tx) {
@@ -6728,20 +6603,9 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
                     return res.sendStatus(200);
                 }
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook WiinPay] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, parsed.customer || {});
-                    } else {
-                        console.log(`[Webhook WiinPay] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return res.sendStatus(200);
-                }
-
-                console.log(`[Webhook WiinPay] Processando transação ${parsed.id} (interna: ${tx.id}) com status '${normalizedStatus}'.`);
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, parsed.customer || {});
+                console.log(`[Webhook WiinPay] ✓ Transação ${parsed.id} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook WiinPay] Erro ao processar pagamento:', error);
             }
@@ -6769,155 +6633,13 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
     }
     res.sendStatus(200);
 });
+// Wrappers para funções de eventos que passam as dependências necessárias
 async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
-    console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
-    try {
-        let integrationId = null;
-
-        if (clickData.pressel_id) {
-            console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
-            const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
-            if (pressel) {
-                integrationId = pressel.utmify_integration_id;
-            }
-        } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
-        }
-
-        if (!integrationId) {
-            console.log(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
-            return;
-        }
-
-        const [integration] = await sqlTx`
-            SELECT api_token FROM utmify_integrations 
-            WHERE id = ${integrationId} AND seller_id = ${sellerData.id}
-        `;
-
-        if (!integration || !integration.api_token) {
-            console.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
-            return;
-        }
-
-        const utmifyApiToken = integration.api_token;
-        
-        const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
-        const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
-        const payload = {
-            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
-            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
-            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
-            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
-            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
-            isTest: false
-        };
-
-        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
-
-    } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
-    }
+    return await sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx });
 }
+
 async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
-    try {
-        let presselPixels = [];
-        if (clickData.pressel_id) {
-            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
-        } else if (clickData.checkout_id) {
-            // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
-            const checkoutId = clickData.checkout_id;
-            
-            // Se começa com 'cko_', é um hosted_checkout (UUID)
-            if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
-                // Buscar pixel_id do config do hosted_checkout
-                const [hostedCheckout] = await sqlTx`
-                    SELECT config->'tracking'->>'pixel_id' as pixel_id 
-                    FROM hosted_checkouts 
-                    WHERE id = ${checkoutId}
-                `;
-                
-                if (hostedCheckout?.pixel_id) {
-                    // Converter pixel_id para o formato esperado
-                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
-                }
-            } else {
-                // É um checkout antigo (integer), usar a tabela checkout_pixels
-                presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
-            }
-        }
-
-        if (presselPixels.length === 0) {
-            console.log(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
-            return;
-        }
-
-        const userData = {
-            fbp: clickData.fbp || undefined,
-            fbc: clickData.fbc || undefined,
-            external_id: clickData.click_id ? clickData.click_id.replace('/start ', '') : undefined
-        };
-
-        if (clickData.ip_address && clickData.ip_address !== '::1' && !clickData.ip_address.startsWith('127.0.0.1')) {
-            userData.client_ip_address = clickData.ip_address;
-        }
-        if (clickData.user_agent && clickData.user_agent.length > 10) { 
-            userData.client_user_agent = clickData.user_agent;
-        }
-
-        if (customerData?.name) {
-            const nameParts = customerData.name.trim().split(' ');
-            const firstName = nameParts[0].toLowerCase();
-            const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : undefined;
-            userData.fn = crypto.createHash('sha256').update(firstName).digest('hex');
-            if (lastName) {
-                userData.ln = crypto.createHash('sha256').update(lastName).digest('hex');
-            }
-        }
-
-        const city = clickData.city && clickData.city !== 'Desconhecida' ? clickData.city.toLowerCase().replace(/[^a-z]/g, '') : null;
-        const state = clickData.state && clickData.state !== 'Desconhecido' ? clickData.state.toLowerCase().replace(/[^a-z]/g, '') : null;
-        if (city) userData.ct = crypto.createHash('sha256').update(city).digest('hex');
-        if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
-
-        Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
-        
-        for (const { pixel_config_id } of presselPixels) {
-            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
-            if (pixelConfig) {
-                const { pixel_id, meta_api_token } = pixelConfig;
-                const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
-                
-                const payload = {
-                    data: [{
-                        event_name: eventName,
-                        event_time: Math.floor(Date.now() / 1000),
-                        event_id,
-                        user_data: userData,
-                        custom_data: {
-                            currency: 'BRL',
-                            value: transactionData.pix_value
-                        },
-                    }]
-                };
-                
-                if (eventName !== 'Purchase') {
-                    delete payload.data[0].custom_data.value;
-                }
-
-                console.log(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
-                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
-                console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
-
-                if (eventName === 'Purchase') {
-                     await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
-    }
+    return await sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx });
 }
 async function checkPendingTransactions() {
     try {
@@ -7027,36 +6749,20 @@ app.post('/api/webhook/syncpay', async (req, res) => {
             
             // CORREÇÃO: Buscar por 'id' OU 'identifier' (SyncPay pode enviar um ou outro)
             const [tx] = await sqlTx`
-                SELECT * FROM pix_transactions 
-                WHERE (provider_transaction_id = ${transactionId} OR provider_transaction_id = ${identifier}) 
-                AND provider = 'syncpay'
+                SELECT pt.id 
+                FROM pix_transactions pt 
+                WHERE (pt.provider_transaction_id = ${transactionId} OR pt.provider_transaction_id = ${identifier}) 
+                AND pt.provider = 'syncpay'
             `;
 
             if (!tx) {
                 console.error(`[Webhook SyncPay] ERRO: Transação não encontrada! Tentou buscar id='${transactionId}' ou identifier='${identifier}', provider='syncpay'`);
-                const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'syncpay'`;
-                console.error(`[Webhook SyncPay] Total de transações SyncPay no banco: ${countResult[0].total}`);
-                // Logar todas as transações SyncPay recentes para debug
-                const recentTx = await sqlTx`SELECT provider_transaction_id FROM pix_transactions WHERE provider = 'syncpay' ORDER BY created_at DESC LIMIT 5`;
-                console.error(`[Webhook SyncPay] Últimas 5 transaction IDs no banco:`, recentTx.map(t => t.provider_transaction_id));
                 return res.sendStatus(200);
             }
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook SyncPay] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
-                } else {
-                    console.log(`[Webhook SyncPay] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-            
-            console.log(`[Webhook SyncPay] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
-            console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
         } else {
             console.log(`[Webhook SyncPay] Status '${status}' não é considerado pago. Ignorando.`);
         }
@@ -7087,12 +6793,10 @@ app.post('/api/webhook/brpix', async (req, res) => {
     const normalizedEvent = String(event).toLowerCase();
 
     try {
-        const [tx] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId} AND provider = 'brpix'`;
+        const [tx] = await sqlTx`SELECT pt.id FROM pix_transactions pt WHERE pt.provider_transaction_id = ${transactionId} AND pt.provider = 'brpix'`;
 
         if (!tx) {
             console.error(`[Webhook BRPix] ERRO: Transação não encontrada! provider_transaction_id='${transactionId}', provider='brpix'`);
-            const countResult = await sqlTx`SELECT COUNT(*) as total FROM pix_transactions WHERE provider = 'brpix'`;
-            console.error(`[Webhook BRPix] Total de transações BRPix no banco: ${countResult[0].total}`);
             return res.sendStatus(200);
         }
 
@@ -7100,21 +6804,9 @@ app.post('/api/webhook/brpix', async (req, res) => {
             const customerDocument = customer?.document?.number || customer?.document || customer?.cpf || null;
             const customerData = { name: customer?.name, document: customerDocument, email: customer?.email };
             
-            // Se já está paga, verificar se eventos foram enviados
-            if (tx.status === 'paid') {
-                // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                if (!tx.meta_event_id) {
-                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                    await handleSuccessfulPayment(tx.id, customerData);
-                } else {
-                    console.log(`[Webhook BRPix] Transação ${transactionId} (interna: ${tx.id}) já está marcada como 'paga' e eventos enviados. Ignorando webhook duplicado.`);
-                }
-                return res.sendStatus(200);
-            }
-
-            console.log(`[Webhook BRPix] Transação ${tx.id} encontrada. Status atual: '${tx.status}'. Atualizando para PAGO...`);
+            // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
             await handleSuccessfulPayment(tx.id, customerData);
-            console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada com sucesso!`);
+            console.log(`[Webhook BRPix] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
         } else if (normalizedEvent === 'transaction.created') {
             if (tx.status === 'paid') {
                 console.log(`[Webhook BRPix] Evento 'created' ignorado: transação ${transactionId} já está paga.`);
@@ -7203,22 +6895,9 @@ app.post('/api/webhook/paradise', async (req, res) => {
                     phone: payerPhone
                 };
 
-                // Se já está paga, verificar se eventos foram enviados
-                if (tx.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!tx.meta_event_id) {
-                        console.log(`[Webhook Paradise] Transação ${tx.id} está paga mas sem meta_event_id. Tentando enviar eventos...`);
-                        await handleSuccessfulPayment(tx.id, customerData);
-                    } else {
-                        console.log(`[Webhook Paradise] Transação ${tx.id} já está paga e eventos enviados. Ignorando duplicata.`);
-                    }
-                    return;
-                }
-
-                console.log(`[Webhook Paradise] Processando transação ${identifier} (interna: ${tx.id}) com status '${normalized}'.`);
-                
+                // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
                 await handleSuccessfulPayment(tx.id, customerData);
-                console.log(`[Webhook Paradise] ✓ Transação ${identifier} (interna: ${tx.id}) processada com sucesso!`);
+                console.log(`[Webhook Paradise] ✓ Transação ${identifier} (interna: ${tx.id}) processada.`);
             } catch (error) {
                 console.error('[Webhook Paradise] Erro ao processar pagamento:', error);
             }
@@ -8584,33 +8263,28 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
                     continue;
                 }
 
-                // Se já está paga, verificar se eventos foram enviados
+                // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
                 if (transaction.status === 'paid') {
-                    // Se não tem meta_event_id, eventos podem não ter sido enviados - tentar enviar
-                    if (!transaction.meta_event_id) {
-                        console.log(`[Check Conversions] Transação ${transaction.id} está paga mas sem meta_event_id. Tentando buscar dados do provider e enviar eventos...`);
-                        
-                        // Tentar buscar dados do cliente do provider
-                        let customerData = {};
-                        try {
-                            if (transaction.provider === 'syncpay') {
-                                const syncPayToken = await getSyncPayAuthToken(seller);
-                                const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                                    headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                                });
-                                customerData = response.data.payer || {};
-                            } else if (transaction.provider === 'pushinpay') {
-                                const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                                customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                            }
-                            
-                            // Tentar enviar eventos mesmo que a transação já esteja paga
-                            if (Object.keys(customerData).length > 0) {
-                                await handleSuccessfulPayment(transaction.id, customerData);
-                            }
-                        } catch (error) {
-                            console.error(`[Check Conversions] Erro ao tentar enviar eventos para transação já paga:`, error.message);
+                    // Tentar buscar dados do cliente do provider se possível
+                    let customerData = {};
+                    try {
+                        if (transaction.provider === 'syncpay') {
+                            const syncPayToken = await getSyncPayAuthToken(seller);
+                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
+                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                            });
+                            customerData = response.data.payer || {};
+                        } else if (transaction.provider === 'pushinpay') {
+                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
+                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
                         }
+                        
+                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                        if (Object.keys(customerData).length > 0) {
+                            await handleSuccessfulPayment(transaction.id, customerData);
+                        }
+                    } catch (error) {
+                        console.error(`[Check Conversions] Erro ao tentar enviar eventos para transação já paga:`, error.message);
                     }
                     
                     await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
