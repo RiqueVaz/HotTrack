@@ -5719,7 +5719,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         }
                     }
                     
-                    if (providerStatus && paidStatuses.has(providerStatus)) {
+                    // Normalizar providerStatus para lowercase antes de comparar
+                    const normalizedProviderStatus = providerStatus ? String(providerStatus).toLowerCase() : null;
+                    if (normalizedProviderStatus && paidStatuses.has(normalizedProviderStatus)) {
                         await handleSuccessfulPayment(transaction.id, customerData); // Atualiza o DB
                         return 'paid'; // Sinaliza para 'processFlow' seguir pelo handle 'a'
                     } else {
