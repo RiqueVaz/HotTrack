@@ -5948,7 +5948,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 }
                 
                 // Encontra o primeiro nó válido (não trigger) após o trigger inicial
-                let currentNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
+                let nextNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
                 let attempts = 0;
                 const maxAttempts = 20; // Proteção contra loops infinitos
                 
@@ -5958,28 +5958,28 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                           WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 // Pula nós do tipo 'trigger' até encontrar um nó válido
-                while (currentNodeId && attempts < maxAttempts) {
-                    const currentNode = targetNodes.find(n => n.id === currentNodeId);
+                while (nextNodeId && attempts < maxAttempts) {
+                    const currentNode = targetNodes.find(n => n.id === nextNodeId);
                     if (!currentNode) {
-                        logger.error(`${logPrefix} Nó ${currentNodeId} não encontrado no fluxo de destino.`);
+                        logger.error(`${logPrefix} Nó ${nextNodeId} não encontrado no fluxo de destino.`);
                         break;
                     }
                     
                     if (currentNode.type !== 'trigger') {
                         // Encontrou um nó válido (não é trigger)
-                        logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${currentNodeId} (tipo: ${currentNode.type})`);
+                        logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${nextNodeId} (tipo: ${currentNode.type})`);
                         // Passa os dados do fluxo de destino para o processFlow recursivo
-                        await processFlow(chatId, botId, botToken, sellerId, currentNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
+                        await processFlow(chatId, botId, botToken, sellerId, nextNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
                         break;
                     }
                     
                     // Se for trigger, continua procurando o próximo nó
-                    logger.debug(`${logPrefix} Pulando nó trigger ${currentNodeId}, procurando próximo nó...`);
-                    currentNodeId = findNextNode(currentNodeId, 'a', targetEdges);
+                    logger.debug(`${logPrefix} Pulando nó trigger ${nextNodeId}, procurando próximo nó...`);
+                    nextNodeId = findNextNode(nextNodeId, 'a', targetEdges);
                     attempts++;
                 }
                 
-                if (!currentNodeId || attempts >= maxAttempts) {
+                if (!nextNodeId || attempts >= maxAttempts) {
                     if (attempts >= maxAttempts) {
                         logger.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo ${targetFlowIdNum}.`);
                     } else {
