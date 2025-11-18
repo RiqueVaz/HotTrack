@@ -6104,17 +6104,12 @@ function generatePreviewHTML(data) {
                                     </label>
                                 </div>
                                 {flow.shareable_link_id && <p style={{color: 'var(--brand-secondary)', fontSize: '0.8rem', fontWeight: '600', marginBottom: '1rem'}}>✓ Compartilhado</p>}
-                                {(() => {
-                                    const cannotShare = flow.share_allow_reshare === false;
-                                    return cannotShare && <p style={{color: '#e74c3c', fontSize: '0.75rem', marginBottom: '1rem'}}>⚠️ Compartilhamento não habilitado para este fluxo</p>;
-                                })()}
                                 <div className="bot-card-actions">
                                     <button className="btn btn-primary btn-sm" onClick={() => onEditFlow(flow)}>Editor</button>
                                     <button 
                                         className="btn btn-secondary btn-sm" 
                                         onClick={() => handleOpenShareModal(flow)}
-                                        disabled={flow.share_allow_reshare === false}
-                                        title={flow.share_allow_reshare === false ? 'Este fluxo não pode ser compartilhado' : 'Compartilhar fluxo'}
+                                        title="Compartilhar fluxo"
                                     >
                                         Compartilhar
                                     </button>
