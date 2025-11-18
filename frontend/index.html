@@ -6384,6 +6384,7 @@ function generatePreviewHTML(data) {
     const [isScheduled, setIsScheduled] = useState(false);
     const [scheduledDateTime, setScheduledDateTime] = useState('');
     const [selectedTagIds, setSelectedTagIds] = useState([]);
+    const [tagFilterMode, setTagFilterMode] = useState('include'); // 'include' ou 'exclude'
     const [availableTags, setAvailableTags] = useState([]);
     const [isLoadingTags, setIsLoadingTags] = useState(false);
     
@@ -6436,6 +6437,7 @@ function generatePreviewHTML(data) {
         setInactiveCount(0);
         setInactiveChatIds([]);
         setSelectedTagIds([]);
+        setTagFilterMode('include');
         setAvailableTags([]);
     }, [selectedBotIds]);
     
@@ -6503,9 +6505,10 @@ function generatePreviewHTML(data) {
                     excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
                 };
                 
-                // Adicionar tagIds apenas se higienização foi feita e tags foram selecionadas
+                // Adicionar tagIds e tagFilterMode apenas se higienização foi feita e tags foram selecionadas
                 if (isHygienized && selectedTagIds.length > 0) {
                     requestBody.tagIds = selectedTagIds;
+                    requestBody.tagFilterMode = tagFilterMode;
                 }
                 
                 const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
@@ -6517,7 +6520,7 @@ function generatePreviewHTML(data) {
             }
         };
         fetchCount();
-    }, [selectedBotIds, inactiveChatIds, selectedTagIds, isHygienized]);
+    }, [selectedBotIds, inactiveChatIds, selectedTagIds, tagFilterMode, isHygienized]);
 
     // Fetch disparo flows
     const fetchDisparoFlows = useCallback(async () => {
@@ -6899,9 +6902,10 @@ function generatePreviewHTML(data) {
             excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
         };
         
-        // Adicionar tagIds se tags foram selecionadas
+        // Adicionar tagIds e tagFilterMode se tags foram selecionadas
         if (selectedTagIds.length > 0) {
             requestBody.tagIds = selectedTagIds;
+            requestBody.tagFilterMode = tagFilterMode;
         }
         
         // Adicionar scheduledAt se agendamento estiver ativado
@@ -6923,6 +6927,7 @@ function generatePreviewHTML(data) {
         setIsScheduled(false);
         setScheduledDateTime('');
         setSelectedTagIds([]);
+        setTagFilterMode('include');
     } catch (error) {
         App.showToast(error.response?.data?.message || 'Erro ao agendar disparo.', 'error');
         console.error("Erro submit disparo:", error);
@@ -7116,8 +7121,38 @@ function generatePreviewHTML(data) {
                                 <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
                                     🏷️ Filtrar por Tags (Opcional)
                                 </label>
+                                
+                                {/* Seletor de Modo TEM/NÃO TEM */}
+                                <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <label style={{ fontSize: '0.9rem', fontWeight: '500', color: 'var(--text-primary)' }}>
+                                        Modo de filtro:
+                                    </label>
+                                    <select
+                                        value={tagFilterMode}
+                                        onChange={(e) => setTagFilterMode(e.target.value)}
+                                        style={{
+                                            padding: '0.5rem 0.75rem',
+                                            borderRadius: '6px',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--bg-primary)',
+                                            color: 'var(--text-primary)',
+                                            fontSize: '0.9rem',
+                                            cursor: 'pointer',
+                                            minWidth: '150px'
+                                        }}
+                                    >
+                                        <option value="include">TEM (Incluir)</option>
+                                        <option value="exclude">NÃO TEM (Excluir)</option>
+                                    </select>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                        {tagFilterMode === 'include' 
+                                            ? 'Incluir apenas contatos que têm as tags selecionadas'
+                                            : 'Excluir contatos que têm as tags selecionadas'}
+                                    </span>
+                                </div>
+                                
                                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                                    Selecione as tags para filtrar os contatos. Apenas contatos com TODAS as tags selecionadas serão incluídos.
+                                    Selecione as tags para filtrar os contatos.
                                 </p>
                                 {isLoadingTags ? (
                                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Carregando tags...</p>

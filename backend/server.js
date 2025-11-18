@@ -6701,7 +6701,7 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, excludeChatIds } = req.body;
+      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, tagFilterMode, excludeChatIds } = req.body;
     
       if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
         return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
@@ -6851,19 +6851,35 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             `;
             
             // Adicionar filtros para tags custom
+            const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
             if (validCustomTagIds.length > 0) {
-                tagQuery += `,
-                custom_tagged AS (
-                    SELECT DISTINCT lcta.chat_id
-                    FROM lead_custom_tag_assignments lcta
-                    WHERE lcta.bot_id = ANY($1::int[])
-                        AND lcta.seller_id = $2
-                        AND lcta.tag_id = ANY($${paramOffset}::int[])
-                    GROUP BY lcta.chat_id
-                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                )`;
-                tagParams.push(validCustomTagIds, validCustomTagIds.length);
-                paramOffset += 2;
+                if (filterMode === 'exclude') {
+                    // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
+                    tagQuery += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    )`;
+                    tagParams.push(validCustomTagIds);
+                    paramOffset += 1;
+                } else {
+                    // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
+                    tagQuery += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                        GROUP BY lcta.chat_id
+                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                    )`;
+                    tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                    paramOffset += 2;
+                }
             }
             
             // Adicionar filtros para tags automáticas (Pagante)
@@ -6887,12 +6903,30 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 FROM base_contacts bc
             `;
             
-            // Adicionar JOINs apenas se necessário
-            if (validCustomTagIds.length > 0) {
-                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-            }
-            if (validAutomaticTags.includes('Pagante')) {
-                tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            // Adicionar JOINs baseado no modo de filtro
+            if (filterMode === 'exclude') {
+                // Modo EXCLUIR: usar LEFT JOIN + WHERE NOT EXISTS
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
+                tagQuery += ` WHERE 1=1`;
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += ` AND ct.chat_id IS NULL`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += ` AND pc.chat_id IS NULL`;
+                }
+            } else {
+                // Modo INCLUIR: usar INNER JOIN (comportamento padrão)
+                if (validCustomTagIds.length > 0) {
+                    tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
             }
             
             tagQuery += ` ORDER BY bc.chat_id`;
@@ -7719,7 +7753,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
 
 // Endpoint 2: Contagem de contatos
 app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
-    const { botIds, excludeChatIds, tagIds } = req.body;
+    const { botIds, excludeChatIds, tagIds, tagFilterMode } = req.body;
     const sellerId = req.user.id;
 
     if (!botIds || !Array.isArray(botIds) || botIds.length === 0) {
@@ -7785,19 +7819,35 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
             query += `)`;
             
             // Adicionar filtros para tags custom
+            const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
             if (validCustomTagIds.length > 0) {
-                query += `,
-                custom_tagged AS (
-                    SELECT DISTINCT lcta.chat_id
-                    FROM lead_custom_tag_assignments lcta
-                    WHERE lcta.bot_id = ANY($1::int[])
-                        AND lcta.seller_id = $2
-                        AND lcta.tag_id = ANY($${paramOffset}::int[])
-                    GROUP BY lcta.chat_id
-                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                )`;
-                params.push(validCustomTagIds, validCustomTagIds.length);
-                paramOffset += 2;
+                if (filterMode === 'exclude') {
+                    // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
+                    query += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    )`;
+                    params.push(validCustomTagIds);
+                    paramOffset += 1;
+                } else {
+                    // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
+                    query += `,
+                    custom_tagged AS (
+                        SELECT DISTINCT lcta.chat_id
+                        FROM lead_custom_tag_assignments lcta
+                        WHERE lcta.bot_id = ANY($1::int[])
+                            AND lcta.seller_id = $2
+                            AND lcta.tag_id = ANY($${paramOffset}::int[])
+                        GROUP BY lcta.chat_id
+                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                    )`;
+                    params.push(validCustomTagIds, validCustomTagIds.length);
+                    paramOffset += 2;
+                }
             }
             
             // Adicionar filtros para tags automáticas (Pagante)
@@ -7821,12 +7871,30 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
                 FROM base_contacts bc
             `;
             
-            // Adicionar JOINs apenas se necessário
-            if (validCustomTagIds.length > 0) {
-                query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-            }
-            if (validAutomaticTags.includes('Pagante')) {
-                query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            // Adicionar JOINs baseado no modo de filtro
+            if (filterMode === 'exclude') {
+                // Modo EXCLUIR: usar LEFT JOIN + WHERE NOT EXISTS
+                if (validCustomTagIds.length > 0) {
+                    query += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    query += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
+                query += ` WHERE 1=1`;
+                if (validCustomTagIds.length > 0) {
+                    query += ` AND ct.chat_id IS NULL`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    query += ` AND pc.chat_id IS NULL`;
+                }
+            } else {
+                // Modo INCLUIR: usar INNER JOIN (comportamento padrão)
+                if (validCustomTagIds.length > 0) {
+                    query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                }
+                if (validAutomaticTags.includes('Pagante')) {
+                    query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
             }
         } else {
             // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
