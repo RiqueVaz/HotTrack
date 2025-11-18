@@ -6142,10 +6142,52 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             currentFlowId = flowId; // Usa o flowId fornecido para rastreamento
             logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (ID: ${flowId}, ${nodes.length} nós, ${edges.length} arestas).`);
         } else {
-            // Tenta buscar o flowId do banco usando bot_id e nodes fornecidos
-            // Como não temos uma forma direta de identificar o fluxo pelos nodes, deixa null
-            // O contador não funcionará neste caso, mas o fluxo continuará funcionando
-            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido sem flowId (${nodes.length} nós, ${edges.length} arestas). Contador de execução não será atualizado.`);
+            // Tenta buscar o flowId do banco comparando os nodes fornecidos
+            try {
+                const flowDataToCompare = JSON.stringify({ nodes: flowNodes, edges: flowEdges });
+                const [matchingFlow] = await sqlTx`
+                    SELECT id FROM flows 
+                    WHERE bot_id = ${botId} 
+                    AND (
+                        nodes::text = ${flowDataToCompare}::text
+                        OR nodes::jsonb = ${flowDataToCompare}::jsonb
+                    )
+                    ORDER BY updated_at DESC LIMIT 1
+                `;
+                
+                if (matchingFlow && matchingFlow.id) {
+                    currentFlowId = matchingFlow.id;
+                    logger.debug(`${logPrefix} [Flow Engine] FlowId encontrado pelo match de nodes (ID: ${currentFlowId}, ${nodes.length} nós, ${edges.length} arestas).`);
+                } else {
+                    // Se não encontrou match exato, tenta buscar por comparação de estrutura
+                    const allFlows = await sqlTx`SELECT id, nodes FROM flows WHERE bot_id = ${botId}`;
+                    for (const flow of allFlows) {
+                        const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                        const flowNodesArray = flowData.nodes || [];
+                        const flowEdgesArray = flowData.edges || [];
+                        
+                        // Compara quantidade de nós e arestas como heurística
+                        if (flowNodesArray.length === flowNodes.length && flowEdgesArray.length === flowEdges.length) {
+                            // Compara IDs dos primeiros nós como verificação adicional
+                            if (flowNodesArray.length > 0 && flowNodes.length > 0) {
+                                const firstNodeId = flowNodesArray[0].id;
+                                const providedFirstNodeId = flowNodes[0].id;
+                                if (firstNodeId === providedFirstNodeId) {
+                                    currentFlowId = flow.id;
+                                    logger.debug(`${logPrefix} [Flow Engine] FlowId encontrado por comparação heurística (ID: ${currentFlowId}).`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!currentFlowId) {
+                        logger.warn(`${logPrefix} [Flow Engine] Não foi possível encontrar flowId correspondente. Contador de execução não será atualizado.`);
+                    }
+                }
+            } catch (error) {
+                logger.warn(`${logPrefix} [Flow Engine] Erro ao buscar flowId: ${error.message}. Continuando sem flowId.`);
+            }
         }
     } else {
         // Busca o fluxo ativo do banco
@@ -8309,8 +8351,8 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
             initialVars.click_id = chatContext.click_id;
         }
 
-        // Inicia o fluxo para o usuário
-        await processFlow(chatId, botId, bot.bot_token, sellerId, firstNodeId, initialVars);
+        // Inicia o fluxo para o usuário, passando os dados do fluxo selecionado manualmente
+        await processFlow(chatId, botId, bot.bot_token, sellerId, firstNodeId, initialVars, flowData.nodes, flowData.edges, flowId);
 
         res.status(200).json({ message: 'Fluxo iniciado para o usuário com sucesso!' });
     } catch (error) {
