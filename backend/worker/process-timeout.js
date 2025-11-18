@@ -563,8 +563,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 if (delaySeconds > 60) {
                     console.log(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via QStash...`);
                     
+                    // Usar variáveis locais para poder modificar os valores
+                    let resolvedCurrentNodeId = currentNodeId;
+                    let resolvedFlowId = flowId;
+                    let resolvedFlowNodes = flowNodes;
+                    let resolvedFlowEdges = flowEdges;
+                    
                     // Verificar se já temos currentNodeId e flowId (necessários para agendar)
-                    if (!currentNodeId) {
+                    if (!resolvedCurrentNodeId) {
                         // Se não temos currentNodeId, buscar do estado atual
                         const [currentState] = await sqlWithRetry(sqlTx`
                             SELECT current_node_id, flow_id 
@@ -572,27 +578,27 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `);
                         if (currentState) {
-                            currentNodeId = currentState.current_node_id;
-                            flowId = currentState.flow_id;
+                            resolvedCurrentNodeId = currentState.current_node_id;
+                            resolvedFlowId = currentState.flow_id;
                         }
                     }
                     
-                    if (!currentNodeId) {
+                    if (!resolvedCurrentNodeId) {
                         console.error(`${logPrefix} [Delay] Não foi possível determinar currentNodeId. Processando delay normalmente.`);
                         await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                         break;
                     }
                     
                     // Buscar flowNodes e flowEdges se necessário
-                    if (!flowNodes || !flowEdges) {
-                        if (flowId) {
+                    if (!resolvedFlowNodes || !resolvedFlowEdges) {
+                        if (resolvedFlowId) {
                             const [flow] = await sqlWithRetry(sqlTx`
-                                SELECT nodes FROM flows WHERE id = ${flowId}
+                                SELECT nodes FROM flows WHERE id = ${resolvedFlowId}
                             `);
                             if (flow && flow.nodes) {
                                 const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                                flowNodes = flowData.nodes || [];
-                                flowEdges = flowData.edges || [];
+                                resolvedFlowNodes = flowData.nodes || [];
+                                resolvedFlowEdges = flowData.edges || [];
                             }
                         }
                     }
@@ -601,8 +607,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     await sqlWithRetry(sqlTx`
                         UPDATE user_flow_states 
                         SET variables = ${JSON.stringify(variables)},
-                            current_node_id = ${currentNodeId},
-                            flow_id = ${flowId}
+                            current_node_id = ${resolvedCurrentNodeId},
+                            flow_id = ${resolvedFlowId}
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}
                     `);
                     
@@ -614,7 +620,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             body: {
                                 chat_id: chatId,
                                 bot_id: botId,
-                                target_node_id: currentNodeId, // Continuar do mesmo nó
+                                target_node_id: resolvedCurrentNodeId, // Continuar do mesmo nó
                                 variables: variables,
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
