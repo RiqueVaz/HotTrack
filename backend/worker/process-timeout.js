@@ -387,7 +387,26 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Verifica se tem botão para anexar
                     if (actionData.buttonText && actionData.buttonUrl) {
                         const btnText = await replaceVariables(actionData.buttonText, variables);
-                        const btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Converter HTTP para HTTPS (Telegram não aceita HTTP)
+                        if (btnUrl.startsWith('http://')) {
+                            btnUrl = btnUrl.replace('http://', 'https://');
+                        }
+                        
+                        // Substituir localhost pela URL de produção (se estiver em produção)
+                        const FRONTEND_URL = process.env.FRONTEND_URL || 'https://hottrackerbot.netlify.app';
+                        if (btnUrl.includes('localhost')) {
+                            try {
+                                const urlObj = new URL(btnUrl);
+                                if (urlObj.hostname === 'localhost' || urlObj.hostname.includes('localhost')) {
+                                    const frontendUrlObj = new URL(FRONTEND_URL);
+                                    btnUrl = btnUrl.replace(urlObj.origin, frontendUrlObj.origin);
+                                }
+                            } catch (urlError) {
+                                console.warn(`${logPrefix} [Flow Message] Erro ao substituir localhost na URL: ${urlError.message}`);
+                            }
+                        }
                         
                         // Envia com botão inline
                         const payload = { 

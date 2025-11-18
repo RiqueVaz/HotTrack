@@ -5416,6 +5416,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         }
                         
+                        // Converter HTTP para HTTPS (Telegram não aceita HTTP)
+                        if (btnUrl.startsWith('http://')) {
+                            btnUrl = btnUrl.replace('http://', 'https://');
+                        }
+                        
+                        // Substituir localhost pela URL de produção (se estiver em produção)
+                        if (btnUrl.includes('localhost')) {
+                            try {
+                                const urlObj = new URL(btnUrl);
+                                if (urlObj.hostname === 'localhost' || urlObj.hostname.includes('localhost')) {
+                                    const frontendUrlObj = new URL(FRONTEND_URL);
+                                    btnUrl = btnUrl.replace(urlObj.origin, frontendUrlObj.origin);
+                                }
+                            } catch (urlError) {
+                                logger.warn(`${logPrefix} [Flow Message] Erro ao substituir localhost na URL: ${urlError.message}`);
+                            }
+                        }
+                        
                         // Envia com botão inline
                         const payload = { 
                             chat_id: chatId, 
