@@ -221,6 +221,14 @@ const PORT = process.env.PORT || 3001;
 app.post(
   '/api/worker/process-timeout',
   express.raw({ type: 'application/json' }), // 1. Ainda é OBRIGATÓRIO para pegar o corpo original
+  (req, res, next) => {
+    // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
+    // Isso permite processamento mais longo antes de agendar delays ou timeouts
+    // O timeout global de 60s não é suficiente para fluxos complexos
+    req.setTimeout(120000); // 120 segundos
+    res.setTimeout(120000);
+    next();
+  },
   async (req, res) => {
     try {
       // 2. Extraia as informações necessárias manualmente
