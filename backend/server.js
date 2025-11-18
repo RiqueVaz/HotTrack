@@ -262,7 +262,6 @@ app.post(
 app.post(
      '/api/worker/process-disparo',
      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-     workerDisparoRateLimitMiddleware, // Rate limiting para evitar sobrecarga simultânea
      async (req, res) => {
       try {
        // 1. Verificar a assinatura do QStash
@@ -587,7 +586,7 @@ app.post(
                     });
                     
                     let messageCounter = 0;
-                    const delayBetweenMessages = 1.5; // 1.5 segundos de atraso entre cada contato (aumentado para margem de segurança)
+                    const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
                     const qstashPromises = [];
                     const CONTACTS_CHUNK_SIZE = 500;
                     const contactChunks = [];
@@ -629,8 +628,8 @@ app.post(
                                     retries: 2,
                                     // Rate limiting distribuído via QStash
                                     headers: {
-                                        'Upstash-Concurrency': '3', // Reduzido de 5 para 3 para evitar sobrecarga
-                                        'Upstash-RateLimit-Max': '20', // 20 requisições por janela
+                                        'Upstash-Concurrency': '2', // Reduzido para 2 para evitar sobrecarga
+                                        'Upstash-RateLimit-Max': '15', // 15 requisições por janela (mais conservador)
                                         'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
                                         'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                     }
@@ -7135,7 +7134,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 });
                 
                 let messageCounter = 0;
-                const delayBetweenMessages = 1.5; // 1.5 segundos de atraso entre cada contato (aumentado para margem de segurança)
+                const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
                 const qstashPromises = [];
                 
                 // Processar contatos em chunks para evitar sobrecarga de memória
@@ -7199,8 +7198,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 retries: 2,
                                 // Rate limiting distribuído via QStash
                                 headers: {
-                                    'Upstash-Concurrency': '3', // Reduzido de 5 para 3 para evitar sobrecarga
-                                    'Upstash-RateLimit-Max': '20', // 20 requisições por janela
+                                    'Upstash-Concurrency': '2', // Reduzido para 2 para evitar sobrecarga
+                                    'Upstash-RateLimit-Max': '15', // 15 requisições por janela (mais conservador)
                                     'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
                                     'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                 }
