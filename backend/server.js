@@ -577,8 +577,17 @@ app.post(
             // Processar disparo em background (mesma lógica do processamento imediato)
             (async () => {
                 try {
+                    // Buscar bot_tokens antes do loop para usar como chave de rate limiting
+                    const botTokens = await sqlWithRetry(
+                        sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${history.seller_id}`
+                    );
+                    const botTokenMap = new Map();
+                    botTokens.forEach(bot => {
+                        botTokenMap.set(bot.id, bot.bot_token);
+                    });
+                    
                     let messageCounter = 0;
-                    const delayBetweenMessages = 1;
+                    const delayBetweenMessages = 1.5; // 1.5 segundos de atraso entre cada contato (aumentado para margem de segurança)
                     const qstashPromises = [];
                     const CONTACTS_CHUNK_SIZE = 500;
                     const contactChunks = [];
@@ -609,14 +618,21 @@ app.post(
                             
                             const totalDelaySeconds = messageCounter * delayBetweenMessages;
                             
+                            // Obter bot_token para usar como chave de rate limiting
+                            const botToken = botTokenMap.get(contact.bot_id_source) || '';
+                            
                             qstashPromises.push(
                                 qstashClient.publishJSON({
                                     url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
                                     body: payload,
                                     delay: `${totalDelaySeconds}s`, 
                                     retries: 2,
+                                    // Rate limiting distribuído via QStash
                                     headers: {
-                                        'Upstash-Concurrency': '5'
+                                        'Upstash-Concurrency': '3', // Reduzido de 5 para 3 para evitar sobrecarga
+                                        'Upstash-RateLimit-Max': '20', // 20 requisições por janela
+                                        'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
+                                        'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                     }
                                 })
                             );
@@ -7109,8 +7125,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         // 6. Processar publicação ao QStash em background (não bloqueia resposta HTTP)
         (async () => {
             try {
+                // Buscar bot_tokens antes do loop para usar como chave de rate limiting
+                const botTokens = await sqlWithRetry(
+                    sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${validBotIds}) AND seller_id = ${sellerId}`
+                );
+                const botTokenMap = new Map();
+                botTokens.forEach(bot => {
+                    botTokenMap.set(bot.id, bot.bot_token);
+                });
+                
                 let messageCounter = 0;
-                const delayBetweenMessages = 1; // 1 segundo de atraso entre cada contato
+                const delayBetweenMessages = 1.5; // 1.5 segundos de atraso entre cada contato (aumentado para margem de segurança)
                 const qstashPromises = [];
                 
                 // Processar contatos em chunks para evitar sobrecarga de memória
@@ -7162,6 +7187,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         };
             
                         const totalDelaySeconds = messageCounter * delayBetweenMessages;
+                        
+                        // Obter bot_token para usar como chave de rate limiting
+                        const botToken = botTokenMap.get(contact.bot_id_source) || '';
             
                         qstashPromises.push(
                             qstashClient.publishJSON({
@@ -7169,9 +7197,12 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 body: payload,
                                 delay: `${totalDelaySeconds}s`, 
                                 retries: 2,
-                                // Limitar concorrência no QStash para evitar sobrecarga
+                                // Rate limiting distribuído via QStash
                                 headers: {
-                                    'Upstash-Concurrency': '5' // Máximo 5 requisições simultâneas
+                                    'Upstash-Concurrency': '3', // Reduzido de 5 para 3 para evitar sobrecarga
+                                    'Upstash-RateLimit-Max': '20', // 20 requisições por janela
+                                    'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
+                                    'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                 }
                             })
                         );
