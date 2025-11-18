@@ -487,13 +487,67 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
             const actionData = action.data || {};
             
             if (action.type === 'message') {
-                const text = await replaceVariables(actionData.text || '', variables);
-                if (text && text.trim()) {
-                    const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
-                    if (actionData.buttonText && actionData.buttonUrl) {
-                        payload.reply_markup = { inline_keyboard: [[{ text: actionData.buttonText, url: actionData.buttonUrl }]] };
+                try {
+                    let textToSend = await replaceVariables(actionData.text, variables);
+                    
+                    // Validação do tamanho do texto (limite do Telegram: 4096 caracteres)
+                    if (textToSend.length > 4096) {
+                        logger.warn(`${logPrefix} [Flow Message] Texto excede limite de 4096 caracteres. Truncando...`);
+                        textToSend = textToSend.substring(0, 4093) + '...';
                     }
-                    await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    
+                    // Verifica se tem botão para anexar
+                    if (actionData.buttonUrl) {
+                        // Trata buttonText vazio, null, undefined ou string vazia
+                        let rawBtnText = actionData.buttonText;
+                        if (!rawBtnText || (typeof rawBtnText === 'string' && rawBtnText.trim() === '')) {
+                            rawBtnText = 'Clique aqui';
+                            logger.warn(`${logPrefix} [Flow Message] Botão sem texto informado. Aplicando texto padrão '${rawBtnText}'.`);
+                        }
+                        
+                        let btnText = await replaceVariables(rawBtnText, variables);
+                        // Garante que após replaceVariables ainda tenha texto válido
+                        btnText = btnText && btnText.trim() !== '' ? btnText : 'Clique aqui';
+
+                        let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
+                        
+                        // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && (btnUrl.includes('/oferta/') || btnUrl.includes('/obrigado/'))) {
+                            try {
+                                // Adiciona protocolo se não existir
+                                const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
+                                const urlObj = new URL(urlWithProtocol);
+                                // Remove prefixo '/start ' se existir
+                                const cleanClickId = variables.click_id.replace('/start ', '');
+                                urlObj.searchParams.set('click_id', cleanClickId);
+                                btnUrl = urlObj.toString();
+                                
+                                // Log apropriado baseado no tipo de URL
+                                const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
+                                logger.debug(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                            } catch (urlError) {
+                                logger.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                            }
+                        }
+                        
+                        // Envia com botão inline
+                        const payload = { 
+                            chat_id: chatId, 
+                            text: textToSend, 
+                            parse_mode: 'HTML',
+                            reply_markup: { 
+                                inline_keyboard: [[{ text: btnText, url: btnUrl }]] 
+                            }
+                        };
+                        
+                        await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    } else {
+                        // Envia mensagem normal sem botão
+                        const payload = { chat_id: chatId, text: textToSend, parse_mode: 'HTML' };
+                        await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    }
+                } catch (error) {
+                    logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
                 }
             } else if (action.type === 'typing_action') {
                 const duration = actionData.durationInSeconds || 1;

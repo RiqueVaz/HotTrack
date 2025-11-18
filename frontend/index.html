@@ -6423,6 +6423,11 @@ function generatePreviewHTML(data) {
     const [itemsPerPage, setItemsPerPage] = useState(20);
     const [disparoPollingInterval, setDisparoPollingInterval] = useState(null);
     
+    // Dashboard data states for button URL dropdown
+    const [pressels, setPressels] = useState([]);
+    const [thankYouPages, setThankYouPages] = useState([]);
+    const [hostedCheckouts, setHostedCheckouts] = useState([]);
+    
     const API_BASE_URL = App.state.API_BASE_URL;
     const buildPreviewSrc = (value) => {
         if (!value) return null;
@@ -6558,6 +6563,22 @@ function generatePreviewHTML(data) {
             fetchDisparoFlowsList();
         }
     }, [activeTab, fetchDisparoFlowsList]);
+
+    // Fetch dashboard data for button URL dropdown
+    const fetchDashboardData = useCallback(async () => {
+        try {
+            const res = await api.get('/api/dashboard/data');
+            setPressels(res.data.pressels || []);
+            setThankYouPages(res.data.thankYouPages || []);
+            setHostedCheckouts(res.data.hostedCheckouts || []);
+        } catch (error) {
+            console.error('Erro ao buscar dados do dashboard:', error);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchDashboardData();
+    }, [fetchDashboardData]);
 
     // Fetch history for historico tab
     const fetchHistory = useCallback((page = 1, showToast = false) => {
@@ -7607,9 +7628,9 @@ function generatePreviewHTML(data) {
                         // Manter na aba atual ou voltar para fluxos-disparo
                     }
                 }}
-                pressels={[]}
-                thankYouPages={[]}
-                hostedCheckouts={[]}
+                pressels={pressels}
+                thankYouPages={thankYouPages}
+                hostedCheckouts={hostedCheckouts}
                 onDirtyChange={() => {}}
                 registerSaveHandler={() => {}}
                 discardChangesToken={null}
