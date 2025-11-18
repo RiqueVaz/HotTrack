@@ -468,10 +468,11 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
  * =================================================================
  * (Colada da sua resposta anterior)
  */
-async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]') {
+async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', currentNodeId = null, flowId = null, flowNodes = null, flowEdges = null) {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
     
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
         const actionData = action.data || {};
 
         switch (action.type) {
@@ -557,7 +558,92 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
-                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                
+                // Se o delay for maior que 60 segundos, agendar via QStash
+                if (delaySeconds > 60) {
+                    console.log(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via QStash...`);
+                    
+                    // Verificar se já temos currentNodeId e flowId (necessários para agendar)
+                    if (!currentNodeId) {
+                        // Se não temos currentNodeId, buscar do estado atual
+                        const [currentState] = await sqlWithRetry(sqlTx`
+                            SELECT current_node_id, flow_id 
+                            FROM user_flow_states 
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `);
+                        if (currentState) {
+                            currentNodeId = currentState.current_node_id;
+                            flowId = currentState.flow_id;
+                        }
+                    }
+                    
+                    if (!currentNodeId) {
+                        console.error(`${logPrefix} [Delay] Não foi possível determinar currentNodeId. Processando delay normalmente.`);
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                        break;
+                    }
+                    
+                    // Buscar flowNodes e flowEdges se necessário
+                    if (!flowNodes || !flowEdges) {
+                        if (flowId) {
+                            const [flow] = await sqlWithRetry(sqlTx`
+                                SELECT nodes FROM flows WHERE id = ${flowId}
+                            `);
+                            if (flow && flow.nodes) {
+                                const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                                flowNodes = flowData.nodes || [];
+                                flowEdges = flowData.edges || [];
+                            }
+                        }
+                    }
+                    
+                    // Salvar estado atual antes de agendar
+                    await sqlWithRetry(sqlTx`
+                        UPDATE user_flow_states 
+                        SET variables = ${JSON.stringify(variables)},
+                            current_node_id = ${currentNodeId},
+                            flow_id = ${flowId}
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                    `);
+                    
+                    // Agendar continuação após o delay
+                    try {
+                        const remainingActions = actions.slice(i + 1); // Ações restantes após o delay
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: {
+                                chat_id: chatId,
+                                bot_id: botId,
+                                target_node_id: currentNodeId, // Continuar do mesmo nó
+                                variables: variables,
+                                continue_from_delay: true, // Flag para indicar que é continuação após delay
+                                remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
+                            },
+                            delay: `${delaySeconds}s`,
+                            contentBasedDeduplication: true,
+                            method: "POST"
+                        });
+                        
+                        // Salvar scheduled_message_id no estado
+                        await sqlWithRetry(sqlTx`
+                            UPDATE user_flow_states 
+                            SET scheduled_message_id = ${response.messageId}
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `);
+                        
+                        console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                        
+                        // Retornar código especial para processFlow saber que parou
+                        return 'delay_scheduled';
+                    } catch (error) {
+                        console.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                        // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                    }
+                } else {
+                    // Delay curto: processar normalmente
+                    await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                }
                 break;
             
             case 'typing_action':
@@ -1271,7 +1357,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         if (currentNode.type === 'trigger') {
             if (currentNode.data.actions && currentNode.data.actions.length > 0) {
-                 await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+                 const actionResult = await processActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`, currentNodeId, currentFlowId, nodes, edges);
+                 
+                 // Se delay foi agendado, parar processamento
+                 if (actionResult === 'delay_scheduled') {
+                     console.log(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                     currentNodeId = null;
+                     break;
+                 }
+                 
                  await sqlWithRetry(sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             }
             currentNodeId = findNextNode(currentNode.id, 'a', edges);
@@ -1280,7 +1374,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         if (currentNode.type === 'action') {
             const actions = currentNode.data.actions || [];
-            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`);
+            const actionResult = await processActions(actions, chatId, botId, botToken, sellerId, variables, `[FlowNode ${currentNode.id}]`, currentNodeId, currentFlowId, nodes, edges);
 
             await sqlWithRetry(sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
 
@@ -1288,6 +1382,13 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual (worker).`);
                 currentNodeId = null; // Para o loop atual
                 break; // Sai do 'while'
+            }
+            
+            // Se delay foi agendado, parar processamento
+            if (actionResult === 'delay_scheduled') {
+                console.log(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                currentNodeId = null;
+                break;
             }
 
             if (currentNode.data.waitForReply) {
@@ -1374,10 +1475,10 @@ async function handler(req, res) {
 
     try {
         // 1. Recebe os dados agendados pelo QStash
-        const { chat_id, bot_id, target_node_id, variables } = req.body;
+        const { chat_id, bot_id, target_node_id, variables, continue_from_delay } = req.body;
         const logPrefix = '[WORKER]';
 
-        console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}`);
+        console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}. Continue from delay: ${continue_from_delay || false}`);
 
         // 2. Busca o bot para obter o token e sellerId
         const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
@@ -1400,25 +1501,34 @@ async function handler(req, res) {
             return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
         }
         
-        if (!currentState.waiting_for_input) {
-            console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
-            return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
-        }
+        // Se é continuação após delay, não verificar waiting_for_input
+        if (!continue_from_delay) {
+            if (!currentState.waiting_for_input) {
+                console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
+                return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
+            }
 
-        // 4. O usuário NÃO respondeu a tempo.
-        console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
-        
-        // Limpa o estado de 'espera' ANTES de processar o próximo nó
-        await sqlWithRetry(sqlTx`
-            UPDATE user_flow_states 
-            SET waiting_for_input = false, scheduled_message_id = NULL 
-            WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
+            // 4. O usuário NÃO respondeu a tempo.
+            console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
+            
+            // Limpa o estado de 'espera' ANTES de processar o próximo nó
+            await sqlWithRetry(sqlTx`
+                UPDATE user_flow_states 
+                SET waiting_for_input = false, scheduled_message_id = NULL 
+                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
+        } else {
+            console.log(`${logPrefix} [Timeout] Continuando após delay agendado para ${chat_id}.`);
+        }
 
         // 5. Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
         // o 'processFlow' saberá que deve encerrar o fluxo.
         if (target_node_id) {
             try {
+                // Verificar se é continuação após delay agendado
+                const continueFromDelay = req.body.continue_from_delay === true;
+                const remainingActionsJson = req.body.remaining_actions;
+                
                 // Busca o fluxo correto usando flow_id do estado, se disponível
                 let flowNodes = null;
                 let flowEdges = null;
@@ -1436,17 +1546,103 @@ async function handler(req, res) {
                     }
                 }
                 
-                await processFlow(
-                    chat_id, 
-                    bot_id, 
-                    botToken, 
-                    sellerId, 
-                    target_node_id, // Este é o nó da saída 'b' (Sem Resposta)
-                    variables,
-                    flowNodes,
-                    flowEdges,
-                    flowIdForProcess
-                );
+                // Se é continuação após delay e há ações restantes, processar apenas as ações restantes
+                if (continueFromDelay && remainingActionsJson) {
+                    try {
+                        const remainingActions = JSON.parse(remainingActionsJson);
+                        console.log(`${logPrefix} [Timeout] Continuando após delay. Processando ${remainingActions.length} ação(ões) restante(s).`);
+                        
+                        // Buscar o nó atual para obter contexto
+                        const currentNode = flowNodes.find(n => n.id === target_node_id);
+                        if (currentNode && currentNode.type === 'action') {
+                            // Processar apenas as ações restantes
+                            const actionResult = await processActions(
+                                remainingActions, 
+                                chat_id, 
+                                bot_id, 
+                                botToken, 
+                                sellerId, 
+                                variables, 
+                                `[FlowNode ${target_node_id}]`,
+                                target_node_id,
+                                flowIdForProcess,
+                                flowNodes,
+                                flowEdges
+                            );
+                            
+                            // Atualizar variáveis
+                            await sqlWithRetry(sqlTx`
+                                UPDATE user_flow_states 
+                                SET variables = ${JSON.stringify(variables)},
+                                    scheduled_message_id = NULL
+                                WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
+                            `);
+                            
+                            // Se não houve outro delay agendado, continuar o fluxo normalmente
+                            if (actionResult !== 'delay_scheduled') {
+                                // Encontrar o próximo nó pelo handle 'a' e continuar de lá
+                                const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
+                                if (nextNodeId) {
+                                    // Continuar processando o fluxo a partir do próximo nó
+                                    await processFlow(
+                                        chat_id, 
+                                        bot_id, 
+                                        botToken, 
+                                        sellerId, 
+                                        nextNodeId,
+                                        variables,
+                                        flowNodes,
+                                        flowEdges,
+                                        flowIdForProcess
+                                    );
+                                } else {
+                                    // Não há próximo nó, fluxo terminou
+                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
+                                }
+                            }
+                        } else {
+                            // Se não é um nó de ação, continuar normalmente
+                            await processFlow(
+                                chat_id, 
+                                bot_id, 
+                                botToken, 
+                                sellerId, 
+                                target_node_id,
+                                variables,
+                                flowNodes,
+                                flowEdges,
+                                flowIdForProcess
+                            );
+                        }
+                    } catch (parseError) {
+                        console.error(`${logPrefix} [Timeout] Erro ao processar ações restantes após delay:`, parseError.message);
+                        // Fallback: continuar normalmente
+                        await processFlow(
+                            chat_id, 
+                            bot_id, 
+                            botToken, 
+                            sellerId, 
+                            target_node_id,
+                            variables,
+                            flowNodes,
+                            flowEdges,
+                            flowIdForProcess
+                        );
+                    }
+                } else {
+                    // Processamento normal (timeout ou continuação sem ações restantes)
+                    await processFlow(
+                        chat_id, 
+                        bot_id, 
+                        botToken, 
+                        sellerId, 
+                        target_node_id, // Este é o nó da saída 'b' (Sem Resposta) ou continuação
+                        variables,
+                        flowNodes,
+                        flowEdges,
+                        flowIdForProcess
+                    );
+                }
                 // Verificar se resposta já foi enviada antes de enviar
                 if (!res.headersSent) {
                     return res.status(200).json({ message: 'Timeout processed successfully.' });
