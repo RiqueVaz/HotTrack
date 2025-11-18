@@ -28,6 +28,7 @@ const syncPayTokenCache = new Map();
 // Cache para respeitar rate limit da PushinPay (1/min por transação)
 const pushinpayLastCheckAt = new Map();
 const wiinpayLastCheckAt = new Map();
+const paradiseLastCheckAt = new Map();
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
@@ -59,9 +60,109 @@ const {
     wiinpaySplitUserId: WIINPAY_SPLIT_USER_ID,
     hottrackApiUrl: process.env.HOTTRACK_API_URL,
 });
+
 // ==========================================================
 //    FUNÇÕES AUXILIARES COMPLETAS PARA AUTONOMIA DO WORKER
 // ==========================================================
+
+function getSellerWiinpayApiKey(seller) {
+    if (!seller) return null;
+    return seller.wiinpay_api_key || seller.wiinpay_token || seller.wiinpay_key || null;
+}
+
+function extractWiinpayCustomer(payment) {
+    const payer = payment?.payer || payment?.customer || payment?.buyer || {};
+    return {
+        name: payer?.name || payer?.full_name || payer?.nome || '',
+        document: payer?.document || payer?.cpf || payer?.cnpj || payer?.tax_id || '',
+        email: payer?.email || payer?.email_address || '',
+        phone: payer?.phone || payer?.phone_number || payer?.telefone || ''
+    };
+}
+
+function parseWiinpayPayment(rawData) {
+    if (!rawData) {
+        return { id: null, status: null, customer: {} };
+    }
+    const payment =
+        rawData.payment ||
+        rawData.data ||
+        rawData.payload ||
+        rawData.transaction ||
+        rawData;
+
+    const id =
+        payment?.id ||
+        payment?.payment_id ||
+        payment?.paymentId ||
+        payment?.transaction_id ||
+        payment?.transactionId ||
+        rawData.payment_id ||
+        rawData.paymentId ||
+        rawData.id;
+
+    const status = String(
+        payment?.status ||
+        rawData.status ||
+        rawData.payment_status ||
+        payment?.payment_status ||
+        ''
+    ).toLowerCase();
+
+    return {
+        id: id || null,
+        status,
+        customer: extractWiinpayCustomer(payment || rawData || {})
+    };
+}
+
+async function getWiinpayPaymentStatus(paymentId, apiKey) {
+    if (!apiKey) {
+        throw new Error('Credenciais da WiinPay não configuradas.');
+    }
+    const response = await axios.get(`https://api-v2.wiinpay.com.br/payment/list/${paymentId}`, {
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+
+    const data = Array.isArray(response.data) ? response.data[0] : response.data;
+    return parseWiinpayPayment(data);
+}
+
+async function getParadisePaymentStatus(transactionId, secretKey) {
+    if (!secretKey) {
+        throw new Error('Credenciais da Paradise não configuradas.');
+    }
+    
+    try {
+        const response = await axios.get(`https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`, {
+            headers: {
+                'X-API-Key': secretKey,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const data = response.data;
+        const status = String(data?.status || '').toLowerCase();
+        const customerData = data?.customer_data?.customer || {};
+
+        return {
+            status,
+            customer: {
+                name: customerData?.name || '',
+                document: customerData?.document || '',
+                email: customerData?.email || '',
+                phone: customerData?.phone || '',
+            },
+        };
+    } catch (error) {
+        const errorMessage = error.response?.data?.message || error.response?.data?.error || error.message;
+        console.error(`[Paradise Status] Erro ao consultar transação ${transactionId}:`, errorMessage);
+        throw new Error(`Erro ao consultar status na Paradise: ${errorMessage || 'Erro desconhecido'}`);
+    }
+}
 
 async function replaceVariables(text, variables) {
     if (!text) return '';
@@ -823,9 +924,35 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
                         providerStatus = String(resp.data.status || '').toLowerCase();
                         customerData = resp.data.payer || {};
+                    } else if (transaction.provider === 'wiinpay') {
+                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
+                        if (wiinpayApiKey) {
+                            const now = Date.now();
+                            const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        }
+                    } else if (transaction.provider === 'paradise') {
+                        const paradiseSecretKey = seller.paradise_secret_key;
+                        if (paradiseSecretKey) {
+                            const now = Date.now();
+                            const last = paradiseLastCheckAt.get(transaction.provider_transaction_id) || 0;
+                            if (now - last >= 60_000) {
+                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
+                                providerStatus = result.status || null;
+                                customerData = result.customer || {};
+                                paradiseLastCheckAt.set(transaction.provider_transaction_id, now);
+                            }
+                        }
                     }
                     
-                    if (providerStatus && paidStatuses.has(providerStatus)) {
+                    // Normalizar providerStatus para lowercase antes de comparar
+                    const normalizedProviderStatus = providerStatus ? String(providerStatus).toLowerCase() : null;
+                    if (normalizedProviderStatus && paidStatuses.has(normalizedProviderStatus)) {
                         await handleSuccessfulPayment(transaction.id, customerData);
                         return 'paid'; // Sinaliza para 'processFlow'
                     } else {
