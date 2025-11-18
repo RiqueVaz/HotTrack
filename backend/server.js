@@ -360,12 +360,21 @@ app.post(
             // Buscar contatos dos bots
             const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
             
-            // Extrair tagIds do flow_steps se existir
+            // Re-executar higienização antes de buscar contatos
+            console.log(`[WORKER-SCHEDULED-DISPARO] Re-executando higienização para ${botIds.length} bot(s)...`);
+            const excludeChatIds = await validateContactsForBots(botIds, history.seller_id);
+            console.log(`[WORKER-SCHEDULED-DISPARO] ${excludeChatIds.length} contatos inativos encontrados.`);
+            
+            // Extrair tagIds e tagFilterMode do flow_steps se existir
             let tagIds = null;
+            let tagFilterMode = 'include'; // Default
             if (history.flow_steps && typeof history.flow_steps === 'object') {
                 const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
                 if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
                     tagIds = flowSteps.tagIds;
+                }
+                if (flowSteps.tagFilterMode) {
+                    tagFilterMode = flowSteps.tagFilterMode;
                 }
             }
             
@@ -414,26 +423,54 @@ app.post(
                         WHERE tc.bot_id = ANY($1::int[]) 
                             AND tc.seller_id = $2
                             AND tc.chat_id > 0
-                        ORDER BY tc.chat_id, tc.created_at DESC
-                    )
                 `;
                 let tagParams = [botIds, history.seller_id];
                 let paramOffset = 3;
                 
+                // Adicionar filtro de contatos inativos se houver
+                if (excludeChatIds && excludeChatIds.length > 0) {
+                    tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+                    tagParams.push(excludeChatIds);
+                    paramOffset++;
+                }
+                
+                tagQuery += `
+                        ORDER BY tc.chat_id, tc.created_at DESC
+                    )
+                `;
+                
+                // Aplicar lógica de tagFilterMode (include/exclude)
+                const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
+                
                 // Adicionar filtros para tags custom
                 if (validCustomTagIds.length > 0) {
-                    tagQuery += `,
-                    custom_tagged AS (
-                        SELECT DISTINCT lcta.chat_id
-                        FROM lead_custom_tag_assignments lcta
-                        WHERE lcta.bot_id = ANY($1::int[])
-                            AND lcta.seller_id = $2
-                            AND lcta.tag_id = ANY($${paramOffset}::int[])
-                        GROUP BY lcta.chat_id
-                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                    )`;
-                    tagParams.push(validCustomTagIds, validCustomTagIds.length);
-                    paramOffset += 2;
+                    if (filterMode === 'exclude') {
+                        // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
+                        tagQuery += `,
+                        custom_tagged AS (
+                            SELECT DISTINCT lcta.chat_id
+                            FROM lead_custom_tag_assignments lcta
+                            WHERE lcta.bot_id = ANY($1::int[])
+                                AND lcta.seller_id = $2
+                                AND lcta.tag_id = ANY($${paramOffset}::int[])
+                        )`;
+                        tagParams.push(validCustomTagIds);
+                        paramOffset += 1;
+                    } else {
+                        // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
+                        tagQuery += `,
+                        custom_tagged AS (
+                            SELECT DISTINCT lcta.chat_id
+                            FROM lead_custom_tag_assignments lcta
+                            WHERE lcta.bot_id = ANY($1::int[])
+                                AND lcta.seller_id = $2
+                                AND lcta.tag_id = ANY($${paramOffset}::int[])
+                            GROUP BY lcta.chat_id
+                            HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                        )`;
+                        tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                        paramOffset += 2;
+                    }
                 }
                 
                 // Adicionar filtros para tags automáticas (Pagante)
@@ -457,12 +494,21 @@ app.post(
                     FROM base_contacts bc
                 `;
                 
-                // Adicionar JOINs apenas se necessário
+                // Adicionar JOINs condicionais
                 if (validCustomTagIds.length > 0) {
-                    tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                    if (filterMode === 'exclude') {
+                        tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                    } else {
+                        tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                    }
                 }
                 if (validAutomaticTags.includes('Pagante')) {
                     tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                }
+                
+                // Adicionar WHERE para exclusão se necessário
+                if (filterMode === 'exclude' && validCustomTagIds.length > 0) {
+                    tagQuery += ` WHERE ct.chat_id IS NULL`;
                 }
                 
                 tagQuery += ` ORDER BY bc.chat_id`;
@@ -470,14 +516,24 @@ app.post(
                 contacts = await sqlWithRetry(tagQuery, tagParams);
             } else {
                 // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
-                contacts = await sqlWithRetry(
-                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                          FROM telegram_chats 
-                          WHERE bot_id = ANY(${botIds}) 
+                let contactsQuery;
+                if (excludeChatIds && excludeChatIds.length > 0) {
+                    contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                        FROM telegram_chats 
+                        WHERE bot_id = ANY(${botIds}) 
                             AND seller_id = ${history.seller_id}
                             AND chat_id > 0
-                          ORDER BY chat_id, created_at DESC`
-                );
+                            AND chat_id != ALL(${excludeChatIds}::bigint[])
+                        ORDER BY chat_id, created_at DESC`;
+                } else {
+                    contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                        FROM telegram_chats 
+                        WHERE bot_id = ANY(${botIds}) 
+                            AND seller_id = ${history.seller_id}
+                            AND chat_id > 0
+                        ORDER BY chat_id, created_at DESC`;
+                }
+                contacts = await sqlWithRetry(contactsQuery);
             }
             
             const allContacts = new Map();
@@ -6984,9 +7040,12 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
     
         // 5. Criar o registro mestre da campanha com os totais corretos
         const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
-        // Salvar tagIds no flow_steps como metadata (incluindo custom e automáticas)
+        // Salvar tagIds e tagFilterMode no flow_steps como metadata (incluindo custom e automáticas)
         const allTagIds = [...(validCustomTagIds || []), ...(validAutomaticTags || [])];
-        const flowStepsMetadata = allTagIds.length > 0 ? { tagIds: allTagIds } : null;
+        const flowStepsMetadata = {
+            tagIds: allTagIds.length > 0 ? allTagIds : null,
+            tagFilterMode: tagFilterMode || 'include'
+        };
         const [history] = await sqlWithRetry(
           sqlTx`INSERT INTO disparo_history (
                     seller_id, campaign_name, bot_ids, disparo_flow_id, 
@@ -6996,7 +7055,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                    VALUES (
                     ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
                     ${statusToSet}, ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0, ${scheduledTimestamp ? scheduledDate : null}, ${flowStepsMetadata ? JSON.stringify(flowStepsMetadata) : null}
+                    ${total_jobs_to_queue}, 0, ${scheduledTimestamp ? scheduledDate : null}, ${JSON.stringify(flowStepsMetadata)}
                    ) 
                    RETURNING id`
         );
@@ -7914,6 +7973,58 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao contar contatos.' });
     }
 });
+
+// Função auxiliar para validação de contatos (reutilizável)
+async function validateContactsForBots(botIds, sellerId) {
+    // Buscar bot tokens
+    const botChecks = await sqlTx`
+        SELECT id, bot_token FROM telegram_bots 
+        WHERE id = ANY(${botIds}) AND seller_id = ${sellerId}
+    `;
+    
+    if (botChecks.length === 0) {
+        return [];
+    }
+    
+    const botTokenMap = new Map();
+    botChecks.forEach(b => botTokenMap.set(b.id, b.bot_token));
+    
+    // Buscar contatos individuais (chat_id > 0)
+    const allContacts = await sqlTx`
+        SELECT DISTINCT ON (chat_id) chat_id, bot_id
+        FROM telegram_chats 
+        WHERE bot_id = ANY(${botIds}) AND seller_id = ${sellerId} AND chat_id > 0
+        ORDER BY chat_id, created_at DESC
+    `;
+    
+    const inactiveChatIds = [];
+    const BATCH_SIZE = 30;
+    
+    // Validar em batches
+    for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
+        const batch = allContacts.slice(i, i + BATCH_SIZE);
+        const promises = batch.map(contact => {
+            const botToken = botTokenMap.get(contact.bot_id);
+            if (!botToken) {
+                inactiveChatIds.push(contact.chat_id);
+                return Promise.resolve();
+            }
+            
+            return sendTelegramRequest(botToken, 'sendChatAction', { 
+                chat_id: contact.chat_id, 
+                action: 'typing' 
+            }).catch(error => {
+                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
+                    inactiveChatIds.push(contact.chat_id);
+                }
+            });
+        });
+        
+        await Promise.all(promises);
+    }
+    
+    return inactiveChatIds;
+}
 
 // Endpoint 3: Validação de contatos (assíncrono) - Suporta múltiplos bots
 app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
