@@ -27,16 +27,16 @@ async function handleSuccessfulPayment({
                 paid_at = COALESCE(paid_at, NOW()),
                 meta_event_id = COALESCE(meta_event_id, ${`Purchase.${transaction_id}.processing`})
             WHERE id = ${transaction_id} 
-                AND (status != 'paid' OR meta_event_id IS NULL)
+                AND status != 'paid'
             RETURNING *
         `;
         
         if (!updateResult) {
-            // Transação já foi processada completamente (paid + meta_event_id definido)
+            // Transação já foi processada (status = 'paid')
             // Isso pode acontecer se:
             // - Webhook foi chamado múltiplas vezes
             // - Outro processo já processou a transação
-            logger.info(`[handleSuccessfulPayment] Transação ${transaction_id} já processada completamente. Ignorando.`);
+            logger.info(`[handleSuccessfulPayment] Transação ${transaction_id} já está como 'paid'. Ignorando.`);
             return;
         }
         
@@ -110,8 +110,7 @@ async function handleSuccessfulPayment({
                 eventName: 'Purchase',
                 clickData: click,
                 transactionData: transaction,
-                customerData: finalCustomerData,
-                sqlTx: sqlTx
+                customerData: finalCustomerData
             });
             logger.info(`[handleSuccessfulPayment] ✓ Chamada sendMetaEvent concluída`);
         } catch (error) {

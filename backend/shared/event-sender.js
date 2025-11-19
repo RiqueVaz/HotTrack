@@ -142,24 +142,14 @@ async function sendMetaEvent({
     logger.info(`[Meta Pixel] Transaction ID: ${transactionData?.id}, Click ID: ${clickData?.id}`);
     
     try {
-        // Para Purchase, verificar se meta_event_id foi definido em handleSuccessfulPayment
+        // Para Purchase, verificar status da transação (sem abortar se já foi enviado)
         if (eventName === 'Purchase' && transactionData.id) {
             logger.info(`[Meta Pixel] [Purchase] Verificando transação ${transactionData.id}...`);
             const [check] = await sqlTx`SELECT meta_event_id, status FROM pix_transactions WHERE id = ${transactionData.id}`;
             logger.info(`[Meta Pixel] [Purchase] Status da transação: ${check?.status}, meta_event_id atual: ${check?.meta_event_id}`);
             
-            if (!check?.meta_event_id) {
-                logger.error(`[Meta Pixel] [Purchase] ERRO: meta_event_id não foi definido para transação ${transactionData.id}. Abortando.`);
-                return;
-            }
-            // Se meta_event_id já é um event_id completo (formato: Purchase.{id}.{pixel_id}), já foi enviado
-            const eventIdPattern = new RegExp(`^Purchase\\.${transactionData.id}\\.[0-9]+$`);
-            if (eventIdPattern.test(check.meta_event_id)) {
-                logger.info(`[Meta Pixel] [Purchase] Evento já enviado com sucesso (meta_event_id: ${check.meta_event_id}). Ignorando.`);
-                return;
-            }
-            
-            logger.info(`[Meta Pixel] [Purchase] meta_event_id atual: "${check.meta_event_id}" - prosseguindo com envio...`);
+            // Não abortar se meta_event_id já existe - permitir reenvio se necessário
+            // O código antigo não verificava isso e sempre tentava enviar
         }
         
         logger.info(`[Meta Pixel] Buscando pixels configurados...`);
@@ -168,7 +158,13 @@ async function sendMetaEvent({
         let presselPixels = [];
         if (clickData.pressel_id) {
             logger.info(`[Meta Pixel] Buscando pixels do pressel ${clickData.pressel_id}...`);
-            presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+            presselPixels = await sqlTx`
+                SELECT pc.id as pixel_config_id, pc.pixel_id, pc.meta_api_token
+                FROM pixel_configurations pc
+                JOIN pressel_pixels pp ON pc.id = pp.pixel_config_id
+                WHERE pp.pressel_id = ${clickData.pressel_id} 
+                    AND pc.seller_id = ${clickData.seller_id}
+            `;
             logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no pressel.`);
         } else if (clickData.checkout_id) {
             // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
@@ -187,14 +183,29 @@ async function sendMetaEvent({
                 logger.info(`[Meta Pixel] Pixel ID do hosted_checkout: ${hostedCheckout?.pixel_id}`);
                 
                 if (hostedCheckout?.pixel_id) {
-                    // Converter pixel_id para o formato esperado
-                    presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
-                    logger.info(`[Meta Pixel] Convertido para pixel_config_id: ${presselPixels[0].pixel_config_id}`);
+                    // Buscar configuração completa com JOIN direto (como código antigo)
+                    const pixelId = parseInt(hostedCheckout.pixel_id);
+                    const [pixelConfig] = await sqlTx`
+                        SELECT id as pixel_config_id, pixel_id, meta_api_token 
+                        FROM pixel_configurations 
+                        WHERE pixel_id = ${pixelId} 
+                            AND seller_id = ${clickData.seller_id}
+                    `;
+                    if (pixelConfig) {
+                        presselPixels = [pixelConfig];
+                        logger.info(`[Meta Pixel] Pixel encontrado para hosted_checkout - pixel_id: ${pixelConfig.pixel_id}`);
+                    }
                 }
             } else {
                 logger.info(`[Meta Pixel] É um checkout antigo (integer)`);
-                // É um checkout antigo (integer), usar a tabela checkout_pixels
-                presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+                // É um checkout antigo (integer), usar JOIN direto como código antigo
+                presselPixels = await sqlTx`
+                    SELECT pc.id as pixel_config_id, pc.pixel_id, pc.meta_api_token
+                    FROM pixel_configurations pc
+                    JOIN checkout_pixels cp ON pc.id = cp.pixel_config_id
+                    WHERE cp.checkout_id = ${checkoutId}
+                        AND pc.seller_id = ${clickData.seller_id}
+                `;
                 logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no checkout antigo.`);
             }
         } else {
@@ -242,33 +253,31 @@ async function sendMetaEvent({
         Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
         logger.debug(`[Meta Pixel] userData preparado:`, JSON.stringify(userData, null, 2));
         
-        let lastEventId = null;
+        // Validar dados mínimos antes de enviar
+        const hasMinimalData = userData.client_ip_address || userData.client_user_agent || userData.external_id;
+        if (!hasMinimalData && eventName === 'Purchase') {
+            logger.warn(`[Meta Pixel] [Purchase] ⚠ Dados mínimos ausentes (IP/UserAgent/ExternalID). Meta pode rejeitar.`);
+            // Continuar mesmo assim, mas logar aviso
+        }
+        
         let pixelsProcessed = 0;
         let pixelsSuccess = 0;
         let pixelsFailed = 0;
         
         logger.info(`[Meta Pixel] Processando ${presselPixels.length} pixel(s)...`);
-        for (const { pixel_config_id } of presselPixels) {
+        for (const pixelConfig of presselPixels) {
             pixelsProcessed++;
+            const { pixel_id, meta_api_token, pixel_config_id } = pixelConfig;
             logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Processando pixel_config_id: ${pixel_config_id}`);
             
             try {
-                const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
-                
-                if (!pixelConfig) {
-                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ ERRO: Configuração de pixel não encontrada (pixel_config_id: ${pixel_config_id})`);
-                    pixelsFailed++;
-                    continue;
-                }
-                
-                const { pixel_id, meta_api_token } = pixelConfig;
-                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Pixel encontrado - pixel_id: ${pixel_id}, token presente: ${!!meta_api_token}`);
-                
                 if (!pixel_id || !meta_api_token) {
                     logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ ERRO: Pixel ID ou token ausente. pixel_id: ${pixel_id}, token: ${!!meta_api_token}`);
                     pixelsFailed++;
                     continue;
                 }
+                
+                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Pixel encontrado - pixel_id: ${pixel_id}, token presente: ${!!meta_api_token}`);
                 
                 const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
                 logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Event ID gerado: ${event_id}`);
@@ -299,9 +308,10 @@ async function sendMetaEvent({
                     logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✓ SUCESSO! Resposta da Meta:`, JSON.stringify(response.data, null, 2));
                     pixelsSuccess++;
                     
-                    // Guardar o último event_id para atualizar no final (se Purchase)
+                    // Store the Meta event ID in the transaction record for reference (como código antigo)
                     if (eventName === 'Purchase') {
-                        lastEventId = event_id;
+                        await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                        logger.info(`[Meta Pixel] [Purchase] meta_event_id atualizado: ${event_id}`);
                     }
                 } catch (apiError) {
                     pixelsFailed++;
@@ -318,23 +328,6 @@ async function sendMetaEvent({
         }
         
         logger.info(`[Meta Pixel] Resumo: ${pixelsSuccess} sucesso, ${pixelsFailed} falhas de ${presselPixels.length} pixel(s) processados.`);
-        
-        // Para Purchase, atualizar meta_event_id apenas uma vez no final com o último event_id
-        if (eventName === 'Purchase' && transactionData.id) {
-            if (lastEventId) {
-                logger.info(`[Meta Pixel] [Purchase] Atualizando meta_event_id para: ${lastEventId}`);
-                await sqlTx`UPDATE pix_transactions SET meta_event_id = ${lastEventId} WHERE id = ${transactionData.id}`;
-                logger.info(`[Meta Pixel] [Purchase] ✓ meta_event_id atualizado com sucesso!`);
-                
-                if (pixelsFailed > 0) {
-                    logger.warn(`[Meta Pixel] [Purchase] ⚠ ATENÇÃO: ${pixelsFailed} pixel(s) falharam, mas pelo menos 1 foi enviado com sucesso.`);
-                }
-            } else {
-                logger.error(`[Meta Pixel] [Purchase] ✗ PROBLEMA CRÍTICO: Nenhum pixel foi enviado com sucesso!`);
-                logger.error(`[Meta Pixel] [Purchase] meta_event_id NÃO será atualizado. Permanece como: Purchase.${transactionData.id}.processing`);
-                logger.error(`[Meta Pixel] [Purchase] Isso significa que o evento Purchase NÃO foi enviado para a Meta!`);
-            }
-        }
         
         logger.info(`[Meta Pixel] ===== FIM ENVIO EVENTO ${eventName} =====`);
     } catch (error) {
