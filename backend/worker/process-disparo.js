@@ -356,14 +356,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     }
 }
 
-// Wrappers para funções de eventos que passam as dependências necessárias
-async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
-    return await sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx });
-}
-
-async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
-    return await sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx });
-}
+// As funções compartilhadas são chamadas diretamente com objetos
 
 // Função simplificada para processar ações em disparos
 async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
@@ -566,7 +559,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         if (transaction && click) {
                             // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
                             if (click.pressel_id || click.checkout_id) {
-                                await sendMetaEvent({
+                                await sendMetaEventShared({
                                     eventName: 'InitiateCheckout',
                                     clickData: click,
                                     transactionData: { id: transaction.id, pix_value: valueInCents / 100 },
@@ -579,7 +572,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             // Enviar waiting_payment para Utmify
                             const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                             const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
-                            await sendEventToUtmify({
+                            await sendEventToUtmifyShared({
                                 status: 'waiting_payment',
                                 clickData: click,
                                 pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
