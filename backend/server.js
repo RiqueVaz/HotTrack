@@ -2154,9 +2154,9 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
         sqlTx,
         adminSubscription,
         webpush,
-        sendEventToUtmify: (status, clickData, pixData, sellerData, customerData, productData) => 
+        sendEventToUtmify: ({ status, clickData, pixData, sellerData, customerData, productData }) => 
             sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
-        sendMetaEvent: (eventName, clickData, transactionData, customerData) => 
+        sendMetaEvent: ({ eventName, clickData, transactionData, customerData }) => 
             sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
     });
 }
