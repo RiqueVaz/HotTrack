@@ -387,9 +387,9 @@ async function handleSuccessfulPayment(transaction_id, customerData) {
         sqlTx,
         adminSubscription: null, // Worker não tem notificações push
         webpush: null, // Worker não tem notificações push
-        sendEventToUtmify: (status, clickData, pixData, sellerData, customerData, productData) => 
+        sendEventToUtmify: ({ status, clickData, pixData, sellerData, customerData, productData }) => 
             sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
-        sendMetaEvent: (eventName, clickData, transactionData, customerData) => 
+        sendMetaEvent: ({ eventName, clickData, transactionData, customerData }) => 
             sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
     });
 }
