@@ -260,7 +260,6 @@ async function sendMetaEvent({
             // Continuar mesmo assim, mas logar aviso
         }
         
-        let lastEventId = null;
         let pixelsProcessed = 0;
         let pixelsSuccess = 0;
         let pixelsFailed = 0;
@@ -309,13 +308,10 @@ async function sendMetaEvent({
                     logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✓ SUCESSO! Resposta da Meta:`, JSON.stringify(response.data, null, 2));
                     pixelsSuccess++;
                     
-                    // Atualizar meta_event_id imediatamente após primeiro sucesso (como versão antiga)
-                    if (eventName === 'Purchase' && pixelsSuccess === 1) {
+                    // Store the Meta event ID in the transaction record for reference (como código antigo)
+                    if (eventName === 'Purchase') {
                         await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
-                        logger.info(`[Meta Pixel] [Purchase] meta_event_id atualizado imediatamente: ${event_id}`);
-                        lastEventId = event_id;
-                    } else if (eventName === 'Purchase') {
-                        lastEventId = event_id; // Guardar para atualização final se múltiplos pixels
+                        logger.info(`[Meta Pixel] [Purchase] meta_event_id atualizado: ${event_id}`);
                     }
                 } catch (apiError) {
                     pixelsFailed++;
@@ -332,23 +328,6 @@ async function sendMetaEvent({
         }
         
         logger.info(`[Meta Pixel] Resumo: ${pixelsSuccess} sucesso, ${pixelsFailed} falhas de ${presselPixels.length} pixel(s) processados.`);
-        
-        // Para Purchase, atualizar meta_event_id apenas uma vez no final com o último event_id
-        if (eventName === 'Purchase' && transactionData.id) {
-            if (lastEventId) {
-                logger.info(`[Meta Pixel] [Purchase] Atualizando meta_event_id para: ${lastEventId}`);
-                await sqlTx`UPDATE pix_transactions SET meta_event_id = ${lastEventId} WHERE id = ${transactionData.id}`;
-                logger.info(`[Meta Pixel] [Purchase] ✓ meta_event_id atualizado com sucesso!`);
-                
-                if (pixelsFailed > 0) {
-                    logger.warn(`[Meta Pixel] [Purchase] ⚠ ATENÇÃO: ${pixelsFailed} pixel(s) falharam, mas pelo menos 1 foi enviado com sucesso.`);
-                }
-            } else {
-                logger.error(`[Meta Pixel] [Purchase] ✗ PROBLEMA CRÍTICO: Nenhum pixel foi enviado com sucesso!`);
-                logger.error(`[Meta Pixel] [Purchase] meta_event_id NÃO será atualizado. Permanece como: Purchase.${transactionData.id}.processing`);
-                logger.error(`[Meta Pixel] [Purchase] Isso significa que o evento Purchase NÃO foi enviado para a Meta!`);
-            }
-        }
         
         logger.info(`[Meta Pixel] ===== FIM ENVIO EVENTO ${eventName} =====`);
     } catch (error) {
