@@ -270,6 +270,14 @@ app.post(
 app.post(
      '/api/worker/process-disparo',
      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+     (req, res, next) => {
+       // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
+       // Isso permite processamento mais longo para disparos com múltiplas ações e delays
+       // O timeout global de 60s não é suficiente para fluxos complexos de disparo
+       req.setTimeout(120000); // 120 segundos
+       res.setTimeout(120000);
+       next();
+     },
      async (req, res) => {
       try {
        // 1. Verificar a assinatura do QStash
@@ -310,6 +318,14 @@ app.post(
 app.post(
     '/api/worker/process-scheduled-disparo',
     express.raw({ type: 'application/json' }),
+    (req, res, next) => {
+        // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
+        // Isso permite processamento mais longo para queries complexas com CTEs, validação de contatos e filtros por tags
+        // O timeout global de 60s não é suficiente para processamento de disparos agendados em massa
+        req.setTimeout(120000); // 120 segundos
+        res.setTimeout(120000);
+        next();
+    },
     async (req, res) => {
         try {
             // Verificar assinatura do QStash
