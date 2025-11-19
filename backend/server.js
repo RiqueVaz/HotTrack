@@ -2801,6 +2801,20 @@ app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
 // --- ROTAS DE CHATS ---
 app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
     try {
+        // Validação do botId
+        const botId = parseInt(req.params.botId);
+        if (!botId || isNaN(botId)) {
+            return res.status(400).json({ message: 'Bot ID inválido.' });
+        }
+        
+        // Paginação opcional (mantém compatibilidade - se não pedir, retorna array direto)
+        const usePagination = req.query.page !== undefined || req.query.limit !== undefined;
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 1000, 1000); // Máx 1000 (mantido)
+        const offset = usePagination ? (page - 1) * limit : 0;
+        const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
+        
+        // Query OTIMIZADA - LIMIT dentro do CTE para processar menos dados
         const users = await sqlWithRetry(`
             WITH base_chats AS (
                 SELECT 
@@ -2813,6 +2827,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 FROM telegram_chats t
                 WHERE t.bot_id = $1 AND t.seller_id = $2
                 GROUP BY t.chat_id
+                ORDER BY MAX(t.created_at) DESC NULLS LAST
+                LIMIT $3 OFFSET $4  -- LIMIT dentro do CTE (otimiza memória)
             ),
             latest_messages AS (
                 SELECT DISTINCT ON (chat_id)
@@ -2822,11 +2838,13 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                     created_at
                 FROM telegram_chats
                 WHERE bot_id = $1 AND seller_id = $2
+                    AND chat_id IN (SELECT chat_id FROM base_chats)  -- OTIMIZAÇÃO: apenas chats retornados
                 ORDER BY chat_id, created_at DESC
             ),
             paid_leads AS (
                 SELECT DISTINCT tc.chat_id
                 FROM telegram_chats tc
+                INNER JOIN base_chats bc ON bc.chat_id = tc.chat_id  -- OTIMIZAÇÃO: join apenas com base_chats
                 JOIN clicks c ON c.click_id = tc.click_id
                 JOIN pix_transactions pt ON pt.click_id_internal = c.id
                 WHERE tc.bot_id = $1
@@ -2846,6 +2864,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                         ORDER BY LOWER(lct.title)
                     ) AS tags
                 FROM lead_custom_tag_assignments lcta
+                INNER JOIN base_chats bc ON bc.chat_id = lcta.chat_id  -- OTIMIZAÇÃO: join apenas com base_chats
                 JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
                 WHERE lcta.bot_id = $1
                   AND lcta.seller_id = $2
@@ -2866,10 +2885,33 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
             LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
             LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
             LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
-            ORDER BY bc.last_message_at DESC NULLS LAST
-            LIMIT 1000;
-        `, [req.params.botId, req.user.id]);
-        res.status(200).json(users);
+            ORDER BY bc.last_message_at DESC NULLS LAST;
+        `, [botId, req.user.id, queryLimit, offset]);
+        
+        // Retornar formato compatível com frontend (array se não paginar, objeto se paginar)
+        if (usePagination) {
+            // Buscar total para paginação (query separada e otimizada)
+            const [countResult] = await sqlWithRetry(`
+                SELECT COUNT(DISTINCT chat_id) as total
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+            `, [botId, req.user.id]);
+            
+            const total = parseInt(countResult.total);
+            
+            res.status(200).json({
+                users,
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
+            });
+        } else {
+            // Retornar array direto (compatibilidade com frontend linha 8108)
+            res.status(200).json(users);
+        }
     } catch (error) { 
         console.error('Erro ao buscar usuários do chat:', error);
         res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
