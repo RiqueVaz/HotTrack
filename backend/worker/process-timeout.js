@@ -1584,12 +1584,27 @@ async function handler(req, res) {
                                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
                             `);
                             
-                            // Se não houve outro delay agendado, continuar o fluxo normalmente
-                            if (actionResult !== 'delay_scheduled') {
-                                // Encontrar o próximo nó pelo handle 'a' e continuar de lá
+                            // Tratar todos os possíveis resultados das ações restantes
+                            // Seguindo a mesma lógica do processFlow
+                            
+                            // 1. Verifica se uma ação 'forward_flow' foi executada
+                            if (actionResult === 'flow_forwarded') {
+                                console.log(`${logPrefix} [Timeout] Fluxo encaminhado após delay. Encerrando o fluxo atual.`);
+                                // Fluxo foi encaminhado, não precisa continuar
+                                return;
+                            }
+                            
+                            // 2. Se delay foi agendado novamente, não continuar (já agendado)
+                            if (actionResult === 'delay_scheduled') {
+                                console.log(`${logPrefix} [Timeout] Outro delay agendado após delay. Parando processamento.`);
+                                return;
+                            }
+                            
+                            // 3. Verifica se o resultado foi de um 'action_check_pix'
+                            if (actionResult === 'paid') {
+                                console.log(`${logPrefix} [Timeout] Resultado após delay: PIX Pago. Seguindo handle 'a'.`);
                                 const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
                                 if (nextNodeId) {
-                                    // Continuar processando o fluxo a partir do próximo nó
                                     await processFlow(
                                         chat_id, 
                                         bot_id, 
@@ -1602,9 +1617,50 @@ async function handler(req, res) {
                                         flowIdForProcess
                                     );
                                 } else {
-                                    // Não há próximo nó, fluxo terminou
-                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
+                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay (paid). Fluxo concluído.`);
                                 }
+                                return;
+                            }
+                            
+                            if (actionResult === 'pending') {
+                                console.log(`${logPrefix} [Timeout] Resultado após delay: PIX Pendente. Seguindo handle 'b'.`);
+                                const nextNodeId = findNextNode(target_node_id, 'b', flowEdges);
+                                if (nextNodeId) {
+                                    await processFlow(
+                                        chat_id, 
+                                        bot_id, 
+                                        botToken, 
+                                        sellerId, 
+                                        nextNodeId,
+                                        variables,
+                                        flowNodes,
+                                        flowEdges,
+                                        flowIdForProcess
+                                    );
+                                } else {
+                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay (pending). Fluxo concluído.`);
+                                }
+                                return;
+                            }
+                            
+                            // 4. Se nada acima aconteceu, é um nó de ação simples. Segue pelo handle 'a'.
+                            const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
+                            if (nextNodeId) {
+                                // Continuar processando o fluxo a partir do próximo nó
+                                await processFlow(
+                                    chat_id, 
+                                    bot_id, 
+                                    botToken, 
+                                    sellerId, 
+                                    nextNodeId,
+                                    variables,
+                                    flowNodes,
+                                    flowEdges,
+                                    flowIdForProcess
+                                );
+                            } else {
+                                // Não há próximo nó, fluxo terminou
+                                console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
                             }
                         } else {
                             // Se não é um nó de ação, continuar normalmente
