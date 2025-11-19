@@ -145,6 +145,12 @@ async function sendMetaEvent({
                 console.log(`[Meta Pixel] ERRO: Tentando enviar Purchase mas meta_event_id não foi definido para transação ${transactionData.id}. Abortando.`);
                 return;
             }
+            // Se meta_event_id já é um event_id completo (formato: Purchase.{id}.{pixel_id}), já foi enviado
+            const eventIdPattern = new RegExp(`^Purchase\\.${transactionData.id}\\.[0-9]+$`);
+            if (eventIdPattern.test(check.meta_event_id)) {
+                console.log(`[Meta Pixel] Purchase já enviado para transação ${transactionData.id} (meta_event_id: ${check.meta_event_id}). Ignorando.`);
+                return;
+            }
         }
         
         let presselPixels = [];
