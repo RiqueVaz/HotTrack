@@ -294,15 +294,23 @@ app.post(
         return res.status(401).send("Invalid signature");
        }
     
-       // 2. Se for válida, processar a tarefa
-       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
-       req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
-       await processDisparoWorker(req, res); // Chama o handler do worker
+       // 2. Responder 202 imediatamente para evitar timeout HTTP
+       // O processamento continua em background sem bloquear a resposta
+       console.log("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento assíncrono.");
+       res.status(202).json({ message: 'Disparo aceito para processamento.' });
        
-       // Verificar se o worker enviou resposta, se não, enviar uma padrão
-       if (!res.headersSent) {
-         res.status(200).json({ message: 'Worker de disparo processado com sucesso.' });
-       }
+       // 3. Processar em background (não bloqueia resposta HTTP)
+       const payload = JSON.parse(bodyString);
+       processDisparoWorker(
+         { body: payload, aborted: false }, 
+         { 
+           status: () => ({ json: () => {}, send: () => {} }),
+           headersSent: false,
+           setHeader: () => {}
+         }
+       ).catch(error => {
+         console.error("[WORKER-DISPARO] Erro no processamento em background:", error);
+       });
     
       } catch (error) {
        console.error("Erro crítico no handler do worker de disparo:", error);
@@ -652,8 +660,8 @@ app.post(
                                     retries: 2,
                                     // Rate limiting distribuído via QStash
                                     headers: {
-                                        'Upstash-Concurrency': '2', // Reduzido para 2 para evitar sobrecarga
-                                        'Upstash-RateLimit-Max': '15', // 15 requisições por janela (mais conservador)
+                                        'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
+                                        'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
                                         'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
                                         'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                     }
@@ -7353,8 +7361,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 retries: 2,
                                 // Rate limiting distribuído via QStash
                                 headers: {
-                                    'Upstash-Concurrency': '2', // Reduzido para 2 para evitar sobrecarga
-                                    'Upstash-RateLimit-Max': '15', // 15 requisições por janela (mais conservador)
+                                    'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
+                                    'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
                                     'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
                                     'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
                                 }
