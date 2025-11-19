@@ -709,21 +709,28 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         if (transaction && click) {
                             // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
                             if (click.pressel_id || click.checkout_id) {
-                                await sendMetaEvent('InitiateCheckout', click, { id: transaction.id, pix_value: valueInCents / 100 }, null);
+                                await sendMetaEvent({
+                                    eventName: 'InitiateCheckout',
+                                    clickData: click,
+                                    transactionData: { id: transaction.id, pix_value: valueInCents / 100 },
+                                    customerData: null,
+                                    sqlTx: sqlTx
+                                });
                                 logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para transação ${transaction.id}`);
                             }
                             
                             // Enviar waiting_payment para Utmify
                             const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                             const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
-                            await sendEventToUtmify(
-                                'waiting_payment',
-                                click,
-                                { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() },
-                                seller,
-                                customerDataForUtmify,
-                                productDataForUtmify
-                            );
+                            await sendEventToUtmify({
+                                status: 'waiting_payment',
+                                clickData: click,
+                                pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
+                                sellerData: seller,
+                                customerData: customerDataForUtmify,
+                                productData: productDataForUtmify,
+                                sqlTx: sqlTx
+                            });
                             logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para transação ${transaction.id}`);
                         }
                     }

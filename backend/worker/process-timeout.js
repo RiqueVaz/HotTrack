@@ -963,12 +963,15 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                     const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmify(
-                        'waiting_payment', 
-                        click, 
-                        { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date() }, 
-                        seller, customerDataForUtmify, productDataForUtmify
-                    );
+                    await sendEventToUtmify({
+                        status: 'waiting_payment',
+                        clickData: click,
+                        pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
+                        sellerData: seller,
+                        customerData: customerDataForUtmify,
+                        productData: productDataForUtmify,
+                        sqlTx: sqlTx
+                    });
                     console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
                     console.log(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
