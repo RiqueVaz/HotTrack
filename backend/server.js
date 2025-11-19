@@ -247,15 +247,23 @@ app.post(
         return res.status(401).send("Invalid signature");
       }
 
-      // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
-      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
-      req.body = JSON.parse(bodyString);
-      await processTimeoutWorker(req, res);
+      // 5. Responder 202 imediatamente para evitar timeout HTTP
+      // O processamento continua em background sem bloquear a resposta
+      console.log("[WORKER] Assinatura válida. Aceitando timeout para processamento assíncrono.");
+      res.status(202).json({ message: 'Timeout aceito para processamento.' });
       
-      // Verificar se o worker enviou resposta, se não, enviar uma padrão
-      if (!res.headersSent) {
-        res.status(200).json({ message: 'Worker processed successfully.' });
-      }
+      // 6. Processar em background (não bloqueia resposta HTTP)
+      const payload = JSON.parse(bodyString);
+      processTimeoutWorker(
+        { body: payload, aborted: false }, 
+        { 
+          status: () => ({ json: () => {}, send: () => {} }),
+          headersSent: false,
+          setHeader: () => {}
+        }
+      ).catch(error => {
+        console.error("[WORKER] Erro no processamento de timeout em background:", error);
+      });
 
     } catch (error) {
       console.error("Erro crítico no handler do worker:", error);
