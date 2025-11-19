@@ -294,23 +294,15 @@ app.post(
         return res.status(401).send("Invalid signature");
        }
     
-       // 2. Responder 202 imediatamente para evitar timeout HTTP
-       // O processamento continua em background sem bloquear a resposta
-       console.log("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento assíncrono.");
-       res.status(202).json({ message: 'Disparo aceito para processamento.' });
+       // 2. Se for válida, processar a tarefa
+       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
+       req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
+       await processDisparoWorker(req, res); // Chama o handler do worker
        
-       // 3. Processar em background (não bloqueia resposta HTTP)
-       const payload = JSON.parse(bodyString);
-       processDisparoWorker(
-         { body: payload, aborted: false }, 
-         { 
-           status: () => ({ json: () => {}, send: () => {} }),
-           headersSent: false,
-           setHeader: () => {}
-         }
-       ).catch(error => {
-         console.error("[WORKER-DISPARO] Erro no processamento em background:", error);
-       });
+       // Verificar se o worker enviou resposta, se não, enviar uma padrão
+       if (!res.headersSent) {
+         res.status(200).json({ message: 'Worker de disparo processado com sucesso.' });
+       }
     
       } catch (error) {
        console.error("Erro crítico no handler do worker de disparo:", error);
