@@ -66,7 +66,7 @@ const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botã
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
 const { processDisparoData } = require('./worker/process-disparo');
-const processTimeoutWorker = require('./worker/process-timeout');
+const { processTimeoutData } = require('./worker/process-timeout');
 
 const receiver = new Receiver({
     currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
@@ -220,45 +220,44 @@ const PORT = process.env.PORT || 3001;
 
 app.post(
   '/api/worker/process-timeout',
-  express.raw({ type: 'application/json' }), // 1. Ainda é OBRIGATÓRIO para pegar o corpo original
-  (req, res, next) => {
-    // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
-    // Isso permite processamento mais longo antes de agendar delays ou timeouts
-    // O timeout global de 60s não é suficiente para fluxos complexos
-    req.setTimeout(120000); // 120 segundos
-    res.setTimeout(120000);
-    next();
-  },
+  express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
   async (req, res) => {
     try {
-      // 2. Extraia as informações necessárias manualmente
+      // 1. Verificar a assinatura do QStash
       const signature = req.headers["upstash-signature"];
-      const bodyString = req.body.toString(); // O Receiver espera uma string, não um Buffer
+      const bodyString = req.body.toString();
 
-      // 3. Verifique a assinatura
       const isValid = await receiver.verify({
         signature,
         body: bodyString,
       });
 
-      // 4. Se a assinatura for inválida, rejeite a requisição
+      // 2. Se a assinatura for inválida, rejeitar a requisição
       if (!isValid) {
-        console.error("QStash Signature Verification Failed (Manual Receiver)");
+        console.error("[WORKER-TIMEOUT] Verificação de assinatura do QStash falhou.");
         return res.status(401).send("Invalid signature");
       }
 
-      // 5. Se for válida, prossiga: transforme a string de volta em JSON para o worker
-      console.log("[WORKER] Assinatura válida. Processando a tarefa.");
-      req.body = JSON.parse(bodyString);
-      await processTimeoutWorker(req, res);
-      
-      // Verificar se o worker enviou resposta, se não, enviar uma padrão
-      if (!res.headersSent) {
-        res.status(200).json({ message: 'Worker processed successfully.' });
-      }
+      // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
+      console.log("[WORKER-TIMEOUT] Assinatura válida. Aceitando timeout para processamento em background.");
+      res.status(200).json({ message: 'Worker de timeout aceito para processamento.' });
+
+      // 4. Processar timeout em background (não bloqueia resposta HTTP)
+      const bodyData = JSON.parse(bodyString);
+      (async () => {
+        try {
+          // Chamar função pura de processamento (não depende de req/res)
+          await processTimeoutData(bodyData);
+          console.log("[WORKER-TIMEOUT] Timeout processado com sucesso em background.");
+        } catch (bgError) {
+          console.error("[WORKER-TIMEOUT] Erro ao processar timeout em background:", bgError);
+          console.error("[WORKER-TIMEOUT] Stack trace:", bgError.stack);
+          // Erros críticos já são logados pela função pura, não precisamos fazer mais nada aqui
+        }
+      })();
 
     } catch (error) {
-      console.error("Erro crítico no handler do worker:", error);
+      console.error("Erro crítico no handler do worker de timeout:", error);
       // Verificar se resposta já foi enviada antes de tentar enviar
       if (!res.headersSent) {
         res.status(500).send("Internal Server Error");
@@ -318,17 +317,9 @@ app.post(
 app.post(
     '/api/worker/process-scheduled-disparo',
     express.raw({ type: 'application/json' }),
-    (req, res, next) => {
-        // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
-        // Isso permite processamento mais longo para queries complexas com CTEs, validação de contatos e filtros por tags
-        // O timeout global de 60s não é suficiente para processamento de disparos agendados em massa
-        req.setTimeout(120000); // 120 segundos
-        res.setTimeout(120000);
-        next();
-    },
     async (req, res) => {
         try {
-            // Verificar assinatura do QStash
+            // 1. Verificar assinatura do QStash
             const signature = req.headers["upstash-signature"];
             const bodyString = req.body.toString();
             
@@ -342,264 +333,272 @@ app.post(
                 return res.status(401).send("Invalid signature");
             }
             
+            // 2. Validação básica de history_id
             const { history_id } = JSON.parse(bodyString);
             
             if (!history_id) {
                 return res.status(400).json({ message: 'history_id é obrigatório.' });
             }
             
-            // Buscar o histórico do disparo
-            const [history] = await sqlWithRetry(
-                'SELECT * FROM disparo_history WHERE id = $1',
-                [history_id]
-            );
+            // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
+            console.log("[WORKER-SCHEDULED-DISPARO] Assinatura válida. Aceitando disparo agendado para processamento em background.");
+            res.status(200).json({ message: 'Disparo agendado aceito para processamento.' });
             
-            if (!history) {
-                return res.status(404).json({ message: 'Histórico de disparo não encontrado.' });
-            }
-            
-            // Validar que está com status SCHEDULED
-            if (history.status !== 'SCHEDULED') {
-                console.log(`[WORKER-SCHEDULED-DISPARO] Disparo ${history_id} não está agendado (status: ${history.status}). Ignorando.`);
-                return res.status(200).json({ message: 'Disparo já foi processado ou cancelado.' });
-            }
-            
-            // Buscar o fluxo de disparo
-            const [disparoFlow] = await sqlWithRetry(
-                'SELECT * FROM disparo_flows WHERE id = $1',
-                [history.disparo_flow_id]
-            );
-            
-            if (!disparoFlow) {
-                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
-                return res.status(404).json({ message: 'Fluxo de disparo não encontrado.' });
-            }
-            
-            // Parse do fluxo
-            const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
-            const flowNodes = flowData.nodes || [];
-            const flowEdges = flowData.edges || [];
-            
-            // Buscar contatos dos bots
-            const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
-            
-            // Re-executar higienização antes de buscar contatos
-            console.log(`[WORKER-SCHEDULED-DISPARO] Re-executando higienização para ${botIds.length} bot(s)...`);
-            const excludeChatIds = await validateContactsForBots(botIds, history.seller_id);
-            console.log(`[WORKER-SCHEDULED-DISPARO] ${excludeChatIds.length} contatos inativos encontrados.`);
-            
-            // Extrair tagIds e tagFilterMode do flow_steps se existir
-            let tagIds = null;
-            let tagFilterMode = 'include'; // Default
-            if (history.flow_steps && typeof history.flow_steps === 'object') {
-                const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
-                if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
-                    tagIds = flowSteps.tagIds;
-                }
-                if (flowSteps.tagFilterMode) {
-                    tagFilterMode = flowSteps.tagFilterMode;
-                }
-            }
-            
-            // Separar tags custom de automáticas
-            let customTagIds = [];
-            let automaticTagNames = [];
-            if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
-                tagIds.forEach(tagId => {
-                    if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
-                        customTagIds.push(parseInt(tagId));
-                    } else if (typeof tagId === 'string') {
-                        automaticTagNames.push(tagId);
-                    }
-                });
-            }
-            
-            let contacts;
-            const hasAnyTagFilter = customTagIds.length > 0 || automaticTagNames.length > 0;
-            
-            // Aplicar filtro por tags se existir
-            if (hasAnyTagFilter) {
-                // Validar tags custom
-                let validCustomTagIds = [];
-                if (customTagIds.length > 0) {
-                    const validTags = await sqlWithRetry(
-                        sqlTx`SELECT id FROM lead_custom_tags 
-                              WHERE id = ANY(${customTagIds}) 
-                                AND seller_id = ${history.seller_id} 
-                                AND bot_id = ANY(${botIds})`
-                    );
-                    
-                    if (validTags && validTags.length > 0) {
-                        validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
-                    }
-                }
-                
-                // Validar tags automáticas
-                const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
-                
-                // Construir query com CTEs - apenas usuários individuais (chat_id > 0)
-                let tagQuery = `
-                    WITH base_contacts AS (
-                        SELECT DISTINCT ON (tc.chat_id) 
-                            tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                        FROM telegram_chats tc
-                        WHERE tc.bot_id = ANY($1::int[]) 
-                            AND tc.seller_id = $2
-                            AND tc.chat_id > 0
-                `;
-                let tagParams = [botIds, history.seller_id];
-                let paramOffset = 3;
-                
-                // Adicionar filtro de contatos inativos se houver
-                if (excludeChatIds && excludeChatIds.length > 0) {
-                    tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
-                    tagParams.push(excludeChatIds);
-                    paramOffset++;
-                }
-                
-                tagQuery += `
-                        ORDER BY tc.chat_id, tc.created_at DESC
-                    )
-                `;
-                
-                // Aplicar lógica de tagFilterMode (include/exclude)
-                const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
-                
-                // Adicionar filtros para tags custom
-                if (validCustomTagIds.length > 0) {
-                    if (filterMode === 'exclude') {
-                        // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
-                        tagQuery += `,
-                        custom_tagged AS (
-                            SELECT DISTINCT lcta.chat_id
-                            FROM lead_custom_tag_assignments lcta
-                            WHERE lcta.bot_id = ANY($1::int[])
-                                AND lcta.seller_id = $2
-                                AND lcta.tag_id = ANY($${paramOffset}::int[])
-                        )`;
-                        tagParams.push(validCustomTagIds);
-                        paramOffset += 1;
-                    } else {
-                        // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
-                        tagQuery += `,
-                        custom_tagged AS (
-                            SELECT DISTINCT lcta.chat_id
-                            FROM lead_custom_tag_assignments lcta
-                            WHERE lcta.bot_id = ANY($1::int[])
-                                AND lcta.seller_id = $2
-                                AND lcta.tag_id = ANY($${paramOffset}::int[])
-                            GROUP BY lcta.chat_id
-                            HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                        )`;
-                        tagParams.push(validCustomTagIds, validCustomTagIds.length);
-                        paramOffset += 2;
-                    }
-                }
-                
-                // Adicionar filtros para tags automáticas (Pagante)
-                if (validAutomaticTags.includes('Pagante')) {
-                    tagQuery += `,
-                    paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        JOIN clicks c ON c.click_id = tc.click_id
-                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                        WHERE tc.bot_id = ANY($1::int[])
-                            AND tc.seller_id = $2
-                            AND tc.chat_id > 0
-                            AND pt.status = 'paid'
-                    )`;
-                }
-                
-                // Construir SELECT final
-                tagQuery += `
-                    SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                    FROM base_contacts bc
-                `;
-                
-                // Adicionar JOINs condicionais
-                if (validCustomTagIds.length > 0) {
-                    if (filterMode === 'exclude') {
-                        tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                    } else {
-                        tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                    }
-                }
-                if (validAutomaticTags.includes('Pagante')) {
-                    tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
-                }
-                
-                // Adicionar WHERE para exclusão se necessário
-                if (filterMode === 'exclude' && validCustomTagIds.length > 0) {
-                    tagQuery += ` WHERE ct.chat_id IS NULL`;
-                }
-                
-                tagQuery += ` ORDER BY bc.chat_id`;
-                
-                contacts = await sqlWithRetry(tagQuery, tagParams);
-            } else {
-                // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
-                let contactsQuery;
-                if (excludeChatIds && excludeChatIds.length > 0) {
-                    contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                        FROM telegram_chats 
-                        WHERE bot_id = ANY(${botIds}) 
-                            AND seller_id = ${history.seller_id}
-                            AND chat_id > 0
-                            AND chat_id != ALL(${excludeChatIds}::bigint[])
-                        ORDER BY chat_id, created_at DESC`;
-                } else {
-                    contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                        FROM telegram_chats 
-                        WHERE bot_id = ANY(${botIds}) 
-                            AND seller_id = ${history.seller_id}
-                            AND chat_id > 0
-                        ORDER BY chat_id, created_at DESC`;
-                }
-                contacts = await sqlWithRetry(contactsQuery);
-            }
-            
-            const allContacts = new Map();
-            contacts.forEach(c => {
-                if (!allContacts.has(c.chat_id)) {
-                    allContacts.set(c.chat_id, { 
-                        chat_id: c.chat_id,
-                        first_name: c.first_name,
-                        last_name: c.last_name,
-                        username: c.username,
-                        click_id: c.click_id,
-                        bot_id_source: c.bot_id 
-                    });
-                }
-            });
-            const uniqueContacts = Array.from(allContacts.values());
-            
-            // Encontrar o trigger (nó inicial do disparo)
-            let startNodeId = null;
-            const triggerNode = flowNodes.find(node => node.type === 'trigger');
-            
-            if (triggerNode) {
-                startNodeId = triggerNode.id;
-            } else {
-                const actionNode = flowNodes.find(node => node.type === 'action');
-                if (actionNode) {
-                    startNodeId = actionNode.id;
-                }
-            }
-            
-            if (!startNodeId) {
-                await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
-                return res.status(400).json({ message: 'Nenhum nó inicial encontrado no fluxo.' });
-            }
-            
-            // Atualizar status para RUNNING
-            await sqlWithRetry(
-                sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${history_id}`
-            );
-            
-            // Processar disparo em background (mesma lógica do processamento imediato)
+            // 4. Processar tudo em background (não bloqueia resposta HTTP)
             (async () => {
                 try {
+                    // Buscar o histórico do disparo
+                    const [history] = await sqlWithRetry(
+                        'SELECT * FROM disparo_history WHERE id = $1',
+                        [history_id]
+                    );
+                    
+                    if (!history) {
+                        console.error(`[WORKER-SCHEDULED-DISPARO] Histórico de disparo ${history_id} não encontrado.`);
+                        return;
+                    }
+                    
+                    // Validar que está com status SCHEDULED
+                    if (history.status !== 'SCHEDULED') {
+                        console.log(`[WORKER-SCHEDULED-DISPARO] Disparo ${history_id} não está agendado (status: ${history.status}). Ignorando.`);
+                        return;
+                    }
+                    
+                    // Buscar o fluxo de disparo
+                    const [disparoFlow] = await sqlWithRetry(
+                        'SELECT * FROM disparo_flows WHERE id = $1',
+                        [history.disparo_flow_id]
+                    );
+                    
+                    if (!disparoFlow) {
+                        await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                        console.error(`[WORKER-SCHEDULED-DISPARO] Fluxo de disparo ${history.disparo_flow_id} não encontrado.`);
+                        return;
+                    }
+                    
+                    // Parse do fluxo
+                    const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+                    const flowNodes = flowData.nodes || [];
+                    const flowEdges = flowData.edges || [];
+                    
+                    // Buscar contatos dos bots
+                    const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
+                    
+                    // Re-executar higienização antes de buscar contatos
+                    console.log(`[WORKER-SCHEDULED-DISPARO] Re-executando higienização para ${botIds.length} bot(s)...`);
+                    const excludeChatIds = await validateContactsForBots(botIds, history.seller_id);
+                    console.log(`[WORKER-SCHEDULED-DISPARO] ${excludeChatIds.length} contatos inativos encontrados.`);
+                    
+                    // Extrair tagIds e tagFilterMode do flow_steps se existir
+                    let tagIds = null;
+                    let tagFilterMode = 'include'; // Default
+                    if (history.flow_steps && typeof history.flow_steps === 'object') {
+                        const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
+                        if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
+                            tagIds = flowSteps.tagIds;
+                        }
+                        if (flowSteps.tagFilterMode) {
+                            tagFilterMode = flowSteps.tagFilterMode;
+                        }
+                    }
+                    
+                    // Separar tags custom de automáticas
+                    let customTagIds = [];
+                    let automaticTagNames = [];
+                    if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+                        tagIds.forEach(tagId => {
+                            if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                                customTagIds.push(parseInt(tagId));
+                            } else if (typeof tagId === 'string') {
+                                automaticTagNames.push(tagId);
+                            }
+                        });
+                    }
+                    
+                    let contacts;
+                    const hasAnyTagFilter = customTagIds.length > 0 || automaticTagNames.length > 0;
+                    
+                    // Aplicar filtro por tags se existir
+                    if (hasAnyTagFilter) {
+                        // Validar tags custom
+                        let validCustomTagIds = [];
+                        if (customTagIds.length > 0) {
+                            const validTags = await sqlWithRetry(
+                                sqlTx`SELECT id FROM lead_custom_tags 
+                                      WHERE id = ANY(${customTagIds}) 
+                                        AND seller_id = ${history.seller_id} 
+                                        AND bot_id = ANY(${botIds})`
+                            );
+                            
+                            if (validTags && validTags.length > 0) {
+                                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+                            }
+                        }
+                        
+                        // Validar tags automáticas
+                        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+                        
+                        // Construir query com CTEs - apenas usuários individuais (chat_id > 0)
+                        let tagQuery = `
+                            WITH base_contacts AS (
+                                SELECT DISTINCT ON (tc.chat_id) 
+                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                                FROM telegram_chats tc
+                                WHERE tc.bot_id = ANY($1::int[]) 
+                                    AND tc.seller_id = $2
+                                    AND tc.chat_id > 0
+                        `;
+                        let tagParams = [botIds, history.seller_id];
+                        let paramOffset = 3;
+                        
+                        // Adicionar filtro de contatos inativos se houver
+                        if (excludeChatIds && excludeChatIds.length > 0) {
+                            tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+                            tagParams.push(excludeChatIds);
+                            paramOffset++;
+                        }
+                        
+                        tagQuery += `
+                                ORDER BY tc.chat_id, tc.created_at DESC
+                            )
+                        `;
+                        
+                        // Aplicar lógica de tagFilterMode (include/exclude)
+                        const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
+                        
+                        // Adicionar filtros para tags custom
+                        if (validCustomTagIds.length > 0) {
+                            if (filterMode === 'exclude') {
+                                // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
+                                tagQuery += `,
+                                custom_tagged AS (
+                                    SELECT DISTINCT lcta.chat_id
+                                    FROM lead_custom_tag_assignments lcta
+                                    WHERE lcta.bot_id = ANY($1::int[])
+                                        AND lcta.seller_id = $2
+                                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                                )`;
+                                tagParams.push(validCustomTagIds);
+                                paramOffset += 1;
+                            } else {
+                                // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
+                                tagQuery += `,
+                                custom_tagged AS (
+                                    SELECT DISTINCT lcta.chat_id
+                                    FROM lead_custom_tag_assignments lcta
+                                    WHERE lcta.bot_id = ANY($1::int[])
+                                        AND lcta.seller_id = $2
+                                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                                    GROUP BY lcta.chat_id
+                                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                                )`;
+                                tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                                paramOffset += 2;
+                            }
+                        }
+                        
+                        // Adicionar filtros para tags automáticas (Pagante)
+                        if (validAutomaticTags.includes('Pagante')) {
+                            tagQuery += `,
+                            paid_contacts AS (
+                                SELECT DISTINCT tc.chat_id
+                                FROM telegram_chats tc
+                                JOIN clicks c ON c.click_id = tc.click_id
+                                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                                WHERE tc.bot_id = ANY($1::int[])
+                                    AND tc.seller_id = $2
+                                    AND tc.chat_id > 0
+                                    AND pt.status = 'paid'
+                            )`;
+                        }
+                        
+                        // Construir SELECT final
+                        tagQuery += `
+                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+                            FROM base_contacts bc
+                        `;
+                        
+                        // Adicionar JOINs condicionais
+                        if (validCustomTagIds.length > 0) {
+                            if (filterMode === 'exclude') {
+                                tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                            } else {
+                                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+                            }
+                        }
+                        if (validAutomaticTags.includes('Pagante')) {
+                            tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+                        }
+                        
+                        // Adicionar WHERE para exclusão se necessário
+                        if (filterMode === 'exclude' && validCustomTagIds.length > 0) {
+                            tagQuery += ` WHERE ct.chat_id IS NULL`;
+                        }
+                        
+                        tagQuery += ` ORDER BY bc.chat_id`;
+                        
+                        contacts = await sqlWithRetry(tagQuery, tagParams);
+                    } else {
+                        // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
+                        let contactsQuery;
+                        if (excludeChatIds && excludeChatIds.length > 0) {
+                            contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                                FROM telegram_chats 
+                                WHERE bot_id = ANY(${botIds}) 
+                                    AND seller_id = ${history.seller_id}
+                                    AND chat_id > 0
+                                    AND chat_id != ALL(${excludeChatIds}::bigint[])
+                                ORDER BY chat_id, created_at DESC`;
+                        } else {
+                            contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                                FROM telegram_chats 
+                                WHERE bot_id = ANY(${botIds}) 
+                                    AND seller_id = ${history.seller_id}
+                                    AND chat_id > 0
+                                ORDER BY chat_id, created_at DESC`;
+                        }
+                        contacts = await sqlWithRetry(contactsQuery);
+                    }
+                    
+                    const allContacts = new Map();
+                    contacts.forEach(c => {
+                        if (!allContacts.has(c.chat_id)) {
+                            allContacts.set(c.chat_id, { 
+                                chat_id: c.chat_id,
+                                first_name: c.first_name,
+                                last_name: c.last_name,
+                                username: c.username,
+                                click_id: c.click_id,
+                                bot_id_source: c.bot_id 
+                            });
+                        }
+                    });
+                    const uniqueContacts = Array.from(allContacts.values());
+                    
+                    // Encontrar o trigger (nó inicial do disparo)
+                    let startNodeId = null;
+                    const triggerNode = flowNodes.find(node => node.type === 'trigger');
+                    
+                    if (triggerNode) {
+                        startNodeId = triggerNode.id;
+                    } else {
+                        const actionNode = flowNodes.find(node => node.type === 'action');
+                        if (actionNode) {
+                            startNodeId = actionNode.id;
+                        }
+                    }
+                    
+                    if (!startNodeId) {
+                        await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
+                        console.error(`[WORKER-SCHEDULED-DISPARO] Nenhum nó inicial encontrado no fluxo.`);
+                        return;
+                    }
+                    
+                    // Atualizar status para RUNNING
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${history_id}`
+                    );
+                    
                     // Buscar bot_tokens antes do loop para usar como chave de rate limiting
                     const botTokens = await sqlWithRetry(
                         sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${history.seller_id}`
@@ -673,18 +672,26 @@ app.post(
                     if (qstashPromises.length > 0) {
                         await publishQStashInBatches(qstashPromises, 10, 500);
                     }
+                    
+                    console.log(`[WORKER-SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso em background.`);
                 } catch (bgError) {
-                    console.error("Erro no processamento em background do disparo agendado:", bgError);
-                    await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${history_id}`
-                    );
+                    console.error("[WORKER-SCHEDULED-DISPARO] Erro ao processar disparo agendado em background:", bgError);
+                    console.error("[WORKER-SCHEDULED-DISPARO] Stack trace:", bgError.stack);
+                    
+                    // Atualizar status para FAILED em caso de erro
+                    try {
+                        await sqlWithRetry(
+                            sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${history_id}`
+                        );
+                    } catch (updateError) {
+                        console.error("[WORKER-SCHEDULED-DISPARO] Erro ao atualizar status para FAILED:", updateError);
+                    }
                 }
             })();
             
-            res.status(200).json({ message: 'Disparo agendado iniciado com sucesso.' });
-            
         } catch (error) {
-            console.error("Erro crítico no processamento de disparo agendado:", error);
+            console.error("Erro crítico no handler do worker de disparo agendado:", error);
+            // Verificar se resposta já foi enviada antes de tentar enviar
             if (!res.headersSent) {
                 res.status(500).json({ message: 'Erro interno ao processar disparo agendado.' });
             }
