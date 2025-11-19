@@ -5152,7 +5152,7 @@ app.post('/api/pix/generate', logApiRequest, async (req, res) => {
         // Apenas continue com os eventos pós-geração
 
         if (click.pressel_id || click.checkout_id) { // Verifica se veio de pressel ou checkout
-             await sendMetaEvent({
+             await sendMetaEventShared({
                 eventName: 'InitiateCheckout',
                 clickData: click,
                 transactionData: { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 },
@@ -5163,7 +5163,7 @@ app.post('/api/pix/generate', logApiRequest, async (req, res) => {
 
         const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
         const productDataForUtmify = product || { id: "prod_1", name: "Produto Ofertado" };
-        await sendEventToUtmify({
+        await sendEventToUtmifyShared({
             status: 'waiting_payment',
             clickData: click,
             pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date() },
@@ -5823,7 +5823,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                     const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmify({
+                    await sendEventToUtmifyShared({
                         status: 'waiting_payment',
                         clickData: click,
                         pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
@@ -5836,7 +5836,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
                     // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
                     if (click.pressel_id || click.checkout_id) {
-                        await sendMetaEvent({
+                        await sendMetaEventShared({
                             eventName: 'InitiateCheckout',
                             clickData: click,
                             transactionData: { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 },
@@ -7751,14 +7751,7 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
     }
     res.sendStatus(200);
 });
-// Wrappers para funções de eventos que passam as dependências necessárias
-async function sendEventToUtmify(status, clickData, pixData, sellerData, customerData, productData) {
-    return await sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx });
-}
-
-async function sendMetaEvent(eventName, clickData, transactionData, customerData = null) {
-    return await sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx });
-}
+// As funções compartilhadas são chamadas diretamente com objetos
 async function checkPendingTransactions() {
     try {
         const pendingTransactions = await sqlTx`
@@ -8683,7 +8676,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
         const customerDataForUtmify = { name: "Cliente Bot", email: "bot@email.com" };
         const productDataForUtmify = { id: "prod_manual", name: "PIX Manual" };
         
-        await sendEventToUtmify({
+        await sendEventToUtmifyShared({
             status: 'waiting_payment',
             clickData: click,
             pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
@@ -8697,7 +8690,7 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
         if (click.pressel_id || click.checkout_id) {
-            await sendMetaEvent({
+            await sendMetaEventShared({
                 eventName: 'InitiateCheckout',
                 clickData: click,
                 transactionData: { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 },
@@ -10248,7 +10241,7 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             created_at: new Date()
         };
 
-        await sendMetaEvent({
+        await sendMetaEventShared({
             eventName: 'InitiateCheckout',
             clickData: { ...click, checkout_id: checkoutId },
             transactionData: { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 },
@@ -10256,7 +10249,7 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             sqlTx: sqlTx
         });
 
-        await sendEventToUtmify({
+        await sendEventToUtmifyShared({
             status: 'waiting_payment',
             clickData: { ...click, checkout_id: checkoutId },
             pixData: transactionDataForEvents,
