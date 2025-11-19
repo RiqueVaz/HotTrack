@@ -221,6 +221,7 @@ function findNextNode(nodeId, handle, edges) {
 // Esta função processa o fluxo completo começando do start_node_id
 async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId) {
     const logPrefix = '[WORKER-DISPARO]';
+    const startTime = Date.now();
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
     
     let variables = { ...initialVariables };
@@ -231,28 +232,39 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     let logDetails = 'Enviado com sucesso.';
     const maxIterations = 50; // Proteção contra loops infinitos
     
+    // Otimização: Criar Map para busca O(1) ao invés de O(n) com find
+    const nodeMap = new Map(flowNodes.map(node => [node.id, node]));
+    
     try {
         // Atualizar variáveis com dados do usuário
-        const [user] = await sqlWithRetry(sqlTx`
-            SELECT first_name, last_name 
-            FROM telegram_chats 
-            WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
-            ORDER BY created_at DESC LIMIT 1`);
-        
-        if (user) {
-            variables.primeiro_nome = user.first_name || '';
-            variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+        try {
+            const [user] = await sqlWithRetry(sqlTx`
+                SELECT first_name, last_name 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
+                ORDER BY created_at DESC LIMIT 1`);
+            
+            if (user) {
+                variables.primeiro_nome = user.first_name || '';
+                variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+                logger.debug(`${logPrefix} Variáveis do usuário atualizadas: primeiro_nome=${variables.primeiro_nome}, nome_completo=${variables.nome_completo}`);
+            }
+        } catch (error) {
+            // Não interromper o fluxo se falhar ao buscar dados do usuário
+            logger.warn(`${logPrefix} Erro ao buscar dados do usuário (não crítico):`, error.message);
         }
         
         // Processar fluxo
         while (currentNodeId && safetyLock < maxIterations) {
             safetyLock++;
-            const currentNode = flowNodes.find(n => n.id === currentNodeId);
+            const currentNode = nodeMap.get(currentNodeId); // Busca O(1) ao invés de O(n)
             
             if (!currentNode) {
                 logger.warn(`${logPrefix} Nó ${currentNodeId} não encontrado. Encerrando fluxo.`);
                 break;
             }
+            
+            logger.debug(`${logPrefix} Processando nó ${currentNodeId} (tipo: ${currentNode.type}, iteração: ${safetyLock})`);
             
             if (currentNode.type === 'trigger') {
                 // Trigger apenas passa para o próximo nó conectado
@@ -269,12 +281,20 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                         const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
                         if (returnedTransactionId) {
                             lastTransactionId = returnedTransactionId;
+                            logger.debug(`${logPrefix} Transaction ID atualizado: ${returnedTransactionId}`);
                         }
                     } catch (error) {
+                        // Log erro mas continua processando outras ações/nós se possível
                         logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
-                        logStatus = 'FAILED';
-                        logDetails = error.message.substring(0, 255);
-                        break;
+                        // Apenas marca como falha se for erro crítico, caso contrário continua
+                        const isCriticalError = error.message?.includes('crítico') || error.message?.includes('critical');
+                        if (isCriticalError) {
+                            logStatus = 'FAILED';
+                            logDetails = error.message.substring(0, 255);
+                            break;
+                        }
+                        // Para erros não críticos, continua para o próximo nó
+                        logger.warn(`${logPrefix} Erro não crítico no nó ${currentNodeId}, continuando para próximo nó.`);
                     }
                 }
                 
@@ -286,10 +306,20 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                 break;
             }
         }
+        
+        if (safetyLock >= maxIterations) {
+            logger.warn(`${logPrefix} Limite de iterações atingido (${maxIterations}). Encerrando fluxo por segurança.`);
+            logStatus = 'FAILED';
+            logDetails = 'Limite de iterações atingido';
+        }
+        
+        const processingTime = Date.now() - startTime;
+        logger.debug(`${logPrefix} [Flow Engine] Processamento concluído para ${chatId} em ${processingTime}ms. Status: ${logStatus}`);
     } catch (error) {
         logStatus = 'FAILED';
         logDetails = error.message.substring(0, 255);
         logger.error(`${logPrefix} Erro crítico ao processar fluxo:`, error);
+        logger.error(`${logPrefix} Stack trace:`, error.stack);
     }
     
     // Atualizar histórico e salvar disparo_log
@@ -481,10 +511,15 @@ async function sendMetaEvent(eventName, clickData, transactionData, customerData
 // Função simplificada para processar ações em disparos
 async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
     let lastPixTransactionId = null; // Rastrear último transaction_id gerado
+    const actionStartTime = Date.now();
+    logger.debug(`${logPrefix} Processando ${actions.length} ação(ões) para chat ${chatId}`);
     
-    for (const action of actions) {
+    for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        const actionIndex = i + 1;
         try {
             const actionData = action.data || {};
+            logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Processando ação tipo: ${action.type}`);
             
             if (action.type === 'message') {
                 try {
@@ -695,14 +730,33 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 }
             } else if (action.type === 'action_check_pix') {
                 // Verificar PIX - lógica simplificada (não implementada completamente para disparos)
-                logger.debug(`${logPrefix} Ação check_pix não suportada em disparos. Pulando.`);
+                logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Ação check_pix não suportada em disparos. Pulando.`);
+            } else {
+                logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Tipo de ação não reconhecido: ${action.type}. Pulando.`);
             }
-            // Outros tipos de ação podem ser adicionados aqui conforme necessário
         } catch (error) {
-            logger.error(`${logPrefix} Erro ao processar ação ${action.type}:`, error);
-            // Continua processando outras ações mesmo se uma falhar
+            // Log detalhado do erro mas continua processando outras ações
+            logger.error(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao processar ação ${action.type}:`, error.message);
+            logger.debug(`${logPrefix} Stack trace da ação ${action.type}:`, error.stack);
+            
+            // Apenas interrompe se for erro crítico (ex: bot não encontrado, token inválido)
+            const isCriticalError = error.message?.includes('não encontrado') || 
+                                   error.message?.includes('not found') ||
+                                   error.message?.includes('token') ||
+                                   error.message?.includes('Token');
+            
+            if (isCriticalError) {
+                logger.error(`${logPrefix} Erro crítico detectado. Interrompendo processamento de ações.`);
+                throw error; // Propaga erro crítico para ser tratado no nível superior
+            }
+            
+            // Para erros não críticos, continua processando outras ações
+            logger.warn(`${logPrefix} Erro não crítico na ação ${action.type}. Continuando com próxima ação.`);
         }
     }
+    
+    const actionProcessingTime = Date.now() - actionStartTime;
+    logger.debug(`${logPrefix} Processamento de ${actions.length} ação(ões) concluído em ${actionProcessingTime}ms`);
     
     return lastPixTransactionId; // Retornar último transaction_id ou null
 }
