@@ -679,39 +679,67 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
 //           LÓGICA DO WORKER
 // ==========================================================
 
+// Função pura que processa disparo sem depender de objetos HTTP (req/res)
+// Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
+async function processDisparoData(data) {
+    const { history_id, chat_id, bot_id, flow_nodes, flow_edges, start_node_id, variables_json } = data;
+    
+    // Validação de dados obrigatórios
+    if (!flow_nodes || !flow_edges || !start_node_id) {
+        throw new Error('Formato inválido. Requer flow_nodes, flow_edges e start_node_id.');
+    }
+    
+    // Parse dos dados JSON
+    const flowNodes = JSON.parse(flow_nodes);
+    const flowEdges = JSON.parse(flow_edges);
+    const userVariables = JSON.parse(variables_json || '{}');
+    
+    // Buscar bot no banco de dados
+    const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+    if (!bot || !bot.bot_token) {
+        throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
+    }
+    
+    // Processar fluxo de disparo (lógica real não depende de res)
+    await processDisparoFlow(
+        chat_id, 
+        bot_id, 
+        bot.bot_token, 
+        bot.seller_id, 
+        start_node_id, 
+        userVariables, 
+        flowNodes, 
+        flowEdges, 
+        history_id
+    );
+}
+
+// Handler HTTP para compatibilidade com código existente
 async function handler(req, res) {
     // Verificar se requisição foi abortada antes de processar
     if (req.aborted) {
         return res.status(499).end(); // 499 = Client Closed Request
     }
     
-    const { history_id, chat_id, bot_id, flow_nodes, flow_edges, start_node_id, variables_json } = req.body;
-    
-    if (!flow_nodes || !flow_edges || !start_node_id) {
-        return res.status(400).json({ message: 'Formato inválido. Requer flow_nodes, flow_edges e start_node_id.' });
-    }
-    
     try {
-        const flowNodes = JSON.parse(flow_nodes);
-        const flowEdges = JSON.parse(flow_edges);
-        const userVariables = JSON.parse(variables_json || '{}');
+        // Chamar função pura de processamento
+        await processDisparoData(req.body);
         
-        const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
-        if (!bot || !bot.bot_token) {
-            throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
-        }
-        
-        await processDisparoFlow(chat_id, bot_id, bot.bot_token, bot.seller_id, start_node_id, userVariables, flowNodes, flowEdges, history_id);
-        
+        // Enviar resposta HTTP de sucesso
         if (!res.headersSent) {
             res.status(200).json({ message: 'Disparo processado com sucesso.' });
         }
     } catch (error) {
         logger.error('[WORKER-DISPARO] Erro ao processar disparo:', error);
+        
+        // Enviar resposta HTTP de erro apropriada
         if (!res.headersSent) {
-            res.status(500).json({ message: 'Erro ao processar disparo.' });
+            const statusCode = error.message.includes('Formato inválido') ? 400 : 500;
+            const message = error.message || 'Erro ao processar disparo.';
+            res.status(statusCode).json({ message });
         }
     }
 }
 
-module.exports = handler;
+// Exportar ambas as funções para permitir uso em diferentes contextos
+module.exports = { handler, processDisparoData };
