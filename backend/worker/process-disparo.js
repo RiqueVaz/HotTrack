@@ -237,6 +237,45 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     const nodeMap = new Map(flowNodes.map(node => [node.id, node]));
     
     try {
+        // Buscar click completo do chat para obter pressel_id de origem
+        let chatClick = null;
+        try {
+            // Buscar click_id do chat
+            const [chatData] = await sqlWithRetry(sqlTx`
+                SELECT click_id 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+            `);
+            
+            if (chatData && chatData.click_id) {
+                // Buscar click completo através do click_id
+                const db_click_id = chatData.click_id.startsWith('/start ') ? chatData.click_id : `/start ${chatData.click_id}`;
+                const [foundClick] = await sqlWithRetry(sqlTx`
+                    SELECT * FROM clicks 
+                    WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                    LIMIT 1
+                `);
+                
+                if (foundClick) {
+                    chatClick = foundClick;
+                    logger.debug(`${logPrefix} Click encontrado para chat ${chatId}: click_id=${foundClick.click_id}, pressel_id=${foundClick.pressel_id || 'null'}`);
+                } else {
+                    logger.debug(`${logPrefix} Click não encontrado no banco para click_id=${db_click_id}`);
+                }
+            } else {
+                logger.debug(`${logPrefix} Chat ${chatId} não possui click_id associado`);
+            }
+        } catch (error) {
+            // Não interromper o fluxo se falhar ao buscar click
+            logger.warn(`${logPrefix} Erro ao buscar click do chat (não crítico):`, error.message);
+        }
+        
+        // Armazenar click do chat nas variáveis para uso posterior
+        if (chatClick) {
+            variables._chatClick = chatClick;
+        }
+        
         // Atualizar variáveis com dados do usuário
         try {
             const [user] = await sqlWithRetry(sqlTx`
@@ -496,11 +535,18 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     throw new Error('Vendedor não encontrado para gerar PIX.');
                 }
                 
-                // Buscar ou criar click para associar a transação
+                // Buscar click do chat (pressel de origem) ou criar novo
                 let click = null;
                 let clickIdInternal = null;
                 
-                if (variables.click_id) {
+                // Prioridade 1: Usar click do chat que foi buscado no início do fluxo (tem pressel_id de origem)
+                if (variables._chatClick) {
+                    click = variables._chatClick;
+                    clickIdInternal = click.id;
+                    logger.debug(`${logPrefix} Usando click do chat com pressel_id=${click.pressel_id || 'null'}`);
+                } 
+                // Prioridade 2: Buscar click através do click_id das variáveis
+                else if (variables.click_id) {
                     const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
                     const [existingClick] = await sqlWithRetry(sqlTx`
                         SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
@@ -509,10 +555,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     if (existingClick) {
                         click = existingClick;
                         clickIdInternal = existingClick.id;
+                        logger.debug(`${logPrefix} Click encontrado via variables.click_id com pressel_id=${existingClick.pressel_id || 'null'}`);
                     }
                 }
                 
-                // Se não encontrou click, criar um novo para tracking
+                // Se não encontrou click, criar um novo para tracking (sem pressel_id)
                 if (!click) {
                     const [newClick] = await sqlWithRetry(sqlTx`
                         INSERT INTO clicks (seller_id, bot_id, ip_address, user_agent)
@@ -521,7 +568,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     `);
                     click = newClick;
                     clickIdInternal = newClick.id;
-                    logger.debug(`${logPrefix} Click criado para disparo: ${clickIdInternal}`);
+                    logger.debug(`${logPrefix} Click criado para disparo (sem pressel_id): ${clickIdInternal}`);
                 }
                 
                 // Gerar PIX usando a função existente com click_id_internal
@@ -557,31 +604,41 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         `);
                         
                         if (transaction && click) {
-                            // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
-                            if (click.pressel_id || click.checkout_id) {
-                                await sendMetaEventShared({
-                                    eventName: 'InitiateCheckout',
-                                    clickData: click,
-                                    transactionData: { id: transaction.id, pix_value: valueInCents / 100 },
-                                    customerData: null,
-                                    sqlTx: sqlTx
-                                });
-                                logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para transação ${transaction.id}`);
-                            }
-                            
-                            // Enviar waiting_payment para Utmify
+                            // Sempre enviar waiting_payment para Utmify (prioridade)
                             const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                             const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
-                            await sendEventToUtmifyShared({
-                                status: 'waiting_payment',
-                                clickData: click,
-                                pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
-                                sellerData: seller,
-                                customerData: customerDataForUtmify,
-                                productData: productDataForUtmify,
-                                sqlTx: sqlTx
-                            });
-                            logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para transação ${transaction.id}`);
+                            try {
+                                await sendEventToUtmifyShared({
+                                    status: 'waiting_payment',
+                                    clickData: click,
+                                    pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
+                                    sellerData: seller,
+                                    customerData: customerDataForUtmify,
+                                    productData: productDataForUtmify,
+                                    sqlTx: sqlTx
+                                });
+                                logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para transação ${transaction.id}`);
+                            } catch (utmifyError) {
+                                logger.error(`${logPrefix} Erro ao enviar evento para Utmify:`, utmifyError.message);
+                            }
+                            
+                            // Enviar InitiateCheckout para Meta apenas se o click tiver pressel_id (pixel da pressel de origem)
+                            if (click.pressel_id) {
+                                try {
+                                    await sendMetaEventShared({
+                                        eventName: 'InitiateCheckout',
+                                        clickData: click,
+                                        transactionData: { id: transaction.id, pix_value: valueInCents / 100 },
+                                        customerData: null,
+                                        sqlTx: sqlTx
+                                    });
+                                    logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta (pressel_id=${click.pressel_id}) para transação ${transaction.id}`);
+                                } catch (metaError) {
+                                    logger.error(`${logPrefix} Erro ao enviar evento para Meta:`, metaError.message);
+                                }
+                            } else {
+                                logger.debug(`${logPrefix} Evento 'InitiateCheckout' não enviado para Meta (click sem pressel_id)`);
+                            }
                         }
                     }
                 }
