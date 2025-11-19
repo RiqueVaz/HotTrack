@@ -270,14 +270,6 @@ app.post(
 app.post(
      '/api/worker/process-disparo',
      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-     (req, res, next) => {
-       // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
-       // Isso permite processamento mais longo para disparos com múltiplas ações e delays
-       // O timeout global de 60s não é suficiente para fluxos complexos de disparo
-       req.setTimeout(120000); // 120 segundos
-       res.setTimeout(120000);
-       next();
-     },
      async (req, res) => {
       try {
        // 1. Verificar a assinatura do QStash
@@ -294,15 +286,63 @@ app.post(
         return res.status(401).send("Invalid signature");
        }
     
-       // 2. Se for válida, processar a tarefa
-       console.log("[WORKER-DISPARO] Assinatura válida. Processando disparo.");
-       req.body = JSON.parse(bodyString); // Converte de volta para JSON para o worker
-       await processDisparoWorker(req, res); // Chama o handler do worker
-       
-       // Verificar se o worker enviou resposta, se não, enviar uma padrão
-       if (!res.headersSent) {
-         res.status(200).json({ message: 'Worker de disparo processado com sucesso.' });
-       }
+       // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
+       console.log("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento em background.");
+       res.status(200).json({ message: 'Worker de disparo aceito para processamento.' });
+    
+       // 3. Processar disparo em background (não bloqueia resposta HTTP)
+       const bodyData = JSON.parse(bodyString);
+       (async () => {
+         try {
+           // Criar mock do objeto res para o worker (ele tenta usar res.headersSent e res.status/json, mas não precisa responder HTTP)
+           const mockRes = {
+             headersSent: false,
+             status: (code) => ({
+               json: (data) => {
+                 if (code === 200) {
+                   console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
+                 } else if (code >= 400) {
+                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
+                 }
+               },
+               send: (data) => {
+                 if (code === 200) {
+                   console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
+                 } else if (code >= 400) {
+                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
+                 }
+               },
+               end: () => {
+                 if (code === 499) {
+                   console.log("[WORKER-DISPARO] Requisição abortada pelo worker (processando em background).");
+                 } else if (code >= 400) {
+                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
+                 }
+               }
+             }),
+             json: (data) => {
+               console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
+             },
+             send: (data) => {
+               console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
+             },
+             end: () => {}
+           };
+           
+           // Criar mock do objeto req para o worker
+           const mockReq = {
+             ...req,
+             body: bodyData,
+             aborted: false
+           };
+           
+           await processDisparoWorker(mockReq, mockRes);
+         } catch (bgError) {
+           console.error("[WORKER-DISPARO] Erro ao processar disparo em background:", bgError);
+           console.error("[WORKER-DISPARO] Stack trace:", bgError.stack);
+           // Erros críticos já são logados pelo worker, não precisamos fazer mais nada aqui
+         }
+       })();
     
       } catch (error) {
        console.error("Erro crítico no handler do worker de disparo:", error);
