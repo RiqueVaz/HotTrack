@@ -1706,6 +1706,34 @@ async function handler(req, res) {
                             flowIdForProcess
                         );
                     }
+                } else if (continueFromDelay && !remainingActionsJson) {
+                    // Delay foi a última ação do nó - continuar para o próximo nó
+                    console.log(`${logPrefix} [Timeout] Continuando após delay. Delay foi a última ação do nó. Continuando para o próximo nó.`);
+                    
+                    // Atualizar scheduled_message_id para NULL já que o delay foi processado
+                    await sqlWithRetry(sqlTx`
+                        UPDATE user_flow_states 
+                        SET scheduled_message_id = NULL
+                        WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
+                    `);
+                    
+                    // Encontrar o próximo nó pelo handle 'a' e continuar de lá
+                    const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
+                    if (nextNodeId) {
+                        await processFlow(
+                            chat_id, 
+                            bot_id, 
+                            botToken, 
+                            sellerId, 
+                            nextNodeId,
+                            variables,
+                            flowNodes,
+                            flowEdges,
+                            flowIdForProcess
+                        );
+                    } else {
+                        console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
+                    }
                 } else {
                     // Processamento normal (timeout ou continuação sem ações restantes)
                     await processFlow(
