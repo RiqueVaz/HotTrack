@@ -161,6 +161,7 @@ async function sendMetaEvent({
                         event_name: eventName,
                         event_time: Math.floor(Date.now() / 1000),
                         event_id,
+                        action_source: 'other', // Indicate server-side event
                         user_data: userData,
                         custom_data: {
                             currency: 'BRL',
