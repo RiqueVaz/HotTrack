@@ -270,6 +270,14 @@ app.post(
 app.post(
      '/api/worker/process-disparo',
      express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+     (req, res, next) => {
+       // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
+       // Isso permite processamento mais longo para disparos com múltiplas ações e delays
+       // O timeout global de 60s não é suficiente para fluxos complexos de disparo
+       req.setTimeout(120000); // 120 segundos
+       res.setTimeout(120000);
+       next();
+     },
      async (req, res) => {
       try {
        // 1. Verificar a assinatura do QStash
@@ -310,6 +318,14 @@ app.post(
 app.post(
     '/api/worker/process-scheduled-disparo',
     express.raw({ type: 'application/json' }),
+    (req, res, next) => {
+        // Aumentar timeout para 120 segundos (2 minutos) para este endpoint específico
+        // Isso permite processamento mais longo para queries complexas com CTEs, validação de contatos e filtros por tags
+        // O timeout global de 60s não é suficiente para processamento de disparos agendados em massa
+        req.setTimeout(120000); // 120 segundos
+        res.setTimeout(120000);
+        next();
+    },
     async (req, res) => {
         try {
             // Verificar assinatura do QStash
@@ -6651,13 +6667,27 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
 
     // Limpeza final: Se o fluxo terminou (não está esperando input), limpa o estado.
+    // IMPORTANTE: Não limpar se há scheduled_message_id (delay agendado) ou waiting_for_input (aguardando resposta)
     if (!currentNodeId) {
-        const [state] = await sqlTx`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`;
+        const [state] = await sqlTx`
+            SELECT waiting_for_input, scheduled_message_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `;
+        
         if (!state) {
+            // Estado não existe, nada a fazer
+            logger.debug(`${logPrefix} [Flow Engine] Nenhum estado encontrado para ${chatId}.`);
+        } else if (state.waiting_for_input) {
+            // Fluxo pausado aguardando resposta do usuário
+            logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+        } else if (state.scheduled_message_id) {
+            // Delay agendado via QStash - estado deve ser preservado
+            logger.debug(`${logPrefix} [Flow Engine] Delay agendado detectado (scheduled_message_id: ${state.scheduled_message_id}). Estado preservado para ${chatId}.`);
+        } else {
+            // Fluxo realmente terminou - pode limpar o estado
             logger.debug(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
             await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-        } else {
-            logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
     }
 }

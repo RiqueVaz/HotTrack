@@ -1455,13 +1455,28 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // FIM DO PASSO 3
     // ==========================================================
 
+    // Limpeza final: Se o fluxo terminou (não está esperando input), limpa o estado.
+    // IMPORTANTE: Não limpar se há scheduled_message_id (delay agendado) ou waiting_for_input (aguardando resposta)
     if (!currentNodeId) {
-        const [state] = await sqlWithRetry(sqlTx`SELECT 1 FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId} AND waiting_for_input = true`);
+        const [state] = await sqlWithRetry(sqlTx`
+            SELECT waiting_for_input, scheduled_message_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `);
+        
         if (!state) {
+            // Estado não existe, nada a fazer
+            console.log(`${logPrefix} [Flow Engine] Nenhum estado encontrado para ${chatId}.`);
+        } else if (state.waiting_for_input) {
+            // Fluxo pausado aguardando resposta do usuário
+            console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+        } else if (state.scheduled_message_id) {
+            // Delay agendado via QStash - estado deve ser preservado
+            console.log(`${logPrefix} [Flow Engine] Delay agendado detectado (scheduled_message_id: ${state.scheduled_message_id}). Estado preservado para ${chatId}.`);
+        } else {
+            // Fluxo realmente terminou - pode limpar o estado
             console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
             await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
-        } else {
-            console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
         }
     }
 }
@@ -1690,6 +1705,34 @@ async function handler(req, res) {
                             flowEdges,
                             flowIdForProcess
                         );
+                    }
+                } else if (continueFromDelay && !remainingActionsJson) {
+                    // Delay foi a última ação do nó - continuar para o próximo nó
+                    console.log(`${logPrefix} [Timeout] Continuando após delay. Delay foi a última ação do nó. Continuando para o próximo nó.`);
+                    
+                    // Atualizar scheduled_message_id para NULL já que o delay foi processado
+                    await sqlWithRetry(sqlTx`
+                        UPDATE user_flow_states 
+                        SET scheduled_message_id = NULL
+                        WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}
+                    `);
+                    
+                    // Encontrar o próximo nó pelo handle 'a' e continuar de lá
+                    const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
+                    if (nextNodeId) {
+                        await processFlow(
+                            chat_id, 
+                            bot_id, 
+                            botToken, 
+                            sellerId, 
+                            nextNodeId,
+                            variables,
+                            flowNodes,
+                            flowEdges,
+                            flowIdForProcess
+                        );
+                    } else {
+                        console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
                     }
                 } else {
                     // Processamento normal (timeout ou continuação sem ações restantes)
