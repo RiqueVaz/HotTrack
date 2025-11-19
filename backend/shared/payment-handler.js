@@ -89,7 +89,15 @@ async function handleSuccessfulPayment({
         // Se algum evento falhar, não abortar o processo (já marcamos como pago)
         logger.info(`[handleSuccessfulPayment] Enviando evento para Utmify...`);
         try {
-            await sendEventToUtmify('paid', click, transaction, seller, finalCustomerData, productData);
+            await sendEventToUtmify({
+                status: 'paid',
+                clickData: click,
+                pixData: transaction,
+                sellerData: seller,
+                customerData: finalCustomerData,
+                productData: productData,
+                sqlTx: sqlTx
+            });
             logger.info(`[handleSuccessfulPayment] ✓ Evento Utmify enviado com sucesso`);
         } catch (error) {
             logger.error(`[handleSuccessfulPayment] ✗ Erro ao enviar evento Utmify:`, error.message);
@@ -98,7 +106,13 @@ async function handleSuccessfulPayment({
         
         logger.info(`[handleSuccessfulPayment] Enviando evento Purchase para Meta...`);
         try {
-            await sendMetaEvent('Purchase', click, transaction, finalCustomerData);
+            await sendMetaEvent({
+                eventName: 'Purchase',
+                clickData: click,
+                transactionData: transaction,
+                customerData: finalCustomerData,
+                sqlTx: sqlTx
+            });
             logger.info(`[handleSuccessfulPayment] ✓ Chamada sendMetaEvent concluída`);
         } catch (error) {
             logger.error(`[handleSuccessfulPayment] ✗ Erro ao enviar evento Meta:`, error.message);
