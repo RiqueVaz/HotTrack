@@ -28,7 +28,35 @@ async function sendEventToUtmify({
                 integrationId = pressel.utmify_integration_id;
             }
         } else if (clickData.checkout_id) {
-            console.log(`[Utmify] Clique originado do Checkout ID: ${clickData.checkout_id}. Lógica de associação não implementada para checkouts.`);
+            // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
+            const checkoutId = clickData.checkout_id;
+            
+            // Se começa com 'cko_', é um hosted_checkout (UUID)
+            if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
+                console.log(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}`);
+                // Buscar utmify_integration_id do config do hosted_checkout
+                const [hostedCheckout] = await sqlTx`
+                    SELECT config->'tracking'->>'utmify_integration_id' as utmify_integration_id 
+                    FROM hosted_checkouts 
+                    WHERE id = ${checkoutId}
+                `;
+                
+                if (hostedCheckout?.utmify_integration_id) {
+                    const parsedId = parseInt(hostedCheckout.utmify_integration_id);
+                    if (!isNaN(parsedId)) {
+                        integrationId = parsedId;
+                        console.log(`[Utmify] Integração Utmify encontrada no checkout hospedado: ${integrationId}`);
+                    } else {
+                        console.log(`[Utmify] Valor inválido para utmify_integration_id no checkout hospedado: ${hostedCheckout.utmify_integration_id}`);
+                    }
+                } else {
+                    console.log(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}, mas nenhuma integração Utmify configurada.`);
+                }
+            } else {
+                console.log(`[Utmify] Clique originado do Checkout ID: ${checkoutId}. Lógica de associação não implementada para checkouts antigos.`);
+            }
+        } else {
+            console.log(`[Utmify] Clique ID ${clickData.id} não originado de Pressel ou Checkout Hospedado conhecido.`);
         }
 
         if (!integrationId) {
@@ -47,16 +75,47 @@ async function sendEventToUtmify({
         }
 
         const utmifyApiToken = integration.api_token;
+        console.log(`[Utmify] Token encontrado. Montando payload...`);
         
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
         const payload = {
-            orderId: pixData.provider_transaction_id, platform: "HotTrack", paymentMethod: 'pix',
-            status: status, createdAt: createdAt, approvedDate: approvedDate, refundedAt: null,
-            customer: { name: customerData?.name || "Não informado", email: customerData?.email || "naoinformado@email.com", phone: customerData?.phone || null, document: customerData?.document || null, },
-            products: [{ id: productData?.id || "default_product", name: productData?.name || "Produto Digital", planId: null, planName: null, quantity: 1, priceInCents: Math.round(pixData.pix_value * 100) }],
-            trackingParameters: { src: null, sck: null, utm_source: clickData.utm_source, utm_campaign: clickData.utm_campaign, utm_medium: clickData.utm_medium, utm_content: clickData.utm_content, utm_term: clickData.utm_term },
-            commission: { totalPriceInCents: Math.round(pixData.pix_value * 100), gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) },
+            orderId: pixData.provider_transaction_id || `ht_${pixData.id}`, // Use provider ID or internal ID as fallback
+            platform: "HotTrack", 
+            paymentMethod: 'pix',
+            status: status, 
+            createdAt: createdAt, 
+            approvedDate: approvedDate, 
+            refundedAt: null,
+            customer: { 
+                name: customerData?.name || "Não informado", 
+                email: customerData?.email || "naoinformado@email.com", 
+                phone: customerData?.phone || null, 
+                document: customerData?.document || null
+            },
+            products: [{ 
+                id: productData?.id || "default_product", 
+                name: productData?.name || "Produto Digital", 
+                planId: null, 
+                planName: null, 
+                quantity: 1, 
+                priceInCents: Math.round(pixData.pix_value * 100) 
+            }],
+            trackingParameters: { 
+                src: null, 
+                sck: null, 
+                utm_source: clickData.utm_source, 
+                utm_campaign: clickData.utm_campaign, 
+                utm_medium: clickData.utm_medium, 
+                utm_content: clickData.utm_content, 
+                utm_term: clickData.utm_term,
+                click_id: clickData.click_id?.replace('/start ', '') || null // Adiciona click_id aqui
+            },
+            commission: { 
+                totalPriceInCents: Math.round(pixData.pix_value * 100), 
+                gatewayFeeInCents: Math.round(pixData.pix_value * 100 * (sellerData.commission_rate || 0.0500)), 
+                userCommissionInCents: Math.round(pixData.pix_value * 100 * (1 - (sellerData.commission_rate || 0.0500))) 
+            },
             isTest: false
         };
 
@@ -161,6 +220,7 @@ async function sendMetaEvent({
                         event_name: eventName,
                         event_time: Math.floor(Date.now() / 1000),
                         event_id,
+                        action_source: 'other', // Indicate server-side event
                         user_data: userData,
                         custom_data: {
                             currency: 'BRL',
