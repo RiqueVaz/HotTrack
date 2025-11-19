@@ -1478,35 +1478,29 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 }
 // ==========================================================
 
-async function handler(req, res) {
-    // Verificar se requisição foi abortada antes de processar
-    if (req.aborted) {
-        return res.status(499).end(); // 499 = Client Closed Request
-    }
-
-    if (req.method !== 'POST') {
-        return res.status(405).json({ message: 'Method Not Allowed' });
-
-
-    }
-
+// Função pura que processa timeout sem depender de objetos HTTP (req/res)
+// Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
+async function processTimeoutData(data) {
     try {
-        // 1. Recebe os dados agendados pelo QStash
-        const { chat_id, bot_id, target_node_id, variables, continue_from_delay } = req.body;
+        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions } = data;
         const logPrefix = '[WORKER]';
+
+        // Validação de dados obrigatórios
+        if (!chat_id || !bot_id) {
+            throw new Error('chat_id e bot_id são obrigatórios.');
+        }
 
         console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}. Continue from delay: ${continue_from_delay || false}`);
 
-        // 2. Busca o bot para obter o token e sellerId
+        // Buscar bot para obter o token e sellerId
         const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
         if (!bot || !bot.bot_token) {
-            throw new Error(`[WORKER] Bot ${bot_id} ou token não encontrado.`);
+            throw new Error(`Bot ${bot_id} ou token não encontrado.`);
         }
         const botToken = bot.bot_token;
         const sellerId = bot.seller_id;
 
-        // 3. *** VERIFICAÇÃO CRÍTICA ***
-        // Verifica se o estado atual corresponde ao esperado
+        // Verificar estado atual do usuário
         const [currentState] = await sqlWithRetry(sqlTx`
             SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id 
             FROM user_flow_states 
@@ -1515,17 +1509,17 @@ async function handler(req, res) {
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
             console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
-            return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
+            return { ignored: true, reason: 'no_user_state' };
         }
         
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
             if (!currentState.waiting_for_input) {
                 console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
-                return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
+                return { ignored: true, reason: 'user_already_proceeded' };
             }
 
-            // 4. O usuário NÃO respondeu a tempo.
+            // O usuário NÃO respondeu a tempo
             console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
             
             // Limpa o estado de 'espera' ANTES de processar o próximo nó
@@ -1537,14 +1531,14 @@ async function handler(req, res) {
             console.log(`${logPrefix} [Timeout] Continuando após delay agendado para ${chat_id}.`);
         }
 
-        // 5. Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
+        // Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
         // o 'processFlow' saberá que deve encerrar o fluxo.
         if (target_node_id) {
             try {
-                // Verificar se é continuação após delay agendado
-                const continueFromDelay = req.body.continue_from_delay === true;
-                const remainingActionsJson = req.body.remaining_actions;
+            // Verificar se é continuação após delay agendado
+            const continueFromDelay = continue_from_delay === true;
+            const remainingActionsJson = remaining_actions;
                 
                 // Busca o fluxo correto usando flow_id do estado, se disponível
                 let flowNodes = null;
@@ -1744,30 +1738,80 @@ async function handler(req, res) {
                         flowIdForProcess
                     );
                 }
-                // Verificar se resposta já foi enviada antes de enviar
-                if (!res.headersSent) {
-                    return res.status(200).json({ message: 'Timeout processed successfully.' });
-                }
-                return;
+                // Timeout processado com sucesso
+                return { success: true };
             } catch (flowError) {
-                // Erro durante processFlow - logar mas não quebrar o handler
+                // Erro durante processFlow - logar mas não interromper
                 console.error(`[WORKER] Erro durante processFlow para timeout:`, flowError.message);
-                // Verificar se resposta já foi enviada antes de enviar
-                if (!res.headersSent) {
-                    return res.status(200).json({ message: 'Timeout processed with errors.' });
-                }
-                return;
+                return { success: true, errors: [flowError.message] };
             }
-        } else {
-            console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
-            await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
-            // Verificar se resposta já foi enviada antes de enviar
-            if (!res.headersSent) {
-                return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
+            } else {
+                // Nenhum nó de destino definido - encerrar fluxo
+                console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
+                await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
+                return { success: true, flowEnded: true, reason: 'no_target_node' };
             }
-            return;
+    } catch (error) {
+        // Tratar especificamente CONNECT_TIMEOUT - re-lançar para tratamento especial no handler
+        if (error.message?.includes('CONNECT_TIMEOUT') || error.message?.includes('write CONNECT_TIMEOUT')) {
+            console.error(`[WORKER] CONNECT_TIMEOUT ao processar timeout para chat ${chat_id}. Pool pode estar esgotado.`);
+            error.isConnectTimeout = true;
+            throw error;
         }
+        
+        // Re-lançar outros erros
+        console.error('[WORKER] Erro ao processar timeout:', error.message, error.stack);
+        throw error;
+    }
+}
 
+// Handler HTTP para compatibilidade com código existente
+async function handler(req, res) {
+    // Verificar se requisição foi abortada antes de processar
+    if (req.aborted) {
+        return res.status(499).end(); // 499 = Client Closed Request
+    }
+
+    if (req.method !== 'POST') {
+        return res.status(405).json({ message: 'Method Not Allowed' });
+    }
+
+    try {
+        // Extrair dados do corpo da requisição
+        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions } = req.body;
+        
+        // Chamar função pura de processamento
+        const result = await processTimeoutData({
+            chat_id,
+            bot_id,
+            target_node_id,
+            variables,
+            continue_from_delay,
+            remaining_actions
+        });
+        
+        // Tratar resultados
+        if (result.ignored) {
+            if (result.reason === 'no_user_state') {
+                return res.status(200).json({ message: 'Timeout ignored, no user state found.' });
+            } else if (result.reason === 'user_already_proceeded') {
+                return res.status(200).json({ message: 'Timeout ignored, user already proceeded.' });
+            }
+        }
+        
+        if (result.flowEnded) {
+            return res.status(200).json({ message: 'Timeout processed, flow ended (no target node).' });
+        }
+        
+        if (result.errors && result.errors.length > 0) {
+            return res.status(200).json({ message: 'Timeout processed with errors.' });
+        }
+        
+        // Sucesso
+        if (!res.headersSent) {
+            return res.status(200).json({ message: 'Timeout processed successfully.' });
+        }
+        
     } catch (error) {
         // Verificar se resposta já foi enviada antes de tentar enviar qualquer resposta
         if (res.headersSent) {
@@ -1785,8 +1829,7 @@ async function handler(req, res) {
         }
         
         // Tratar especificamente CONNECT_TIMEOUT
-        if (error.message?.includes('CONNECT_TIMEOUT') || error.message?.includes('write CONNECT_TIMEOUT')) {
-            console.error(`[WORKER] CONNECT_TIMEOUT ao processar timeout para chat ${chat_id}. Pool pode estar esgotado.`);
+        if (error.isConnectTimeout) {
             // Retornar 500 para que o QStash tente novamente mais tarde
             return res.status(500).json({ 
                 error: `Database connection timeout: ${error.message}`,
@@ -1794,12 +1837,11 @@ async function handler(req, res) {
             });
         }
         
+        // Erros genéricos - retornar 200 para que o QStash NÃO tente re-executar
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);
-        // Retornamos 200 para que o QStash NÃO tente re-executar um fluxo que falhou logicamente.
         return res.status(200).json({ error: `Failed to process timeout: ${error.message}` });
-    
     }
 }
 
-// Exporta o handler com a verificação de segurança do QStash
-module.exports = handler;
+// Exportar ambas as funções para permitir uso em diferentes contextos
+module.exports = { handler, processTimeoutData };
