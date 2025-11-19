@@ -110,8 +110,7 @@ async function handleSuccessfulPayment({
                 eventName: 'Purchase',
                 clickData: click,
                 transactionData: transaction,
-                customerData: finalCustomerData,
-                sqlTx: sqlTx
+                customerData: finalCustomerData
             });
             logger.info(`[handleSuccessfulPayment] ✓ Chamada sendMetaEvent concluída`);
         } catch (error) {

@@ -149,8 +149,8 @@ async function sendMetaEvent({
             logger.info(`[Meta Pixel] [Purchase] Status da transação: ${check?.status}, meta_event_id atual: ${check?.meta_event_id}`);
             
             if (!check?.meta_event_id) {
-                logger.error(`[Meta Pixel] [Purchase] ERRO: meta_event_id não foi definido para transação ${transactionData.id}. Abortando.`);
-                return;
+                logger.warn(`[Meta Pixel] [Purchase] meta_event_id não definido ainda. Continuando envio...`);
+                // Não abortar, continuar o envio
             }
             // Se meta_event_id já é um event_id completo (formato: Purchase.{id}.{pixel_id}), já foi enviado
             const eventIdPattern = new RegExp(`^Purchase\\.${transactionData.id}\\.[0-9]+$`);
@@ -242,6 +242,13 @@ async function sendMetaEvent({
         Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
         logger.debug(`[Meta Pixel] userData preparado:`, JSON.stringify(userData, null, 2));
         
+        // Validar dados mínimos antes de enviar
+        const hasMinimalData = userData.client_ip_address || userData.client_user_agent || userData.external_id;
+        if (!hasMinimalData && eventName === 'Purchase') {
+            logger.warn(`[Meta Pixel] [Purchase] ⚠ Dados mínimos ausentes (IP/UserAgent/ExternalID). Meta pode rejeitar.`);
+            // Continuar mesmo assim, mas logar aviso
+        }
+        
         let lastEventId = null;
         let pixelsProcessed = 0;
         let pixelsSuccess = 0;
@@ -253,7 +260,12 @@ async function sendMetaEvent({
             logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Processando pixel_config_id: ${pixel_config_id}`);
             
             try {
-                const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+                const [pixelConfig] = await sqlTx`
+                    SELECT pixel_id, meta_api_token 
+                    FROM pixel_configurations 
+                    WHERE id = ${pixel_config_id} 
+                        AND seller_id = ${clickData.seller_id}
+                `;
                 
                 if (!pixelConfig) {
                     logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ ERRO: Configuração de pixel não encontrada (pixel_config_id: ${pixel_config_id})`);
@@ -299,9 +311,13 @@ async function sendMetaEvent({
                     logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✓ SUCESSO! Resposta da Meta:`, JSON.stringify(response.data, null, 2));
                     pixelsSuccess++;
                     
-                    // Guardar o último event_id para atualizar no final (se Purchase)
-                    if (eventName === 'Purchase') {
+                    // Atualizar meta_event_id imediatamente após primeiro sucesso (como versão antiga)
+                    if (eventName === 'Purchase' && pixelsSuccess === 1) {
+                        await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
+                        logger.info(`[Meta Pixel] [Purchase] meta_event_id atualizado imediatamente: ${event_id}`);
                         lastEventId = event_id;
+                    } else if (eventName === 'Purchase') {
+                        lastEventId = event_id; // Guardar para atualização final se múltiplos pixels
                     }
                 } catch (apiError) {
                     pixelsFailed++;
