@@ -2395,16 +2395,35 @@ app.post('/api/admin/save-subscription', authenticateAdmin, (req, res) => {
 
 app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
     try {
+        // Buscar total de sellers (todos)
         const totalSellers = await sqlTx`SELECT COUNT(*) FROM sellers;`;
-        const paidTransactions = await sqlTx`SELECT COUNT(*) as count, SUM(pix_value) as total_revenue FROM pix_transactions WHERE status = 'paid';`;
         const total_sellers = parseInt(totalSellers[0].count);
-        const total_paid_transactions = parseInt(paidTransactions[0].count);
-        const total_revenue = parseFloat(paidTransactions[0].total_revenue || 0);
-        const saas_profit = total_revenue * 0.0500;
+        
+        // Buscar transações pagas com JOIN para obter commission_rate de cada seller
+        // Calcular lucro do SaaS como soma das comissões individuais
+        const dashboardData = await sqlTx`
+            SELECT 
+                COUNT(DISTINCT pt.id) as total_paid_transactions,
+                COALESCE(SUM(pt.pix_value), 0) as total_revenue,
+                COALESCE(SUM(pt.pix_value * COALESCE(s.commission_rate, 0.0500)), 0) as saas_profit,
+                COUNT(DISTINCT s.id) as active_sellers
+            FROM pix_transactions pt
+            JOIN clicks c ON pt.click_id_internal = c.id
+            JOIN sellers s ON c.seller_id = s.id
+            WHERE pt.status = 'paid'
+        `;
+        
+        const total_paid_transactions = parseInt(dashboardData[0].total_paid_transactions);
+        const total_revenue = parseFloat(dashboardData[0].total_revenue || 0);
+        const saas_profit = parseFloat(dashboardData[0].saas_profit || 0);
+        const active_sellers = parseInt(dashboardData[0].active_sellers || 0);
+        
         res.json({
-            total_sellers, total_paid_transactions,
+            total_sellers, 
+            total_paid_transactions,
             total_revenue: total_revenue.toFixed(2),
-            saas_profit: saas_profit.toFixed(2)
+            saas_profit: saas_profit.toFixed(2),
+            active_sellers
         });
     } catch (error) {
         console.error("Erro no dashboard admin:", error);
@@ -2413,11 +2432,22 @@ app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
 });
 app.get('/api/admin/ranking', authenticateAdmin, async (req, res) => {
     try {
+        // Usar COUNT(DISTINCT pt.id) para evitar duplicação de transações
+        // SUM não precisa de DISTINCT porque já estamos agrupando por seller
         const ranking = await sqlTx`
-            SELECT s.id, s.name, s.email, COUNT(pt.id) AS total_sales, COALESCE(SUM(pt.pix_value), 0) AS total_revenue
-            FROM sellers s LEFT JOIN clicks c ON s.id = c.seller_id
+            SELECT 
+                s.id, 
+                s.name, 
+                s.email, 
+                COUNT(DISTINCT pt.id) AS total_sales, 
+                COALESCE(SUM(pt.pix_value), 0) AS total_revenue
+            FROM sellers s 
+            LEFT JOIN clicks c ON s.id = c.seller_id
             LEFT JOIN pix_transactions pt ON c.id = pt.click_id_internal AND pt.status = 'paid'
-            GROUP BY s.id, s.name, s.email ORDER BY total_revenue DESC LIMIT 20;`;
+            GROUP BY s.id, s.name, s.email 
+            HAVING COUNT(DISTINCT pt.id) > 0
+            ORDER BY total_revenue DESC 
+            LIMIT 20`;
         res.json(ranking);
     } catch (error) {
         console.error("Erro no ranking de sellers:", error);

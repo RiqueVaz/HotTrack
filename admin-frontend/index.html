@@ -250,9 +250,9 @@
     }
 
     function renderDashboardPage() {
-        const { saas_profit = 0, total_revenue = 0, total_paid_transactions = 0, total_sellers = 0 } = appState.dashboardData;
+        const { saas_profit = 0, total_revenue = 0, total_paid_transactions = 0, total_sellers = 0, active_sellers = 0 } = appState.dashboardData;
         const ticketMedio = total_paid_transactions > 0 ? total_revenue / total_paid_transactions : 0;
-        const arpu = total_sellers > 0 ? total_revenue / total_sellers : 0;
+        const arpu = active_sellers > 0 ? total_revenue / active_sellers : 0;
         const topUsage = appState.allUsage.slice(0, 5);
 
         const content = `
@@ -263,7 +263,7 @@
                 <div class="card"><h3>Lucro do SaaS</h3><p class="metric-value" style="color:var(--success);">${formatCurrency(parseFloat(saas_profit))}</p></div>
                 <div class="card"><h3>Ticket Médio</h3><p class="metric-value">${formatCurrency(ticketMedio)}</p></div>
                 <div class="card"><h3>Receita / Vendedor</h3><p class="metric-value">${formatCurrency(arpu)}</p></div>
-                <div class="card"><h3>Vendedores Ativos</h3><p class="metric-value">${total_sellers}</p></div>
+                <div class="card"><h3>Vendedores Ativos</h3><p class="metric-value">${active_sellers || 0}</p></div>
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 20px;">
                 <div class="card">
