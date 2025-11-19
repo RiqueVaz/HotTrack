@@ -4,6 +4,7 @@
 
 const crypto = require('crypto');
 const axios = require('axios');
+const logger = require('../logger');
 
 /**
  * Envia evento para Utmify
@@ -17,12 +18,12 @@ async function sendEventToUtmify({
     productData,
     sqlTx
 }) {
-    console.log(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
+    logger.info(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
         let integrationId = null;
 
         if (clickData.pressel_id) {
-            console.log(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
+            logger.info(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
             const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
             if (pressel) {
                 integrationId = pressel.utmify_integration_id;
@@ -33,7 +34,7 @@ async function sendEventToUtmify({
             
             // Se começa com 'cko_', é um hosted_checkout (UUID)
             if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
-                console.log(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}`);
+                logger.info(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}`);
                 // Buscar utmify_integration_id do config do hosted_checkout
                 const [hostedCheckout] = await sqlTx`
                     SELECT config->'tracking'->>'utmify_integration_id' as utmify_integration_id 
@@ -45,22 +46,22 @@ async function sendEventToUtmify({
                     const parsedId = parseInt(hostedCheckout.utmify_integration_id);
                     if (!isNaN(parsedId)) {
                         integrationId = parsedId;
-                        console.log(`[Utmify] Integração Utmify encontrada no checkout hospedado: ${integrationId}`);
+                        logger.info(`[Utmify] Integração Utmify encontrada no checkout hospedado: ${integrationId}`);
                     } else {
-                        console.log(`[Utmify] Valor inválido para utmify_integration_id no checkout hospedado: ${hostedCheckout.utmify_integration_id}`);
+                        logger.warn(`[Utmify] Valor inválido para utmify_integration_id no checkout hospedado: ${hostedCheckout.utmify_integration_id}`);
                     }
                 } else {
-                    console.log(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}, mas nenhuma integração Utmify configurada.`);
+                    logger.info(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}, mas nenhuma integração Utmify configurada.`);
                 }
             } else {
-                console.log(`[Utmify] Clique originado do Checkout ID: ${checkoutId}. Lógica de associação não implementada para checkouts antigos.`);
+                logger.info(`[Utmify] Clique originado do Checkout ID: ${checkoutId}. Lógica de associação não implementada para checkouts antigos.`);
             }
         } else {
-            console.log(`[Utmify] Clique ID ${clickData.id} não originado de Pressel ou Checkout Hospedado conhecido.`);
+            logger.info(`[Utmify] Clique ID ${clickData.id} não originado de Pressel ou Checkout Hospedado conhecido.`);
         }
 
         if (!integrationId) {
-            console.log(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
+            logger.info(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
             return;
         }
 
@@ -70,12 +71,12 @@ async function sendEventToUtmify({
         `;
 
         if (!integration || !integration.api_token) {
-            console.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
+            logger.error(`[Utmify] ERRO: Token não encontrado para a integração ID ${integrationId} do vendedor ${sellerData.id}.`);
             return;
         }
 
         const utmifyApiToken = integration.api_token;
-        console.log(`[Utmify] Token encontrado. Montando payload...`);
+        logger.info(`[Utmify] Token encontrado. Montando payload...`);
         
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
@@ -120,10 +121,10 @@ async function sendEventToUtmify({
         };
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        console.log(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+        logger.info(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
 
     } catch (error) {
-        console.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+        logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
     }
 }
 
@@ -137,53 +138,79 @@ async function sendMetaEvent({
     customerData,
     sqlTx
 }) {
+    logger.info(`[Meta Pixel] ===== INÍCIO ENVIO EVENTO ${eventName} =====`);
+    logger.info(`[Meta Pixel] Transaction ID: ${transactionData?.id}, Click ID: ${clickData?.id}`);
+    
     try {
         // Para Purchase, verificar se meta_event_id foi definido em handleSuccessfulPayment
         if (eventName === 'Purchase' && transactionData.id) {
-            const [check] = await sqlTx`SELECT meta_event_id FROM pix_transactions WHERE id = ${transactionData.id}`;
+            logger.info(`[Meta Pixel] [Purchase] Verificando transação ${transactionData.id}...`);
+            const [check] = await sqlTx`SELECT meta_event_id, status FROM pix_transactions WHERE id = ${transactionData.id}`;
+            logger.info(`[Meta Pixel] [Purchase] Status da transação: ${check?.status}, meta_event_id atual: ${check?.meta_event_id}`);
+            
             if (!check?.meta_event_id) {
-                console.log(`[Meta Pixel] ERRO: Tentando enviar Purchase mas meta_event_id não foi definido para transação ${transactionData.id}. Abortando.`);
+                logger.error(`[Meta Pixel] [Purchase] ERRO: meta_event_id não foi definido para transação ${transactionData.id}. Abortando.`);
                 return;
             }
             // Se meta_event_id já é um event_id completo (formato: Purchase.{id}.{pixel_id}), já foi enviado
             const eventIdPattern = new RegExp(`^Purchase\\.${transactionData.id}\\.[0-9]+$`);
             if (eventIdPattern.test(check.meta_event_id)) {
-                console.log(`[Meta Pixel] Purchase já enviado para transação ${transactionData.id} (meta_event_id: ${check.meta_event_id}). Ignorando.`);
+                logger.info(`[Meta Pixel] [Purchase] Evento já enviado com sucesso (meta_event_id: ${check.meta_event_id}). Ignorando.`);
                 return;
             }
+            
+            logger.info(`[Meta Pixel] [Purchase] meta_event_id atual: "${check.meta_event_id}" - prosseguindo com envio...`);
         }
+        
+        logger.info(`[Meta Pixel] Buscando pixels configurados...`);
+        logger.info(`[Meta Pixel] Click data - pressel_id: ${clickData.pressel_id}, checkout_id: ${clickData.checkout_id}`);
         
         let presselPixels = [];
         if (clickData.pressel_id) {
+            logger.info(`[Meta Pixel] Buscando pixels do pressel ${clickData.pressel_id}...`);
             presselPixels = await sqlTx`SELECT pixel_config_id FROM pressel_pixels WHERE pressel_id = ${clickData.pressel_id}`;
+            logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no pressel.`);
         } else if (clickData.checkout_id) {
             // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
             const checkoutId = clickData.checkout_id;
+            logger.info(`[Meta Pixel] Buscando pixels do checkout ${checkoutId}...`);
             
             // Se começa com 'cko_', é um hosted_checkout (UUID)
             if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
+                logger.info(`[Meta Pixel] É um hosted_checkout (UUID)`);
                 // Buscar pixel_id do config do hosted_checkout
                 const [hostedCheckout] = await sqlTx`
                     SELECT config->'tracking'->>'pixel_id' as pixel_id 
                     FROM hosted_checkouts 
                     WHERE id = ${checkoutId}
                 `;
+                logger.info(`[Meta Pixel] Pixel ID do hosted_checkout: ${hostedCheckout?.pixel_id}`);
                 
                 if (hostedCheckout?.pixel_id) {
                     // Converter pixel_id para o formato esperado
                     presselPixels = [{ pixel_config_id: parseInt(hostedCheckout.pixel_id) }];
+                    logger.info(`[Meta Pixel] Convertido para pixel_config_id: ${presselPixels[0].pixel_config_id}`);
                 }
             } else {
+                logger.info(`[Meta Pixel] É um checkout antigo (integer)`);
                 // É um checkout antigo (integer), usar a tabela checkout_pixels
                 presselPixels = await sqlTx`SELECT pixel_config_id FROM checkout_pixels WHERE checkout_id = ${checkoutId}`;
+                logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no checkout antigo.`);
             }
+        } else {
+            logger.info(`[Meta Pixel] Clique não tem pressel_id nem checkout_id.`);
         }
 
         if (presselPixels.length === 0) {
-            console.log(`Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
+            logger.error(`[Meta Pixel] ⚠⚠⚠ PROBLEMA ENCONTRADO: Nenhum pixel configurado para o evento ${eventName} do clique ${clickData.id}.`);
+            logger.error(`[Meta Pixel] pressel_id: ${clickData.pressel_id}, checkout_id: ${clickData.checkout_id}`);
+            if (eventName === 'Purchase' && transactionData.id) {
+                logger.error(`[Meta Pixel] [Purchase] Transação ${transactionData.id} NÃO TERÁ evento Purchase enviado para Meta!`);
+            }
             return;
         }
 
+        logger.info(`[Meta Pixel] Preparando userData...`);
         const userData = {
             fbp: clickData.fbp || undefined,
             fbc: clickData.fbc || undefined,
@@ -213,13 +240,38 @@ async function sendMetaEvent({
         if (state) userData.st = crypto.createHash('sha256').update(state).digest('hex');
 
         Object.keys(userData).forEach(key => userData[key] === undefined && delete userData[key]);
+        logger.debug(`[Meta Pixel] userData preparado:`, JSON.stringify(userData, null, 2));
         
         let lastEventId = null;
+        let pixelsProcessed = 0;
+        let pixelsSuccess = 0;
+        let pixelsFailed = 0;
+        
+        logger.info(`[Meta Pixel] Processando ${presselPixels.length} pixel(s)...`);
         for (const { pixel_config_id } of presselPixels) {
-            const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
-            if (pixelConfig) {
+            pixelsProcessed++;
+            logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Processando pixel_config_id: ${pixel_config_id}`);
+            
+            try {
+                const [pixelConfig] = await sqlTx`SELECT pixel_id, meta_api_token FROM pixel_configurations WHERE id = ${pixel_config_id}`;
+                
+                if (!pixelConfig) {
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ ERRO: Configuração de pixel não encontrada (pixel_config_id: ${pixel_config_id})`);
+                    pixelsFailed++;
+                    continue;
+                }
+                
                 const { pixel_id, meta_api_token } = pixelConfig;
+                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Pixel encontrado - pixel_id: ${pixel_id}, token presente: ${!!meta_api_token}`);
+                
+                if (!pixel_id || !meta_api_token) {
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ ERRO: Pixel ID ou token ausente. pixel_id: ${pixel_id}, token: ${!!meta_api_token}`);
+                    pixelsFailed++;
+                    continue;
+                }
+                
                 const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
+                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Event ID gerado: ${event_id}`);
                 
                 const payload = {
                     data: [{
@@ -239,23 +291,59 @@ async function sendMetaEvent({
                     delete payload.data[0].custom_data.value;
                 }
 
-                console.log(`[Meta Pixel] Enviando payload para o pixel ${pixel_id}:`, JSON.stringify(payload, null, 2));
-                await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
-                console.log(`Evento '${eventName}' enviado para o Pixel ID ${pixel_id}.`);
+                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Enviando para Meta API...`);
+                logger.debug(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Payload:`, JSON.stringify(payload, null, 2));
                 
-                // Guardar o último event_id para atualizar no final (se Purchase)
-                if (eventName === 'Purchase') {
-                    lastEventId = event_id;
+                try {
+                    const response = await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
+                    logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✓ SUCESSO! Resposta da Meta:`, JSON.stringify(response.data, null, 2));
+                    pixelsSuccess++;
+                    
+                    // Guardar o último event_id para atualizar no final (se Purchase)
+                    if (eventName === 'Purchase') {
+                        lastEventId = event_id;
+                    }
+                } catch (apiError) {
+                    pixelsFailed++;
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✗ FALHA ao enviar para Meta API:`);
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Status:`, apiError.response?.status);
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Erro:`, JSON.stringify(apiError.response?.data || apiError.message, null, 2));
+                    logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Stack:`, apiError.stack);
                 }
+            } catch (error) {
+                pixelsFailed++;
+                logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ERRO inesperado ao processar pixel:`, error.message);
+                logger.error(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Stack:`, error.stack);
             }
         }
         
+        logger.info(`[Meta Pixel] Resumo: ${pixelsSuccess} sucesso, ${pixelsFailed} falhas de ${presselPixels.length} pixel(s) processados.`);
+        
         // Para Purchase, atualizar meta_event_id apenas uma vez no final com o último event_id
-        if (eventName === 'Purchase' && lastEventId && transactionData.id) {
-            await sqlTx`UPDATE pix_transactions SET meta_event_id = ${lastEventId} WHERE id = ${transactionData.id}`;
+        if (eventName === 'Purchase' && transactionData.id) {
+            if (lastEventId) {
+                logger.info(`[Meta Pixel] [Purchase] Atualizando meta_event_id para: ${lastEventId}`);
+                await sqlTx`UPDATE pix_transactions SET meta_event_id = ${lastEventId} WHERE id = ${transactionData.id}`;
+                logger.info(`[Meta Pixel] [Purchase] ✓ meta_event_id atualizado com sucesso!`);
+                
+                if (pixelsFailed > 0) {
+                    logger.warn(`[Meta Pixel] [Purchase] ⚠ ATENÇÃO: ${pixelsFailed} pixel(s) falharam, mas pelo menos 1 foi enviado com sucesso.`);
+                }
+            } else {
+                logger.error(`[Meta Pixel] [Purchase] ✗ PROBLEMA CRÍTICO: Nenhum pixel foi enviado com sucesso!`);
+                logger.error(`[Meta Pixel] [Purchase] meta_event_id NÃO será atualizado. Permanece como: Purchase.${transactionData.id}.processing`);
+                logger.error(`[Meta Pixel] [Purchase] Isso significa que o evento Purchase NÃO foi enviado para a Meta!`);
+            }
         }
+        
+        logger.info(`[Meta Pixel] ===== FIM ENVIO EVENTO ${eventName} =====`);
     } catch (error) {
-        console.error(`Erro ao enviar evento '${eventName}' para a Meta. Detalhes:`, error.response?.data || error.message);
+        logger.error(`[Meta Pixel] ===== ERRO CRÍTICO NO ENVIO DE ${eventName} =====`);
+        logger.error(`[Meta Pixel] Erro:`, error.response?.data || error.message);
+        logger.error(`[Meta Pixel] Stack trace completo:`, error.stack);
+        logger.error(`[Meta Pixel] Transaction ID: ${transactionData?.id}`);
+        logger.error(`[Meta Pixel] Click ID: ${clickData?.id}`);
+        logger.error(`[Meta Pixel] ================================================`);
     }
 }
 
