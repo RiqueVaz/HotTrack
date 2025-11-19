@@ -65,7 +65,7 @@ const qstashClient = new Client({
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
-const processDisparoWorker = require('./worker/process-disparo');
+const { processDisparoData } = require('./worker/process-disparo');
 const processTimeoutWorker = require('./worker/process-timeout');
 
 const receiver = new Receiver({
@@ -294,49 +294,9 @@ app.post(
        const bodyData = JSON.parse(bodyString);
        (async () => {
          try {
-           // Criar mock do objeto res para o worker (ele tenta usar res.headersSent e res.status/json, mas não precisa responder HTTP)
-           const mockRes = {
-             headersSent: false,
-             status: (code) => ({
-               json: (data) => {
-                 if (code === 200) {
-                   console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-                 } else if (code >= 400) {
-                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
-                 }
-               },
-               send: (data) => {
-                 if (code === 200) {
-                   console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-                 } else if (code >= 400) {
-                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
-                 }
-               },
-               end: () => {
-                 if (code === 499) {
-                   console.log("[WORKER-DISPARO] Requisição abortada pelo worker (processando em background).");
-                 } else if (code >= 400) {
-                   console.log(`[WORKER-DISPARO] Status ${code} retornado pelo worker (processando em background).`);
-                 }
-               }
-             }),
-             json: (data) => {
-               console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-             },
-             send: (data) => {
-               console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-             },
-             end: () => {}
-           };
-           
-           // Criar mock do objeto req para o worker
-           const mockReq = {
-             ...req,
-             body: bodyData,
-             aborted: false
-           };
-           
-           await processDisparoWorker(mockReq, mockRes);
+           // Chamar função pura de processamento (não depende de req/res)
+           await processDisparoData(bodyData);
+           console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
          } catch (bgError) {
            console.error("[WORKER-DISPARO] Erro ao processar disparo em background:", bgError);
            console.error("[WORKER-DISPARO] Stack trace:", bgError.stack);
