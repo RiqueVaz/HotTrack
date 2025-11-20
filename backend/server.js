@@ -2228,8 +2228,12 @@ app.get('/api/pix-status/:transaction_id', async (req, res) => {
     }
 
     try {
+        // Busca a transação com JOIN para pegar checkout_id do click
         const result = await sqlTx`
-            SELECT status, pix_value FROM pix_transactions WHERE provider_transaction_id = ${transaction_id}
+            SELECT pt.status, pt.pix_value, c.checkout_id
+            FROM pix_transactions pt 
+            LEFT JOIN clicks c ON pt.click_id_internal = c.id
+            WHERE pt.provider_transaction_id = ${transaction_id}
         `;
 
         if (result.length === 0) {
@@ -2237,10 +2241,24 @@ app.get('/api/pix-status/:transaction_id', async (req, res) => {
         }
 
         const transaction = result[0];
-        res.status(200).json({ 
+        const response = { 
             status: transaction.status, 
             pix_value: transaction.pix_value 
-        });
+        };
+
+        // Se estiver pago e vier de checkout hospedado, busca redirectUrl
+        if (transaction.status === 'paid' && transaction.checkout_id && String(transaction.checkout_id).startsWith('cko_')) {
+            const [checkoutConfig] = await sqlTx`SELECT config FROM hosted_checkouts WHERE id = ${transaction.checkout_id}`;
+            let checkoutConfigJson;
+            try {
+                checkoutConfigJson = parseJsonField(checkoutConfig?.config, `hosted_checkouts:${transaction.checkout_id}`);
+            } catch {
+                checkoutConfigJson = null;
+            }
+            response.redirectUrl = checkoutConfigJson?.redirects?.success_url || null;
+        }
+
+        res.status(200).json(response);
 
     } catch (error) {
         console.error('Erro ao consultar status do PIX:', error);

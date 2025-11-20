@@ -1718,7 +1718,7 @@
                     const closeModalButton = e.target.closest('.modal-close-btn');
                     const modalContainer = document.getElementById('modal-container');
 
-                    if (closeModalButton && modalContainer.querySelector('#pix-status')) {
+                    if (closeModalButton && modalContainer.querySelector('#pix-status-message')) {
                         if (App.state.pixPollingIntervalId) {
                             clearInterval(App.state.pixPollingIntervalId);
                             App.state.pixPollingIntervalId = null;
@@ -1902,7 +1902,7 @@
                 if (Date.now() - startTime > pollDuration) {
                     clearInterval(this.state.pixPollingIntervalId);
                     this.state.pixPollingIntervalId = null;
-                    const statusEl = document.getElementById('pix-status');
+                    const statusEl = document.getElementById('pix-status-message');
                     if (statusEl) statusEl.innerHTML = '<span class="text-red-500">Tempo esgotado. Gere um novo PIX.</span>';
                     // Re-habilita o botão de fechar se o tempo esgotar
                     const closeBtn = document.querySelector('#modal-container .modal-close-btn');
@@ -1911,8 +1911,11 @@
                 }
 
                 try {
-                    const { status } = await this.apiRequest(`/api/pix-status/${transactionId}`);
-                    const statusEl = document.getElementById('pix-status');
+                    const { status, redirectUrl: apiRedirectUrl } = await this.apiRequest(`/api/pix-status/${transactionId}`);
+                    const statusEl = document.getElementById('pix-status-message');
+                    
+                    // Usa redirectUrl da resposta da API, ou fallback para o parâmetro
+                    const redirectUrl = apiRedirectUrl || successRedirectUrl;
 
                     if (status === 'paid') {
                         clearInterval(this.state.pixPollingIntervalId);
@@ -1922,8 +1925,8 @@
                         }
                         // Redireciona após um pequeno delay
                         setTimeout(() => {
-                            if (successRedirectUrl) {
-                                window.location.href = successRedirectUrl;
+                            if (redirectUrl) {
+                                window.location.href = redirectUrl;
                             } else {
                                 // Fallback se não houver URL de sucesso
                                 document.getElementById('modal-container').innerHTML = '';
