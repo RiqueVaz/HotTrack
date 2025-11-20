@@ -7914,9 +7914,7 @@ app.post('/api/webhook/syncpay', async (req, res) => {
 
         const transactionData = notification.data;
         const transactionId = transactionData.id;
-        const identifier = transactionData.identifier; // CORREÇÃO: SyncPay pode usar 'identifier'
         const status = transactionData.status;
-        const customer = transactionData.client;
 
         if (!transactionId || !status) {
             console.log('[Webhook SyncPay] Ignorado: "id" ou "status" não encontrados dentro do objeto "data".');
@@ -7924,26 +7922,36 @@ app.post('/api/webhook/syncpay', async (req, res) => {
         }
 
         const normalized = String(status || '').toLowerCase();
-        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
+        const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'paid_out']);
         
         if (paidStatuses.has(normalized)) {
-            console.log(`[Webhook SyncPay] Processando pagamento - ID: ${transactionId}, Identifier: ${identifier}`);
+            console.log(`[Webhook SyncPay] Processando pagamento - ID: ${transactionId}`);
             
-            // CORREÇÃO: Buscar por 'id' OU 'identifier' (SyncPay pode enviar um ou outro)
+            // Buscar transação por id (conforme documentação oficial)
             const [tx] = await sqlTx`
                 SELECT pt.id 
                 FROM pix_transactions pt 
-                WHERE (pt.provider_transaction_id = ${transactionId} OR pt.provider_transaction_id = ${identifier}) 
+                WHERE pt.provider_transaction_id = ${transactionId} 
                 AND pt.provider = 'syncpay'
             `;
 
             if (!tx) {
-                console.error(`[Webhook SyncPay] ERRO: Transação não encontrada! Tentou buscar id='${transactionId}' ou identifier='${identifier}', provider='syncpay'`);
+                console.error(`[Webhook SyncPay] ERRO: Transação não encontrada! Tentou buscar id='${transactionId}', provider='syncpay'`);
                 return res.sendStatus(200);
             }
             
+            // Extrair dados do cliente de múltiplas fontes conforme documentação
+            // Documentação mostra: client_name, client_email, client_document diretamente no data
+            // Mas também pode vir em transactionData.client (objeto)
+            const clientObj = transactionData.client || {};
+            const customerData = {
+                name: clientObj.name || transactionData.client_name || null,
+                document: clientObj.document || transactionData.client_document || null,
+                email: clientObj.email || transactionData.client_email || null
+            };
+            
             // Simplesmente chamar handleSuccessfulPayment - ele cuida de tudo
-            await handleSuccessfulPayment(tx.id, { name: customer?.name, document: customer?.document });
+            await handleSuccessfulPayment(tx.id, customerData);
             console.log(`[Webhook SyncPay] ✓ Transação ${transactionId} (interna: ${tx.id}) processada.`);
         } else {
             console.log(`[Webhook SyncPay] Status '${status}' não é considerado pago. Ignorando.`);
