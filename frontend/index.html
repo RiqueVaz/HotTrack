@@ -4190,32 +4190,32 @@
                 const urlParams = new URLSearchParams(window.location.search);
                 return urlParams.get(param);
             }
-            function getFacebookCookies() {
+            function getCookie(name) {
                 const cookies = document.cookie.split('; ');
-                let fbp = null, fbc = null;
                 for (const cookie of cookies) {
                     const parts = cookie.split('=');
-                    if (parts[0] === '_fbp') fbp = parts[1];
-                    if (parts[0] === '_fbc') fbc = parts[1];
+                    if (parts[0] === name) return parts[1];
                 }
-                return { fbp, fbc };
+                return null;
             }
-            try {
-                // Bloqueia bots conhecidos do Facebook para evitar poluir as métricas
+            function getFacebookCookies() {
+                return {
+                    fbp: getCookie('_fbp'),
+                    fbc: getCookie('_fbc')
+                };
+            }
+            function isBot() {
                 const userAgent = navigator.userAgent;
-                if (/facebookexternalhit|Facebot/i.test(userAgent)) {
-                    console.log('Bot do Facebook detectado. Redirecionando...');
-                    window.location.href = CONFIG.WHITE_PAGE_URL;
-                    return; // Interrompe a execução
-                }
-
-                ${deviceDetectionCode}
-                const { fbp, fbc } = getFacebookCookies();
-                const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                                                presselId: CONFIG.PRESSEL_ID,
+                return /facebookexternalhit|Facebot/i.test(userAgent);
+            }
+            async function registerAndRedirect() {
+                try {
+                    ${deviceDetectionCode} // <<< INJETA O CÓDIGO DE DETECÇÃO
+                    
+                    const { fbp, fbc } = getFacebookCookies();
+                    // Construir payload para /api/registerClick
+                    const clickPayload = {
+                        presselId: CONFIG.PRESSEL_ID,
                         referer: document.referrer || null,
                         fbclid: getQueryParam('fbclid'),
                         fbp: fbp,
@@ -4226,20 +4226,52 @@
                         utm_medium: getQueryParam('utm_medium'),
                         utm_content: getQueryParam('utm_content'),
                         utm_term: getQueryParam('utm_term')
-                    })
-                });
-                if (!response.ok) throw new Error('Falha ao registrar clique.');
-                const { click_id } = await response.json();
+                    };
 
-                // Dispara ViewContent no Pixel da Meta
-                fbq('track', 'ViewContent', {}, { eventID: click_id });
+                    const response = await fetch(CONFIG.API_BASE_URL + '/api/registerClick', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(clickPayload)
+                    });
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.message || 'Falha ao registrar clique.');
+                    }
+                    const { click_id } = await response.json();
 
-                const botUrl = \`https://t.me/\${CONFIG.BOT_USERNAME}?start=\${click_id}\`;
-                window.location.href = botUrl;
-            } catch (error) {
-                console.error("Erro na pressel:", error);
-                window.location.href = CONFIG.WHITE_PAGE_URL; // Redireciona para página branca em caso de erro
+                    // Dispara ViewContent no Pixel da Meta com o eventID
+                    if (typeof fbq !== 'undefined') {
+                        fbq('track', 'ViewContent', {}, { eventID: click_id });
+                        console.log('Evento ViewContent disparado com eventID:', click_id);
+                    } else {
+                        console.warn('fbq não definido. Não foi possível disparar ViewContent.');
+                    }
+
+                    const botUrl = \`https://t.me/\${CONFIG.BOT_USERNAME}?start=\${click_id}\`;
+                    window.location.href = botUrl;
+                } catch (error) {
+                    console.error("Erro na lógica da pressel:", error);
+                    window.location.href = CONFIG.WHITE_PAGE_URL; // Redireciona para página branca em caso de erro
+                }
             }
+            function startFlow() {
+                if (isBot()) {
+                    window.location.href = CONFIG.WHITE_PAGE_URL;
+                    return;
+                }
+                let attempts = 0;
+                const maxAttempts = 15;
+                const interval = setInterval(() => {
+                    const fbc = getCookie("_fbc");
+                    const fbclid = getQueryParam("fbclid");
+                    if (fbc || !fbclid || attempts >= maxAttempts) {
+                        clearInterval(interval);
+                        registerAndRedirect();
+                    }
+                    attempts++;
+                }, 200);
+            }
+            startFlow();
         })();
     <\/script>
 </head>
