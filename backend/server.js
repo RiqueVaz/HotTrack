@@ -6456,6 +6456,31 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             variables.estado = '';
         }
     }
+    
+    // ==========================================================
+    // CARREGAR VARIÁVEIS DO BANCO DE DADOS (se existir estado)
+    // Isso garante que variáveis atualizadas (ex: last_transaction_id)
+    // estejam disponíveis mesmo quando processFlow é chamado com startNodeId
+    // ==========================================================
+    const [userStateForVars] = await sqlTx`
+        SELECT variables 
+        FROM user_flow_states 
+        WHERE chat_id = ${chatId} AND bot_id = ${botId}
+    `;
+    
+    if (userStateForVars && userStateForVars.variables) {
+        let parsedDbVariables = {};
+        try {
+            parsedDbVariables = typeof userStateForVars.variables === 'string' 
+                ? JSON.parse(userStateForVars.variables) 
+                : userStateForVars.variables;
+        } catch (e) {
+            parsedDbVariables = userStateForVars.variables || {};
+        }
+        // Mescla variáveis do banco com as iniciais (variáveis iniciais têm prioridade)
+        variables = { ...parsedDbVariables, ...variables };
+        logger.debug(`${logPrefix} [Flow Engine] Variáveis do banco carregadas e mescladas. last_transaction_id: ${variables.last_transaction_id || 'não definido'}`);
+    }
     // ==========================================================
     // FIM DO PASSO 1
     // ==========================================================
