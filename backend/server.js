@@ -18,8 +18,6 @@ const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
 const { OAuth2Client } = require('google-auth-library');
-const { Client } = require("@upstash/qstash");
-const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
@@ -58,20 +56,50 @@ const mailerSend = new MailerSend({
     apiKey: process.env.MAILERSEND_API_KEY,
 });
 
-const qstashClient = new Client({
-  token: process.env.QSTASH_TOKEN,
-});
-
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
 const { processDisparoData } = require('./worker/process-disparo');
 const { processTimeoutData } = require('./worker/process-timeout');
 
-const receiver = new Receiver({
-    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
-    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
-  });
+// Inicializar workers BullMQ (apenas em produção ou quando habilitado)
+if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
+    console.log('[SERVER] Inicializando workers BullMQ...');
+    require('./workers');
+}
+
+// Função auxiliar para cancelar jobs BullMQ
+async function cancelBullMQJob(jobId) {
+    if (!jobId) return false;
+    
+    try {
+        const queueManager = require('./shared/queue-manager');
+        
+        // Inferir nome da fila pelo prefixo do jobId
+        let queueName;
+        if (jobId.includes('scheduled-disparo')) {
+            queueName = 'disparos-agendados';
+        } else if (jobId.startsWith('timeout-')) {
+            queueName = 'timeouts';
+        } else if (jobId.startsWith('delay-')) {
+            queueName = 'delays';
+        } else if (jobId.startsWith('disparo-')) {
+            queueName = 'disparos';
+        } else {
+            // Tentar em todas as filas se não conseguir inferir
+            for (const queue of ['timeouts', 'delays', 'disparos', 'disparos-agendados']) {
+                const result = await queueManager.cancelJob(queue, jobId);
+                if (result) return true;
+            }
+            return false;
+        }
+        
+        return await queueManager.cancelJob(queueName, jobId);
+    } catch (error) {
+        console.error(`Erro ao cancelar job ${jobId}:`, error.message);
+        return false;
+    }
+}
 
 // Função de validação de URLs em texto (anti-links externos)
 const validateTextForUrls = (text) => {
@@ -217,491 +245,9 @@ const parseContentLength = (value) => {
 // Configuração do servidor
 const PORT = process.env.PORT || 3001;
 
+// Endpoints QStash removidos - agora usando BullMQ workers
 
-app.post(
-  '/api/worker/process-timeout',
-  express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-  async (req, res) => {
-    try {
-      // 1. Verificar a assinatura do QStash
-      const signature = req.headers["upstash-signature"];
-      const bodyString = req.body.toString();
-
-      const isValid = await receiver.verify({
-        signature,
-        body: bodyString,
-      });
-
-      // 2. Se a assinatura for inválida, rejeitar a requisição
-      if (!isValid) {
-        console.error("[WORKER-TIMEOUT] Verificação de assinatura do QStash falhou.");
-        return res.status(401).send("Invalid signature");
-      }
-
-      // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-      console.log("[WORKER-TIMEOUT] Assinatura válida. Aceitando timeout para processamento em background.");
-      res.status(200).json({ message: 'Worker de timeout aceito para processamento.' });
-
-      // 4. Processar timeout em background (não bloqueia resposta HTTP)
-      const bodyData = JSON.parse(bodyString);
-      (async () => {
-        try {
-          // Chamar função pura de processamento (não depende de req/res)
-          await processTimeoutData(bodyData);
-          console.log("[WORKER-TIMEOUT] Timeout processado com sucesso em background.");
-        } catch (bgError) {
-          console.error("[WORKER-TIMEOUT] Erro ao processar timeout em background:", bgError);
-          console.error("[WORKER-TIMEOUT] Stack trace:", bgError.stack);
-          // Erros críticos já são logados pela função pura, não precisamos fazer mais nada aqui
-        }
-      })();
-
-    } catch (error) {
-      console.error("Erro crítico no handler do worker de timeout:", error);
-      // Verificar se resposta já foi enviada antes de tentar enviar
-      if (!res.headersSent) {
-        res.status(500).send("Internal Server Error");
-      }
-    }
-  }
-);
-
-app.post(
-     '/api/worker/process-disparo',
-     express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-     async (req, res) => {
-      try {
-       // 1. Verificar a assinatura do QStash
-       const signature = req.headers["upstash-signature"];
-       const bodyString = req.body.toString();
-    
-       const isValid = await receiver.verify({
-        signature,
-        body: bodyString,
-       });
-    
-       if (!isValid) {
-        console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
-        return res.status(401).send("Invalid signature");
-       }
-    
-       // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-       console.log("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento em background.");
-       res.status(200).json({ message: 'Worker de disparo aceito para processamento.' });
-    
-       // 3. Processar disparo em background (não bloqueia resposta HTTP)
-       const bodyData = JSON.parse(bodyString);
-       (async () => {
-         try {
-           // Chamar função pura de processamento (não depende de req/res)
-           await processDisparoData(bodyData);
-           console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-         } catch (bgError) {
-           console.error("[WORKER-DISPARO] Erro ao processar disparo em background:", bgError);
-           console.error("[WORKER-DISPARO] Stack trace:", bgError.stack);
-           // Erros críticos já são logados pelo worker, não precisamos fazer mais nada aqui
-         }
-       })();
-    
-      } catch (error) {
-       console.error("Erro crítico no handler do worker de disparo:", error);
-       // Verificar se resposta já foi enviada antes de tentar enviar
-       if (!res.headersSent) {
-         res.status(500).send("Internal Server Error");
-       }
-      }
-     }
-    );
-
-// Endpoint para processar disparos agendados (chamado pelo QStash)
-app.post(
-    '/api/worker/process-scheduled-disparo',
-    express.raw({ type: 'application/json' }),
-    async (req, res) => {
-        try {
-            // 1. Verificar assinatura do QStash
-            const signature = req.headers["upstash-signature"];
-            const bodyString = req.body.toString();
-            
-            const isValid = await receiver.verify({
-                signature,
-                body: bodyString,
-            });
-            
-            if (!isValid) {
-                console.error("[WORKER-SCHEDULED-DISPARO] Verificação de assinatura do QStash falhou.");
-                return res.status(401).send("Invalid signature");
-            }
-            
-            // 2. Validação básica de history_id
-            const { history_id } = JSON.parse(bodyString);
-            
-            if (!history_id) {
-                return res.status(400).json({ message: 'history_id é obrigatório.' });
-            }
-            
-            // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-            console.log("[WORKER-SCHEDULED-DISPARO] Assinatura válida. Aceitando disparo agendado para processamento em background.");
-            res.status(200).json({ message: 'Disparo agendado aceito para processamento.' });
-            
-            // 4. Processar tudo em background (não bloqueia resposta HTTP)
-            (async () => {
-                try {
-                    // Buscar o histórico do disparo
-                    const [history] = await sqlWithRetry(
-                        'SELECT * FROM disparo_history WHERE id = $1',
-                        [history_id]
-                    );
-                    
-                    if (!history) {
-                        console.error(`[WORKER-SCHEDULED-DISPARO] Histórico de disparo ${history_id} não encontrado.`);
-                        return;
-                    }
-                    
-                    // Validar que está com status SCHEDULED
-                    if (history.status !== 'SCHEDULED') {
-                        console.log(`[WORKER-SCHEDULED-DISPARO] Disparo ${history_id} não está agendado (status: ${history.status}). Ignorando.`);
-                        return;
-                    }
-                    
-                    // Buscar o fluxo de disparo
-                    const [disparoFlow] = await sqlWithRetry(
-                        'SELECT * FROM disparo_flows WHERE id = $1',
-                        [history.disparo_flow_id]
-                    );
-                    
-                    if (!disparoFlow) {
-                        await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
-                        console.error(`[WORKER-SCHEDULED-DISPARO] Fluxo de disparo ${history.disparo_flow_id} não encontrado.`);
-                        return;
-                    }
-                    
-                    // Parse do fluxo
-                    const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
-                    const flowNodes = flowData.nodes || [];
-                    const flowEdges = flowData.edges || [];
-                    
-                    // Buscar contatos dos bots
-                    const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
-                    
-                    // Re-executar higienização antes de buscar contatos
-                    console.log(`[WORKER-SCHEDULED-DISPARO] Re-executando higienização para ${botIds.length} bot(s)...`);
-                    const excludeChatIds = await validateContactsForBots(botIds, history.seller_id);
-                    console.log(`[WORKER-SCHEDULED-DISPARO] ${excludeChatIds.length} contatos inativos encontrados.`);
-                    
-                    // Extrair tagIds e tagFilterMode do flow_steps se existir
-                    let tagIds = null;
-                    let tagFilterMode = 'include'; // Default
-                    if (history.flow_steps && typeof history.flow_steps === 'object') {
-                        const flowSteps = typeof history.flow_steps === 'string' ? JSON.parse(history.flow_steps) : history.flow_steps;
-                        if (flowSteps.tagIds && Array.isArray(flowSteps.tagIds)) {
-                            tagIds = flowSteps.tagIds;
-                        }
-                        if (flowSteps.tagFilterMode) {
-                            tagFilterMode = flowSteps.tagFilterMode;
-                        }
-                    }
-                    
-                    // Separar tags custom de automáticas
-                    let customTagIds = [];
-                    let automaticTagNames = [];
-                    if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
-                        tagIds.forEach(tagId => {
-                            if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
-                                customTagIds.push(parseInt(tagId));
-                            } else if (typeof tagId === 'string') {
-                                automaticTagNames.push(tagId);
-                            }
-                        });
-                    }
-                    
-                    let contacts;
-                    const hasAnyTagFilter = customTagIds.length > 0 || automaticTagNames.length > 0;
-                    
-                    // Aplicar filtro por tags se existir
-                    if (hasAnyTagFilter) {
-                        // Validar tags custom
-                        let validCustomTagIds = [];
-                        if (customTagIds.length > 0) {
-                            const validTags = await sqlWithRetry(
-                                sqlTx`SELECT id FROM lead_custom_tags 
-                                      WHERE id = ANY(${customTagIds}) 
-                                        AND seller_id = ${history.seller_id} 
-                                        AND bot_id = ANY(${botIds})`
-                            );
-                            
-                            if (validTags && validTags.length > 0) {
-                                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
-                            }
-                        }
-                        
-                        // Validar tags automáticas
-                        const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
-                        
-                        // Construir query com CTEs - apenas usuários individuais (chat_id > 0)
-                        let tagQuery = `
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                WHERE tc.bot_id = ANY($1::int[]) 
-                                    AND tc.seller_id = $2
-                                    AND tc.chat_id > 0
-                        `;
-                        let tagParams = [botIds, history.seller_id];
-                        let paramOffset = 3;
-                        
-                        // Adicionar filtro de contatos inativos se houver
-                        if (excludeChatIds && excludeChatIds.length > 0) {
-                            tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
-                            tagParams.push(excludeChatIds);
-                            paramOffset++;
-                        }
-                        
-                        tagQuery += `
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                            )
-                        `;
-                        
-                        // Aplicar lógica de tagFilterMode (include/exclude)
-                        const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
-                        
-                        // Adicionar filtros para tags custom
-                        if (validCustomTagIds.length > 0) {
-                            if (filterMode === 'exclude') {
-                                // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
-                                tagQuery += `,
-                                custom_tagged AS (
-                                    SELECT DISTINCT lcta.chat_id
-                                    FROM lead_custom_tag_assignments lcta
-                                    WHERE lcta.bot_id = ANY($1::int[])
-                                        AND lcta.seller_id = $2
-                                        AND lcta.tag_id = ANY($${paramOffset}::int[])
-                                )`;
-                                tagParams.push(validCustomTagIds);
-                                paramOffset += 1;
-                            } else {
-                                // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
-                                tagQuery += `,
-                                custom_tagged AS (
-                                    SELECT DISTINCT lcta.chat_id
-                                    FROM lead_custom_tag_assignments lcta
-                                    WHERE lcta.bot_id = ANY($1::int[])
-                                        AND lcta.seller_id = $2
-                                        AND lcta.tag_id = ANY($${paramOffset}::int[])
-                                    GROUP BY lcta.chat_id
-                                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                                )`;
-                                tagParams.push(validCustomTagIds, validCustomTagIds.length);
-                                paramOffset += 2;
-                            }
-                        }
-                        
-                        // Adicionar filtros para tags automáticas (Pagante)
-                        if (validAutomaticTags.includes('Pagante')) {
-                            tagQuery += `,
-                            paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                JOIN clicks c ON c.click_id = tc.click_id
-                                JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                                WHERE tc.bot_id = ANY($1::int[])
-                                    AND tc.seller_id = $2
-                                    AND tc.chat_id > 0
-                                    AND pt.status = 'paid'
-                            )`;
-                        }
-                        
-                        // Construir SELECT final
-                        tagQuery += `
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                        `;
-                        
-                        // Adicionar JOINs condicionais
-                        if (validCustomTagIds.length > 0) {
-                            if (filterMode === 'exclude') {
-                                tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                            } else {
-                                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                            }
-                        }
-                        if (validAutomaticTags.includes('Pagante')) {
-                            tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
-                        }
-                        
-                        // Adicionar WHERE para exclusão se necessário
-                        if (filterMode === 'exclude' && validCustomTagIds.length > 0) {
-                            tagQuery += ` WHERE ct.chat_id IS NULL`;
-                        }
-                        
-                        tagQuery += ` ORDER BY bc.chat_id`;
-                        
-                        contacts = await sqlWithRetry(tagQuery, tagParams);
-                    } else {
-                        // Sem filtro de tags - apenas usuários individuais (chat_id > 0)
-                        let contactsQuery;
-                        if (excludeChatIds && excludeChatIds.length > 0) {
-                            contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                                FROM telegram_chats 
-                                WHERE bot_id = ANY(${botIds}) 
-                                    AND seller_id = ${history.seller_id}
-                                    AND chat_id > 0
-                                    AND chat_id != ALL(${excludeChatIds}::bigint[])
-                                ORDER BY chat_id, created_at DESC`;
-                        } else {
-                            contactsQuery = sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                                FROM telegram_chats 
-                                WHERE bot_id = ANY(${botIds}) 
-                                    AND seller_id = ${history.seller_id}
-                                    AND chat_id > 0
-                                ORDER BY chat_id, created_at DESC`;
-                        }
-                        contacts = await sqlWithRetry(contactsQuery);
-                    }
-                    
-                    const allContacts = new Map();
-                    contacts.forEach(c => {
-                        if (!allContacts.has(c.chat_id)) {
-                            allContacts.set(c.chat_id, { 
-                                chat_id: c.chat_id,
-                                first_name: c.first_name,
-                                last_name: c.last_name,
-                                username: c.username,
-                                click_id: c.click_id,
-                                bot_id_source: c.bot_id 
-                            });
-                        }
-                    });
-                    const uniqueContacts = Array.from(allContacts.values());
-                    
-                    // Encontrar o trigger (nó inicial do disparo)
-                    let startNodeId = null;
-                    const triggerNode = flowNodes.find(node => node.type === 'trigger');
-                    
-                    if (triggerNode) {
-                        startNodeId = triggerNode.id;
-                    } else {
-                        const actionNode = flowNodes.find(node => node.type === 'action');
-                        if (actionNode) {
-                            startNodeId = actionNode.id;
-                        }
-                    }
-                    
-                    if (!startNodeId) {
-                        await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', history_id]);
-                        console.error(`[WORKER-SCHEDULED-DISPARO] Nenhum nó inicial encontrado no fluxo.`);
-                        return;
-                    }
-                    
-                    // Atualizar status para RUNNING
-                    await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${history_id}`
-                    );
-                    
-                    // Buscar bot_tokens antes do loop para usar como chave de rate limiting
-                    const botTokens = await sqlWithRetry(
-                        sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${history.seller_id}`
-                    );
-                    const botTokenMap = new Map();
-                    botTokens.forEach(bot => {
-                        botTokenMap.set(bot.id, bot.bot_token);
-                    });
-                    
-                    let messageCounter = 0;
-                    const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
-                    const qstashPromises = [];
-                    const CONTACTS_CHUNK_SIZE = 500;
-                    const contactChunks = [];
-                    
-                    for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
-                        contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
-                    }
-                    
-                    console.log(`[DISPARO-AGENDADO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks`);
-                    
-                    for (const contactChunk of contactChunks) {
-                        for (const contact of contactChunk) {
-                            const userVariables = {
-                                primeiro_nome: contact.first_name || '',
-                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                            };
-                            
-                            const payload = {
-                                history_id: history_id,
-                                chat_id: contact.chat_id,
-                                bot_id: contact.bot_id_source,
-                                flow_nodes: JSON.stringify(flowNodes),
-                                flow_edges: JSON.stringify(flowEdges),
-                                start_node_id: startNodeId,
-                                variables_json: JSON.stringify(userVariables)
-                            };
-                            
-                            const totalDelaySeconds = messageCounter * delayBetweenMessages;
-                            
-                            // Obter bot_token para usar como chave de rate limiting
-                            const botToken = botTokenMap.get(contact.bot_id_source) || '';
-                            
-                            qstashPromises.push(
-                                qstashClient.publishJSON({
-                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                    body: payload,
-                                    delay: `${totalDelaySeconds}s`, 
-                                    retries: 2,
-                                    // Rate limiting distribuído via QStash
-                                    headers: {
-                                        'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
-                                        'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
-                                        'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
-                                        'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
-                                    }
-                                })
-                            );
-                            
-                            messageCounter++; 
-                        }
-                        
-                        if (qstashPromises.length > 0) {
-                            console.log(`[DISPARO-AGENDADO] Processando chunk com ${qstashPromises.length} promises...`);
-                            await publishQStashInBatches(qstashPromises, 10, 500);
-                            qstashPromises.length = 0;
-                        }
-                    }
-                    
-                    if (qstashPromises.length > 0) {
-                        await publishQStashInBatches(qstashPromises, 10, 500);
-                    }
-                    
-                    console.log(`[WORKER-SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso em background.`);
-                } catch (bgError) {
-                    console.error("[WORKER-SCHEDULED-DISPARO] Erro ao processar disparo agendado em background:", bgError);
-                    console.error("[WORKER-SCHEDULED-DISPARO] Stack trace:", bgError.stack);
-                    
-                    // Atualizar status para FAILED em caso de erro
-                    try {
-                        await sqlWithRetry(
-                            sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${history_id}`
-                        );
-                    } catch (updateError) {
-                        console.error("[WORKER-SCHEDULED-DISPARO] Erro ao atualizar status para FAILED:", updateError);
-                    }
-                }
-            })();
-            
-        } catch (error) {
-            console.error("Erro crítico no handler do worker de disparo agendado:", error);
-            // Verificar se resposta já foi enviada antes de tentar enviar
-            if (!res.headersSent) {
-                res.status(500).json({ message: 'Erro interno ao processar disparo agendado.' });
-            }
-        }
-    }
-);
-
-// ==========================================================
-// FIM DA ROTA DO QSTASH
-// ==========================================================
+// Endpoint process-scheduled-disparo removido - agora usando BullMQ worker
 
 
 app.use(express.json({ limit: '70mb' }));
@@ -1734,163 +1280,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
 }
-
-// Função para processar promises do QStash em batches para evitar sobrecarga
-async function publishQStashInBatches(promises, batchSize = 10, delayMs = 500) {
-    const batches = [];
-    for (let i = 0; i < promises.length; i += batchSize) {
-        batches.push(promises.slice(i, i + batchSize));
-    }
-    
-    console.log(`[DISPARO] Processando ${promises.length} jobs em ${batches.length} batches de ${batchSize}`);
-    
-    for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        try {
-            await Promise.all(batch);
-            console.log(`[DISPARO] Batch ${i + 1}/${batches.length} concluído`);
-        } catch (error) {
-            console.error(`[DISPARO] Erro no batch ${i + 1}:`, error.message);
-            // Continuar com próximos batches mesmo se um falhar
-        }
-        
-        // Adiciona delay entre batches, exceto no último
-        if (delayMs > 0 && i < batches.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
-    }
-}
-
-// Função para processar múltiplos steps em batch (otimização)
-async function processStepsForQStashBatch(steps, sellerId) {
-    const processedStepsCache = new Map();
-    
-    // Identifica steps únicos que precisam de processamento (apenas mídia)
-    const mediaSteps = steps.filter(step => ['image', 'video', 'audio'].includes(step.type));
-    
-    if (mediaSteps.length === 0) {
-        // Se não há steps de mídia, retorna cache vazio
-        return processedStepsCache;
-    }
-    
-    // Coleta todos os file_ids únicos que precisam ser buscados
-    const fileIdsToLookup = new Set();
-    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    
-    for (const step of mediaSteps) {
-        const fileUrl = step[urlMap[step.type]];
-        if (fileUrl && (fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC'))) {
-            fileIdsToLookup.add(fileUrl);
-        }
-    }
-    
-    if (fileIdsToLookup.size === 0) {
-        return processedStepsCache;
-    }
-    
-    try {
-        // Busca todos os file_ids de uma vez usando IN
-        const fileIdsArray = Array.from(fileIdsToLookup);
-        const mediaResults = await sqlWithRetry(
-            sqlTx`SELECT id, file_id FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
-        );
-        
-        // Cria um Map de file_id -> media_id para lookup rápido
-        const fileIdToMediaId = new Map();
-        for (const media of mediaResults) {
-            fileIdToMediaId.set(media.file_id, media.id);
-        }
-        
-        // Processa cada step e armazena no cache
-        for (const step of steps) {
-            const stepKey = JSON.stringify(step);
-            
-            if (!['image', 'video', 'audio'].includes(step.type)) {
-                // Step não é mídia, não precisa processar
-                processedStepsCache.set(stepKey, step);
-                continue;
-            }
-            
-            const fileUrl = step[urlMap[step.type]];
-            if (!fileUrl) {
-                processedStepsCache.set(stepKey, step);
-                continue;
-            }
-            
-            const isLibraryFile = fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC');
-            if (!isLibraryFile) {
-                processedStepsCache.set(stepKey, step);
-                continue;
-            }
-            
-            const mediaId = fileIdToMediaId.get(fileUrl);
-            if (mediaId) {
-                // Cria uma cópia do step substituindo file_id por mediaLibraryId
-                const processedStep = { ...step };
-                processedStep[urlMap[step.type]] = null;
-                processedStep.mediaLibraryId = mediaId;
-                processedStepsCache.set(stepKey, processedStep);
-            } else {
-                // Não encontrado na biblioteca, mantém original
-                processedStepsCache.set(stepKey, step);
-            }
-        }
-    } catch (error) {
-        console.error(`[processStepsForQStashBatch] Erro ao processar steps em batch:`, error);
-        // Em caso de erro, retorna cache vazio e o código vai usar processStepForQStash individual
-    }
-    
-    return processedStepsCache;
-}
-
-// Função para processar steps e substituir file_id da biblioteca por mediaLibraryId antes de enviar ao QStash
-async function processStepForQStash(step, sellerId) {
-    // Se o step não é de mídia, retorna sem alterações
-    if (!['image', 'video', 'audio'].includes(step.type)) {
-        return step;
-    }
-    
-    const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
-    const fileUrl = step[urlMap[step.type]];
-    
-    if (!fileUrl) {
-        return step;
-    }
-    
-    // Verifica se é um file_id da biblioteca (começa com BAAC, AgAC, AwAC)
-    const isLibraryFile = fileUrl.startsWith('BAAC') || fileUrl.startsWith('AgAC') || fileUrl.startsWith('AwAC');
-    
-    if (!isLibraryFile) {
-        // Se não é da biblioteca, pode ser URL ou outro file_id, mantém como está
-        return step;
-    }
-    
-    try {
-        // Busca o ID da biblioteca de mídia pelo file_id
-        const [media] = await sqlWithRetry(
-            'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
-            [fileUrl, sellerId]
-        );
-        
-        if (!media) {
-            console.warn(`[processStepForQStash] Arquivo da biblioteca não encontrado: ${fileUrl}`);
-            return step; // Retorna o step original se não encontrar
-        }
-        
-        // Cria uma cópia do step substituindo file_id por mediaLibraryId
-        const processedStep = { ...step };
-        processedStep[urlMap[step.type]] = null; // Remove o file_id
-        processedStep.mediaLibraryId = media.id; // Adiciona o ID da biblioteca
-        
-        console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
-        
-        return processedStep;
-    } catch (error) {
-        console.error(`[processStepForQStash] Erro ao processar arquivo da biblioteca:`, error);
-        // Em caso de erro, retorna o step original
-        return step;
-    }
-}
+// Funções auxiliares QStash removidas - não mais necessárias com BullMQ
 
 async function handleMediaNode(node, botToken, chatId, caption) {
     const type = node.type;
@@ -5764,12 +5154,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}
                     `;
                     
-                    // Agendar continuação após o delay
+                    // Agendar continuação após o delay usando BullMQ
                     try {
                         const remainingActions = actions.slice(i + 1); // Ações restantes após o delay
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: {
+                        const queueManager = require('./shared/queue-manager');
+                        const job = await queueManager.addJob(
+                            'delays',
+                            'process-delay',
+                            {
                                 chat_id: chatId,
                                 bot_id: botId,
                                 target_node_id: resolvedCurrentNodeId, // Continuar do mesmo nó
@@ -5777,24 +5169,25 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
                             },
-                            delay: `${delaySeconds}s`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
+                            {
+                                delay: delaySeconds * 1000, // Converter segundos para milissegundos
+                                jobId: `delay-${chatId}-${botId}-${Date.now()}`,
+                            }
+                        );
                         
                         // Salvar scheduled_message_id no estado
                         await sqlTx`
                             UPDATE user_flow_states 
-                            SET scheduled_message_id = ${response.messageId}
+                            SET scheduled_message_id = ${job.id}
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `;
                         
-                        logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                        logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via BullMQ. Tarefa: ${job.id}`);
                         
                         // Retornar código especial para processFlow saber que parou
                         return 'delay_scheduled';
                     } catch (error) {
-                        logger.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                        logger.error(`${logPrefix} [Delay] Erro ao agendar delay via BullMQ:`, error.message);
                         // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
                         await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                     }
@@ -6126,10 +5519,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
-                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            await cancelBullMQJob(stateToCancel.scheduled_message_id);
                             logger.debug(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
-                            logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                            logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
                         }
                     }
                 } catch (e) {
@@ -6618,10 +6011,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    await cancelBullMQJob(stateToCancel.scheduled_message_id);
                     logger.debug(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) {
-                    logger.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                    logger.warn(`[Flow Engine] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
                 }
             }
 
@@ -6814,32 +6207,34 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Agenda o worker de timeout com uma única chamada
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { 
+                    // Agenda o worker de timeout usando BullMQ
+                    const queueManager = require('./shared/queue-manager');
+                    const job = await queueManager.addJob(
+                        'timeouts',
+                        'process-timeout',
+                        { 
                             chat_id: chatId, 
                             bot_id: botId, 
                             target_node_id: noReplyNodeId,
-                            variables: variables,
-                            timestamp: Date.now() // 👈 ADICIONE ISSO para evitar deduplicação
+                            variables: variables
                         },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: false, // 👈 MUDE DE true PARA false
-                        method: "POST"
-                    });
+                        {
+                            delay: timeoutMinutes * 60 * 1000, // Converter minutos para milissegundos
+                            jobId: `timeout-${chatId}-${botId}-${Date.now()}`,
+                        }
+                    );
                     
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
                     await sqlTx`
                         UPDATE user_flow_states 
-                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
+                        SET waiting_for_input = true, scheduled_message_id = ${job.id} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     
-                    logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa BullMQ: ${job.id}`);
                 
                 } catch (error) {
-                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no BullMQ:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -6999,7 +6394,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
             // Cancela o timeout, pois o usuário respondeu.
             if (userState.scheduled_message_id) {
                  try {
-                    await qstashClient.messages.delete(userState.scheduled_message_id);
+                    await cancelBullMQJob(userState.scheduled_message_id);
                     logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
                 } catch (e) { 
                     logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
@@ -7457,17 +6852,22 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
                 }
                 
-                const qstashResponse = await qstashClient.publishJSON({
-                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
-                    body: { history_id: historyId },
-                    delay: `${delaySeconds}s`, // Delay relativo em segundos
-                    retries: 2,
-                    method: "POST"
-                });
+                // Agendar disparo usando BullMQ
+                const queueManager = require('./shared/queue-manager');
+                const job = await queueManager.addJob(
+                    'disparos-agendados',
+                    'process-scheduled-disparo',
+                    { history_id: historyId },
+                    {
+                        delay: delaySeconds * 1000, // Converter segundos para milissegundos
+                        attempts: 3,
+                        jobId: `scheduled-disparo-${historyId}`,
+                    }
+                );
                 
                 // Salvar o scheduled_message_id
                 await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${job.id} WHERE id = ${historyId}`
                 );
                 
                 // scheduledDate está em UTC (vem do frontend como ISO string)
@@ -7477,9 +6877,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
                 });
                 return; // Não processar imediatamente
-            } catch (qstashError) {
-                console.error("Erro ao agendar disparo no QStash:", qstashError);
-                console.error("Detalhes do erro:", JSON.stringify(qstashError, null, 2));
+            } catch (bullmqError) {
+                console.error("Erro ao agendar disparo no BullMQ:", bullmqError);
+                console.error("Detalhes do erro:", JSON.stringify(bullmqError, null, 2));
                 // Se falhar ao agendar, deletar o registro e retornar erro
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
                 return res.status(500).json({ message: 'Erro ao agendar o disparo. Tente novamente.' });
@@ -7503,7 +6903,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 let messageCounter = 0;
                 const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
-                const qstashPromises = [];
                 
                 // Processar contatos em chunks para evitar sobrecarga de memória
                 const CONTACTS_CHUNK_SIZE = 500; // Processar 500 contatos por vez
@@ -7558,37 +6957,23 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         // Obter bot_token para usar como chave de rate limiting
                         const botToken = botTokenMap.get(contact.bot_id_source) || '';
             
-                        qstashPromises.push(
-                            qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                body: payload,
-                                delay: `${totalDelaySeconds}s`, 
-                                retries: 2,
-                                // Rate limiting distribuído via QStash
-                                headers: {
-                                    'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
-                                    'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
-                                    'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
-                                    'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
-                                }
-                            })
+                        // Adicionar job usando BullMQ (não precisa acumular promises)
+                        const queueManager = require('./shared/queue-manager');
+                        await queueManager.addJob(
+                            'disparos',
+                            'process-disparo',
+                            { ...payload, bot_token: botToken },
+                            {
+                                delay: totalDelaySeconds * 1000, // Converter segundos para milissegundos
+                                attempts: 3,
+                                jobId: `disparo-${contact.chat_id}-${historyId}-${Date.now()}-${messageCounter}`,
+                            }
                         );
                        
                         messageCounter++; 
                     }
                     
-                    // Processar promises deste chunk antes de continuar para o próximo
-                    // Isso evita acumular milhões de promises em memória
-                    if (qstashPromises.length > 0) {
-                        console.log(`[DISPARO] Processando chunk com ${qstashPromises.length} promises...`);
-                        await publishQStashInBatches(qstashPromises, 10, 500);
-                        qstashPromises.length = 0; // Limpar array para liberar memória
-                    }
-                }
-        
-                // Processar promises restantes (se houver)
-                if (qstashPromises.length > 0) {
-                    await publishQStashInBatches(qstashPromises, 10, 500);
+                    // BullMQ gerencia rate limiting automaticamente, não precisa de batches
                 }
         
                 // Atualizar o status da campanha para "RUNNING"
@@ -8915,7 +8300,7 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         const [existingState] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         if (existingState && existingState.scheduled_message_id) {
             try {
-                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                await cancelBullMQJob(existingState.scheduled_message_id);
                 console.log(`[Manual Flow Start] Tarefa de timeout antiga cancelada.`);
             } catch (e) { /* Ignora erro se a tarefa já foi executada */ }
         }
@@ -10781,6 +10166,33 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
     console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+});
+
+// Graceful shutdown para BullMQ
+process.on('SIGTERM', async () => {
+    console.log('[SERVER] SIGTERM recebido, encerrando graciosamente...');
+    try {
+        const queueManager = require('./shared/queue-manager');
+        await queueManager.close();
+        console.log('[SERVER] Workers e filas fechados com sucesso');
+        process.exit(0);
+    } catch (error) {
+        console.error('[SERVER] Erro ao fechar workers:', error);
+        process.exit(1);
+    }
+});
+
+process.on('SIGINT', async () => {
+    console.log('[SERVER] SIGINT recebido, encerrando graciosamente...');
+    try {
+        const queueManager = require('./shared/queue-manager');
+        await queueManager.close();
+        console.log('[SERVER] Workers e filas fechados com sucesso');
+        process.exit(0);
+    } catch (error) {
+        console.error('[SERVER] Erro ao fechar workers:', error);
+        process.exit(1);
+    }
 });
 
 module.exports = app;

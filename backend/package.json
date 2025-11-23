@@ -10,13 +10,14 @@
     "lint": "echo \"No linting configured\" && exit 0"
   },
   "dependencies": {
-    "@upstash/qstash": "^2.8.4",
     "axios": "^1.7.2",
     "bcryptjs": "^2.4.3",
+    "bullmq": "^5.13.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "google-auth-library": "^9.4.1",
+    "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "mailersend": "^2.0.0",
     "postgres": "^3.4.7",

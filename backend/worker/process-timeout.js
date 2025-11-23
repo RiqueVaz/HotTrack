@@ -7,7 +7,6 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
-const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const { sqlTx, sqlWithRetry } = require('../db');
@@ -37,9 +36,38 @@ const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 
 
-const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
-     token: process.env.QSTASH_TOKEN,
-    });
+// Função auxiliar para cancelar jobs BullMQ
+async function cancelBullMQJob(jobId) {
+    if (!jobId) return false;
+    
+    try {
+        const queueManager = require('../shared/queue-manager');
+        
+        // Inferir nome da fila pelo prefixo do jobId
+        let queueName;
+        if (jobId.includes('scheduled-disparo')) {
+            queueName = 'disparos-agendados';
+        } else if (jobId.startsWith('timeout-')) {
+            queueName = 'timeouts';
+        } else if (jobId.startsWith('delay-')) {
+            queueName = 'delays';
+        } else if (jobId.startsWith('disparo-')) {
+            queueName = 'disparos';
+        } else {
+            // Tentar em todas as filas se não conseguir inferir
+            for (const queue of ['timeouts', 'delays', 'disparos', 'disparos-agendados']) {
+                const result = await queueManager.cancelJob(queue, jobId);
+                if (result) return true;
+            }
+            return false;
+        }
+        
+        return await queueManager.cancelJob(queueName, jobId);
+    } catch (error) {
+        console.error(`Erro ao cancelar job ${jobId}:`, error.message);
+        return false;
+    }
+}
 
 const {
     getSyncPayAuthToken,
@@ -605,12 +633,14 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}
                     `);
                     
-                    // Agendar continuação após o delay
+                    // Agendar continuação após o delay usando BullMQ
                     try {
                         const remainingActions = actions.slice(i + 1); // Ações restantes após o delay
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: {
+                        const queueManager = require('../shared/queue-manager');
+                        const job = await queueManager.addJob(
+                            'delays',
+                            'process-delay',
+                            {
                                 chat_id: chatId,
                                 bot_id: botId,
                                 target_node_id: resolvedCurrentNodeId, // Continuar do mesmo nó
@@ -618,24 +648,25 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
                             },
-                            delay: `${delaySeconds}s`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
+                            {
+                                delay: delaySeconds * 1000, // Converter segundos para milissegundos
+                                jobId: `delay-${chatId}-${botId}-${Date.now()}`,
+                            }
+                        );
                         
                         // Salvar scheduled_message_id no estado
                         await sqlWithRetry(sqlTx`
                             UPDATE user_flow_states 
-                            SET scheduled_message_id = ${response.messageId}
+                            SET scheduled_message_id = ${job.id}
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `);
                         
-                        console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                        console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via BullMQ. Tarefa: ${job.id}`);
                         
                         // Retornar código especial para processFlow saber que parou
                         return 'delay_scheduled';
                     } catch (error) {
-                        console.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                        console.error(`${logPrefix} [Delay] Erro ao agendar delay via BullMQ:`, error.message);
                         // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
                         await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                     }
@@ -1112,10 +1143,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
-                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            await cancelBullMQJob(stateToCancel.scheduled_message_id);
                             console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
-                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
                         }
                     }
                 } catch (e) {
@@ -1321,9 +1352,9 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    await cancelBullMQJob(stateToCancel.scheduled_message_id);
                     console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
-                } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message); }
+                } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message); }
             }
             await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             const startNode = nodes.find(node => node.type === 'trigger');
@@ -1470,31 +1501,34 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
 
                 try {
-                    // Agenda o worker de timeout com uma única chamada
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { 
+                    // Agenda o worker de timeout usando BullMQ
+                    const queueManager = require('../shared/queue-manager');
+                    const job = await queueManager.addJob(
+                        'timeouts',
+                        'process-timeout',
+                        { 
                             chat_id: chatId, 
                             bot_id: botId, 
                             target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
                             variables: variables
                         },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
-                        method: "POST"
-                    });
+                        {
+                            delay: timeoutMinutes * 60 * 1000, // Converter minutos para milissegundos
+                            jobId: `timeout-${chatId}-${botId}-${Date.now()}`,
+                        }
+                    );
                     
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
                     await sqlWithRetry(sqlTx`
                         UPDATE user_flow_states 
-                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
+                        SET waiting_for_input = true, scheduled_message_id = ${job.id} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
                     
-                    console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa BullMQ: ${job.id}`);
                 
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no BullMQ:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
