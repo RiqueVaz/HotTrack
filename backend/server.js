@@ -7301,7 +7301,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
         
-        // Se for agendado, criar tarefa única no BullMQ para processar depois
+        // Se for agendado, criar tarefa única no QStash para processar depois
         if (scheduledTimestamp) {
             try {
                 const now = Math.floor(Date.now() / 1000);
@@ -7311,20 +7311,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
                 }
                 
-                const queueManager = require('./shared/queue-manager');
-                const job = await queueManager.addJob(
-                    'disparos-agendados',
-                    'process-scheduled-disparo',
-                    { history_id: historyId },
-                    {
-                        delay: delaySeconds * 1000,
-                        attempts: 3,
-                        jobId: `scheduled-disparo-${historyId}`,
-                    }
-                );
+                const qstashResponse = await qstashClient.publishJSON({
+                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
+                    body: { history_id: historyId },
+                    delay: `${delaySeconds}s`, // QStash usa formato relativo em segundos
+                    retries: 2,
+                    method: "POST"
+                });
                 
+                // Salvar o scheduled_message_id
                 await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${job.id} WHERE id = ${historyId}`
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
                 );
                 
                 const displayDate = new Date(scheduledDate.getTime());
