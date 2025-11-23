@@ -174,6 +174,10 @@
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes pulse { 
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+        }
         @keyframes shimmer { 
             0% { left: -100%; }
             100% { left: 100%; }
@@ -7347,9 +7351,11 @@ function generatePreviewHTML(data) {
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                             <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
-                                {disparoProgress.current_step === 'hygienizing' ? 'Higienizando contatos...' : 
-                                 disparoProgress.current_step === 'sending' ? 'Executando disparos...' :
-                                 'Processando disparo...'}
+                                {disparoProgress.status === 'COMPLETED' ? '✓ Disparo Finalizado' :
+                                 disparoProgress.status === 'FAILED' ? '✗ Disparo Falhou' :
+                                 disparoProgress.current_step === 'hygienizing' ? '🔍 Higienizando Contatos' : 
+                                 disparoProgress.current_step === 'sending' ? '📤 Executando Disparos' :
+                                 '⏳ Processando Disparo'}
                             </h3>
                             <button 
                                 className="btn btn-secondary btn-sm"
@@ -7359,6 +7365,81 @@ function generatePreviewHTML(data) {
                                 Minimizar
                             </button>
                         </div>
+                        
+                        {/* Indicador de Estágio */}
+                        {disparoProgress.status !== 'COMPLETED' && disparoProgress.status !== 'FAILED' && (
+                            <div style={{ 
+                                marginBottom: '1.5rem', 
+                                padding: '1rem', 
+                                background: 'var(--bg-secondary)', 
+                                borderRadius: '8px',
+                                border: '1px solid var(--border-color)'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                    <div style={{
+                                        width: '12px',
+                                        height: '12px',
+                                        borderRadius: '50%',
+                                        background: disparoProgress.current_step === 'hygienizing' 
+                                            ? 'var(--accent-primary)' 
+                                            : disparoProgress.current_step === 'sending'
+                                            ? 'var(--accent-secondary)'
+                                            : 'var(--text-secondary)',
+                                        animation: disparoProgress.status !== 'PENDING' ? 'pulse 2s infinite' : 'none'
+                                    }}></div>
+                                    <strong style={{ color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                                        {disparoProgress.current_step === 'hygienizing' ? 'Etapa 1: Higienizando Contatos' :
+                                         disparoProgress.current_step === 'sending' ? 'Etapa 2: Executando Disparos' :
+                                         'Aguardando início...'}
+                                    </strong>
+                                </div>
+                                {disparoProgress.current_step === 'hygienizing' && (
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, marginLeft: '1.75rem' }}>
+                                        Validando contatos ativos e removendo inativos...
+                                    </p>
+                                )}
+                                {disparoProgress.current_step === 'sending' && (
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, marginLeft: '1.75rem' }}>
+                                        Enviando mensagens para os contatos válidos...
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* Mensagem de Finalização */}
+                        {disparoProgress.status === 'COMPLETED' && (
+                            <div style={{ 
+                                marginBottom: '1.5rem', 
+                                padding: '1rem', 
+                                background: 'var(--success)', 
+                                borderRadius: '8px',
+                                color: 'white',
+                                textAlign: 'center'
+                            }}>
+                                <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✓</div>
+                                <strong style={{ fontSize: '1rem' }}>Disparo concluído com sucesso!</strong>
+                                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.9 }}>
+                                    {disparoProgress.sent_messages || 0} mensagens enviadas
+                                </p>
+                            </div>
+                        )}
+                        
+                        {disparoProgress.status === 'FAILED' && (
+                            <div style={{ 
+                                marginBottom: '1.5rem', 
+                                padding: '1rem', 
+                                background: 'var(--danger)', 
+                                borderRadius: '8px',
+                                color: 'white',
+                                textAlign: 'center'
+                            }}>
+                                <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✗</div>
+                                <strong style={{ fontSize: '1rem' }}>Disparo falhou</strong>
+                                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.9 }}>
+                                    Verifique os logs para mais detalhes
+                                </p>
+                            </div>
+                        )}
                         
                         <div style={{ marginBottom: '1rem' }}>
                             <div style={{
@@ -7373,7 +7454,7 @@ function generatePreviewHTML(data) {
                                     height: '100%',
                                     width: `${disparoProgress.progress_percentage || 0}%`,
                                     background: disparoProgress.status === 'FAILED' 
-                                        ? 'var(--error)' 
+                                        ? 'var(--danger)' 
                                         : disparoProgress.status === 'COMPLETED'
                                         ? 'var(--success)'
                                         : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))',
