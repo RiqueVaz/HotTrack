@@ -313,6 +313,128 @@ app.post(
      }
     );
 
+// Endpoint para continuar disparos após delays agendados (chamado pelo QStash)
+app.post(
+    '/api/worker/process-disparo-delay',
+    express.raw({ type: 'application/json' }),
+    async (req, res) => {
+        try {
+            // 1. Verificar assinatura do QStash
+            const signature = req.headers["upstash-signature"];
+            const bodyString = req.body.toString();
+            
+            const isValid = await receiver.verify({
+                signature,
+                body: bodyString,
+            });
+            
+            if (!isValid) {
+                console.error("[WORKER-DISPARO-DELAY] Verificação de assinatura do QStash falhou.");
+                return res.status(401).send("Invalid signature");
+            }
+            
+            // 2. Responder IMEDIATAMENTE ao QStash
+            console.log("[WORKER-DISPARO-DELAY] Assinatura válida. Aceitando continuação de disparo após delay.");
+            res.status(200).json({ message: 'Continuação de disparo após delay aceita para processamento.' });
+            
+            // 3. Processar em background
+            const bodyData = JSON.parse(bodyString);
+            (async () => {
+                try {
+                    const { history_id, chat_id, bot_id, current_node_id, variables, remaining_actions } = bodyData;
+                    
+                    // Buscar dados do histórico
+                    const [history] = await sqlWithRetry(
+                        'SELECT * FROM disparo_history WHERE id = $1',
+                        [history_id]
+                    );
+                    
+                    if (!history) {
+                        console.error(`[WORKER-DISPARO-DELAY] Histórico ${history_id} não encontrado.`);
+                        return;
+                    }
+                    
+                    // Buscar bot
+                    const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+                    if (!bot || !bot.bot_token) {
+                        console.error(`[WORKER-DISPARO-DELAY] Bot ${bot_id} não encontrado.`);
+                        return;
+                    }
+                    
+                    // Buscar fluxo
+                    const [disparoFlow] = await sqlWithRetry(
+                        'SELECT * FROM disparo_flows WHERE id = $1',
+                        [history.disparo_flow_id]
+                    );
+                    
+                    if (!disparoFlow) {
+                        console.error(`[WORKER-DISPARO-DELAY] Fluxo ${history.disparo_flow_id} não encontrado.`);
+                        return;
+                    }
+                    
+                    const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+                    const flowNodes = flowData.nodes || [];
+                    const flowEdges = flowData.edges || [];
+                    
+                    const parsedVariables = typeof variables === 'string' ? JSON.parse(variables) : variables;
+                    
+                    // Se há ações restantes, processá-las primeiro
+                    if (remaining_actions) {
+                        try {
+                            const actions = typeof remaining_actions === 'string' ? JSON.parse(remaining_actions) : remaining_actions;
+                            const { processDisparoActions } = require('./worker/process-disparo');
+                            const actionResult = await processDisparoActions(actions, chat_id, bot_id, bot.bot_token, bot.seller_id, parsedVariables, '[WORKER-DISPARO-DELAY]', history_id, current_node_id);
+                            
+                            // Se delay foi agendado novamente, parar aqui
+                            if (actionResult === 'delay_scheduled') {
+                                console.log(`[WORKER-DISPARO-DELAY] Novo delay agendado. Parando processamento.`);
+                                return;
+                            }
+                        } catch (error) {
+                            console.error(`[WORKER-DISPARO-DELAY] Erro ao processar ações restantes:`, error);
+                        }
+                    }
+                    
+                    // Continuar o fluxo do nó atual (ou próximo se current_node_id não foi especificado)
+                    let startNodeId = current_node_id;
+                    if (!startNodeId) {
+                        // Se não especificado, buscar o nó inicial do fluxo (trigger)
+                        const startNode = flowNodes.find(node => node.type === 'trigger');
+                        if (startNode) {
+                            // Encontrar o próximo nó após o trigger
+                            const { findNextNode } = require('./worker/process-disparo');
+                            startNodeId = findNextNode(startNode.id, 'a', flowEdges);
+                        }
+                        // Se ainda não encontrou, usar null e o processDisparoFlow vai lidar com isso
+                    }
+                    
+                    // Continuar o fluxo normalmente usando processDisparoData
+                    const { processDisparoData } = require('./worker/process-disparo');
+                    await processDisparoData({
+                        history_id: history_id,
+                        chat_id: chat_id,
+                        bot_id: bot_id,
+                        flow_nodes: JSON.stringify(flowNodes),
+                        flow_edges: JSON.stringify(flowEdges),
+                        start_node_id: startNodeId,
+                        variables_json: JSON.stringify(parsedVariables)
+                    });
+                    
+                    console.log(`[WORKER-DISPARO-DELAY] Disparo ${history_id} continuado após delay com sucesso.`);
+                } catch (error) {
+                    console.error("[WORKER-DISPARO-DELAY] Erro ao continuar disparo após delay:", error);
+                    console.error("[WORKER-DISPARO-DELAY] Stack trace:", error.stack);
+                }
+            })();
+        } catch (error) {
+            console.error("[WORKER-DISPARO-DELAY] Erro crítico no handler:", error);
+            if (!res.headersSent) {
+                res.status(500).send("Internal Server Error");
+            }
+        }
+    }
+);
+
 // Endpoint para processar disparos agendados (chamado pelo QStash)
 app.post(
     '/api/worker/process-scheduled-disparo',

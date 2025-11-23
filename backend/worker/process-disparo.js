@@ -8,12 +8,18 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
+const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
+
+// Inicializar QStash client para delays longos
+const qstashClient = new Client({
+    token: process.env.QSTASH_TOKEN
+});
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -279,7 +285,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
         // Garantir que variáveis faltantes sejam buscadas do banco
         await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, logPrefix);
         
-        // Processar fluxo
+        // Processar fluxo - usando lógica similar ao processFlow normal
         while (currentNodeId && safetyLock < maxIterations) {
             safetyLock++;
             const currentNode = nodeMap.get(currentNodeId); // Busca O(1) ao invés de O(n)
@@ -292,44 +298,101 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
             logger.debug(`${logPrefix} Processando nó ${currentNodeId} (tipo: ${currentNode.type}, iteração: ${safetyLock})`);
             
             if (currentNode.type === 'trigger') {
-                // Trigger apenas passa para o próximo nó conectado
-                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
-                if (!currentNodeId) {
-                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
-                    break;
-                }
-            } else if (currentNode.type === 'action') {
-                // Processar ações do nó
-                const actions = currentNode.data?.actions || [];
-                if (actions.length > 0) {
+                // Nó de 'trigger' é apenas um ponto de partida, executa ações aninhadas (se houver) e segue
+                if (currentNode.data?.actions && currentNode.data.actions.length > 0) {
                     try {
-                        const returnedTransactionId = await processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix);
-                        if (returnedTransactionId) {
-                            lastTransactionId = returnedTransactionId;
-                            logger.debug(`${logPrefix} Transaction ID atualizado: ${returnedTransactionId}`);
+                        const actionResult = await processDisparoActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
+                        
+                        // Se delay foi agendado, parar processamento
+                        if (actionResult === 'delay_scheduled') {
+                            logger.debug(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                            currentNodeId = null;
+                            break;
+                        }
+                        
+                        // Se retornou transactionId, atualizar
+                        if (actionResult && actionResult !== 'paid' && actionResult !== 'pending' && actionResult !== 'completed' && actionResult !== 'delay_scheduled') {
+                            lastTransactionId = actionResult;
+                            logger.debug(`${logPrefix} Transaction ID atualizado: ${actionResult}`);
                         }
                     } catch (error) {
-                        // Log erro mas continua processando outras ações/nós se possível
-                        logger.error(`${logPrefix} Erro ao processar ações do nó ${currentNodeId}:`, error);
-                        // Apenas marca como falha se for erro crítico, caso contrário continua
+                        logger.error(`${logPrefix} Erro ao processar ações do trigger:`, error);
                         const isCriticalError = error.message?.includes('crítico') || error.message?.includes('critical');
                         if (isCriticalError) {
                             logStatus = 'FAILED';
                             logDetails = error.message.substring(0, 255);
                             break;
                         }
-                        // Para erros não críticos, continua para o próximo nó
-                        logger.warn(`${logPrefix} Erro não crítico no nó ${currentNodeId}, continuando para próximo nó.`);
                     }
                 }
-                
-                // Encontrar próximo nó
                 currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
-            } else {
-                // Tipo de nó não suportado em disparos
-                logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
-                break;
+                if (!currentNodeId) {
+                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
+                    break;
+                }
+                continue;
             }
+            
+            if (currentNode.type === 'action') {
+                // Processar ações do nó
+                const allActions = currentNode.data?.actions || [];
+                
+                logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${allActions.length} ação(ões): ${allActions.map(a => a.type).join(', ')}`);
+                
+                let actionResult;
+                try {
+                    actionResult = await processDisparoActions(allActions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
+                    
+                    // Se retornou transactionId (string que não é um código de controle), atualizar
+                    if (actionResult && actionResult !== 'paid' && actionResult !== 'pending' && actionResult !== 'completed' && actionResult !== 'delay_scheduled') {
+                        lastTransactionId = actionResult;
+                        logger.debug(`${logPrefix} Transaction ID atualizado: ${actionResult}`);
+                    }
+                } catch (actionError) {
+                    // Erro crítico durante execução de ação
+                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao processar ações do nó ${currentNode.id}:`, actionError.message);
+                    const isCriticalError = actionError.message?.includes('crítico') || actionError.message?.includes('critical') || 
+                                          actionError.message?.includes('não encontrado') || actionError.message?.includes('not found');
+                    if (isCriticalError) {
+                        logStatus = 'FAILED';
+                        logDetails = actionError.message.substring(0, 255);
+                        break;
+                    }
+                    // Para erros não críticos, continua para o próximo nó
+                    logger.warn(`${logPrefix} Erro não crítico no nó ${currentNodeId}, continuando para próximo nó.`);
+                    actionResult = 'completed'; // Continuar normalmente
+                }
+                
+                // Verifica se delay foi agendado
+                if (actionResult === 'delay_scheduled') {
+                    logger.debug(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                    currentNodeId = null;
+                    break;
+                }
+                
+                // Ignorar waitForReply em disparos (sempre seguir pelo handle padrão)
+                // Em disparos, não há interação do usuário, então sempre seguir pelo handle 'a'
+                
+                // Verifica se o resultado foi de um 'action_check_pix'
+                if (actionResult === 'paid') {
+                    logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
+                    currentNodeId = findNextNode(currentNode.id, 'a', flowEdges); // 'a' = Pago
+                    continue;
+                }
+                if (actionResult === 'pending') {
+                    logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
+                    currentNodeId = findNextNode(currentNode.id, 'b', flowEdges); // 'b' = Pendente
+                    continue;
+                }
+                
+                // Se nada acima aconteceu, é um nó de ação simples. Segue pelo handle 'a'.
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                continue;
+            }
+            
+            // Tipo de nó não suportado em disparos
+            logger.warn(`${logPrefix} Tipo de nó não suportado em disparos: ${currentNode.type}. Encerrando fluxo.`);
+            break;
         }
         
         if (safetyLock >= maxIterations) {
@@ -467,7 +530,7 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
 }
 
 // Função simplificada para processar ações em disparos
-async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix) {
+async function processDisparoActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId = null, currentNodeId = null) {
     let lastPixTransactionId = null; // Rastrear último transaction_id gerado
     const actionStartTime = Date.now();
     logger.debug(`${logPrefix} Processando ${actions.length} ação(ões) para chat ${chatId}`);
@@ -595,7 +658,81 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 }
             } else if (action.type === 'delay') {
                 const delaySeconds = actionData.delayInSeconds || 1;
-                await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                
+                // Se delay > 60s, agendar via QStash para evitar timeout
+                if (delaySeconds > 60) {
+                    logger.debug(`${logPrefix} [Delay] Delay longo (${delaySeconds}s) detectado. Agendando via QStash...`);
+                    
+                    // Buscar history_id se não foi passado como parâmetro
+                    let historyIdToUse = historyId;
+                    if (!historyIdToUse) {
+                        const [historyFromLog] = await sqlWithRetry(sqlTx`
+                            SELECT history_id 
+                            FROM disparo_log
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                            ORDER BY created_at DESC LIMIT 1
+                        `);
+                        if (historyFromLog) {
+                            historyIdToUse = historyFromLog.history_id;
+                        }
+                    }
+                    
+                    if (historyIdToUse) {
+                        try {
+                            // Buscar disparo_flow_id do histórico e depois buscar o fluxo
+                            const [history] = await sqlWithRetry(sqlTx`
+                                SELECT disparo_flow_id
+                                FROM disparo_history
+                                WHERE id = ${historyIdToUse}
+                            `);
+                            
+                            if (history && history.disparo_flow_id) {
+                                const [disparoFlow] = await sqlWithRetry(sqlTx`
+                                    SELECT nodes
+                                    FROM disparo_flows
+                                    WHERE id = ${history.disparo_flow_id}
+                                `);
+                                
+                                if (disparoFlow && disparoFlow.nodes) {
+                                    // Agendar continuação do disparo após delay
+                                    // Passar currentNodeId para continuar do mesmo nó
+                                    const response = await qstashClient.publishJSON({
+                                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-delay`,
+                                        body: {
+                                            history_id: historyIdToUse,
+                                            chat_id: chatId,
+                                            bot_id: botId,
+                                            current_node_id: currentNodeId, // Continuar do mesmo nó após processar ações restantes
+                                            variables: variables,
+                                            remaining_actions: actions.slice(i + 1).length > 0 ? JSON.stringify(actions.slice(i + 1)) : null
+                                        },
+                                        delay: `${delaySeconds}s`,
+                                        contentBasedDeduplication: true,
+                                        method: "POST"
+                                    });
+                                    
+                                    logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                                    
+                                    // Retornar código especial para processDisparoFlow saber que parou
+                                    return 'delay_scheduled';
+                                }
+                            }
+                        } catch (error) {
+                            logger.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                            // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
+                            await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                        }
+                    } else {
+                        // Se não encontrou histórico, processar delay inline (limitado)
+                        logger.warn(`${logPrefix} [Delay] Histórico não encontrado. Processando delay inline (limitado a 60s).`);
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                    }
+                } else {
+                    // Delay curto: processar normalmente
+                    logger.debug(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
+                    await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+                    logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
+                }
             } else if (action.type === 'action_pix') {
                 // Processar PIX - usar a mesma lógica do process-disparo original
                 const valueInCents = actionData.valueInCents || 100;
@@ -715,8 +852,76 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     }
                 }
             } else if (action.type === 'action_check_pix') {
-                // Verificar PIX - lógica simplificada (não implementada completamente para disparos)
-                logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Ação check_pix não suportada em disparos. Pulando.`);
+                // Verificar PIX - implementação completa para disparos
+                try {
+                    let transactionId = variables.last_transaction_id;
+                    let transaction = null;
+                    
+                    logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Verificando status do PIX. transaction_id=${transactionId}`);
+                    
+                    // Se não tem transactionId nas variáveis, tenta buscar do banco como fallback
+                    if (!transactionId) {
+                        logger.info(`${logPrefix} [action_check_pix] last_transaction_id não encontrado nas variáveis. Tentando buscar do banco de dados...`);
+                        
+                        // Tenta buscar através do click_id nas variáveis
+                        if (variables.click_id) {
+                            const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                            const [click] = await sqlWithRetry(sqlTx`SELECT id FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`);
+                            
+                            if (click) {
+                                const [recentTransaction] = await sqlWithRetry(sqlTx`
+                                    SELECT * FROM pix_transactions 
+                                    WHERE click_id_internal = ${click.id} 
+                                    ORDER BY created_at DESC 
+                                    LIMIT 1
+                                `);
+                                if (recentTransaction) {
+                                    transactionId = recentTransaction.provider_transaction_id;
+                                    transaction = recentTransaction;
+                                    logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do click_id: ${transactionId}`);
+                                }
+                            }
+                        }
+                        
+                        // Se ainda não encontrou, tenta buscar através do telegram_chats
+                        if (!transactionId) {
+                            const [chat] = await sqlWithRetry(sqlTx`
+                                SELECT last_transaction_id 
+                                FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND last_transaction_id IS NOT NULL 
+                                ORDER BY created_at DESC 
+                                LIMIT 1
+                            `);
+                            if (chat && chat.last_transaction_id) {
+                                transactionId = chat.last_transaction_id;
+                                logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do telegram_chats: ${transactionId}`);
+                            }
+                        }
+                        
+                        if (!transactionId) {
+                            throw new Error("Nenhum ID de transação PIX encontrado nas variáveis nem no banco de dados.");
+                        }
+                    }
+                    
+                    // Se ainda não tem a transação, busca pelo transactionId
+                    if (!transaction) {
+                        [transaction] = await sqlWithRetry(sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`);
+                        if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+                    }
+                    
+                    // Verificar status da transação
+                    if (transaction.status === 'paid') {
+                        logger.debug(`${logPrefix} [action_check_pix] PIX está pago. Retornando 'paid'.`);
+                        return 'paid'; // Sinaliza para processDisparoFlow seguir pelo handle 'a'
+                    } else {
+                        logger.debug(`${logPrefix} [action_check_pix] PIX está pendente (status: ${transaction.status}). Retornando 'pending'.`);
+                        return 'pending'; // Sinaliza para processDisparoFlow seguir pelo handle 'b'
+                    }
+                } catch (error) {
+                    logger.error(`${logPrefix} [action_check_pix] Erro ao verificar PIX:`, error.message);
+                    // Em caso de erro, seguir pelo handle padrão (como se fosse pending)
+                    return 'pending';
+                }
             } else {
                 logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Tipo de ação não reconhecido: ${action.type}. Pulando.`);
             }
@@ -744,7 +949,9 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
     const actionProcessingTime = Date.now() - actionStartTime;
     logger.debug(`${logPrefix} Processamento de ${actions.length} ação(ões) concluído em ${actionProcessingTime}ms`);
     
-    return lastPixTransactionId; // Retornar último transaction_id ou null
+    // Retornar último transaction_id se houver, ou 'completed' se tudo foi processado normalmente
+    // O processDisparoFlow vai verificar se o retorno é 'paid', 'pending', 'delay_scheduled' ou transactionId
+    return lastPixTransactionId || 'completed';
 }
 
 // ==========================================================
@@ -813,5 +1020,5 @@ async function handler(req, res) {
     }
 }
 
-// Exportar ambas as funções para permitir uso em diferentes contextos
-module.exports = { handler, processDisparoData };
+// Exportar funções para permitir uso em diferentes contextos
+module.exports = { handler, processDisparoData, findNextNode };
