@@ -6434,15 +6434,12 @@ function generatePreviewHTML(data) {
     const [disparoFlowsList, setDisparoFlowsList] = useState([]);
     const [isLoadingFlowsList, setIsLoadingFlowsList] = useState(false);
     
-    // Hygiene states
-    const [isHygienized, setIsHygienized] = useState(false);
-    const [inactiveCount, setInactiveCount] = useState(0);
-    const [isValidating, setIsValidating] = useState(false);
-    const [inactiveChatIds, setInactiveChatIds] = useState([]);
-    const [showProgressModal, setShowProgressModal] = useState(false);
-    const [validationProgress, setValidationProgress] = useState(null);
-    const [validationId, setValidationId] = useState(null);
-    const [pollingInterval, setPollingInterval] = useState(null);
+    // Disparo progress states (unificado para higienização + disparo)
+    const [activeDisparoId, setActiveDisparoId] = useState(null);
+    const [showDisparoProgressModal, setShowDisparoProgressModal] = useState(false);
+    const [disparoProgress, setDisparoProgress] = useState(null);
+    const disparoPollingIntervalRef = window.React.useRef(null);
+    const [isDisparoInProgress, setIsDisparoInProgress] = useState(false);
     
     // Historico tab states
     const [history, setHistory] = useState([]);
@@ -6466,15 +6463,66 @@ function generatePreviewHTML(data) {
         return v.startsWith('http') ? v : `${API_BASE_URL}/api/media/preview/storage/${v}`;
     };
 
-    // Reset hygiene and tags when bots change
+    // Reset tags when bots change
     useEffect(() => {
-        setIsHygienized(false);
-        setInactiveCount(0);
-        setInactiveChatIds([]);
         setSelectedTagIds([]);
         setTagFilterMode('include');
         setAvailableTags([]);
     }, [selectedBotIds]);
+    
+    // Verificar se há disparo em progresso ao montar componente
+    useEffect(() => {
+        const checkActiveDisparo = async () => {
+            try {
+                const response = await App.apiRequest('/api/disparos/check-active', 'GET');
+                if (response.active && response.disparo) {
+                    setActiveDisparoId(response.disparo.id);
+                    setIsDisparoInProgress(true);
+                    setShowDisparoProgressModal(true);
+                    setDisparoProgress({ 
+                        status: response.disparo.status, 
+                        progress_percentage: 0,
+                        current_step: response.disparo.current_step
+                    });
+                    startDisparoPolling(response.disparo.id);
+                } else {
+                    setIsDisparoInProgress(false);
+                }
+            } catch (error) {
+                console.error('Erro ao verificar disparo ativo:', error);
+            }
+        };
+        
+        if (activeTab === 'disparos') {
+            checkActiveDisparo();
+        }
+        
+        // Cleanup ao desmontar
+        return () => {
+            if (disparoPollingIntervalRef.current) {
+                clearInterval(disparoPollingIntervalRef.current);
+                disparoPollingIntervalRef.current = null;
+            }
+        };
+    }, [activeTab]);
+    
+    // Verificar periodicamente se há disparo em progresso (para liberar botão quando concluir)
+    useEffect(() => {
+        if (activeTab !== 'disparos' || isDisparoInProgress) return;
+        
+        const checkInterval = setInterval(async () => {
+            try {
+                const response = await App.apiRequest('/api/disparos/check-active', 'GET');
+                if (!response.active) {
+                    setIsDisparoInProgress(false);
+                }
+            } catch (error) {
+                console.error('Erro ao verificar disparo ativo:', error);
+            }
+        }, 5000); // Verificar a cada 5 segundos
+        
+        return () => clearInterval(checkInterval);
+    }, [activeTab, isDisparoInProgress]);
     
     // Fetch available tags when bots change
     useEffect(() => {
@@ -6527,7 +6575,7 @@ function generatePreviewHTML(data) {
         fetchTags();
     }, [selectedBotIds]);
 
-    // Fetch contact count when selected bots change, after hygiene, or when tags change
+    // Fetch contact count when selected bots change or when tags change
     useEffect(() => {
         const fetchCount = async () => {
             if (selectedBotIds.length === 0) {
@@ -6536,12 +6584,11 @@ function generatePreviewHTML(data) {
             }
             try {
                 const requestBody = { 
-                    botIds: selectedBotIds,
-                    excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
+                    botIds: selectedBotIds
                 };
                 
-                // Adicionar tagIds e tagFilterMode apenas se higienização foi feita e tags foram selecionadas
-                if (isHygienized && selectedTagIds.length > 0) {
+                // Adicionar tagIds e tagFilterMode se tags foram selecionadas
+                if (selectedTagIds.length > 0) {
                     requestBody.tagIds = selectedTagIds;
                     requestBody.tagFilterMode = tagFilterMode;
                 }
@@ -6555,7 +6602,7 @@ function generatePreviewHTML(data) {
             }
         };
         fetchCount();
-    }, [selectedBotIds, inactiveChatIds, selectedTagIds, tagFilterMode, isHygienized]);
+    }, [selectedBotIds, selectedTagIds, tagFilterMode]);
 
     // Fetch disparo flows
     const fetchDisparoFlows = useCallback(async () => {
@@ -6759,102 +6806,7 @@ function generatePreviewHTML(data) {
         );
     };
 
-    const handleHygienize = async () => {
-        if (selectedBotIds.length === 0) {
-            App.showToast('Selecione pelo menos um bot primeiro.', 'error');
-            return;
-        }
-        
-        setIsValidating(true);
-        setInactiveChatIds([]);
-        setInactiveCount(0);
-        
-        try {
-            // Usar botIds (array) para suportar múltiplos bots de uma vez
-            const response = await App.apiRequest('/api/bots/validate-contacts', 'POST', { botIds: selectedBotIds });
-            
-            // Verificar se response existe e se é resposta assíncrona
-            if (!response) {
-                setIsValidating(false);
-                App.showToast('Resposta inválida do servidor.', 'error');
-                return;
-            }
-            
-            // Verificar se é resposta assíncrona (status 202 ou tem validation_id)
-            if (response.validation_id) {
-                // Validação assíncrona iniciada - mostrar modal de progresso
-                const vId = response.validation_id;
-                setValidationId(vId);
-                setShowProgressModal(true);
-                setValidationProgress({ status: 'PENDING', progress_percentage: 0, processed_contacts: 0, total_contacts: response.total_contacts || 0 });
-                App.showToast('Validação iniciada. Processando em background...', 'success');
-                
-                // Iniciar polling
-                const interval = setInterval(async () => {
-                    try {
-                        const statusResponse = await App.apiRequest(`/api/bots/validate-contacts/${vId}`, 'GET');
-                        
-                        if (!statusResponse) {
-                            return;
-                        }
-                        
-                        const status = statusResponse;
-                        setValidationProgress(status);
-                        
-                        // Parar polling se completou ou falhou
-                        if (status.status === 'COMPLETED' || status.status === 'FAILED') {
-                            clearInterval(interval);
-                            setPollingInterval(null);
-                            
-                            if (status.status === 'COMPLETED') {
-                                const inactiveContacts = Array.isArray(status.inactive_contacts) ? status.inactive_contacts : [];
-                                const uniqueInactiveChatIds = [...new Set(inactiveContacts.map(c => c && c.chat_id ? c.chat_id : null).filter(id => id !== null))];
-                                setInactiveChatIds(uniqueInactiveChatIds);
-                                setInactiveCount(uniqueInactiveChatIds.length);
-                                setIsHygienized(true);
-                                setIsValidating(false);
-                                
-                                // Fechar modal após 1 segundo
-                                setTimeout(() => {
-                                    setShowProgressModal(false);
-                                }, 1000);
-                                
-                                App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
-                            } else {
-                                setIsValidating(false);
-                                setTimeout(() => {
-                                    setShowProgressModal(false);
-                                }, 1000);
-                                App.showToast('Erro na validação: ' + (status.error_message || 'Erro desconhecido'), 'error');
-                            }
-                        }
-                    } catch (statusError) {
-                        console.error('Erro ao consultar status da validação:', statusError);
-                    }
-                }, 2000); // Polling a cada 2 segundos
-                
-                setPollingInterval(interval);
-            } else if (response.inactive_contacts !== undefined) {
-                // Resposta síncrona (fallback para casos sem muitos contatos)
-                const inactiveContacts = Array.isArray(response.inactive_contacts) ? response.inactive_contacts : [];
-                const uniqueInactiveChatIds = [...new Set(inactiveContacts.map(c => c && c.chat_id ? c.chat_id : null).filter(id => id !== null))];
-                setInactiveChatIds(uniqueInactiveChatIds);
-                setInactiveCount(uniqueInactiveChatIds.length);
-                setIsHygienized(true);
-                setIsValidating(false);
-                
-                App.showToast(`Higienização concluída! ${uniqueInactiveChatIds.length} contatos inativos encontrados.`, 'success');
-            } else {
-                // Resposta inesperada
-                setIsValidating(false);
-                App.showToast('Resposta inesperada do servidor.', 'error');
-            }
-        } catch (error) {
-            console.error('Erro ao higienizar contatos:', error);
-            setIsValidating(false);
-            App.showToast('Erro ao higienizar contatos.', 'error');
-        }
-    };
+    // Função handleHygienize removida - higienização agora é automática no disparo
 
     const addStep = (type) => {
         const newStep = { id: Date.now(), type };
@@ -6900,20 +6852,15 @@ function generatePreviewHTML(data) {
         App.showToast('Preencha o nome da campanha, selecione ao menos um bot e escolha um fluxo de disparo.', 'error');
         return;
     }
-    if (!isHygienized) {
-        App.showToast('Por favor, higienize os contatos antes de enviar o disparo.', 'error');
-        return;
-    }
+    
     // Validar agendamento se ativado
     if (isScheduled) {
         if (!scheduledDateTime) {
             App.showToast('Por favor, selecione uma data e hora para o agendamento.', 'error');
             return;
         }
-        // Criar data a partir do valor do input (que está em horário local)
         const scheduledDate = new Date(scheduledDateTime);
         const now = new Date();
-        // Adicionar margem de segurança de 2 minutos
         const minScheduledTime = new Date(now.getTime() + 120000);
         
         if (scheduledDate <= minScheduledTime) {
@@ -6928,13 +6875,13 @@ function generatePreviewHTML(data) {
             return;
         }
     }
+    
     setIsSending(true);
     try {
         const requestBody = { 
             campaignName, 
             botIds: selectedBotIds, 
-            disparoFlowId: selectedDisparoFlowId,
-            excludeChatIds: inactiveChatIds.length > 0 ? inactiveChatIds : undefined
+            disparoFlowId: selectedDisparoFlowId
         };
         
         // Adicionar tagIds e tagFilterMode se tags foram selecionadas
@@ -6945,31 +6892,89 @@ function generatePreviewHTML(data) {
         
         // Adicionar scheduledAt se agendamento estiver ativado
         if (isScheduled && scheduledDateTime) {
-            // Converter para ISO string (UTC)
             const scheduledDate = new Date(scheduledDateTime);
             requestBody.scheduledAt = scheduledDate.toISOString();
         }
         
         const response = await App.apiRequest('/api/bots/mass-send', 'POST', requestBody);
-        App.showToast(response.message || 'Disparo agendado com sucesso!', 'success');
-        setCampaignName('');
-        setSelectedBotIds([]);
-        setSelectedDisparoFlowId('');
-        setContactCount(0);
-        setIsHygienized(false);
-        setInactiveChatIds([]);
-        setInactiveCount(0);
-        setIsScheduled(false);
-        setScheduledDateTime('');
-        setSelectedTagIds([]);
-        setTagFilterMode('include');
+        
+        // Se for agendado, não mostrar modal de progresso
+        if (isScheduled) {
+            App.showToast(response.message || 'Disparo agendado com sucesso!', 'success');
+            setCampaignName('');
+            setSelectedBotIds([]);
+            setSelectedDisparoFlowId('');
+            setContactCount(0);
+            setIsScheduled(false);
+            setScheduledDateTime('');
+            setSelectedTagIds([]);
+            setTagFilterMode('include');
+        } else {
+            // Disparo imediato - iniciar polling
+            const historyId = response.historyId;
+            if (historyId) {
+                setActiveDisparoId(historyId);
+                setShowDisparoProgressModal(true);
+                setIsDisparoInProgress(true);
+                setDisparoProgress({ 
+                    status: 'PENDING', 
+                    progress_percentage: 0, 
+                    current_step: null 
+                });
+                
+                // Iniciar polling do status
+                startDisparoPolling(historyId);
+            }
+        }
     } catch (error) {
-        App.showToast(error.response?.data?.message || 'Erro ao agendar disparo.', 'error');
+        App.showToast(error.response?.data?.message || 'Erro ao iniciar disparo.', 'error');
         console.error("Erro submit disparo:", error);
     } finally {
         setIsSending(false);
     }
 };
+
+    // Função para iniciar polling do status do disparo
+    const startDisparoPolling = (historyId) => {
+        // Limpar polling anterior se existir
+        if (disparoPollingIntervalRef.current) {
+            clearInterval(disparoPollingIntervalRef.current);
+        }
+        
+        const interval = setInterval(async () => {
+            try {
+                const status = await App.apiRequest(`/api/disparos/status/${historyId}`, 'GET');
+                setDisparoProgress(status);
+                
+                // Parar polling se completou ou falhou
+                if (status.status === 'COMPLETED' || status.status === 'FAILED') {
+                    clearInterval(interval);
+                    disparoPollingIntervalRef.current = null;
+                    setIsDisparoInProgress(false);
+                    
+                    if (status.status === 'COMPLETED') {
+                        App.showToast('Disparo concluído com sucesso!', 'success');
+                        // Fechar modal após 2 segundos
+                        setTimeout(() => {
+                            setShowDisparoProgressModal(false);
+                            setActiveDisparoId(null);
+                        }, 2000);
+                    } else {
+                        App.showToast('Disparo falhou. Verifique os logs.', 'error');
+                    }
+                    
+                    // Atualizar histórico
+                    if (activeTab === 'historico') {
+                        fetchHistory(currentPage, false);
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao consultar status do disparo:', error);
+            }
+        }, 2000); // Polling a cada 2 segundos
+        
+        disparoPollingIntervalRef.current = interval;
+    };
     // renderStep function remains largely the same, just ensure classNames match the new CSS if needed
     const renderStep = (step) => {
         switch (step.type) {
@@ -7027,131 +7032,8 @@ function generatePreviewHTML(data) {
                             Total de contatos: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
                         </p>
                         
-                        {/* Hygiene Section */}
-                        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
-                            <button 
-                                type="button"
-                                onClick={handleHygienize} 
-                                disabled={selectedBotIds.length === 0 || isValidating}
-                                className="btn btn-secondary"
-                                style={{ marginBottom: '0.5rem' }}
-                            >
-                                {isValidating ? 'Validando...' : 'Higienizar Contatos'}
-                            </button>
-                            {isHygienized && (
-                                <p style={{color: 'var(--success)', fontSize: '0.9rem', marginTop: '0.5rem'}}>
-                                    ✓ Higienização concluída ({inactiveCount} contatos inativos removidos: usuários bloqueados, grupos, canais e supergrupos)
-                                </p>
-                            )}
-                            {!isHygienized && selectedBotIds.length > 0 && (
-                                <p style={{color: 'var(--warning)', fontSize: '0.85rem', marginTop: '0.5rem'}}>
-                                    ⚠️ Higienize os contatos antes de disparar
-                                </p>
-                            )}
-                        </div>
-                        
-                        {/* Modal de Progresso */}
-                        {showProgressModal && validationProgress && (
-                            <div style={{
-                                position: 'fixed',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                background: 'rgba(0, 0, 0, 0.7)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                zIndex: 10000
-                            }}>
-                                <div style={{
-                                    background: 'var(--bg-primary)',
-                                    borderRadius: '12px',
-                                    padding: '2rem',
-                                    maxWidth: '500px',
-                                    width: '90%',
-                                    boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)'
-                                }}>
-                                    <h3 style={{ marginTop: 0, marginBottom: '1.5rem', color: 'var(--text-primary)' }}>
-                                        Validando Contatos
-                                    </h3>
-                                    
-                                    <div style={{ marginBottom: '1rem' }}>
-                                        <div style={{
-                                            width: '100%',
-                                            height: '24px',
-                                            background: 'var(--bg-secondary)',
-                                            borderRadius: '12px',
-                                            overflow: 'hidden',
-                                            position: 'relative'
-                                        }}>
-                                            <div style={{
-                                                height: '100%',
-                                                width: `${validationProgress.progress_percentage || 0}%`,
-                                                background: validationProgress.status === 'FAILED' 
-                                                    ? 'var(--error)' 
-                                                    : validationProgress.status === 'COMPLETED'
-                                                    ? 'var(--success)'
-                                                    : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))',
-                                                transition: 'width 0.3s ease',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                color: 'white',
-                                                fontSize: '0.75rem',
-                                                fontWeight: '600'
-                                            }}>
-                                                {validationProgress.progress_percentage}%
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                        <strong>Status:</strong> {
-                                            validationProgress.status === 'PENDING' ? 'Aguardando início...' :
-                                            validationProgress.status === 'RUNNING' ? 'Validando contatos...' :
-                                            validationProgress.status === 'COMPLETED' ? 'Concluído!' :
-                                            'Erro'
-                                        }
-                                    </p>
-                                    
-                                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                        <strong>Progresso:</strong> {validationProgress.processed_contacts || 0} de {validationProgress.total_contacts || 0} contatos
-                                    </p>
-                                    
-                                    {validationProgress.status === 'COMPLETED' && validationProgress.inactive_contacts && (
-                                        <p style={{ color: 'var(--success)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                            <strong>Contatos inativos removidos</strong>
-                                        </p>
-                                    )}
-                                    
-                                    {validationProgress.status === 'FAILED' && validationProgress.error_message && (
-                                        <p style={{ color: 'var(--error)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                            <strong>Erro:</strong> {validationProgress.error_message}
-                                        </p>
-                                    )}
-                                    
-                                    {(validationProgress.status === 'COMPLETED' || validationProgress.status === 'FAILED') && (
-                                        <button 
-                                            className="btn btn-primary"
-                                            onClick={() => {
-                                                setShowProgressModal(false);
-                                                if (pollingInterval) {
-                                                    clearInterval(pollingInterval);
-                                                    setPollingInterval(null);
-                                                }
-                                            }}
-                                            style={{ width: '100%' }}
-                                        >
-                                            Fechar
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                        
-                        {/* Tag Filter Section - Only show after hygiene */}
-                        {isHygienized && availableTags.length > 0 && (
+                        {/* Tag Filter Section */}
+                        {availableTags.length > 0 && (
                             <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                                 <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
                                     🏷️ Filtrar por Tags (Opcional)
@@ -7433,13 +7315,140 @@ function generatePreviewHTML(data) {
                 </div>
 
                 {/* Submit Button */}
-                <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem' }} disabled={isSending || !isHygienized || selectedBotIds.length === 0}>
-                    {!isHygienized ? 'Higienize os contatos primeiro' : 
+                <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem' }} disabled={isSending || isDisparoInProgress || selectedBotIds.length === 0}>
+                    {isDisparoInProgress ? 'Aguarde a conclusão do disparo em andamento' : 
                      isSending ? (isScheduled ? 'Agendando...' : 'Disparando...') : 
                      isScheduled ? `Agendar para ${contactCount} contato(s)` :
                      `Disparar para ${contactCount} contato(s)`}
                 </button>
             </form>
+            
+            {/* Modal de Progresso Unificado (Higienização + Disparo) */}
+            {showDisparoProgressModal && disparoProgress && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000
+                }}>
+                    <div style={{
+                        background: 'var(--bg-primary)',
+                        borderRadius: '12px',
+                        padding: '2rem',
+                        maxWidth: '500px',
+                        width: '90%',
+                        boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                            <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
+                                {disparoProgress.current_step === 'hygienizing' ? 'Higienizando disparo...' : 
+                                 disparoProgress.current_step === 'sending' ? 'Executando disparo...' :
+                                 'Processando disparo...'}
+                            </h3>
+                            <button 
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setShowDisparoProgressModal(false)}
+                                style={{ padding: '0.5rem 1rem' }}
+                            >
+                                Minimizar
+                            </button>
+                        </div>
+                        
+                        <div style={{ marginBottom: '1rem' }}>
+                            <div style={{
+                                width: '100%',
+                                height: '28px',
+                                background: 'var(--bg-secondary)',
+                                borderRadius: '14px',
+                                overflow: 'hidden',
+                                position: 'relative'
+                            }}>
+                                <div style={{
+                                    height: '100%',
+                                    width: `${disparoProgress.progress_percentage || 0}%`,
+                                    background: disparoProgress.status === 'FAILED' 
+                                        ? 'var(--error)' 
+                                        : disparoProgress.status === 'COMPLETED'
+                                        ? 'var(--success)'
+                                        : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))',
+                                    transition: 'width 0.3s ease',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: 'white',
+                                    fontSize: '0.8rem',
+                                    fontWeight: '600'
+                                }}>
+                                    {disparoProgress.progress_percentage || 0}%
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                            <strong>Status:</strong> {
+                                disparoProgress.status === 'PENDING' ? 'Aguardando início...' :
+                                disparoProgress.status === 'HYGIENIZING' ? 'Higienizando contatos...' :
+                                disparoProgress.status === 'RUNNING' ? 'Enviando mensagens...' :
+                                disparoProgress.status === 'COMPLETED' ? 'Concluído!' :
+                                disparoProgress.status === 'FAILED' ? 'Falhou' :
+                                'Processando...'
+                            }
+                        </p>
+                        
+                        {disparoProgress.current_step === 'hygienizing' && (
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                <strong>Progresso:</strong> {disparoProgress.processed_contacts || 0} de {disparoProgress.total_contacts || 0} contatos processados
+                            </p>
+                        )}
+                        
+                        {disparoProgress.current_step === 'sending' && (
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                <strong>Progresso:</strong> {disparoProgress.sent_messages || 0} de {disparoProgress.total_messages || 0} mensagens enviadas
+                            </p>
+                        )}
+                        
+                        {disparoProgress.inactive_count !== null && disparoProgress.inactive_count > 0 && (
+                            <p style={{ color: 'var(--success)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                                <strong>✓ {disparoProgress.inactive_count} contatos inativos removidos</strong>
+                            </p>
+                        )}
+                        
+                        {disparoProgress.status === 'COMPLETED' && (
+                            <button 
+                                className="btn btn-primary"
+                                onClick={() => {
+                                    setShowDisparoProgressModal(false);
+                                    setActiveDisparoId(null);
+                                    setIsDisparoInProgress(false);
+                                }}
+                                style={{ width: '100%' }}
+                            >
+                                Fechar
+                            </button>
+                        )}
+                        
+                        {disparoProgress.status === 'FAILED' && (
+                            <button 
+                                className="btn btn-secondary"
+                                onClick={() => {
+                                    setShowDisparoProgressModal(false);
+                                    setActiveDisparoId(null);
+                                    setIsDisparoInProgress(false);
+                                }}
+                                style={{ width: '100%' }}
+                            >
+                                Fechar
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 

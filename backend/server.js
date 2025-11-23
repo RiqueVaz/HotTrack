@@ -7140,10 +7140,27 @@ app.get('/api/dispatches/:id', authenticateJwt, async (req, res) => {
 });
 app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
       const sellerId = req.user.id;
-      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, tagFilterMode, excludeChatIds } = req.body;
+      const { botIds, disparoFlowId, campaignName, scheduledAt, tagIds, tagFilterMode } = req.body;
     
       if (!botIds || !Array.isArray(botIds) || botIds.length === 0 || !disparoFlowId || !campaignName) {
         return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
+      }
+
+      // Verificar se há disparo em progresso
+      const [activeDisparo] = await sqlWithRetry(
+          sqlTx`
+              SELECT id FROM disparo_history 
+              WHERE seller_id = ${sellerId} 
+              AND status IN ('PENDING', 'HYGIENIZING', 'RUNNING')
+              ORDER BY created_at DESC
+              LIMIT 1
+          `
+      );
+
+      if (activeDisparo) {
+          return res.status(409).json({ 
+              message: 'Já existe um disparo em progresso. Aguarde a conclusão antes de iniciar outro.' 
+          });
       }
     
         // Validar scheduledAt se fornecido
@@ -7220,9 +7237,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             return res.status(404).json({ message: 'Nenhum bot válido encontrado.' });
         }
         
-        // 3. Buscar todos os contatos únicos em uma única query (otimização)
-        // Aplicar filtros: primeiro excluir inativos (excludeChatIds), depois filtrar por tags
-        
         // Separar tags custom (IDs numéricos) de tags automáticas (strings)
         let customTagIds = [];
         let automaticTagNames = [];
@@ -7260,166 +7274,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         
         const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
         
-        let contacts;
-        
-        // Se tem filtro de tags, usar query com JOIN e GROUP BY
-        if (hasAnyTagFilter) {
-            // Construir query base com CTEs para cada tipo de tag
-            let tagQuery = `
-                WITH base_contacts AS (
-                    SELECT DISTINCT ON (tc.chat_id) 
-                        tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                    FROM telegram_chats tc
-                    WHERE tc.bot_id = ANY($1::int[]) 
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-            `;
-            let tagParams = [validBotIds, sellerId];
-            let paramOffset = 3;
-            
-            // Adicionar filtro de contatos inativos se houver
-            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
-                tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
-                tagParams.push(excludeChatIds);
-                paramOffset++;
-            }
-            
-            tagQuery += `
-                    ORDER BY tc.chat_id, tc.created_at DESC
-                )
-            `;
-            
-            // Adicionar filtros para tags custom
-            const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
-            if (validCustomTagIds.length > 0) {
-                if (filterMode === 'exclude') {
-                    // Modo EXCLUIR: contatos que têm QUALQUER uma das tags (sem GROUP BY/HAVING)
-                    tagQuery += `,
-                    custom_tagged AS (
-                        SELECT DISTINCT lcta.chat_id
-                        FROM lead_custom_tag_assignments lcta
-                        WHERE lcta.bot_id = ANY($1::int[])
-                            AND lcta.seller_id = $2
-                            AND lcta.tag_id = ANY($${paramOffset}::int[])
-                    )`;
-                    tagParams.push(validCustomTagIds);
-                    paramOffset += 1;
-                } else {
-                    // Modo INCLUIR: contatos que têm TODAS as tags (com GROUP BY/HAVING)
-                    tagQuery += `,
-                    custom_tagged AS (
-                        SELECT DISTINCT lcta.chat_id
-                        FROM lead_custom_tag_assignments lcta
-                        WHERE lcta.bot_id = ANY($1::int[])
-                            AND lcta.seller_id = $2
-                            AND lcta.tag_id = ANY($${paramOffset}::int[])
-                        GROUP BY lcta.chat_id
-                        HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-                    )`;
-                    tagParams.push(validCustomTagIds, validCustomTagIds.length);
-                    paramOffset += 2;
-                }
-            }
-            
-            // Adicionar filtros para tags automáticas (Pagante)
-            if (validAutomaticTags.includes('Pagante')) {
-                tagQuery += `,
-                paid_contacts AS (
-                    SELECT DISTINCT tc.chat_id
-                    FROM telegram_chats tc
-                    JOIN clicks c ON c.click_id = tc.click_id
-                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                    WHERE tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-                        AND pt.status = 'paid'
-                )`;
-            }
-            
-            // Construir SELECT final com JOINs condicionais
-            tagQuery += `
-                SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                FROM base_contacts bc
-            `;
-            
-            // Adicionar JOINs baseado no modo de filtro
-            if (filterMode === 'exclude') {
-                // Modo EXCLUIR: usar LEFT JOIN + WHERE NOT EXISTS
-                if (validCustomTagIds.length > 0) {
-                    tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                }
-                if (validAutomaticTags.includes('Pagante')) {
-                    tagQuery += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
-                }
-                tagQuery += ` WHERE 1=1`;
-                if (validCustomTagIds.length > 0) {
-                    tagQuery += ` AND ct.chat_id IS NULL`;
-                }
-                if (validAutomaticTags.includes('Pagante')) {
-                    tagQuery += ` AND pc.chat_id IS NULL`;
-                }
-            } else {
-                // Modo INCLUIR: usar INNER JOIN (comportamento padrão)
-                if (validCustomTagIds.length > 0) {
-                    tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-                }
-                if (validAutomaticTags.includes('Pagante')) {
-                    tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
-                }
-            }
-            
-            tagQuery += ` ORDER BY bc.chat_id`;
-            
-            contacts = await sqlWithRetry(tagQuery, tagParams);
-        } else {
-            // Query simples sem filtro de tags - apenas usuários individuais (chat_id > 0)
-            if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
-                contacts = await sqlWithRetry(
-                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                          FROM telegram_chats 
-                          WHERE bot_id = ANY(${validBotIds}) 
-                            AND seller_id = ${sellerId}
-                            AND chat_id > 0
-                            AND chat_id != ALL(${excludeChatIds})
-                          ORDER BY chat_id, created_at DESC`
-                );
-            } else {
-                contacts = await sqlWithRetry(
-                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
-                          FROM telegram_chats 
-                          WHERE bot_id = ANY(${validBotIds}) 
-                            AND seller_id = ${sellerId}
-                            AND chat_id > 0
-                          ORDER BY chat_id, created_at DESC`
-                );
-            }
-        }
-        
-        const allContacts = new Map();
-        contacts.forEach(c => {
-            if (!allContacts.has(c.chat_id)) {
-                allContacts.set(c.chat_id, { 
-                    chat_id: c.chat_id,
-                    first_name: c.first_name,
-                    last_name: c.last_name,
-                    username: c.username,
-                    click_id: c.click_id,
-                    bot_id_source: c.bot_id 
-                });
-            }
-        });
-        const uniqueContacts = Array.from(allContacts.values());
-    
-        if (uniqueContacts.length === 0) {
-          return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
-        }
-    
-            // --- MUDANÇA PRINCIPAL AQUI ---
-            // 4. Calcular o total de trabalhos (1 trabalho por contato - o fluxo completo será processado)
-            const total_jobs_to_queue = uniqueContacts.length;
-            if (total_jobs_to_queue === 0) {
-                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos).' });
-            }
+        // Busca de contatos será feita depois da higienização no background
+        // Por enquanto, apenas criar o registro
     
         // 5. Criar o registro mestre da campanha com os totais corretos
         const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
@@ -7433,96 +7289,197 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
           sqlTx`INSERT INTO disparo_history (
                     seller_id, campaign_name, bot_ids, disparo_flow_id, 
                     status, total_sent, failure_count, 
-                    total_jobs, processed_jobs, scheduled_at, flow_steps
+                    total_jobs, processed_jobs, scheduled_at, flow_steps, current_step
                    ) 
                    VALUES (
                     ${sellerId}, ${campaignName}, ${JSON.stringify(botIds)}, ${disparoFlowId}, 
-                    ${statusToSet}, ${uniqueContacts.length}, 0, 
-                    ${total_jobs_to_queue}, 0, ${scheduledTimestamp ? scheduledDate : null}, ${JSON.stringify(flowStepsMetadata)}
+                    ${statusToSet}, 0, 0, 
+                    0, 0, ${scheduledTimestamp ? scheduledDate : null}, ${JSON.stringify(flowStepsMetadata)}, NULL
                    ) 
                    RETURNING id`
         );
         historyId = history.id;
             // --- FIM DA MUDANÇA ---
         
-        // Se for agendado, criar tarefa única no QStash para processar depois
+        // Se for agendado, criar tarefa única no BullMQ para processar depois
         if (scheduledTimestamp) {
             try {
-                // QStash para agendamento único usa 'delay' com formato relativo (ex: "30s", "5m")
-                // Precisamos calcular o delay em segundos a partir do timestamp absoluto
-                const now = Math.floor(Date.now() / 1000); // Unix timestamp atual em segundos
+                const now = Math.floor(Date.now() / 1000);
                 const delaySeconds = scheduledTimestamp - now;
                 
                 if (delaySeconds <= 0) {
                     return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
                 }
                 
-                const qstashResponse = await qstashClient.publishJSON({
-                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
-                    body: { history_id: historyId },
-                    delay: `${delaySeconds}s`, // Delay relativo em segundos
-                    retries: 2,
-                    method: "POST"
-                });
-                
-                // Salvar o scheduled_message_id
-                await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
+                const queueManager = require('./shared/queue-manager');
+                const job = await queueManager.addJob(
+                    'disparos-agendados',
+                    'process-scheduled-disparo',
+                    { history_id: historyId },
+                    {
+                        delay: delaySeconds * 1000,
+                        attempts: 3,
+                        jobId: `scheduled-disparo-${historyId}`,
+                    }
                 );
                 
-                // scheduledDate está em UTC (vem do frontend como ISO string)
-                // Converter para horário local do Brasil para exibição
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${job.id} WHERE id = ${historyId}`
+                );
+                
                 const displayDate = new Date(scheduledDate.getTime());
                 res.status(202).json({ 
-                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
+                    historyId: historyId,
+                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso!` 
                 });
-                return; // Não processar imediatamente
-            } catch (qstashError) {
-                console.error("Erro ao agendar disparo no QStash:", qstashError);
-                console.error("Detalhes do erro:", JSON.stringify(qstashError, null, 2));
-                // Se falhar ao agendar, deletar o registro e retornar erro
+                return;
+            } catch (schedulingError) {
+                console.error("Erro ao agendar disparo:", schedulingError);
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
                 return res.status(500).json({ message: 'Erro ao agendar o disparo. Tente novamente.' });
             }
         }
         
-        // 5. Retornar resposta HTTP imediatamente e processar em background
-        res.status(202).json({ message: `Disparo "${campaignName}" para ${uniqueContacts.length} contatos agendado com sucesso! O processo ocorrerá em segundo plano.` });
+        // Retornar resposta HTTP imediatamente com historyId para iniciar polling
+        res.status(202).json({ 
+            historyId: historyId,
+            message: `Disparo "${campaignName}" iniciado! Higienização e envio ocorrerão em segundo plano.` 
+        });
         
-        // 6. Processar publicação ao QStash em background (não bloqueia resposta HTTP)
+        // 6. Processar higienização e disparo em background
         (async () => {
             try {
-                // Buscar bot_tokens antes do loop para usar como chave de rate limiting
+                // PASSO 1: Fazer higienização
+                console.log(`[DISPARO ${historyId}] Iniciando higienização...`);
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET status = 'HYGIENIZING', current_step = 'hygienizing' WHERE id = ${historyId}`
+                );
+                
+                // Criar job de validação
+                const allContactsForValidation = await sqlWithRetry(
+                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, bot_id
+                          FROM telegram_chats 
+                          WHERE bot_id = ANY(${validBotIds}) 
+                            AND seller_id = ${sellerId}
+                          ORDER BY chat_id, created_at DESC`
+                );
+                
+                const individualUsers = allContactsForValidation.filter(c => c.chat_id > 0);
+                const groupsAndChannels = allContactsForValidation.filter(c => c.chat_id < 0);
+                
+                const [validationJob] = await sqlTx`
+                    INSERT INTO contact_validation_jobs (
+                        seller_id, bot_ids, status, total_contacts, processed_contacts, inactive_contacts
+                    ) VALUES (
+                        ${sellerId}, ${JSON.stringify(validBotIds)}, 'PENDING', ${allContactsForValidation.length}, 0, ${JSON.stringify(groupsAndChannels)}
+                    ) RETURNING id
+                `;
+                
+                const validationId = validationJob.id;
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET validation_id = ${validationId} WHERE id = ${historyId}`
+                );
+                
+                // Processar validação
+                await sqlTx`
+                    UPDATE contact_validation_jobs 
+                    SET status = 'RUNNING', updated_at = NOW() 
+                    WHERE id = ${validationId}
+                `;
+                
                 const botTokens = await sqlWithRetry(
                     sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${validBotIds}) AND seller_id = ${sellerId}`
                 );
                 const botTokenMap = new Map();
-                botTokens.forEach(bot => {
-                    botTokenMap.set(bot.id, bot.bot_token);
-                });
+                botTokens.forEach(b => botTokenMap.set(b.id, b.bot_token));
                 
-                let messageCounter = 0;
-                const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
-                const qstashPromises = [];
+                const inactiveContacts = [...groupsAndChannels];
+                const BATCH_SIZE = 30;
                 
-                // Processar contatos em chunks para evitar sobrecarga de memória
-                const CONTACTS_CHUNK_SIZE = 500; // Processar 500 contatos por vez
-                const contactChunks = [];
-                for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
-                    contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
+                for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
+                    const batch = individualUsers.slice(i, i + BATCH_SIZE);
+                    const batchInactive = [];
+                    
+                    const promises = batch.map(contact => {
+                        const botToken = botTokenMap.get(contact.bot_id);
+                        if (!botToken) {
+                            batchInactive.push(contact);
+                            return Promise.resolve();
+                        }
+                        
+                        return sendTelegramRequest(botToken, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
+                            .catch(error => {
+                                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
+                                    batchInactive.push(contact);
+                                }
+                            });
+                    });
+                    
+                    await Promise.all(promises);
+                    inactiveContacts.push(...batchInactive);
+                    
+                    const processedCount = Math.min(i + BATCH_SIZE, individualUsers.length);
+                    await sqlTx`
+                        UPDATE contact_validation_jobs 
+                        SET processed_contacts = ${processedCount}, 
+                            inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                            updated_at = NOW()
+                        WHERE id = ${validationId}
+                    `;
+                    
+                    if (i + BATCH_SIZE < individualUsers.length) {
+                        await new Promise(resolve => setTimeout(resolve, 1100));
+                    }
                 }
                 
-                console.log(`[DISPARO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks de ${CONTACTS_CHUNK_SIZE}`);
-        
+                const excludeChatIds = inactiveContacts.map(c => c.chat_id || c).filter(id => id);
+                
+                await sqlTx`
+                    UPDATE contact_validation_jobs 
+                    SET status = 'COMPLETED', 
+                        processed_contacts = ${individualUsers.length},
+                        inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = ${validationId}
+                `;
+                
+                console.log(`[DISPARO ${historyId}] Higienização concluída. ${excludeChatIds.length} contatos inativos encontrados.`);
+                
+                // PASSO 2: Buscar contatos com filtros aplicados
+                console.log(`[DISPARO ${historyId}] Buscando contatos para disparo...`);
+                const uniqueContacts = await fetchContactsWithFilters(validBotIds, sellerId, validCustomTagIds, validAutomaticTags, tagFilterMode, excludeChatIds);
+                
+                if (uniqueContacts.length === 0) {
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'COMPLETED', current_step = NULL WHERE id = ${historyId}`
+                    );
+                    console.log(`[DISPARO ${historyId}] Nenhum contato encontrado após higienização.`);
+                    return;
+                }
+                
+                // Atualizar total_jobs
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET total_jobs = ${uniqueContacts.length}, total_sent = ${uniqueContacts.length} WHERE id = ${historyId}`
+                );
+                
+                // PASSO 3: Iniciar disparo
+                console.log(`[DISPARO ${historyId}] Iniciando disparo para ${uniqueContacts.length} contatos...`);
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history SET status = 'RUNNING', current_step = 'sending' WHERE id = ${historyId}`
+                );
+                
+                const queueManager = require('./shared/queue-manager');
+                let messageCounter = 0;
+                const delayBetweenMessages = 2;
+                
                 // Encontrar o trigger (nó inicial do disparo)
                 let startNodeId = null;
                 const triggerNode = flowNodes.find(node => node.type === 'trigger');
                 
                 if (triggerNode) {
-                    // Se tem trigger, começar do trigger (ele passará para o próximo nó automaticamente)
                     startNodeId = triggerNode.id;
                 } else {
-                    // Fallback: procurar primeiro nó de ação (compatibilidade com fluxos antigos)
                     const actionNode = flowNodes.find(node => node.type === 'action');
                     if (actionNode) {
                         startNodeId = actionNode.id;
@@ -7530,77 +7487,53 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 if (!startNodeId) {
-                    console.error('[DISPARO] Nenhum nó inicial encontrado no fluxo!');
-                    await sqlWithRetry('UPDATE disparo_history SET status = $1 WHERE id = $2', ['FAILED', historyId]);
+                    console.error(`[DISPARO ${historyId}] Nenhum nó inicial encontrado no fluxo!`);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED', current_step = NULL WHERE id = ${historyId}`
+                    );
                     return;
                 }
-        
-                for (const contactChunk of contactChunks) {
-                    for (const contact of contactChunk) {
-                        const userVariables = {
-                            primeiro_nome: contact.first_name || '',
-                            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                        };
-                        
-                        const payload = {
+                
+                for (const contact of uniqueContacts) {
+                    const userVariables = {
+                        primeiro_nome: contact.first_name || '',
+                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                    };
+                    
+                    const totalDelaySeconds = messageCounter * delayBetweenMessages;
+                    const botToken = botTokenMap.get(contact.bot_id_source) || '';
+                    
+                    await queueManager.addJob(
+                        'disparos',
+                        'process-disparo',
+                        {
                             history_id: historyId,
                             chat_id: contact.chat_id,
                             bot_id: contact.bot_id_source,
                             flow_nodes: JSON.stringify(flowNodes),
                             flow_edges: JSON.stringify(flowEdges),
                             start_node_id: startNodeId,
-                            variables_json: JSON.stringify(userVariables)
-                        };
-            
-                        const totalDelaySeconds = messageCounter * delayBetweenMessages;
-                        
-                        // Obter bot_token para usar como chave de rate limiting
-                        const botToken = botTokenMap.get(contact.bot_id_source) || '';
-            
-                        qstashPromises.push(
-                            qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                body: payload,
-                                delay: `${totalDelaySeconds}s`, 
-                                retries: 2,
-                                // Rate limiting distribuído via QStash
-                                headers: {
-                                    'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
-                                    'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
-                                    'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
-                                    'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
-                                }
-                            })
-                        );
-                       
-                        messageCounter++; 
-                    }
+                            variables_json: JSON.stringify(userVariables),
+                            bot_token: botToken
+                        },
+                        {
+                            delay: totalDelaySeconds * 1000,
+                            attempts: 3,
+                            jobId: `disparo-${contact.chat_id}-${historyId}-${Date.now()}-${messageCounter}`,
+                        }
+                    );
                     
-                    // Processar promises deste chunk antes de continuar para o próximo
-                    // Isso evita acumular milhões de promises em memória
-                    if (qstashPromises.length > 0) {
-                        console.log(`[DISPARO] Processando chunk com ${qstashPromises.length} promises...`);
-                        await publishQStashInBatches(qstashPromises, 10, 500);
-                        qstashPromises.length = 0; // Limpar array para liberar memória
-                    }
+                    messageCounter++;
                 }
-        
-                // Processar promises restantes (se houver)
-                if (qstashPromises.length > 0) {
-                    await publishQStashInBatches(qstashPromises, 10, 500);
-                }
-        
-                // Atualizar o status da campanha para "RUNNING"
-                await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history SET status = 'RUNNING' WHERE id = ${historyId}`
-                );
+                
+                console.log(`[DISPARO ${historyId}] ${uniqueContacts.length} jobs de disparo criados.`);
+                
             } catch (bgError) {
-                console.error("Erro no processamento em background do disparo:", bgError);
-                // Atualizar status para erro se possível
+                console.error(`[DISPARO ${historyId}] Erro no processamento em background:`, bgError);
                 try {
                     await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED', current_step = NULL WHERE id = ${historyId}`
                     );
                 } catch (updateError) {
                     console.error("Erro ao atualizar status para FAILED:", updateError);
@@ -8374,6 +8307,145 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
 });
 
 // Função auxiliar para validação de contatos (reutilizável)
+// Função auxiliar para buscar contatos com filtros de tags e excludeChatIds
+async function fetchContactsWithFilters(validBotIds, sellerId, validCustomTagIds, validAutomaticTags, tagFilterMode, excludeChatIds) {
+    const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+    let contacts;
+    
+    if (hasAnyTagFilter) {
+        let tagQuery = `
+            WITH base_contacts AS (
+                SELECT DISTINCT ON (tc.chat_id) 
+                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
+                FROM telegram_chats tc
+                WHERE tc.bot_id = ANY($1::int[]) 
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+        `;
+        let tagParams = [validBotIds, sellerId];
+        let paramOffset = 3;
+        
+        if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+            tagQuery += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+            tagParams.push(excludeChatIds);
+            paramOffset++;
+        }
+        
+        tagQuery += ` ORDER BY tc.chat_id, tc.created_at DESC ) `;
+        
+        const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
+        if (validCustomTagIds.length > 0) {
+            if (filterMode === 'exclude') {
+                tagQuery += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                )`;
+                tagParams.push(validCustomTagIds);
+                paramOffset += 1;
+            } else {
+                tagQuery += `,
+                custom_tagged AS (
+                    SELECT DISTINCT lcta.chat_id
+                    FROM lead_custom_tag_assignments lcta
+                    WHERE lcta.bot_id = ANY($1::int[])
+                        AND lcta.seller_id = $2
+                        AND lcta.tag_id = ANY($${paramOffset}::int[])
+                    GROUP BY lcta.chat_id
+                    HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+                )`;
+                tagParams.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+        }
+        
+        if (validAutomaticTags.includes('Pagante')) {
+            tagQuery += `,
+            paid_contacts AS (
+                SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                JOIN clicks c ON c.click_id = tc.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+                    AND pt.status = 'paid'
+            )`;
+        }
+        
+        tagQuery += `
+            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
+            FROM base_contacts bc
+        `;
+        
+        if (filterMode === 'exclude') {
+            if (validCustomTagIds.length > 0) {
+                tagQuery += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+            tagQuery += ` WHERE 1=1`;
+            if (validCustomTagIds.length > 0) {
+                tagQuery += ` AND ct.chat_id IS NULL`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += ` AND pc.chat_id IS NULL`;
+            }
+        } else {
+            if (validCustomTagIds.length > 0) {
+                tagQuery += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (validAutomaticTags.includes('Pagante')) {
+                tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+        }
+        
+        tagQuery += ` ORDER BY bc.chat_id`;
+        contacts = await sqlWithRetry(tagQuery, tagParams);
+    } else {
+        if (excludeChatIds && Array.isArray(excludeChatIds) && excludeChatIds.length > 0) {
+            contacts = await sqlWithRetry(
+                sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                      FROM telegram_chats 
+                      WHERE bot_id = ANY(${validBotIds}) 
+                        AND seller_id = ${sellerId}
+                        AND chat_id > 0
+                        AND chat_id != ALL(${excludeChatIds})
+                      ORDER BY chat_id, created_at DESC`
+            );
+        } else {
+            contacts = await sqlWithRetry(
+                sqlTx`SELECT DISTINCT ON (chat_id) chat_id, first_name, last_name, username, click_id, bot_id
+                      FROM telegram_chats 
+                      WHERE bot_id = ANY(${validBotIds}) 
+                        AND seller_id = ${sellerId}
+                        AND chat_id > 0
+                      ORDER BY chat_id, created_at DESC`
+            );
+        }
+    }
+    
+    const allContacts = new Map();
+    contacts.forEach(c => {
+        if (!allContacts.has(c.chat_id)) {
+            allContacts.set(c.chat_id, { 
+                chat_id: c.chat_id,
+                first_name: c.first_name,
+                last_name: c.last_name,
+                username: c.username,
+                click_id: c.click_id,
+                bot_id_source: c.bot_id 
+            });
+        }
+    });
+    
+    return Array.from(allContacts.values());
+}
+
 async function validateContactsForBots(botIds, sellerId) {
     // Buscar bot tokens
     const botChecks = await sqlTx`
@@ -10105,6 +10177,110 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
         res.status(200).json({ message: `Verificação concluída. ${updatedCount} novas conversões encontradas.` });
     } catch (error) {
         res.status(500).json({ message: 'Erro ao verificar conversões.' });
+    }
+});
+
+// Endpoint para consultar status e progresso de um disparo
+app.get('/api/disparos/status/:historyId', authenticateJwt, async (req, res) => {
+    const { historyId } = req.params;
+    const sellerId = req.user.id;
+
+    try {
+        const [history] = await sqlWithRetry(
+            sqlTx`SELECT * FROM disparo_history WHERE id = ${historyId} AND seller_id = ${sellerId}`
+        );
+
+        if (!history) {
+            return res.status(404).json({ message: 'Disparo não encontrado.' });
+        }
+
+        const response = {
+            status: history.status,
+            current_step: history.current_step || null,
+            progress_percentage: 0,
+            processed_contacts: null,
+            total_contacts: null,
+            sent_messages: null,
+            total_messages: null,
+            inactive_count: null
+        };
+
+        // Se está em HYGIENIZING, buscar progresso da validação
+        if (history.status === 'HYGIENIZING' && history.validation_id) {
+            const [validation] = await sqlWithRetry(
+                sqlTx`SELECT * FROM contact_validation_jobs WHERE id = ${history.validation_id}`
+            );
+            
+            if (validation) {
+                response.processed_contacts = validation.processed_contacts || 0;
+                response.total_contacts = validation.total_contacts || 0;
+                response.progress_percentage = validation.total_contacts > 0 
+                    ? Math.round((validation.processed_contacts / validation.total_contacts) * 100)
+                    : 0;
+                
+                if (validation.inactive_contacts) {
+                    const inactiveArray = Array.isArray(validation.inactive_contacts) 
+                        ? validation.inactive_contacts 
+                        : JSON.parse(validation.inactive_contacts || '[]');
+                    response.inactive_count = inactiveArray.length;
+                }
+            }
+        }
+
+        // Se está em RUNNING, calcular progresso do disparo
+        if (history.status === 'RUNNING') {
+            response.sent_messages = history.processed_jobs || 0;
+            response.total_messages = history.total_jobs || 0;
+            response.progress_percentage = history.total_jobs > 0
+                ? Math.round((history.processed_jobs / history.total_jobs) * 100)
+                : 0;
+        }
+
+        // Se está COMPLETED, mostrar 100%
+        if (history.status === 'COMPLETED') {
+            response.progress_percentage = 100;
+            response.sent_messages = history.processed_jobs || 0;
+            response.total_messages = history.total_jobs || 0;
+        }
+
+        res.status(200).json(response);
+    } catch (error) {
+        console.error('Erro ao consultar status do disparo:', error);
+        res.status(500).json({ message: 'Erro ao consultar status do disparo.' });
+    }
+});
+
+// Endpoint para verificar se há disparo em progresso
+app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
+    const sellerId = req.user.id;
+
+    try {
+        const [activeDisparo] = await sqlWithRetry(
+            sqlTx`
+                SELECT * FROM disparo_history 
+                WHERE seller_id = ${sellerId} 
+                AND status IN ('PENDING', 'HYGIENIZING', 'RUNNING')
+                ORDER BY created_at DESC
+                LIMIT 1
+            `
+        );
+
+        if (!activeDisparo) {
+            return res.status(200).json({ active: false, disparo: null });
+        }
+
+        res.status(200).json({ 
+            active: true, 
+            disparo: {
+                id: activeDisparo.id,
+                campaign_name: activeDisparo.campaign_name,
+                status: activeDisparo.status,
+                current_step: activeDisparo.current_step
+            }
+        });
+    } catch (error) {
+        console.error('Erro ao verificar disparo ativo:', error);
+        res.status(500).json({ message: 'Erro ao verificar disparo ativo.' });
     }
 });
 
