@@ -456,6 +456,90 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
 // /backend/worker/process-timeout.js (Função processActions CORRIGIDA)
 
 /**
+ * Busca variáveis faltantes do banco de dados quando não estão disponíveis nas variáveis.
+ * Similar ao comportamento de fallback usado para last_transaction_id.
+ * @param {number} chatId - ID do chat do Telegram
+ * @param {number} botId - ID do bot
+ * @param {number} sellerId - ID do vendedor
+ * @param {Object} variables - Objeto de variáveis (será modificado in-place)
+ * @param {string} logPrefix - Prefixo para logs
+ */
+async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, logPrefix = '[Variables]') {
+    try {
+        // Buscar primeiro_nome e nome_completo se não estiverem disponíveis
+        if (!variables.primeiro_nome || !variables.nome_completo) {
+            const [user] = await sqlWithRetry(sqlTx`
+                SELECT first_name, last_name 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
+                ORDER BY created_at DESC LIMIT 1
+            `);
+            
+            if (user) {
+                if (!variables.primeiro_nome) {
+                    variables.primeiro_nome = user.first_name || '';
+                    console.log(`${logPrefix} primeiro_nome buscado do banco: ${variables.primeiro_nome}`);
+                }
+                if (!variables.nome_completo) {
+                    variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+                    console.log(`${logPrefix} nome_completo buscado do banco: ${variables.nome_completo}`);
+                }
+            }
+        }
+        
+        // Buscar click_id se não estiver disponível
+        let clickIdToUse = variables.click_id;
+        if (!clickIdToUse) {
+            const [chatData] = await sqlWithRetry(sqlTx`
+                SELECT click_id 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+            `);
+            
+            if (chatData && chatData.click_id) {
+                clickIdToUse = chatData.click_id;
+                variables.click_id = clickIdToUse;
+                console.log(`${logPrefix} click_id buscado do banco: ${clickIdToUse}`);
+            }
+        }
+        
+        // Buscar cidade e estado se não estiverem disponíveis e tivermos click_id
+        if ((!variables.cidade || !variables.estado) && clickIdToUse) {
+            const db_click_id = clickIdToUse.startsWith('/start ') ? clickIdToUse : `/start ${clickIdToUse}`;
+            const [click] = await sqlWithRetry(sqlTx`
+                SELECT city, state 
+                FROM clicks 
+                WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                LIMIT 1
+            `);
+            
+            if (click) {
+                if (!variables.cidade) {
+                    variables.cidade = click.city || '';
+                    console.log(`${logPrefix} cidade buscada do banco: ${variables.cidade}`);
+                }
+                if (!variables.estado) {
+                    variables.estado = click.state || '';
+                    console.log(`${logPrefix} estado buscado do banco: ${variables.estado}`);
+                }
+            } else {
+                // Se não encontrou click, definir valores vazios como fallback
+                if (!variables.cidade) variables.cidade = '';
+                if (!variables.estado) variables.estado = '';
+            }
+        } else if (!variables.cidade) {
+            variables.cidade = '';
+        } else if (!variables.estado) {
+            variables.estado = '';
+        }
+    } catch (error) {
+        // Não falhar se houver erro ao buscar variáveis do banco
+        console.warn(`${logPrefix} Erro ao buscar variáveis do banco (não crítico):`, error.message);
+    }
+}
+
+/**
  * =================================================================
  * FUNÇÃO 'processActions' (O EXECUTOR) - VERSÃO NOVA
  * =================================================================
@@ -463,6 +547,9 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
  */
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', currentNodeId = null, flowId = null, flowNodes = null, flowEdges = null) {
     console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+    
+    // Garantir que variáveis faltantes sejam buscadas do banco
+    await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, logPrefix);
     
     for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
@@ -1211,28 +1298,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let variables = { ...initialVariables };
 
-    const [user] = await sqlWithRetry(sqlTx`
-        SELECT first_name, last_name 
-        FROM telegram_chats 
-        WHERE chat_id = ${chatId} AND bot_id = ${botId} AND sender_type = 'user'
-        ORDER BY created_at DESC LIMIT 1`);
-
-    if (user) {
-        variables.primeiro_nome = user.first_name || '';
-        variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
-    }
-
-    if (variables.click_id) {
-        const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
-        const [click] = await sqlWithRetry(sqlTx`SELECT city, state FROM clicks WHERE click_id = ${db_click_id}`);
-        if (click) {
-            variables.cidade = click.city || '';
-            variables.estado = click.state || '';
-        }else{
-            variables.cidade = '';
-            variables.estado = '';
-        }
-    }
+    // Garantir que variáveis faltantes sejam buscadas do banco
+    await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, logPrefix);
     
     // ==========================================================
     // CARREGAR VARIÁVEIS DO BANCO DE DADOS (se existir estado)
