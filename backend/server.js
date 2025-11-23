@@ -7165,6 +7165,29 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         return res.status(400).json({ message: 'Nome da campanha, IDs dos Bots e ID do fluxo de disparo são obrigatórios.' });
       }
     
+      // Verificar se já existe disparo ativo (apenas para disparos imediatos, não agendados)
+      if (!scheduledAt) {
+          const [activeDisparo] = await sqlWithRetry(
+              sqlTx`SELECT id, campaign_name, status, current_step 
+                    FROM disparo_history 
+                    WHERE seller_id = ${sellerId} 
+                      AND status IN ('PENDING', 'HYGIENIZING', 'RUNNING')
+                    ORDER BY created_at DESC 
+                    LIMIT 1`
+          );
+          
+          if (activeDisparo) {
+              return res.status(409).json({ 
+                  message: `Já existe um disparo em andamento: "${activeDisparo.campaign_name}". Aguarde a conclusão antes de iniciar um novo disparo.`,
+                  activeDisparo: {
+                      id: activeDisparo.id,
+                      campaign_name: activeDisparo.campaign_name,
+                      status: activeDisparo.status
+                  }
+              });
+          }
+      }
+    
         // Validar scheduledAt se fornecido
         let scheduledTimestamp = null;
         let scheduledDate = null;
@@ -7192,6 +7215,39 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 scheduledTimestamp = Math.floor(scheduledDate.getTime() / 1000); // Unix timestamp em segundos
             } catch (error) {
                 return res.status(400).json({ message: 'Erro ao processar data/hora de agendamento.' });
+            }
+            
+            // Verificar se já existe disparo agendado (apenas um agendado por vez)
+            const [scheduledDisparo] = await sqlWithRetry(
+                sqlTx`SELECT id, campaign_name, status, scheduled_at 
+                      FROM disparo_history 
+                      WHERE seller_id = ${sellerId} 
+                        AND status = 'SCHEDULED'
+                      ORDER BY created_at DESC 
+                      LIMIT 1`
+            );
+            
+            if (scheduledDisparo) {
+                const scheduledDateStr = scheduledDisparo.scheduled_at 
+                    ? new Date(scheduledDisparo.scheduled_at).toLocaleString('pt-BR', { 
+                        timeZone: 'America/Sao_Paulo', 
+                        day: '2-digit', 
+                        month: '2-digit', 
+                        year: 'numeric', 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    })
+                    : 'data não definida';
+                
+                return res.status(409).json({ 
+                    message: `Já existe um disparo agendado: "${scheduledDisparo.campaign_name}" para ${scheduledDateStr}. Cancele o disparo agendado antes de criar um novo.`,
+                    scheduledDisparo: {
+                        id: scheduledDisparo.id,
+                        campaign_name: scheduledDisparo.campaign_name,
+                        status: scheduledDisparo.status,
+                        scheduled_at: scheduledDisparo.scheduled_at
+                    }
+                });
             }
       }
     
@@ -10188,11 +10244,11 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
 
     try {
-        // Buscar disparo mais recente que está em progresso
+        // Buscar disparo mais recente que está em progresso (incluindo agendados)
         const [activeDisparo] = await sqlWithRetry(
             sqlTx`SELECT * FROM disparo_history 
                   WHERE seller_id = ${sellerId} 
-                    AND status IN ('PENDING', 'HYGIENIZING', 'RUNNING')
+                    AND status IN ('PENDING', 'HYGIENIZING', 'RUNNING', 'SCHEDULED')
                   ORDER BY created_at DESC 
                   LIMIT 1`
         );
@@ -10203,7 +10259,10 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
 
         // Calcular progresso
         let progressPercentage = 0;
-        if (activeDisparo.current_step === 'sending' && activeDisparo.total_jobs > 0) {
+        if (activeDisparo.status === 'SCHEDULED') {
+            // Para agendados, não há progresso ainda
+            progressPercentage = 0;
+        } else if (activeDisparo.current_step === 'sending' && activeDisparo.total_jobs > 0) {
             progressPercentage = Math.round((activeDisparo.processed_jobs / activeDisparo.total_jobs) * 100);
         } else if (activeDisparo.current_step === 'hygienizing') {
             progressPercentage = 10; // Estimativa inicial
@@ -10217,6 +10276,7 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
                 current_step: activeDisparo.current_step,
                 progress_percentage: progressPercentage,
                 campaign_name: activeDisparo.campaign_name,
+                scheduled_at: activeDisparo.scheduled_at,
                 created_at: activeDisparo.created_at
             }
         };
@@ -10226,6 +10286,66 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
     } catch (error) {
         console.error('Erro ao verificar disparo ativo:', error);
         res.status(500).json({ message: 'Erro interno ao verificar disparo ativo.' });
+    }
+});
+
+// Endpoint para cancelar disparo agendado
+app.post('/api/disparos/cancel/:historyId', authenticateJwt, async (req, res) => {
+    const { historyId } = req.params;
+    const sellerId = req.user.id;
+
+    try {
+        // Buscar o disparo
+        const [disparo] = await sqlWithRetry(
+            sqlTx`SELECT * FROM disparo_history 
+                  WHERE id = ${historyId} AND seller_id = ${sellerId}`
+        );
+
+        if (!disparo) {
+            return res.status(404).json({ message: 'Disparo não encontrado.' });
+        }
+
+        // Verificar se o disparo está agendado
+        if (disparo.status !== 'SCHEDULED') {
+            return res.status(400).json({ 
+                message: `Este disparo não pode ser cancelado. Status atual: ${disparo.status}. Apenas disparos agendados podem ser cancelados.` 
+            });
+        }
+
+        // Cancelar tarefa no QStash se houver scheduled_message_id
+        if (disparo.scheduled_message_id) {
+            try {
+                await qstashClient.messages.delete(disparo.scheduled_message_id);
+                console.log(`[CANCEL DISPARO] Tarefa QStash ${disparo.scheduled_message_id} cancelada com sucesso.`);
+            } catch (qstashError) {
+                // Se a tarefa já foi processada ou não existe, apenas logar o erro mas continuar
+                console.warn(`[CANCEL DISPARO] Erro ao cancelar tarefa QStash (pode já ter sido processada):`, qstashError.message);
+            }
+        }
+
+        // Atualizar status para CANCELLED
+        await sqlWithRetry(
+            sqlTx`UPDATE disparo_history 
+                  SET status = 'CANCELLED', 
+                      scheduled_message_id = NULL,
+                      updated_at = NOW()
+                  WHERE id = ${historyId}`
+        );
+
+        console.log(`[CANCEL DISPARO] Disparo ${historyId} cancelado com sucesso.`);
+
+        res.status(200).json({ 
+            message: `Disparo "${disparo.campaign_name}" cancelado com sucesso.`,
+            disparo: {
+                id: disparo.id,
+                campaign_name: disparo.campaign_name,
+                status: 'CANCELLED'
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao cancelar disparo:', error);
+        res.status(500).json({ message: 'Erro interno ao cancelar disparo.' });
     }
 });
 

@@ -6482,13 +6482,20 @@ function generatePreviewHTML(data) {
                 if (response.active && response.disparo) {
                     setActiveDisparoId(response.disparo.id);
                     setIsDisparoInProgress(true);
-                    setShowDisparoProgressModal(true);
-                    setDisparoProgress({ 
-                        status: response.disparo.status, 
-                        progress_percentage: 0,
-                        current_step: response.disparo.current_step
-                    });
-                    startDisparoPolling(response.disparo.id);
+                    
+                    // Só mostrar modal se não for agendado (agendados não têm progresso)
+                    if (response.disparo.status !== 'SCHEDULED') {
+                        setShowDisparoProgressModal(true);
+                        setDisparoProgress({ 
+                            status: response.disparo.status, 
+                            progress_percentage: response.disparo.progress_percentage || 0,
+                            current_step: response.disparo.current_step
+                        });
+                        startDisparoPolling(response.disparo.id);
+                    } else {
+                        // Para agendados, apenas bloquear botão, não mostrar modal
+                        setShowDisparoProgressModal(false);
+                    }
                 } else {
                     setIsDisparoInProgress(false);
                 }
@@ -6857,8 +6864,33 @@ function generatePreviewHTML(data) {
         return;
     }
     
+    // Verificar se há disparo ativo (apenas para disparos imediatos)
+    if (!isScheduled && isDisparoInProgress) {
+        App.showToast('Já existe um disparo em andamento. Aguarde a conclusão antes de iniciar um novo.', 'error');
+        return;
+    }
+    
     // Validar agendamento se ativado
     if (isScheduled) {
+        // Verificar se já existe disparo agendado
+        try {
+            const activeCheck = await App.apiRequest('/api/disparos/check-active', 'GET');
+            if (activeCheck.active && activeCheck.disparo && activeCheck.disparo.status === 'SCHEDULED') {
+                const scheduledDateStr = activeCheck.disparo.scheduled_at 
+                    ? new Date(activeCheck.disparo.scheduled_at).toLocaleString('pt-BR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    })
+                    : 'data não definida';
+                App.showToast(`Já existe um disparo agendado: "${activeCheck.disparo.campaign_name}" para ${scheduledDateStr}. Cancele o disparo agendado antes de criar um novo.`, 'error');
+                return;
+            }
+        } catch (error) {
+            console.error('Erro ao verificar disparo agendado:', error);
+        }
         if (!scheduledDateTime) {
             App.showToast('Por favor, selecione uma data e hora para o agendamento.', 'error');
             return;
@@ -6931,7 +6963,37 @@ function generatePreviewHTML(data) {
             }
         }
     } catch (error) {
-        App.showToast(error.response?.data?.message || 'Erro ao iniciar disparo.', 'error');
+        // Se o erro for 409 (conflito - disparo ativo ou agendado), atualizar estado
+        if (error.response?.status === 409) {
+            const errorData = error.response?.data;
+            App.showToast(errorData?.message || 'Já existe um disparo em andamento ou agendado.', 'error');
+            
+            // Se o backend retornou informações do disparo ativo, atualizar estado
+            if (errorData?.activeDisparo) {
+                setIsDisparoInProgress(true);
+                setActiveDisparoId(errorData.activeDisparo.id);
+                // Só mostrar modal se não for agendado
+                if (errorData.activeDisparo.status !== 'SCHEDULED') {
+                    setShowDisparoProgressModal(true);
+                    // Verificar status do disparo ativo
+                    try {
+                        const statusResponse = await App.apiRequest(`/api/disparos/status/${errorData.activeDisparo.id}`, 'GET');
+                        setDisparoProgress(statusResponse);
+                        startDisparoPolling(errorData.activeDisparo.id);
+                    } catch (statusError) {
+                        console.error('Erro ao buscar status do disparo ativo:', statusError);
+                    }
+                }
+            }
+            
+            // Se o backend retornou informações do disparo agendado
+            if (errorData?.scheduledDisparo) {
+                setIsDisparoInProgress(true);
+                // Não mostrar modal para agendados, apenas bloquear botão
+            }
+        } else {
+            App.showToast(error.response?.data?.message || 'Erro ao iniciar disparo.', 'error');
+        }
         console.error("Erro submit disparo:", error);
     } finally {
         setIsSending(false);
@@ -7320,11 +7382,22 @@ function generatePreviewHTML(data) {
 
                 {/* Submit Button */}
                 <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem' }} disabled={isSending || isDisparoInProgress || selectedBotIds.length === 0}>
-                    {isDisparoInProgress ? 'Aguarde a conclusão do disparo em andamento' : 
+                    {isDisparoInProgress && !isScheduled ? 'Aguarde a conclusão do disparo em andamento' : 
+                     isDisparoInProgress && isScheduled ? 'Já existe um disparo agendado. Cancele o agendamento antes de criar um novo.' :
                      isSending ? (isScheduled ? 'Agendando...' : 'Disparando...') : 
                      isScheduled ? `Agendar para ${contactCount} contato(s)` :
                      `Disparar para ${contactCount} contato(s)`}
                 </button>
+                {isDisparoInProgress && !isScheduled && (
+                    <p style={{ color: 'var(--warning)', fontSize: '0.85rem', marginTop: '0.5rem', textAlign: 'center' }}>
+                        ⚠️ Não é possível iniciar um novo disparo enquanto houver um em andamento
+                    </p>
+                )}
+                {isDisparoInProgress && isScheduled && (
+                    <p style={{ color: 'var(--warning)', fontSize: '0.85rem', marginTop: '0.5rem', textAlign: 'center' }}>
+                        ⚠️ Já existe um disparo agendado. Cancele o agendamento no histórico antes de criar um novo
+                    </p>
+                )}
             </form>
             
             {/* Modal de Progresso Unificado (Higienização + Disparo) */}
@@ -7546,6 +7619,28 @@ function generatePreviewHTML(data) {
         }
     };
     
+    const [isCancelling, setIsCancelling] = useState(null);
+    
+    const handleCancelDisparo = async (historyId, campaignName) => {
+        if (!confirm(`Tem certeza que deseja cancelar o disparo "${campaignName}"?`)) {
+            return;
+        }
+        
+        setIsCancelling(historyId);
+        try {
+            const res = await App.apiRequest(`/api/disparos/cancel/${historyId}`, 'POST');
+            App.showToast(res.message || 'Disparo cancelado com sucesso!', 'success');
+            fetchHistory(currentPage, false);
+            // Verificar se ainda há disparo ativo após cancelamento
+            const activeCheck = await App.apiRequest('/api/disparos/check-active', 'GET');
+            setIsDisparoInProgress(activeCheck.active);
+        } catch (error) {
+            App.showToast('Erro ao cancelar: ' + (error.response?.data?.message || error.message), 'error');
+        } finally {
+            setIsCancelling(null);
+        }
+    };
+    
     const getStatusChip = (status) => {
         const styles = {
             PENDING: { background: '#a16207', color: '#fefce8' },
@@ -7687,9 +7782,21 @@ function generatePreviewHTML(data) {
                                             <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
                                             <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
                                             <td style={{padding: '1rem'}}>
-                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                </button>
+                                                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                                    {item.status === 'SCHEDULED' && (
+                                                        <button 
+                                                            className="btn btn-secondary btn-sm" 
+                                                            onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
+                                                            disabled={isCancelling === item.id}
+                                                            style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
+                                                        >
+                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                        </button>
+                                                    )}
+                                                    <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                        {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                         {(item.status === 'RUNNING' || item.status === 'PENDING') && (
@@ -7895,20 +8002,43 @@ function generatePreviewHTML(data) {
             }
         };
         
+        const [isCancelling, setIsCancelling] = useState(null);
+        
+        const handleCancelDisparo = async (historyId, campaignName) => {
+            if (!confirm(`Tem certeza que deseja cancelar o disparo "${campaignName}"?`)) {
+                return;
+            }
+            
+            setIsCancelling(historyId);
+            try {
+                const res = await api.post(`/api/disparos/cancel/${historyId}`);
+                alert(res.data.message || 'Disparo cancelado com sucesso!');
+                fetchHistory();
+            } catch (error) {
+                alert('Erro ao cancelar: ' + (error.response?.data?.message || error.message));
+            } finally {
+                setIsCancelling(null);
+            }
+        };
+        
         const getStatusChip = (status) => {
             const styles = {
                 PENDING: { background: '#a16207', color: '#fefce8' },
                 SCHEDULED: { background: '#7c3aed', color: '#ede9fe' },
                 RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
                 COMPLETED: { background: '#166534', color: '#dcfce7' },
-                FAILED: { background: '#991b1b', color: '#fee2e2' }
+                FAILED: { background: '#991b1b', color: '#fee2e2' },
+                CANCELLED: { background: '#6b7280', color: '#f3f4f6' },
+                HYGIENIZING: { background: '#059669', color: '#d1fae5' }
             };
             const labels = {
                 PENDING: 'Pendente',
                 SCHEDULED: 'Agendado',
                 RUNNING: 'Em Execução',
                 COMPLETED: 'Concluído',
-                FAILED: 'Falhou'
+                FAILED: 'Falhou',
+                CANCELLED: 'Cancelado',
+                HYGIENIZING: 'Higienizando'
             };
             return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{labels[status] || status}</span>
         }
@@ -7954,9 +8084,21 @@ function generatePreviewHTML(data) {
                                             <td style={{padding: '1rem'}}>{item.total_sent || 0}</td>
                                             <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
                                             <td style={{padding: '1rem'}}>
-                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                </button>
+                                                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                                    {item.status === 'SCHEDULED' && (
+                                                        <button 
+                                                            className="btn btn-secondary btn-sm" 
+                                                            onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
+                                                            disabled={isCancelling === item.id}
+                                                            style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
+                                                        >
+                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                        </button>
+                                                    )}
+                                                    <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                        {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                         {(item.status === 'RUNNING' || item.status === 'PENDING') && (
