@@ -10327,8 +10327,7 @@ app.post('/api/disparos/cancel/:historyId', authenticateJwt, async (req, res) =>
         await sqlWithRetry(
             sqlTx`UPDATE disparo_history 
                   SET status = 'CANCELLED', 
-                      scheduled_message_id = NULL,
-                      updated_at = NOW()
+                      scheduled_message_id = NULL
                   WHERE id = ${historyId}`
         );
 
