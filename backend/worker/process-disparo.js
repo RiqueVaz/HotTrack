@@ -883,7 +883,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             }
                         }
                         
-                        // Se ainda não encontrou, tenta buscar através do telegram_chats
+                        // Se ainda não encontrou, tenta buscar através do telegram_chats.last_transaction_id
                         if (!transactionId) {
                             const [chat] = await sqlWithRetry(sqlTx`
                                 SELECT last_transaction_id 
@@ -894,7 +894,46 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             `);
                             if (chat && chat.last_transaction_id) {
                                 transactionId = chat.last_transaction_id;
-                                logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do telegram_chats: ${transactionId}`);
+                                logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do telegram_chats.last_transaction_id: ${transactionId}`);
+                            }
+                        }
+                        
+                        // Se ainda não encontrou, busca transações através do chat_id e bot_id diretamente
+                        // Isso permite encontrar transações de checkout mesmo se last_transaction_id não foi atualizado
+                        if (!transactionId) {
+                            // Buscar click_id do telegram_chats para este chat
+                            const [chatData] = await sqlWithRetry(sqlTx`
+                                SELECT click_id 
+                                FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
+                                ORDER BY created_at DESC 
+                                LIMIT 1
+                            `);
+                            
+                            if (chatData && chatData.click_id) {
+                                const db_click_id = chatData.click_id.startsWith('/start ') ? chatData.click_id : `/start ${chatData.click_id}`;
+                                // Buscar click único com esse click_id
+                                const [click] = await sqlWithRetry(sqlTx`
+                                    SELECT id FROM clicks 
+                                    WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                                    LIMIT 1
+                                `);
+                                
+                                if (click) {
+                                    // Buscar transação mais recente associada a esse click
+                                    const [recentTransaction] = await sqlWithRetry(sqlTx`
+                                        SELECT * FROM pix_transactions 
+                                        WHERE click_id_internal = ${click.id}
+                                        ORDER BY created_at DESC 
+                                        LIMIT 1
+                                    `);
+                                    
+                                    if (recentTransaction) {
+                                        transactionId = recentTransaction.provider_transaction_id;
+                                        transaction = recentTransaction;
+                                        logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do chat_id/bot_id (checkout): ${transactionId}`);
+                                    }
+                                }
                             }
                         }
                         

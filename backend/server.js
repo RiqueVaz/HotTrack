@@ -6186,7 +6186,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         }
                         
-                        // Se ainda não encontrou, tenta buscar através do telegram_chats
+                        // Se ainda não encontrou, tenta buscar através do telegram_chats.last_transaction_id
                         if (!transactionId) {
                             const [chat] = await sqlTx`
                                 SELECT last_transaction_id 
@@ -6197,7 +6197,46 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             `;
                             if (chat && chat.last_transaction_id) {
                                 transactionId = chat.last_transaction_id;
-                                logger.info(`[PIX][action_check_pix] Transação encontrada através do telegram_chats: ${transactionId}`);
+                                logger.info(`[PIX][action_check_pix] Transação encontrada através do telegram_chats.last_transaction_id: ${transactionId}`);
+                            }
+                        }
+                        
+                        // Se ainda não encontrou, busca transações através do chat_id e bot_id diretamente
+                        // Isso permite encontrar transações de checkout mesmo se last_transaction_id não foi atualizado
+                        if (!transactionId) {
+                            // Buscar click_id do telegram_chats para este chat
+                            const [chatData] = await sqlTx`
+                                SELECT click_id 
+                                FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
+                                ORDER BY created_at DESC 
+                                LIMIT 1
+                            `;
+                            
+                            if (chatData && chatData.click_id) {
+                                const db_click_id = chatData.click_id.startsWith('/start ') ? chatData.click_id : `/start ${chatData.click_id}`;
+                                // Buscar click único com esse click_id
+                                const [click] = await sqlTx`
+                                    SELECT id FROM clicks 
+                                    WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                                    LIMIT 1
+                                `;
+                                
+                                if (click) {
+                                    // Buscar transação mais recente associada a esse click
+                                    const [recentTransaction] = await sqlTx`
+                                        SELECT * FROM pix_transactions 
+                                        WHERE click_id_internal = ${click.id}
+                                        ORDER BY created_at DESC 
+                                        LIMIT 1
+                                    `;
+                                    
+                                    if (recentTransaction) {
+                                        transactionId = recentTransaction.provider_transaction_id;
+                                        transaction = recentTransaction;
+                                        logger.info(`[PIX][action_check_pix] Transação encontrada através do chat_id/bot_id (checkout): ${transactionId}`);
+                                    }
+                                }
                             }
                         }
                         
@@ -11041,6 +11080,23 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             productData: productDataForUtmify,
             sqlTx: sqlTx
         });
+
+        // 4) Atualizar last_transaction_id em telegram_chats para tornar a transação acessível no contexto do fluxo
+        // Buscar todos os chats que compartilham o mesmo click_id e atualizar last_transaction_id
+        if (click.click_id) {
+            try {
+                await sqlTx`
+                    UPDATE telegram_chats 
+                    SET last_transaction_id = ${pixResult.transaction_id}
+                    WHERE click_id = ${click.click_id} 
+                      AND bot_id IN (SELECT id FROM telegram_bots WHERE seller_id = ${sellerId})
+                `;
+                console.log(`[Checkout PIX] last_transaction_id atualizado para chats com click_id ${click.click_id}`);
+            } catch (updateError) {
+                // Não falhar se houver erro ao atualizar (não crítico)
+                console.warn(`[Checkout PIX] Erro ao atualizar last_transaction_id (não crítico):`, updateError.message);
+            }
+        }
 
         const { internal_transaction_id, ...apiResponse } = pixResult;
         return res.status(200).json(apiResponse);
