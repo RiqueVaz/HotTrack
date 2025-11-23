@@ -981,11 +981,58 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'action_check_pix':
                 try {
-                    const transactionId = variables.last_transaction_id;
-                    if (!transactionId) throw new Error("Nenhum ID de transação PIX nas variáveis.");
+                    let transactionId = variables.last_transaction_id;
+                    let transaction = null;
                     
-                    const [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
-                    if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+                    // Se não tem transactionId nas variáveis, tenta buscar do banco como fallback
+                    if (!transactionId) {
+                        console.log(`${logPrefix} last_transaction_id não encontrado nas variáveis. Tentando buscar do banco de dados...`);
+                        
+                        // Tenta buscar através do click_id nas variáveis
+                        if (variables.click_id) {
+                            const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                            const [click] = await sqlTx`SELECT id FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                            
+                            if (click) {
+                                const [recentTransaction] = await sqlTx`
+                                    SELECT * FROM pix_transactions 
+                                    WHERE click_id_internal = ${click.id} 
+                                    ORDER BY created_at DESC 
+                                    LIMIT 1
+                                `;
+                                if (recentTransaction) {
+                                    transactionId = recentTransaction.provider_transaction_id;
+                                    transaction = recentTransaction;
+                                    console.log(`${logPrefix} Transação encontrada através do click_id: ${transactionId}`);
+                                }
+                            }
+                        }
+                        
+                        // Se ainda não encontrou, tenta buscar através do telegram_chats
+                        if (!transactionId) {
+                            const [chat] = await sqlTx`
+                                SELECT last_transaction_id 
+                                FROM telegram_chats 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND last_transaction_id IS NOT NULL 
+                                ORDER BY created_at DESC 
+                                LIMIT 1
+                            `;
+                            if (chat && chat.last_transaction_id) {
+                                transactionId = chat.last_transaction_id;
+                                console.log(`${logPrefix} Transação encontrada através do telegram_chats: ${transactionId}`);
+                            }
+                        }
+                        
+                        if (!transactionId) {
+                            throw new Error("Nenhum ID de transação PIX encontrado nas variáveis nem no banco de dados.");
+                        }
+                    }
+                    
+                    // Se ainda não tem a transação, busca pelo transactionId
+                    if (!transaction) {
+                        [transaction] = await sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`;
+                        if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+                    }
 
                     if (transaction.status === 'paid') {
                         return 'paid'; // Sinaliza para 'processFlow'
