@@ -531,6 +531,13 @@ app.post(
                               ORDER BY chat_id, created_at DESC`
                     );
                     
+                    // Garantir que total_contacts seja atualizado corretamente
+                    await sqlWithRetry(
+                        sqlTx`UPDATE contact_validation_jobs 
+                              SET total_contacts = ${allContacts.length}
+                              WHERE id = ${validation_id} AND (total_contacts IS NULL OR total_contacts = 0)`
+                    );
+                    
                     const inactiveContacts = validationJob.inactive_contacts ? 
                         (Array.isArray(validationJob.inactive_contacts) ? validationJob.inactive_contacts : []) : [];
                     const BATCH_SIZE = 30;
@@ -547,10 +554,17 @@ app.post(
                                 return Promise.resolve();
                             }
                             
+                            // Verificar cache ANTES de fazer requisição HTTP
+                            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                                batchInactive.push(contact.chat_id);
+                                return Promise.resolve(); // Pula requisição HTTP
+                            }
+                            
+                            // Só faz requisição se não estiver no cache
                             return sendTelegramRequest(botToken, 'sendChatAction', { 
                                 chat_id: contact.chat_id, 
                                 action: 'typing' 
-                            }).catch(error => {
+                            }, {}, 3, 1500, contact.bot_id).catch(error => {
                                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
                                     batchInactive.push(contact.chat_id);
                                 }
@@ -1017,8 +1031,35 @@ app.post(
                               WHERE id = ${history_id}`
                     );
                     
-                    // Re-executar higienização antes de buscar contatos
-                    const excludeChatIds = await validateContactsForBots(botIds, history.seller_id);
+                    // Criar job de validação ANTES de higienizar
+                    const allContactsForValidation = await sqlWithRetry(
+                        sqlTx`SELECT DISTINCT ON (chat_id) chat_id, bot_id
+                              FROM telegram_chats 
+                              WHERE bot_id = ANY(${botIds}) AND seller_id = ${history.seller_id} AND chat_id > 0
+                              ORDER BY chat_id, created_at DESC`
+                    );
+                    
+                    const groupsAndChannels = allContactsForValidation.filter(c => c.chat_id < 0);
+                    
+                    const [validationJob] = await sqlWithRetry(
+                        sqlTx`INSERT INTO contact_validation_jobs (
+                                  seller_id, bot_ids, status, total_contacts, processed_contacts, inactive_contacts
+                              ) VALUES (
+                                  ${history.seller_id}, ${JSON.stringify(botIds)}, 'RUNNING', ${allContactsForValidation.length}, 0, ${JSON.stringify(groupsAndChannels)}
+                              ) RETURNING id`
+                    );
+                    
+                    const validationId = validationJob.id;
+                    
+                    // Atualizar disparo_history com validation_id
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history 
+                              SET validation_id = ${validationId}
+                              WHERE id = ${history_id}`
+                    );
+                    
+                    // Agora fazer higienização (que atualizará o progresso)
+                    const excludeChatIds = await validateContactsForBots(botIds, history.seller_id, validationId);
                     console.log(`[WORKER-SCHEDULED-DISPARO ${history_id}] Higienização concluída. ${excludeChatIds.length} contatos inativos encontrados.`);
                     
                     // Extrair tagIds e tagFilterMode do flow_steps se existir
@@ -9391,7 +9432,7 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
 });
 
 // Função auxiliar para validação de contatos (reutilizável)
-async function validateContactsForBots(botIds, sellerId) {
+async function validateContactsForBots(botIds, sellerId, validationId = null) {
     // Buscar bot tokens
     const botChecks = await sqlTx`
         SELECT id, bot_token FROM telegram_bots 
@@ -9419,16 +9460,18 @@ async function validateContactsForBots(botIds, sellerId) {
     // Validar em batches
     for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
         const batch = allContacts.slice(i, i + BATCH_SIZE);
+        const batchInactive = [];
+        
         const promises = batch.map(contact => {
             const botToken = botTokenMap.get(contact.bot_id);
             if (!botToken) {
-                inactiveChatIds.push(contact.chat_id);
+                batchInactive.push(contact.chat_id);
                 return Promise.resolve();
             }
             
             // Verificar cache ANTES de fazer requisição HTTP
             if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
-                inactiveChatIds.push(contact.chat_id);
+                batchInactive.push(contact.chat_id);
                 return Promise.resolve(); // Pula requisição HTTP
             }
             
@@ -9438,12 +9481,39 @@ async function validateContactsForBots(botIds, sellerId) {
                 action: 'typing' 
             }, {}, 3, 1500, contact.bot_id).catch(error => {
                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
-                    inactiveChatIds.push(contact.chat_id);
+                    batchInactive.push(contact.chat_id);
                 }
             });
         });
         
         await Promise.all(promises);
+        
+        // Adicionar contatos inativos encontrados neste batch
+        inactiveChatIds.push(...batchInactive);
+        
+        // Se validationId fornecido, atualizar progresso durante validação
+        if (validationId) {
+            const processedCount = Math.min(i + BATCH_SIZE, allContacts.length);
+            await sqlTx`
+                UPDATE contact_validation_jobs 
+                SET processed_contacts = ${processedCount}, 
+                    inactive_contacts = ${JSON.stringify(inactiveChatIds)},
+                    updated_at = NOW()
+                WHERE id = ${validationId}
+            `;
+        }
+    }
+    
+    // Atualizar status final se validationId fornecido
+    if (validationId) {
+        await sqlTx`
+            UPDATE contact_validation_jobs 
+            SET status = 'COMPLETED',
+                processed_contacts = ${allContacts.length},
+                inactive_contacts = ${JSON.stringify(inactiveChatIds)},
+                updated_at = NOW()
+            WHERE id = ${validationId}
+        `;
     }
     
     return inactiveChatIds;
@@ -10985,19 +11055,28 @@ app.get('/api/disparos/status/:historyId', authenticateJwt, async (req, res) => 
         }
 
         if (history.current_step === 'hygienizing') {
-            // Durante higienização, usar contadores de higienização
+            // Higienização: 0-30% do progresso total
             if (validationJob && totalContacts > 0) {
-                progressPercentage = Math.round((processedContacts / totalContacts) * 100);
+                const hygieneProgress = Math.round((processedContacts / totalContacts) * 100);
+                progressPercentage = Math.round(hygieneProgress * 0.3); // 30% máximo para higienização
+            } else if (validationJob && totalContacts === 0) {
+                // Se total_contacts ainda não foi definido, usar estimativa baseada em status
+                progressPercentage = 5; // Início da higienização
             } else {
-                progressPercentage = 10; // Estimativa inicial se não houver dados
+                progressPercentage = 0; // Ainda não começou
             }
         } else if (history.current_step === 'sending') {
-            // Durante disparo, calcular baseado em processed_jobs / total_jobs
+            // Envio: 30-100% do progresso total
             if (totalMessages > 0) {
-                progressPercentage = Math.round((sentMessages / totalMessages) * 100);
+                const sendingProgress = Math.round((sentMessages / totalMessages) * 100);
+                progressPercentage = 30 + Math.round(sendingProgress * 0.7); // 30% base + 70% do envio
+            } else {
+                progressPercentage = 30; // Higienização concluída, aguardando envio
             }
         } else if (history.status === 'COMPLETED') {
             progressPercentage = 100;
+        } else if (history.status === 'PENDING') {
+            progressPercentage = 0;
         }
 
         const response = {
@@ -11043,27 +11122,50 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
 
         // Calcular progresso
         let progressPercentage = 0;
+        let processedContacts = 0;
+        let totalContacts = 0;
+        let sentMessages = activeDisparo.processed_jobs || 0;
+        let totalMessages = activeDisparo.total_jobs || 0;
+        
         if (activeDisparo.status === 'SCHEDULED') {
             // Para agendados, não há progresso ainda
             progressPercentage = 0;
-        } else if (activeDisparo.current_step === 'sending' && activeDisparo.total_jobs > 0) {
-            progressPercentage = Math.round((activeDisparo.processed_jobs / activeDisparo.total_jobs) * 100);
         } else if (activeDisparo.current_step === 'hygienizing') {
-            // Buscar dados de validação se disponível
+            // Higienização: 0-30% do progresso total
             if (activeDisparo.validation_id) {
                 const [validationJob] = await sqlWithRetry(
                     sqlTx`SELECT processed_contacts, total_contacts 
                           FROM contact_validation_jobs 
                           WHERE id = ${activeDisparo.validation_id}`
                 );
-                if (validationJob && validationJob.total_contacts > 0) {
-                    progressPercentage = Math.round((validationJob.processed_contacts / validationJob.total_contacts) * 100);
+                if (validationJob) {
+                    processedContacts = validationJob.processed_contacts || 0;
+                    totalContacts = validationJob.total_contacts || 0;
+                    
+                    if (totalContacts > 0) {
+                        const hygieneProgress = Math.round((processedContacts / totalContacts) * 100);
+                        progressPercentage = Math.round(hygieneProgress * 0.3); // 30% máximo para higienização
+                    } else {
+                        progressPercentage = 5; // Início da higienização
+                    }
                 } else {
-                    progressPercentage = 10; // Estimativa inicial se não houver dados
+                    progressPercentage = 0; // Ainda não começou
                 }
             } else {
-                progressPercentage = 10; // Estimativa inicial
+                progressPercentage = 0; // Ainda não começou
             }
+        } else if (activeDisparo.current_step === 'sending') {
+            // Envio: 30-100% do progresso total
+            if (totalMessages > 0) {
+                const sendingProgress = Math.round((sentMessages / totalMessages) * 100);
+                progressPercentage = 30 + Math.round(sendingProgress * 0.7); // 30% base + 70% do envio
+            } else {
+                progressPercentage = 30; // Higienização concluída, aguardando envio
+            }
+        } else if (activeDisparo.status === 'COMPLETED') {
+            progressPercentage = 100;
+        } else if (activeDisparo.status === 'PENDING') {
+            progressPercentage = 0;
         }
 
         const response = {
