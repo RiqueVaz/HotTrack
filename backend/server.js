@@ -5966,6 +5966,9 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                         logger.debug(`[GEO] Usando geolocalização em cache para IP ${ip_address}: ${city}, ${state}`);
                     } else {
                         // Só chamar API se não estiver em cache
+                        // Adicionar delay aleatório (0-500ms) para evitar picos simultâneos
+                        await new Promise(resolve => setTimeout(resolve, Math.random() * 500));
+                        
                         try {
                             const geo = await apiRateLimiter.getTransactionStatus({
                                 provider: 'ip-api',

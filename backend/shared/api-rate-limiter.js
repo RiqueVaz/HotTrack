@@ -49,7 +49,7 @@ class ApiRateLimiter {
                 timeout: 10000
             }],
             ['ip-api', {
-                globalRateLimit: 1333, // 45 req/min = 1 req a cada 1.33s
+                globalRateLimit: 2000, // 30 req/min (mais conservador, margem de segurança)
                 cacheTTL: 24 * 3600_000, // 24 horas (IPs não mudam de localização)
                 maxRetries: 1, // Reduzir retries para evitar mais 429s
                 retryDelay: 5000, // Aumentar delay entre retries
@@ -110,11 +110,22 @@ class ApiRateLimiter {
         if (!this.globalLimiters.has(key)) {
             this.globalLimiters.set(key, {
                 lastRequest: 0,
-                queue: []
+                queue: [],
+                processing: false
             });
         }
         
         const limiter = this.globalLimiters.get(key);
+        
+        // Para ip-api, usar fila real para evitar requisições simultâneas
+        if (provider === 'ip-api') {
+            return new Promise((resolve) => {
+                limiter.queue.push(resolve);
+                this._processQueue(provider, sellerId, limiter, config);
+            });
+        }
+        
+        // Para outros provedores, comportamento atual
         const now = Date.now();
         const timeSinceLastRequest = now - limiter.lastRequest;
         
@@ -125,6 +136,32 @@ class ApiRateLimiter {
         }
         
         limiter.lastRequest = Date.now();
+    }
+
+    /**
+     * Processa fila de requisições sequencialmente (para ip-api)
+     */
+    async _processQueue(provider, sellerId, limiter, config) {
+        // Evitar processar múltiplas filas simultaneamente
+        if (limiter.processing) return;
+        limiter.processing = true;
+        
+        while (limiter.queue.length > 0) {
+            const resolve = limiter.queue.shift();
+            const now = Date.now();
+            const timeSinceLastRequest = now - limiter.lastRequest;
+            
+            // Aguardar tempo necessário antes de processar próxima requisição
+            if (timeSinceLastRequest < config.globalRateLimit) {
+                const waitTime = config.globalRateLimit - timeSinceLastRequest;
+                await new Promise(res => setTimeout(res, waitTime));
+            }
+            
+            limiter.lastRequest = Date.now();
+            resolve(); // Libera a requisição para continuar
+        }
+        
+        limiter.processing = false;
     }
 
     /**
