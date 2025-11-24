@@ -514,6 +514,16 @@ app.post(
                 try {
                     const { history_id, validation_id, seller_id, bot_ids, disparo_flow_id, tag_ids, tag_filter_mode, exclude_chat_ids } = bodyData;
                     
+                    // Verificar se disparo foi cancelado antes de continuar
+                    const [disparoCheck] = await sqlWithRetry(
+                        sqlTx`SELECT status FROM disparo_history WHERE id = ${history_id}`
+                    );
+                    
+                    if (!disparoCheck || disparoCheck.status === 'CANCELLED') {
+                        console.log(`[WORKER-VALIDATION-DISPARO ${history_id}] Disparo foi cancelado. Abortando processamento.`);
+                        return;
+                    }
+                    
                     // Buscar o job de validação
                     const [validationJob] = await sqlWithRetry(
                         sqlTx`SELECT * FROM contact_validation_jobs WHERE id = ${validation_id} AND seller_id = ${seller_id}`
@@ -929,6 +939,16 @@ app.post(
                     const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
                     const flowNodes = flowData.nodes || [];
                     const flowEdges = flowData.edges || [];
+                    
+                    // Verificar se disparo foi cancelado antes de continuar
+                    const [disparoCheckScheduled] = await sqlWithRetry(
+                        sqlTx`SELECT status FROM disparo_history WHERE id = ${history_id}`
+                    );
+                    
+                    if (!disparoCheckScheduled || disparoCheckScheduled.status === 'CANCELLED') {
+                        console.log(`[WORKER-SCHEDULED-DISPARO ${history_id}] Disparo foi cancelado. Abortando processamento.`);
+                        return;
+                    }
                     
                     // Buscar contatos dos bots
                     const botIds = Array.isArray(history.bot_ids) ? history.bot_ids : JSON.parse(history.bot_ids || '[]');
@@ -11378,21 +11398,35 @@ app.post('/api/disparos/cancel/:historyId', authenticateJwt, async (req, res) =>
             return res.status(404).json({ message: 'Disparo não encontrado.' });
         }
 
-        // Verificar se o disparo está agendado
-        if (disparo.status !== 'SCHEDULED') {
+        // Verificar se o disparo pode ser cancelado
+        if (!['SCHEDULED', 'RUNNING', 'PENDING', 'HYGIENIZING'].includes(disparo.status)) {
             return res.status(400).json({ 
-                message: `Este disparo não pode ser cancelado. Status atual: ${disparo.status}. Apenas disparos agendados podem ser cancelados.` 
+                message: `Este disparo não pode ser cancelado. Status atual: ${disparo.status}.` 
             });
         }
 
-        // Cancelar tarefa no QStash se houver scheduled_message_id
-        if (disparo.scheduled_message_id) {
+        // Cancelar tarefa no QStash apenas se for SCHEDULED (ainda não iniciado)
+        if (disparo.status === 'SCHEDULED' && disparo.scheduled_message_id) {
             try {
                 await qstashClient.messages.delete(disparo.scheduled_message_id);
                 console.log(`[CANCEL DISPARO] Tarefa QStash ${disparo.scheduled_message_id} cancelada com sucesso.`);
             } catch (qstashError) {
                 // Se a tarefa já foi processada ou não existe, apenas logar o erro mas continuar
                 console.warn(`[CANCEL DISPARO] Erro ao cancelar tarefa QStash (pode já ter sido processada):`, qstashError.message);
+            }
+        }
+
+        // Para HYGIENIZING, cancelar job de validação se existir
+        if (disparo.status === 'HYGIENIZING' && disparo.validation_id) {
+            try {
+                await sqlWithRetry(
+                    sqlTx`UPDATE contact_validation_jobs 
+                          SET status = 'CANCELLED', updated_at = NOW()
+                          WHERE id = ${disparo.validation_id}`
+                );
+                console.log(`[CANCEL DISPARO] Job de validação ${disparo.validation_id} cancelado.`);
+            } catch (error) {
+                console.warn(`[CANCEL DISPARO] Erro ao cancelar job de validação:`, error.message);
             }
         }
 

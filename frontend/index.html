@@ -7896,6 +7896,16 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
+                                                    {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
+                                                        <button 
+                                                            className="btn btn-secondary btn-sm" 
+                                                            onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
+                                                            disabled={isCancelling === item.id}
+                                                            style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
+                                                        >
+                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                        </button>
+                                                    )}
                                                 <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
                                                     {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
                                                 </button>
@@ -8189,6 +8199,16 @@ function generatePreviewHTML(data) {
                                             <td style={{padding: '1rem'}}>
                                                 <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
                                                     {item.status === 'SCHEDULED' && (
+                                                        <button 
+                                                            className="btn btn-secondary btn-sm" 
+                                                            onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
+                                                            disabled={isCancelling === item.id}
+                                                            style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
+                                                        >
+                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                        </button>
+                                                    )}
+                                                    {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
