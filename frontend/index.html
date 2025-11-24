@@ -6485,13 +6485,13 @@ function generatePreviewHTML(data) {
                     
                     // Só mostrar modal se não for agendado (agendados não têm progresso)
                     if (response.disparo.status !== 'SCHEDULED') {
-                        setShowDisparoProgressModal(true);
-                        setDisparoProgress({ 
-                            status: response.disparo.status, 
+                    setShowDisparoProgressModal(true);
+                    setDisparoProgress({ 
+                        status: response.disparo.status, 
                             progress_percentage: response.disparo.progress_percentage || 0,
-                            current_step: response.disparo.current_step
-                        });
-                        startDisparoPolling(response.disparo.id);
+                        current_step: response.disparo.current_step
+                    });
+                    startDisparoPolling(response.disparo.id);
                     } else {
                         // Para agendados, apenas bloquear botão, não mostrar modal
                         setShowDisparoProgressModal(false);
@@ -6992,7 +6992,7 @@ function generatePreviewHTML(data) {
                 // Não mostrar modal para agendados, apenas bloquear botão
             }
         } else {
-            App.showToast(error.response?.data?.message || 'Erro ao iniciar disparo.', 'error');
+        App.showToast(error.response?.data?.message || 'Erro ao iniciar disparo.', 'error');
         }
         console.error("Erro submit disparo:", error);
     } finally {
@@ -7793,9 +7793,9 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                    <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                        {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                    </button>
+                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                </button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -8095,9 +8095,9 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                    <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                        {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                    </button>
+                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
+                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
+                                                </button>
                                                 </div>
                                             </td>
                                         </tr>

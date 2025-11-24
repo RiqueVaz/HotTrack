@@ -110,7 +110,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 const retryAfter = parseInt(error.response.headers['retry-after'] || error.response.headers['Retry-After'] || '2');
                 const waitTime = retryAfter * 1000; // Converter para milissegundos
                 
-                logger.warn(`[WORKER-DISPARO] Rate limit atingido (429). Aguardando ${retryAfter}s antes de retry. Method: ${method}, ChatID: ${errorChatId}`);
+                // Reduzir logging de rate limits - só logar a cada 20 ocorrências ou na primeira/última tentativa
+                if (i === 0 || i === retries - 1 || (i % 20 === 0 && i > 0)) {
+                    logger.debug(`[WORKER-DISPARO] Rate limit atingido (429). Aguardando ${retryAfter}s. Method: ${method}`);
+                }
                 
                 if (i < retries - 1) {
                     await new Promise(res => setTimeout(res, waitTime));
@@ -184,17 +187,47 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
     
+    // Para vídeos, tentar usar file_id diretamente primeiro (sem baixar)
+    // Isso evita baixar arquivos grandes desnecessariamente e reduz tráfego de rede
+    if (fileType === 'video') {
+        try {
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            const method = methodMap[fileType];
+            const field = fieldMap[fileType];
+            const timeout = 120000;
+            
+            const result = await sendTelegramRequest(destinationBotToken, method, { 
+                chat_id: chatId, 
+                [field]: fileId, 
+                caption, 
+                parse_mode: 'HTML' 
+            }, { timeout });
+            
+            // Se funcionou, retornar
+            if (result && result.ok) {
+                return result;
+            }
+        } catch (error) {
+            // Se file_id não funcionou, continuar para tentar baixar
+            // Mas só logar se não for erro comum (403, 400 com wrong file identifier)
+            if (error.response?.status !== 400 && error.response?.status !== 403) {
+                logger.debug(`[WORKER-DISPARO] file_id direto falhou, tentando download: ${error.message}`);
+            }
+        }
+    }
+    
+    // Para imagens/áudio ou se vídeo falhou, tentar baixar normalmente
     try {
         const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
         if (!fileInfo.ok) {
             // Se getFile falhar com "file is too big", tentar usar file_id diretamente
             if (fileInfo.error_code === 400 && fileInfo.description && fileInfo.description.includes('too big')) {
-                logger.warn(`[WORKER-DISPARO] Arquivo muito grande para getFile. Tentando usar file_id diretamente: ${fileId}`);
                 const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
                 const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
                 const method = methodMap[fileType];
                 const field = fieldMap[fileType];
-                const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+                const timeout = fileType === 'video' ? 120000 : 60000;
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
@@ -211,7 +244,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
         formData.append('chat_id', chatId);
         if (caption) {
             formData.append('caption', caption);
-            formData.append('parse_mode', 'HTML'); // Adicionado para consistência
+            formData.append('parse_mode', 'HTML');
         }
         const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
         const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
@@ -219,21 +252,20 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
         const method = methodMap[fileType];
         const field = fieldMap[fileType];
         const fileName = fileNameMap[fileType];
-        const timeout = fileType === 'video' ? 120000 : 30000; // Timeout maior para vídeos
+        const timeout = fileType === 'video' ? 120000 : 30000;
         if (!method) throw new Error('Tipo de arquivo não suportado.');
 
         formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
 
         return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
     } catch (error) {
-        // Se falhar ao baixar o arquivo (timeout, network error, etc.), tentar usar file_id diretamente
-        if (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED')) {
-            logger.warn(`[WORKER-DISPARO] Erro ao baixar arquivo (${error.message}). Tentando usar file_id diretamente: ${fileId}`);
+        // Se falhar ao baixar, tentar file_id como último recurso (apenas se não for vídeo, pois já tentamos)
+        if (fileType !== 'video' && (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED'))) {
             const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
             const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
             const method = methodMap[fileType];
             const field = fieldMap[fileType];
-            const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+            const timeout = fileType === 'video' ? 120000 : 60000;
             return await sendTelegramRequest(destinationBotToken, method, { 
                 chat_id: chatId, 
                 [field]: fileId, 
@@ -685,22 +717,32 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         try {
                             await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
                         } catch (error) {
-                            // Se sendMediaAsProxy falhar, tentar usar file_id diretamente como fallback
-                            logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao enviar mídia via proxy (${error.message}). Tentando file_id diretamente.`);
-                            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                            const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                            const timeout = action.type === 'video' ? 120000 : 60000; // Timeout maior para vídeos
-                            await sendTelegramRequest(botToken, method, { 
-                                chat_id: chatId, 
-                                [field]: fileId, 
-                                caption, 
-                                parse_mode: 'HTML' 
-                            }, { timeout });
+                            // Reduzir logging - só logar se não for erro comum esperado (400, 403)
+                            // Para vídeos, sendMediaAsProxy já tentou file_id diretamente, então não tentar novamente
+                            if (action.type !== 'video' && error.response?.status !== 400 && error.response?.status !== 403) {
+                                logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao enviar mídia via proxy. Tentando file_id diretamente.`);
+                            }
+                            // Tentar file_id diretamente apenas se não for vídeo (vídeo já tentou no sendMediaAsProxy)
+                            if (action.type !== 'video') {
+                                try {
+                                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                    const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                    const timeout = action.type === 'video' ? 120000 : 60000;
+                                    await sendTelegramRequest(botToken, method, { 
+                                        chat_id: chatId, 
+                                        [field]: fileId, 
+                                        caption, 
+                                        parse_mode: 'HTML' 
+                                    }, { timeout });
+                                } catch (fallbackError) {
+                                    // Silenciar erro de fallback para reduzir logging excessivo
+                                }
+                            }
                         }
                     } else {
                         const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
                         const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                        const timeout = action.type === 'video' ? 120000 : 60000; // Timeout maior para vídeos
+                        const timeout = action.type === 'video' ? 120000 : 60000;
                         await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
                     }
                 }
