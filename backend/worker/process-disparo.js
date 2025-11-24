@@ -502,19 +502,37 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     // Atualizar histórico e salvar disparo_log
     if (historyId) {
         try {
+            // Atualizar processed_jobs e verificar se concluído
+            let updatedHistory = null;
             if (logStatus === 'FAILED') {
-                await sqlWithRetry(sqlTx`
+                const [result] = await sqlWithRetry(sqlTx`
                     UPDATE disparo_history 
                     SET processed_jobs = processed_jobs + 1,
                         failure_count = failure_count + 1
                     WHERE id = ${historyId}
+                    RETURNING processed_jobs, total_jobs, status
                 `);
+                updatedHistory = result;
             } else {
-                await sqlWithRetry(sqlTx`
+                const [result] = await sqlWithRetry(sqlTx`
                     UPDATE disparo_history 
                     SET processed_jobs = processed_jobs + 1
                     WHERE id = ${historyId}
+                    RETURNING processed_jobs, total_jobs, status
                 `);
+                updatedHistory = result;
+            }
+            
+            // Verificar se todas as mensagens foram enviadas
+            if (updatedHistory && updatedHistory.processed_jobs >= updatedHistory.total_jobs && updatedHistory.total_jobs > 0) {
+                if (updatedHistory.status !== 'COMPLETED') {
+                    await sqlWithRetry(sqlTx`
+                        UPDATE disparo_history 
+                        SET status = 'COMPLETED', current_step = NULL
+                        WHERE id = ${historyId}
+                    `);
+                    logger.debug(`${logPrefix} Disparo ${historyId} concluído. Todas as mensagens foram enviadas.`);
+                }
             }
         } catch (error) {
             logger.error(`${logPrefix} Erro ao atualizar histórico:`, error);

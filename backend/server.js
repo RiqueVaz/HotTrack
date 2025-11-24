@@ -11018,13 +11018,30 @@ app.get('/api/disparos/status/:historyId', authenticateJwt, async (req, res) => 
     const sellerId = req.user.id;
 
     try {
-        const [history] = await sqlWithRetry(
+        let [history] = await sqlWithRetry(
             sqlTx`SELECT * FROM disparo_history 
                   WHERE id = ${historyId} AND seller_id = ${sellerId}`
         );
 
         if (!history) {
             return res.status(404).json({ message: 'Disparo não encontrado.' });
+        }
+
+        // Corrigir automaticamente se disparo foi concluído
+        if (history.status === 'RUNNING' && history.processed_jobs >= history.total_jobs && history.total_jobs > 0) {
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history 
+                      SET status = 'COMPLETED', current_step = NULL
+                      WHERE id = ${historyId}`
+            );
+            // Buscar novamente para ter dados atualizados
+            const [updatedHistory] = await sqlWithRetry(
+                sqlTx`SELECT * FROM disparo_history 
+                      WHERE id = ${historyId} AND seller_id = ${sellerId}`
+            );
+            if (updatedHistory) {
+                history = updatedHistory;
+            }
         }
 
         // Calcular porcentagem de progresso baseado na fase atual
@@ -11107,6 +11124,16 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
 
     try {
+        // Corrigir automaticamente disparos concluídos
+        await sqlWithRetry(
+            sqlTx`UPDATE disparo_history 
+                  SET status = 'COMPLETED', current_step = NULL
+                  WHERE seller_id = ${sellerId} 
+                    AND status = 'RUNNING' 
+                    AND processed_jobs >= total_jobs 
+                    AND total_jobs > 0`
+        );
+        
         // Buscar disparo mais recente que está em progresso (incluindo agendados)
         const [activeDisparo] = await sqlWithRetry(
             sqlTx`SELECT * FROM disparo_history 
