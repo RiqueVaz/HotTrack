@@ -27,6 +27,7 @@ const { sqlTx, sqlWithRetry } = require('./db');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
 const apiRateLimiter = require('./shared/api-rate-limiter');
+const dbCache = require('./shared/db-cache');
 
 function parseJsonField(value, context) {
     if (value === null || value === undefined) {
@@ -355,8 +356,8 @@ app.post(
                         return;
                     }
                     
-                    // Buscar bot
-                    const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
+                    // Buscar bot (precisa seller_id também, então busca completo)
+                    const bot = await getBot(bot_id, null); // seller_id será validado depois
                     if (!bot || !bot.bot_token) {
                         console.error(`[WORKER-DISPARO-DELAY] Bot ${bot_id} não encontrado.`);
                         return;
@@ -1739,6 +1740,111 @@ const {
     paradiseSplitRecipientId: PARADISE_SPLIT_RECIPIENT_ID,
     hottrackApiUrl: process.env.HOTTRACK_API_URL,
 });
+
+// ==========================================================
+//          FUNÇÕES DE CACHE PARA BANCO DE DADOS
+// ==========================================================
+
+/**
+ * Obtém configurações do seller com cache de 5 minutos
+ */
+async function getSellerSettings(sellerId) {
+    const cacheKey = `seller:${sellerId}`;
+    const cached = dbCache.get(cacheKey);
+    
+    if (cached !== null) {
+        return cached;
+    }
+    
+    const [settings] = await sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, paradise_secret_key, paradise_product_hash, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+    
+    if (settings) {
+        dbCache.set(cacheKey, settings, 5 * 60 * 1000); // 5 minutos
+    }
+    
+    return settings;
+}
+
+/**
+ * Invalida cache de configurações do seller
+ */
+function invalidateSellerCache(sellerId) {
+    dbCache.delete(`seller:${sellerId}`);
+}
+
+/**
+ * Obtém bot token com cache de 10 minutos
+ */
+async function getBotToken(botId, sellerId) {
+    const cacheKey = `bot:${botId}:${sellerId}`;
+    const cached = dbCache.get(cacheKey);
+    
+    if (cached !== null) {
+        return cached;
+    }
+    
+    const [bot] = await sqlTx`SELECT bot_token, seller_id FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`;
+    
+    if (bot) {
+        dbCache.set(cacheKey, bot.bot_token, 10 * 60 * 1000); // 10 minutos
+        return bot.bot_token;
+    }
+    
+    return null;
+}
+
+/**
+ * Obtém bot completo com cache de 10 minutos
+ * Se sellerId for null, busca sem filtro de seller (apenas por botId)
+ */
+async function getBot(botId, sellerId = null) {
+    const cacheKey = sellerId ? `bot_full:${botId}:${sellerId}` : `bot_full:${botId}`;
+    const cached = dbCache.get(cacheKey);
+    
+    if (cached !== null) {
+        return cached;
+    }
+    
+    const [bot] = sellerId 
+        ? await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`
+        : await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId}`;
+    
+    if (bot) {
+        dbCache.set(cacheKey, bot, 10 * 60 * 1000); // 10 minutos
+    }
+    
+    return bot;
+}
+
+/**
+ * Invalida cache de bot token
+ */
+function invalidateBotCache(botId, sellerId) {
+    dbCache.delete(`bot:${botId}:${sellerId}`);
+    dbCache.delete(`bot_full:${botId}:${sellerId}`);
+}
+
+/**
+ * Obtém geolocalização de click com cache de 24 horas
+ */
+async function getClickGeo(clickId, sellerId) {
+    const cacheKey = `click_geo:${clickId}:${sellerId}`;
+    const cached = dbCache.get(cacheKey);
+    
+    if (cached !== null) {
+        return cached;
+    }
+    
+    const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${clickId} AND seller_id = ${sellerId}`;
+    
+    if (clickResult.length > 0) {
+        const geo = { city: clickResult[0].city, state: clickResult[0].state };
+        dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
+        return geo;
+    }
+    
+    return { city: null, state: null };
+}
 
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
@@ -3662,9 +3768,9 @@ app.post('/api/chats/:botId/send-message', authenticateJwt, async (req, res) => 
     const { chatId, text } = req.body;
     if (!chatId || !text) return res.status(400).json({ message: 'Chat ID e texto são obrigatórios.' });
     try {
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
-        const response = await sendTelegramRequest(bot.bot_token, 'sendMessage', { chat_id: chatId, text });
+        const botToken = await getBotToken(req.params.botId, req.user.id);
+        if (!botToken) return res.status(404).json({ message: 'Bot não encontrado.' });
+        const response = await sendTelegramRequest(botToken, 'sendMessage', { chat_id: chatId, text });
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
@@ -3681,10 +3787,10 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
     }
 
     try {
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [botId, req.user.id]);
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
+        const botToken = await getBotToken(botId, req.user.id);
+        if (!botToken) return res.status(404).json({ message: 'Bot não encontrado.' });
 
-        const response = await sendMediaAsProxy(bot.bot_token, chatId, fileId, fileType, null);
+        const response = await sendMediaAsProxy(botToken, chatId, fileId, fileType, null);
 
         if (response.ok) {
             await saveMessageToDb(req.user.id, botId, response.result, 'operator');
@@ -4393,7 +4499,7 @@ app.post('/api/auth/logout', async (req, res) => {
 app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
-        const settingsPromise = sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, paradise_secret_key, paradise_product_hash, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
+        const settingsPromise = getSellerSettings(sellerId);
         const pixelsPromise = sqlTx`SELECT * FROM pixel_configurations WHERE seller_id = ${sellerId} ORDER BY created_at DESC`;
         const presselsPromise = sqlTx`
             SELECT p.*, COALESCE(px.pixel_ids, ARRAY[]::integer[]) as pixel_ids, b.bot_name
@@ -4553,6 +4659,8 @@ app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
             SET bot_token = ${bot_token},
                 telegram_supergroup_id = ${telegram_supergroup_id || null}
             WHERE id = ${id} AND seller_id = ${req.user.id}`;
+        // Invalida cache após atualização bem-sucedida
+        invalidateBotCache(parseInt(id), req.user.id);
         res.status(200).json({ message: 'Bot atualizado com sucesso.' });
     } catch (error) {
         console.error("Erro ao atualizar token do bot:", error);
@@ -4564,14 +4672,12 @@ app.post('/api/bots/:id/set-webhook', authenticateJwt, async (req, res) => {
     const { id } = req.params;
     const sellerId = req.user.id;
     try {
-        const [bot] = await sqlTx`
-            SELECT bot_token FROM telegram_bots 
-            WHERE id = ${id} AND seller_id = ${sellerId}`;
+        const botToken = await getBotToken(id, sellerId);
 
-        if (!bot || !bot.bot_token || bot.bot_token.trim() === '') {
+        if (!botToken || botToken.trim() === '') {
             return res.status(400).json({ message: 'O token do bot não está configurado. Salve um token válido primeiro.' });
         }
-        const token = bot.bot_token.trim();
+        const token = botToken.trim();
         const webhookUrl = `${HOTTRACK_API_URL}/api/webhook/telegram/${id}`;
         const telegramApiUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${webhookUrl}`;
         
@@ -4601,7 +4707,7 @@ app.post('/api/bots/test-connection', authenticateJwt, async (req, res) => {
     if (!bot_id) return res.status(400).json({ message: 'ID do bot é obrigatório.' });
 
     try {
-        const [bot] = await sqlTx`SELECT bot_token, bot_name FROM telegram_bots WHERE id = ${bot_id} AND seller_id = ${req.user.id}`;
+        const bot = await getBot(bot_id, req.user.id);
         if (!bot) {
             return res.status(404).json({ message: 'Bot não encontrado ou não pertence a este usuário.' });
         }
@@ -5467,6 +5573,8 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
         pix_provider_primary, pix_provider_secondary, pix_provider_tertiary
     } = req.body;
     try {
+        // Invalida cache do seller ao atualizar configurações
+        invalidateSellerCache(req.user.id);
         await sqlTx`UPDATE sellers SET 
             pushinpay_token = ${pushinpay_token || null}, 
             cnpay_public_key = ${cnpay_public_key || null}, 
@@ -5714,12 +5822,18 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 const isLocalIp = ip_address === '::1' || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.') || ip_address.startsWith('10.');
                 if (ip_address && !isLocalIp) {
                     try {
-                        const geo = await axios.get(`http://ip-api.com/json/${ip_address}?fields=status,city,regionName`);
-                        if (geo.data.status === 'success') {
-                            city = geo.data.city || city;
-                            state = geo.data.regionName || state;
+                        const geo = await apiRateLimiter.getTransactionStatus({
+                            provider: 'ip-api',
+                            sellerId: 0, // Global, não por seller
+                            transactionId: ip_address,
+                            url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
+                            headers: {}
+                        });
+                        if (geo.status === 'success') {
+                            city = geo.city || city;
+                            state = geo.regionName || state;
                         } else {
-                             logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.data.message || 'Status não foi success'}`);
+                             logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
                         }
                     } catch (geoError) {
                          logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
@@ -5763,15 +5877,14 @@ app.post('/api/click/info', logApiRequest, async (req, res) => {
         
         const db_click_id = click_id.startsWith('/start ') ? click_id : `/start ${click_id}`;
         
-        const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${seller_id}`;
+        const geo = await getClickGeo(db_click_id, seller_id);
         
-        if (clickResult.length === 0) {
+        if (!geo.city && !geo.state) {
             console.warn(`[CLICK INFO NOT FOUND] Vendedor (ID: ${seller_id}, Email: ${seller_email}) tentou consultar o click_id "${click_id}", mas não foi encontrado.`);
             return res.status(404).json({ message: 'Click ID não encontrado para este vendedor.' });
         }
         
-        const clickInfo = clickResult[0];
-        res.status(200).json({ status: 'success', city: clickInfo.city, state: clickInfo.state });
+        res.status(200).json({ status: 'success', city: geo.city, state: geo.state });
 
     } catch (error) {
         console.error("Erro ao consultar informações do clique:", error);
@@ -7767,7 +7880,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
         const text = message.text || '';
         const isStartCommand = text.startsWith('/start');
 
-        const [bot] = await sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${botId}`;
+        const bot = await getBot(botId, null);
         if (!bot) {
             logger.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
             return;
@@ -9058,6 +9171,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
     const { apiKey } = req.body;
     if (typeof apiKey === 'undefined') return res.status(400).json({ message: 'O campo apiKey é obrigatório.' });
     try {
+        invalidateSellerCache(req.user.id);
         await sqlWithRetry('UPDATE sellers SET api_key = $1 WHERE id = $2', [apiKey, req.user.id]);
         res.status(200).json({ message: 'Chave de API do HotTrack salva com sucesso!' });
     } catch (error) {
@@ -9577,8 +9691,8 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
 
 
     try {
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1 AND seller_id = $2', [req.params.botId, req.user.id]);
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado.' });
+        const botToken = await getBotToken(req.params.botId, req.user.id);
+        if (!botToken) return res.status(404).json({ message: 'Bot não encontrado.' });
         const buffer = Buffer.from(fileData, 'base64');
         try { validateTelegramSize(buffer, fileType); } catch (e) { return res.status(413).json({ message: e.message }); }
         const formData = new FormData();
@@ -9597,7 +9711,7 @@ app.post('/api/chats/:botId/send-media', authenticateJwt, json70mb, async (req, 
             return res.status(400).json({ message: 'Tipo de arquivo não suportado.' });
         }
         formData.append(field, buffer, { filename: fileName });
-        const response = await sendTelegramRequest(bot.bot_token, method, formData, { headers: formData.getHeaders() });
+        const response = await sendTelegramRequest(botToken, method, formData, { headers: formData.getHeaders() });
         if (response.ok) {
             await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
         }
@@ -9642,14 +9756,18 @@ app.post('/api/chats/generate-pix', authenticateJwt, async (req, res) => {
 
         await sqlWithRetry(`UPDATE telegram_chats SET last_transaction_id = $1 WHERE bot_id = $2 AND chat_id = $3`, [pixResult.transaction_id, botId, chatId]);
 
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botId]);
+        const bot = await getBot(botId, null);
+        if (!bot || !bot.bot_token) {
+            return res.status(404).json({ message: 'Bot não encontrado.' });
+        }
+        const botToken = bot.bot_token;
         
         const messageText = pixMessage || '';
         const buttonText = pixButtonText || '📋 Copiar Código PIX';
         const textToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
 
         // CRÍTICO: Tenta enviar o PIX para o usuário
-        const sentMessage = await sendTelegramRequest(bot.bot_token, 'sendMessage', {
+        const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
             chat_id: chatId,
             text: textToSend,
             parse_mode: 'HTML',
@@ -9757,8 +9875,8 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     const sellerId = req.user.id;
 
     try {
-        const [bot] = await sqlTx`SELECT bot_token FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`;
-        if (!bot) return res.status(404).json({ message: 'Bot não encontrado ou não pertence a você.' });
+        const botToken = await getBotToken(botId, sellerId);
+        if (!botToken) return res.status(404).json({ message: 'Bot não encontrado ou não pertence a você.' });
 
         const [flow] = await sqlTx`SELECT nodes FROM flows WHERE id = ${flowId} AND bot_id = ${botId}`;
         if (!flow || !flow.nodes) return res.status(404).json({ message: 'Fluxo não encontrado ou não pertence a este bot.' });
