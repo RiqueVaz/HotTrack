@@ -6374,11 +6374,25 @@ function findNextNode(currentNodeId, handleId, edges) {
 }
 
 async function sendTypingAction(chatId, botToken) {
+    // Verificar cache antes de enviar
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        if (dbCache.isBotTokenBlocked(botToken, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando ação typing.`);
+            return;
+        }
+    }
+    
     try {
-        await axios.post(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
+        const response = await sendTelegramRequest(botToken, 'sendChatAction', {
             chat_id: chatId,
             action: 'typing',
-        });
+        }, {}, 3, 1500, null);
+        
+        // Se retornou erro 403, o cache já foi atualizado pela sendTelegramRequest
+        if (response && !response.ok && response.error_code === 403) {
+            logger.debug(`[Flow Engine] Chat ${chatId} bloqueou o bot (typing). Ignorando.`);
+            return;
+        }
     } catch (error) {
         console.warn(`[Flow Engine] Falha ao enviar ação 'typing' para ${chatId}:`, error.response?.data || error.message);
     }
@@ -6397,21 +6411,43 @@ async function showTypingForDuration(chatId, botToken, durationMs) {
 
 async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, variables = {}) {
     if (!text || text.trim() === '') return;
+    
+    // Verificar cache antes de enviar
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mensagem.`);
+            return;
+        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando envio de mensagem.`);
+            return;
+        }
+    }
+    
     try {
         if (showTyping) {
             await sendTypingAction(chatId, botToken);
             let typingDuration = Math.max(500, Math.min(2000, text.length * 50));
             await new Promise(resolve => setTimeout(resolve, typingDuration));
         }
-        const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text: text, parse_mode: 'HTML' });
-        if (response.data.ok) {
-            const sentMessage = response.data.result;
+        
+        const response = await sendTelegramRequest(botToken, 'sendMessage', { 
+            chat_id: chatId, 
+            text: text, 
+            parse_mode: 'HTML' 
+        }, {}, 3, 1500, botId);
+        
+        if (response && response.ok && response.result) {
+            const sentMessage = response.result;
             // CORREÇÃO FINAL: Salva NULL para os dados do usuário quando o remetente é o bot.
             await sqlTx`
                 INSERT INTO telegram_chats (seller_id, bot_id, chat_id, message_id, user_id, first_name, last_name, username, message_text, sender_type, click_id)
                 VALUES (${sellerId}, ${botId}, ${chatId}, ${sentMessage.message_id}, ${sentMessage.from.id}, NULL, NULL, NULL, ${text}, 'bot', ${variables.click_id || null})
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
             `;
+        } else if (response && !response.ok && response.error_code === 403) {
+            // Se retornou erro 403, o cache já foi atualizado pela sendTelegramRequest
+            logger.debug(`[Flow Engine] Chat ${chatId} bloqueou o bot (message). Ignorando.`);
+            return;
         }
     } catch (error) {
         logger.error(`[Flow Engine] Erro ao enviar/salvar mensagem:`, error.response?.data || error.message);
