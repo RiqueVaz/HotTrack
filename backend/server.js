@@ -9426,10 +9426,17 @@ async function validateContactsForBots(botIds, sellerId) {
                 return Promise.resolve();
             }
             
+            // Verificar cache ANTES de fazer requisição HTTP
+            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                inactiveChatIds.push(contact.chat_id);
+                return Promise.resolve(); // Pula requisição HTTP
+            }
+            
+            // Só faz requisição se não estiver no cache
             return sendTelegramRequest(botToken, 'sendChatAction', { 
                 chat_id: contact.chat_id, 
                 action: 'typing' 
-            }).catch(error => {
+            }, {}, 3, 1500, contact.bot_id).catch(error => {
                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
                     inactiveChatIds.push(contact.chat_id);
                 }
@@ -9544,7 +9551,17 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
                             return Promise.resolve();
                         }
                         
-                        return sendTelegramRequest(botToken, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
+                        // Verificar cache ANTES de fazer requisição HTTP
+                        if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                            batchInactive.push(contact);
+                            return Promise.resolve(); // Pula requisição HTTP
+                        }
+                        
+                        // Só faz requisição se não estiver no cache
+                        return sendTelegramRequest(botToken, 'sendChatAction', { 
+                            chat_id: contact.chat_id, 
+                            action: 'typing' 
+                        }, {}, 3, 1500, contact.bot_id)
                             .catch(error => {
                                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
                                     batchInactive.push(contact);
