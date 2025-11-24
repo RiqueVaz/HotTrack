@@ -10157,7 +10157,7 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         }
 
         // Inicia o fluxo para o usuário, passando os dados do fluxo selecionado manualmente
-        await processFlow(chatId, botId, bot.bot_token, sellerId, firstNodeId, initialVars, flowData.nodes, flowData.edges, flowId);
+        await processFlow(chatId, botId, botToken, sellerId, firstNodeId, initialVars, flowData.nodes, flowData.edges, flowId);
 
         res.status(200).json({ message: 'Fluxo iniciado para o usuário com sucesso!' });
     } catch (error) {
