@@ -102,6 +102,70 @@ class DbCache {
             expired
         };
     }
+
+    /**
+     * Verifica se um bot está bloqueado por um chat
+     * @param {number} botId - ID do bot
+     * @param {string|number} chatId - ID do chat
+     * @returns {boolean} - true se bloqueado
+     */
+    isBotBlocked(botId, chatId) {
+        const cacheKey = `blocked:${botId}:${chatId}`;
+        return this.get(cacheKey) === true;
+    }
+
+    /**
+     * Marca um bot como bloqueado por um chat
+     * @param {number} botId - ID do bot
+     * @param {string|number} chatId - ID do chat
+     * @param {number} ttlHours - TTL em horas (padrão 24h)
+     */
+    markBotBlocked(botId, chatId, ttlHours = 24) {
+        const cacheKey = `blocked:${botId}:${chatId}`;
+        this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
+    }
+
+    /**
+     * Remove marcação de bloqueio (quando usuário desbloqueia)
+     * @param {number} botId - ID do bot
+     * @param {string|number} chatId - ID do chat
+     */
+    unmarkBotBlocked(botId, chatId) {
+        const cacheKey = `blocked:${botId}:${chatId}`;
+        this.delete(cacheKey);
+    }
+
+    /**
+     * Verifica se um bot está bloqueado usando botToken (fallback quando botId não disponível)
+     * @param {string} botToken - Token do bot
+     * @param {string|number} chatId - ID do chat
+     * @returns {boolean} - true se bloqueado
+     */
+    isBotTokenBlocked(botToken, chatId) {
+        const cacheKey = `blocked_token:${botToken}:${chatId}`;
+        return this.get(cacheKey) === true;
+    }
+
+    /**
+     * Marca um bot como bloqueado usando botToken (fallback quando botId não disponível)
+     * @param {string} botToken - Token do bot
+     * @param {string|number} chatId - ID do chat
+     * @param {number} ttlHours - TTL em horas (padrão 24h)
+     */
+    markBotTokenBlocked(botToken, chatId, ttlHours = 24) {
+        const cacheKey = `blocked_token:${botToken}:${chatId}`;
+        this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
+    }
+
+    /**
+     * Remove marcação de bloqueio usando botToken
+     * @param {string} botToken - Token do bot
+     * @param {string|number} chatId - ID do chat
+     */
+    unmarkBotTokenBlocked(botToken, chatId) {
+        const cacheKey = `blocked_token:${botToken}:${chatId}`;
+        this.delete(cacheKey);
+    }
 }
 
 // Exportar instância singleton

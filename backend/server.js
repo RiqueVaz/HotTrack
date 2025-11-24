@@ -2289,12 +2289,24 @@ async function generatePresselHTML(pressel, pixelIds) {
 // ==========================================================
 const telegramRateLimiter = require('./shared/telegram-rate-limiter');
 
-async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
+async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500, botId = null) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
 
     // Aplicar rate limiting proativo antes de fazer a requisição
     const chatId = data?.chat_id || null;
+    
+    // VERIFICAR CACHE ANTES DE TENTAR
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando requisição.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando requisição.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        }
+    }
+    
     await telegramRateLimiter.waitIfNeeded(botToken, chatId);
 
     for (let i = 0; i < retries; i++) {
@@ -2309,10 +2321,21 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             return response.data;
         } catch (error) {
             // FormData do Node.js não tem .get(), então tenta extrair do erro ou deixa undefined
-            const chatId = data?.chat_id || 'unknown';
+            const errorChatId = data?.chat_id || 'unknown';
 
             if (error.response && error.response.status === 403) {
-                console.warn(`[TELEGRAM API WARN] O bot foi bloqueado pelo usuário. ChatID: ${chatId}`);
+                const description = error.response?.data?.description || 'Forbidden: bot was blocked by the user';
+                
+                // MARCAR NO CACHE QUANDO RECEBER 403
+                if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
+                    if (botId) {
+                        dbCache.markBotBlocked(botId, errorChatId);
+                    } else {
+                        dbCache.markBotTokenBlocked(botToken, errorChatId);
+                    }
+                }
+                
+                console.warn(`[TELEGRAM API WARN] O bot foi bloqueado pelo usuário. ChatID: ${errorChatId}`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
@@ -2354,6 +2377,14 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 
             const description = (errorMessage && errorMessage.description) || error.message;
             if (description && description.includes('bot was blocked by the user')) {
+                // MARCAR NO CACHE QUANDO RECEBER ERRO DE BLOQUEIO
+                if (chatId && chatId !== 'unknown') {
+                    if (botId) {
+                        dbCache.markBotBlocked(botId, chatId);
+                    } else {
+                        dbCache.markBotTokenBlocked(botToken, chatId);
+                    }
+                }
                 logger.debug(`[Telegram API] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
                 return { ok: false, error_code: 403, description };
             }
@@ -6595,7 +6626,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         };
                         
-                        const response = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        const response = await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
                         if (response && response.ok) {
                             await saveMessageToDb(sellerId, botId, response.result, 'bot');
                         }
@@ -6796,7 +6827,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
                         reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
-                    });
+                    }, {}, 3, 1500, botId);
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
@@ -7184,7 +7215,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 chat_id: normalizedChatId,
                                 user_id: normalizedUserId,
                                 only_if_banned: true
-                            }
+                            },
+                            {},
+                            3,
+                            1500,
+                            botId
                         );
                         if (unbanResponse?.ok) {
                             logger.debug(`${logPrefix} Usuário ${userToUnban} desbanido antes da criação do convite.`);
@@ -7226,7 +7261,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const inviteResponse = await sendTelegramRequest(
                         botToken, 
                         'createChatInviteLink', 
-                        invitePayload
+                        invitePayload,
+                        {},
+                        3,
+                        1500,
+                        botId
                     );
                     
                     if (inviteResponse.ok) {
@@ -7250,7 +7289,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             }
                         };
 
-                        const messageResponse = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        const messageResponse = await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
                         if (messageResponse?.ok) {
                             await saveMessageToDb(sellerId, botId, messageResponse.result, 'bot');
                         } else {
@@ -7306,7 +7345,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 chat_id: normalizedChatId,
                                 user_id: normalizedUserId,
                                 revoke_messages: actionData.deleteMessages || false
-                            }
+                            },
+                            {},
+                            3,
+                            1500,
+                            botId
                         );
                     } catch (banError) {
                         const errorDesc =
@@ -7337,7 +7380,11 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                     {
                                         chat_id: normalizedChatId,
                                         invite_link: linkToRevoke
-                                    }
+                                    },
+                                    {},
+                                    3,
+                                    1500,
+                                    botId
                                 );
                                 if (revokeResponse.ok) {
                                     logger.debug(`${logPrefix} Link de convite revogado após banimento: ${linkToRevoke}`);
@@ -9379,10 +9426,17 @@ async function validateContactsForBots(botIds, sellerId) {
                 return Promise.resolve();
             }
             
+            // Verificar cache ANTES de fazer requisição HTTP
+            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                inactiveChatIds.push(contact.chat_id);
+                return Promise.resolve(); // Pula requisição HTTP
+            }
+            
+            // Só faz requisição se não estiver no cache
             return sendTelegramRequest(botToken, 'sendChatAction', { 
                 chat_id: contact.chat_id, 
                 action: 'typing' 
-            }).catch(error => {
+            }, {}, 3, 1500, contact.bot_id).catch(error => {
                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
                     inactiveChatIds.push(contact.chat_id);
                 }
@@ -9497,7 +9551,17 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
                             return Promise.resolve();
                         }
                         
-                        return sendTelegramRequest(botToken, 'sendChatAction', { chat_id: contact.chat_id, action: 'typing' })
+                        // Verificar cache ANTES de fazer requisição HTTP
+                        if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                            batchInactive.push(contact);
+                            return Promise.resolve(); // Pula requisição HTTP
+                        }
+                        
+                        // Só faz requisição se não estiver no cache
+                        return sendTelegramRequest(botToken, 'sendChatAction', { 
+                            chat_id: contact.chat_id, 
+                            action: 'typing' 
+                        }, {}, 3, 1500, contact.bot_id)
                             .catch(error => {
                                 if (error.response && (error.response.status === 403 || error.response.status === 400)) {
                                     batchInactive.push(contact);

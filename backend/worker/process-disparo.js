@@ -84,12 +84,25 @@ const normalizeChatIdentifier = (value) => {
     return trimmed;
 };
 
-async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500) {
+async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500, botId = null) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
     
     // Aplicar rate limiting proativo antes de fazer a requisição
     const chatId = data?.chat_id || null;
+    
+    // VERIFICAR CACHE ANTES DE TENTAR
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        const dbCache = require('../shared/db-cache');
+        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando requisição.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando requisição.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        }
+    }
+    
     await telegramRateLimiter.waitIfNeeded(botToken, chatId);
     
     for (let i = 0; i < retries; i++) {
@@ -101,6 +114,17 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
             const errorChatId = data?.chat_id || 'unknown';
             const description = error.response?.data?.description || error.message;
             if (error.response && error.response.status === 403) {
+                const dbCache = require('../shared/db-cache');
+                
+                // MARCAR NO CACHE QUANDO RECEBER 403
+                if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
+                    if (botId) {
+                        dbCache.markBotBlocked(botId, errorChatId);
+                    } else {
+                        dbCache.markBotTokenBlocked(botToken, errorChatId);
+                    }
+                }
+                
                 logger.debug(`[WORKER-DISPARO] Chat ${errorChatId} bloqueou o bot (method ${method}). Ignorando.`);
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
@@ -683,18 +707,18 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             }
                         };
                         
-                        await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
                     } else {
                         // Envia mensagem normal sem botão
                         const payload = { chat_id: chatId, text: textToSend, parse_mode: 'HTML' };
-                        await sendTelegramRequest(botToken, 'sendMessage', payload);
+                        await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
                     }
                 } catch (error) {
                     logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
                 }
             } else if (action.type === 'typing_action') {
                 const duration = actionData.durationInSeconds || 1;
-                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'typing' });
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'typing' }, {}, 3, 1500, botId);
                 await new Promise(resolve => setTimeout(resolve, duration * 1000));
             } else if (['image', 'video', 'audio'].includes(action.type)) {
                 let fileId = actionData.fileId || actionData.file_id || actionData.imageUrl || actionData.videoUrl || actionData.audioUrl;
