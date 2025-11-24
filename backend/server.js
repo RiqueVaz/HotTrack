@@ -1679,22 +1679,23 @@ async function getClickGeo(clickId, sellerId) {
     const cached = dbCache.get(cacheKey);
     
     if (cached !== null) {
-        // Garantir que o objeto retornado tem a propriedade 'exists' para compatibilidade
-        // Se tem city ou state, exists é false (não precisa verificar telegram_chats)
-        // Se não tem city nem state mas está em cache, pode ser que exista em telegram_chats
-        const result = { ...cached };
-        if (result.exists === undefined) {
-            // Cache antigo sem 'exists' - se tem city/state, não precisa verificar
-            result.exists = (result.city || result.state) ? false : undefined;
-        }
-        return result;
+        // Retornar cache diretamente - já tem a propriedade 'exists' correta
+        // Se exists === false: encontrado em clicks (mesmo sem geo)
+        // Se exists === true: encontrado em telegram_chats
+        // Se exists === undefined: cache antigo, precisa verificar
+        return cached;
     }
     
     // PRIMEIRO: Buscar na tabela clicks (dados completos com geolocalização)
     const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${clickId} AND seller_id = ${sellerId}`;
     
     if (clickResult.length > 0) {
-        const geo = { city: clickResult[0].city, state: clickResult[0].state };
+        // Click encontrado em clicks - salvar exists: false para indicar que não precisa verificar telegram_chats
+        const geo = { 
+            city: clickResult[0].city, 
+            state: clickResult[0].state,
+            exists: false // Indica que foi encontrado em clicks, não precisa verificar telegram_chats
+        };
         dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
         return geo;
     }
@@ -1717,7 +1718,8 @@ async function getClickGeo(clickId, sellerId) {
     }
     
     // Não encontrado em nenhuma tabela
-    return { city: null, state: null, exists: false };
+    // Não definir exists para que o endpoint saiba que precisa retornar 404
+    return { city: null, state: null };
 }
 
 // ==========================================================
@@ -5809,10 +5811,19 @@ app.post('/api/click/info', logApiRequest, async (req, res) => {
         
         // Se não tem city nem state, verificar se o click existe
         if (!geo.city && !geo.state) {
-            // Se geo.exists é true, significa que o click existe em telegram_chats mas não tem geolocalização
-            // Se geo.exists é undefined, pode ser cache antigo - verificar novamente
+            // Se geo.exists é false, significa que foi encontrado em clicks mas sem geolocalização
+            // Retornar 200 mesmo sem geolocalização
+            if (geo.exists === false) {
+                return res.status(200).json({ 
+                    status: 'success', 
+                    city: null, 
+                    state: null,
+                    message: 'Click encontrado mas sem dados de geolocalização'
+                });
+            }
+            
+            // Se geo.exists é true, significa que foi encontrado em telegram_chats mas não tem geolocalização
             if (geo.exists === true) {
-                // Click existe mas não tem geolocalização - retornar sucesso com null
                 return res.status(200).json({ 
                     status: 'success', 
                     city: null, 
