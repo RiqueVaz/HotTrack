@@ -320,6 +320,40 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     const startTime = Date.now();
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
     
+    // ==========================================================
+    // LIMPEZA: Deletar estado de fluxo antigo antes de iniciar
+    // Isso evita conflitos quando novos leads entram durante disparo
+    // ==========================================================
+    try {
+        const [existingState] = await sqlWithRetry(sqlTx`
+            SELECT scheduled_message_id 
+            FROM user_flow_states 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `);
+        
+        if (existingState) {
+            // Cancelar tarefa QStash pendente se existir
+            if (existingState.scheduled_message_id) {
+                try {
+                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                    logger.debug(`${logPrefix} Tarefa QStash cancelada: ${existingState.scheduled_message_id}`);
+                } catch (e) {
+                    logger.warn(`${logPrefix} Erro ao cancelar QStash (não crítico):`, e.message);
+                }
+            }
+            
+            // Deletar estado antigo
+            await sqlWithRetry(sqlTx`
+                DELETE FROM user_flow_states 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId}
+            `);
+            logger.debug(`${logPrefix} Estado de fluxo limpo antes de iniciar disparo para chat ${chatId}.`);
+        }
+    } catch (error) {
+        // Não interromper o disparo se falhar ao limpar estado
+        logger.warn(`${logPrefix} Erro ao limpar estado de fluxo (não crítico):`, error.message);
+    }
+    
     let variables = { ...initialVariables };
     let currentNodeId = startNodeId;
     let safetyLock = 0;
@@ -1194,6 +1228,20 @@ async function handler(req, res) {
 // Função para processar múltiplos contatos em batch com controle de concorrência
 async function processDisparoBatchData(data) {
     const { history_id, contacts, flow_nodes, flow_edges, start_node_id, batch_index = 0, total_batches = 1 } = data;
+    
+    // Verificar se disparo foi cancelado antes de processar
+    try {
+        const [disparoStatus] = await sqlWithRetry(
+            sqlTx`SELECT status FROM disparo_history WHERE id = ${history_id}`
+        );
+        
+        if (!disparoStatus || disparoStatus.status === 'CANCELLED') {
+            logger.info(`[WORKER-DISPARO-BATCH] Disparo ${history_id} foi cancelado. Ignorando batch ${batch_index + 1}/${total_batches}.`);
+            return; // Não processar batch
+        }
+    } catch (error) {
+        logger.warn(`[WORKER-DISPARO-BATCH] Erro ao verificar status do disparo (continuando):`, error.message);
+    }
     
     // Validação de dados obrigatórios
     if (!flow_nodes || !flow_edges || !start_node_id || !contacts || !Array.isArray(contacts)) {
