@@ -174,6 +174,7 @@
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes pulse { 
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.7; transform: scale(1.1); }
@@ -6419,6 +6420,7 @@ function generatePreviewHTML(data) {
     const [selectedBotIds, setSelectedBotIds] = useState([]);
     const [campaignName, setCampaignName] = useState('');
     const [contactCount, setContactCount] = useState(0);
+    const [isFilteringContacts, setIsFilteringContacts] = useState(false);
     const [isSending, setIsSending] = useState(false);
     const [isScheduled, setIsScheduled] = useState(false);
     const [scheduledDateTime, setScheduledDateTime] = useState('');
@@ -6586,23 +6588,22 @@ function generatePreviewHTML(data) {
         fetchTags();
     }, [selectedBotIds]);
 
-    // Fetch contact count when selected bots change or when tags change
+    // Fetch contact count when selected bots change (SEM tags - apenas contagem básica)
     useEffect(() => {
         const fetchCount = async () => {
             if (selectedBotIds.length === 0) {
                 setContactCount(0);
                 return;
             }
+            // Se há tags selecionadas, não buscar automaticamente - usuário deve clicar em "Filtrar"
+            if (selectedTagIds.length > 0) {
+                setContactCount(0); // Resetar contagem quando tags são selecionadas
+                return;
+            }
             try {
                 const requestBody = { 
                     botIds: selectedBotIds
                 };
-                
-                // Adicionar tagIds e tagFilterMode se tags foram selecionadas
-                if (selectedTagIds.length > 0) {
-                    requestBody.tagIds = selectedTagIds;
-                    requestBody.tagFilterMode = tagFilterMode;
-                }
                 
                 const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
                 setContactCount(response.count);
@@ -6613,7 +6614,43 @@ function generatePreviewHTML(data) {
             }
         };
         fetchCount();
-    }, [selectedBotIds, selectedTagIds, tagFilterMode]);
+    }, [selectedBotIds]); // Removido selectedTagIds e tagFilterMode das dependências
+
+    // Função para filtrar contatos manualmente (chamada pelo botão)
+    const handleFilterContacts = async () => {
+        if (selectedBotIds.length === 0) {
+            App.showToast('Selecione pelo menos um bot antes de filtrar.', 'warning');
+            return;
+        }
+        
+        setIsFilteringContacts(true);
+        try {
+            const requestBody = { 
+                botIds: selectedBotIds
+            };
+            
+            // Adicionar tagIds e tagFilterMode se tags foram selecionadas
+            if (selectedTagIds.length > 0) {
+                requestBody.tagIds = selectedTagIds;
+                requestBody.tagFilterMode = tagFilterMode;
+            }
+            
+            const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
+            setContactCount(response.count);
+            
+            if (selectedTagIds.length > 0) {
+                App.showToast(`Filtro aplicado: ${response.count} contato(s) encontrado(s).`, 'success');
+            } else {
+                App.showToast(`Contagem atualizada: ${response.count} contato(s).`, 'success');
+            }
+        } catch (error) {
+            console.error("Erro ao filtrar contatos", error);
+            setContactCount(0);
+            App.showToast('Erro ao filtrar contatos. Tente novamente.', 'error');
+        } finally {
+            setIsFilteringContacts(false);
+        }
+    };
 
     // Fetch disparo flows
     const fetchDisparoFlows = useCallback(async () => {
@@ -7094,9 +7131,20 @@ function generatePreviewHTML(data) {
                                 </label>
                             ))}
                         </div>
-                        <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                            Total de contatos: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
-                        </p>
+                        <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>
+                                Total de contatos: <strong style={{ color: 'var(--accent-primary)' }}>{contactCount}</strong>
+                            </p>
+                            {selectedTagIds.length > 0 && contactCount === 0 && !isFilteringContacts && (
+                                <span style={{ 
+                                    fontSize: '0.85rem', 
+                                    color: 'var(--warning)',
+                                    fontStyle: 'italic'
+                                }}>
+                                    Clique em "Filtrar Contatos" para aplicar os filtros
+                                </span>
+                            )}
+                        </div>
                         
                         {/* Tag Filter Section */}
                         {availableTags.length > 0 && (
@@ -7203,14 +7251,69 @@ function generatePreviewHTML(data) {
                                     </div>
                                 )}
                                 {selectedTagIds.length > 0 && (
-                                    <p style={{ 
-                                        color: 'var(--accent-primary)', 
-                                        fontSize: '0.85rem', 
-                                        marginTop: '0.75rem',
-                                        fontWeight: '500'
-                                    }}>
-                                        {selectedTagIds.length} tag(s) selecionada(s)
-                                    </p>
+                                    <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                                        <p style={{ 
+                                            color: 'var(--accent-primary)', 
+                                            fontSize: '0.85rem',
+                                            fontWeight: '500',
+                                            margin: 0
+                                        }}>
+                                            {selectedTagIds.length} tag(s) selecionada(s)
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={handleFilterContacts}
+                                            disabled={isFilteringContacts || selectedBotIds.length === 0}
+                                            style={{
+                                                padding: '0.5rem 1rem',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: isFilteringContacts 
+                                                    ? 'var(--text-secondary)' 
+                                                    : 'var(--accent-primary)',
+                                                color: 'white',
+                                                fontSize: '0.9rem',
+                                                fontWeight: '600',
+                                                cursor: isFilteringContacts || selectedBotIds.length === 0 ? 'not-allowed' : 'pointer',
+                                                opacity: isFilteringContacts || selectedBotIds.length === 0 ? 0.6 : 1,
+                                                transition: 'all 0.2s',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.5rem'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                if (!isFilteringContacts && selectedBotIds.length > 0) {
+                                                    e.currentTarget.style.opacity = '0.9';
+                                                    e.currentTarget.style.transform = 'scale(1.02)';
+                                                }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                if (!isFilteringContacts && selectedBotIds.length > 0) {
+                                                    e.currentTarget.style.opacity = '1';
+                                                    e.currentTarget.style.transform = 'scale(1)';
+                                                }
+                                            }}
+                                        >
+                                            {isFilteringContacts ? (
+                                                <>
+                                                    <span style={{ 
+                                                        display: 'inline-block',
+                                                        width: '14px',
+                                                        height: '14px',
+                                                        border: '2px solid white',
+                                                        borderTopColor: 'transparent',
+                                                        borderRadius: '50%',
+                                                        animation: 'spin 0.8s linear infinite'
+                                                    }}></span>
+                                                    Filtrando...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    🔍 Filtrar Contatos
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         )}
