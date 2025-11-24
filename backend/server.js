@@ -1608,11 +1608,14 @@ async function getSellerSettings(sellerId) {
     
     const [settings] = await sqlTx`SELECT api_key, pushinpay_token, cnpay_public_key, cnpay_secret_key, oasyfy_public_key, oasyfy_secret_key, wiinpay_api_key, pixup_client_id, pixup_client_secret, syncpay_client_id, syncpay_client_secret, brpix_secret_key, brpix_company_id, paradise_secret_key, paradise_product_hash, pix_provider_primary, pix_provider_secondary, pix_provider_tertiary, commission_rate, netlify_access_token, netlify_site_id FROM sellers WHERE id = ${sellerId}`;
     
+    // Garantir que sempre retorna objeto, nunca null ou undefined
+    const result = settings || {};
+    
     if (settings) {
-        dbCache.set(cacheKey, settings, 5 * 60 * 1000); // 5 minutos
+        dbCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutos
     }
     
-    return settings;
+    return result;
 }
 
 /**
@@ -4458,7 +4461,8 @@ app.get('/api/dashboard/data', authenticateJwt, async (req, res) => {
             settingsPromise, pixelsPromise, presselsPromise, botsPromise, checkoutsPromise, utmifyIntegrationsPromise, thankYouPagesPromise, hostedCheckoutsPromise
         ]);
         
-        const settings = settingsResult[0] || {};
+        // getSellerSettings retorna objeto diretamente, não array - garantir que sempre retorna objeto
+        const settings = settingsResult || {};
         res.json({ settings, pixels, pressels, bots, checkouts, utmifyIntegrations, thankYouPages, hostedCheckouts });
     } catch (error) {
         console.error("Erro ao buscar dados do dashboard:", error);
