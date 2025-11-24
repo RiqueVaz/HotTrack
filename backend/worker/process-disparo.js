@@ -1191,5 +1191,92 @@ async function handler(req, res) {
     }
 }
 
+// Função para processar múltiplos contatos em batch com controle de concorrência
+async function processDisparoBatchData(data) {
+    const { history_id, contacts, flow_nodes, flow_edges, start_node_id, batch_index = 0, total_batches = 1 } = data;
+    
+    // Validação de dados obrigatórios
+    if (!flow_nodes || !flow_edges || !start_node_id || !contacts || !Array.isArray(contacts)) {
+        throw new Error('Formato inválido. Requer contacts (array), flow_nodes, flow_edges e start_node_id.');
+    }
+    
+    // Parse dos dados JSON
+    const flowNodes = JSON.parse(flow_nodes);
+    const flowEdges = JSON.parse(flow_edges);
+    
+    // Buscar todos os bots únicos necessários
+    const uniqueBotIds = [...new Set(contacts.map(c => c.bot_id))];
+    const bots = await sqlWithRetry(
+        sqlTx`SELECT id, seller_id, bot_token FROM telegram_bots WHERE id = ANY(${uniqueBotIds})`
+    );
+    
+    if (bots.length === 0) {
+        throw new Error('Nenhum bot encontrado para os IDs fornecidos.');
+    }
+    
+    const botMap = new Map(bots.map(b => [b.id, b]));
+    
+    // Configurações de concorrência (usar valores padrão se não disponíveis via env)
+    const INTERNAL_CONCURRENCY = parseInt(process.env.DISPARO_INTERNAL_CONCURRENCY) || 15;
+    const DELAY_BETWEEN_CONTACTS = parseFloat(process.env.DISPARO_DELAY_BETWEEN_MESSAGES) || 0.3;
+    
+    logger.info(`[WORKER-DISPARO-BATCH] Processando batch ${batch_index + 1}/${total_batches} com ${contacts.length} contatos (concorrência: ${INTERNAL_CONCURRENCY})`);
+    
+    // Processar contatos com controle de concorrência
+    const queue = [...contacts];
+    const results = [];
+    let processedCount = 0;
+    
+    const workers = Array(Math.min(INTERNAL_CONCURRENCY, contacts.length)).fill(null).map(async (_, workerId) => {
+        while (queue.length > 0) {
+            const contact = queue.shift();
+            if (!contact) break;
+            
+            try {
+                const bot = botMap.get(contact.bot_id);
+                if (!bot || !bot.bot_token) {
+                    logger.warn(`[WORKER-DISPARO-BATCH] Bot ${contact.bot_id} não encontrado para contato ${contact.chat_id}`);
+                    continue;
+                }
+                
+                // Parse das variáveis do contato
+                const userVariables = JSON.parse(contact.variables_json || '{}');
+                
+                // Aplicar delay mínimo baseado no índice do contato no batch
+                const contactIndex = contacts.indexOf(contact);
+                if (contactIndex > 0 && DELAY_BETWEEN_CONTACTS > 0) {
+                    await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_CONTACTS * 1000));
+                }
+                
+                // Processar fluxo de disparo para este contato
+                await processDisparoFlow(
+                    contact.chat_id,
+                    contact.bot_id,
+                    bot.bot_token,
+                    bot.seller_id,
+                    start_node_id,
+                    userVariables,
+                    flowNodes,
+                    flowEdges,
+                    history_id
+                );
+                
+                processedCount++;
+                if (processedCount % 50 === 0) {
+                    logger.debug(`[WORKER-DISPARO-BATCH] Processados ${processedCount}/${contacts.length} contatos do batch ${batch_index + 1}`);
+                }
+            } catch (error) {
+                logger.error(`[WORKER-DISPARO-BATCH] Erro ao processar contato ${contact.chat_id}:`, error.message);
+                // Continuar processando outros contatos mesmo se um falhar
+            }
+        }
+    });
+    
+    await Promise.all(workers);
+    logger.info(`[WORKER-DISPARO-BATCH] Batch ${batch_index + 1}/${total_batches} concluído: ${processedCount}/${contacts.length} contatos processados`);
+    
+    return { processed: processedCount, total: contacts.length };
+}
+
 // Exportar funções para permitir uso em diferentes contextos
-module.exports = { handler, processDisparoData, findNextNode };
+module.exports = { handler, processDisparoData, processDisparoBatchData, findNextNode };

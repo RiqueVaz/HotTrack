@@ -67,7 +67,7 @@ const qstashClient = new Client({
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
-const { processDisparoData } = require('./worker/process-disparo');
+const { processDisparoData, processDisparoBatchData } = require('./worker/process-disparo');
 const { processTimeoutData } = require('./worker/process-timeout');
 
 const receiver = new Receiver({
@@ -315,6 +315,53 @@ app.post(
      }
     );
 
+// Endpoint para processar disparos em batch (chamado pelo QStash)
+app.post(
+    '/api/worker/process-disparo-batch',
+    express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
+    async (req, res) => {
+        try {
+            // 1. Verificar a assinatura do QStash
+            const signature = req.headers["upstash-signature"];
+            const bodyString = req.body.toString();
+            
+            const isValid = await receiver.verify({
+                signature,
+                body: bodyString,
+            });
+            
+            if (!isValid) {
+                console.error("[WORKER-DISPARO-BATCH] Verificação de assinatura do QStash falhou.");
+                return res.status(401).send("Invalid signature");
+            }
+            
+            // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
+            console.log("[WORKER-DISPARO-BATCH] Assinatura válida. Aceitando batch de disparo para processamento em background.");
+            res.status(200).json({ message: 'Worker de disparo batch aceito para processamento.' });
+            
+            // 3. Processar batch em background (não bloqueia resposta HTTP)
+            const bodyData = JSON.parse(bodyString);
+            (async () => {
+                try {
+                    // Chamar função pura de processamento em batch
+                    await processDisparoBatchData(bodyData);
+                    console.log(`[WORKER-DISPARO-BATCH] Batch ${bodyData.batch_index + 1}/${bodyData.total_batches} processado com sucesso em background.`);
+                } catch (bgError) {
+                    console.error("[WORKER-DISPARO-BATCH] Erro ao processar batch de disparo em background:", bgError);
+                    console.error("[WORKER-DISPARO-BATCH] Stack trace:", bgError.stack);
+                }
+            })();
+            
+        } catch (error) {
+            console.error("Erro crítico no handler do worker de disparo batch:", error);
+            // Verificar se resposta já foi enviada antes de tentar enviar
+            if (!res.headersSent) {
+                res.status(500).send("Internal Server Error");
+            }
+        }
+    }
+);
+
 // Endpoint para continuar disparos após delays agendados (chamado pelo QStash)
 app.post(
     '/api/worker/process-disparo-delay',
@@ -540,56 +587,50 @@ app.post(
                     
                     const inactiveContacts = validationJob.inactive_contacts ? 
                         (Array.isArray(validationJob.inactive_contacts) ? validationJob.inactive_contacts : []) : [];
-                    const BATCH_SIZE = 30;
+                    const BATCH_SIZE = VALIDATION_BATCH_SIZE;
+                    const BATCH_DELAY = VALIDATION_BATCH_DELAY;
+                    const PARALLEL_BATCHES = VALIDATION_PARALLEL_BATCHES;
                     
-                    // Validar em batches
+                    // Validar em batches com processamento paralelo
+                    const batchPromises = [];
                     for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
                         const batch = allContacts.slice(i, i + BATCH_SIZE);
-                        const batchInactive = [];
                         
-                        const promises = batch.map(contact => {
-                            const botToken = botTokenMap.get(contact.bot_id);
-                            if (!botToken) {
-                                batchInactive.push(contact.chat_id);
-                                return Promise.resolve();
-                            }
-                            
-                            // Verificar cache ANTES de fazer requisição HTTP
-                            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
-                                batchInactive.push(contact.chat_id);
-                                return Promise.resolve(); // Pula requisição HTTP
-                            }
-                            
-                            // Só faz requisição se não estiver no cache
-                            return sendTelegramRequest(botToken, 'sendChatAction', { 
-                                chat_id: contact.chat_id, 
-                                action: 'typing' 
-                            }, {}, 3, 1500, contact.bot_id).catch(error => {
-                                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
-                                    batchInactive.push(contact.chat_id);
-                                }
+                        // Processar batch com concorrência interna
+                        const batchPromise = processBatchWithConcurrency(batch, botTokenMap, dbCache, VALIDATION_INTERNAL_CONCURRENCY)
+                            .then(batchInactive => {
+                                // Converter objetos de contato para chat_ids
+                                const batchInactiveChatIds = batchInactive.map(c => c.chat_id || c);
+                                inactiveContacts.push(...batchInactiveChatIds);
+                                
+                                // Atualizar progresso no banco
+                                const processedCount = Math.min(i + BATCH_SIZE, allContacts.length);
+                                return sqlWithRetry(
+                                    sqlTx`UPDATE contact_validation_jobs 
+                                          SET processed_contacts = ${processedCount}, 
+                                              inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                                              updated_at = NOW()
+                                          WHERE id = ${validation_id}`
+                                );
                             });
-                        });
                         
-                        await Promise.all(promises);
+                        batchPromises.push(batchPromise);
                         
-                        // Adicionar contatos inativos encontrados neste batch
-                        inactiveContacts.push(...batchInactive);
-                        
-                        // Atualizar progresso no banco
-                        const processedCount = Math.min(i + BATCH_SIZE, allContacts.length);
-                        await sqlWithRetry(
-                            sqlTx`UPDATE contact_validation_jobs 
-                                  SET processed_contacts = ${processedCount}, 
-                                      inactive_contacts = ${JSON.stringify(inactiveContacts)},
-                                      updated_at = NOW()
-                                  WHERE id = ${validation_id}`
-                        );
-                        
-                        // Delay entre batches (exceto no último)
-                        if (i + BATCH_SIZE < allContacts.length) {
-                            await new Promise(resolve => setTimeout(resolve, 1100));
+                        // Limitar concorrência: processar múltiplos batches simultaneamente
+                        if (batchPromises.length >= PARALLEL_BATCHES) {
+                            await Promise.all(batchPromises);
+                            batchPromises.length = 0;
+                            
+                            // Delay entre grupos de batches paralelos (exceto no último)
+                            if (i + BATCH_SIZE < allContacts.length) {
+                                await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+                            }
                         }
+                    }
+                    
+                    // Processar batches restantes
+                    if (batchPromises.length > 0) {
+                        await Promise.all(batchPromises);
                     }
                     
                     // Finalizar validação
@@ -853,68 +894,70 @@ app.post(
                     // Reutilizar botTokenMap já criado anteriormente (já contém os mesmos dados)
                     // Não precisa buscar novamente, botTokenMap já foi populado com botChecks
                     
-                    let messageCounter = 0;
-                    const delayBetweenMessages = 2;
-                    const qstashPromises = [];
-                    const CONTACTS_CHUNK_SIZE = 500;
-                    const contactChunks = [];
-                    
-                    for (let i = 0; i < uniqueContactsAfterHygiene.length; i += CONTACTS_CHUNK_SIZE) {
-                        contactChunks.push(uniqueContactsAfterHygiene.slice(i, i + CONTACTS_CHUNK_SIZE));
-                    }
-                    
-                    console.log(`[WORKER-VALIDATION-DISPARO ${history_id}] Processando ${uniqueContactsAfterHygiene.length} contatos em ${contactChunks.length} chunks`);
-                    
-                    for (const contactChunk of contactChunks) {
-                        for (const contact of contactChunk) {
-                            const userVariables = {
-                                primeiro_nome: contact.first_name || '',
-                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                            };
-                            
-                            const payload = {
-                                history_id: history_id,
-                                chat_id: contact.chat_id,
-                                bot_id: contact.bot_id_source,
-                                flow_nodes: JSON.stringify(flowNodes),
-                                flow_edges: JSON.stringify(flowEdges),
-                                start_node_id: startNodeId,
-                                variables_json: JSON.stringify(userVariables)
-                            };
-                            
-                            const totalDelaySeconds = messageCounter * delayBetweenMessages;
-                            
-                            // Obter bot_token para usar como chave de rate limiting
-                            const botToken = botTokenMap.get(contact.bot_id_source) || '';
-                            
-                            qstashPromises.push(
-                                qstashClient.publishJSON({
-                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                    body: payload,
-                                    delay: `${totalDelaySeconds}s`, 
-                                    retries: 2,
-                                    headers: {
-                                        'Upstash-Concurrency': '10',
-                                        'Upstash-RateLimit-Max': '50',
-                                        'Upstash-RateLimit-Window': '1s',
-                                        'Upstash-RateLimit-Key': botToken
-                                    }
-                                })
-                            );
-                            
-                            messageCounter++; 
-                        }
+                    // Preparar contatos para batch processing
+                    const contactsForBatch = uniqueContactsAfterHygiene.map(contact => {
+                        const userVariables = {
+                            primeiro_nome: contact.first_name || '',
+                            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                        };
                         
-                        if (qstashPromises.length > 0) {
-                            console.log(`[WORKER-VALIDATION-DISPARO] Processando chunk com ${qstashPromises.length} promises...`);
-                            await publishQStashInBatches(qstashPromises, 10, 500);
-                            qstashPromises.length = 0;
-                        }
+                        return {
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source,
+                            variables_json: JSON.stringify(userVariables)
+                        };
+                    });
+                    
+                    // Agrupar contatos em batches
+                    const batchSize = DISPARO_BATCH_SIZE;
+                    const totalBatches = Math.ceil(contactsForBatch.length / batchSize);
+                    const qstashPromises = [];
+                    
+                    console.log(`[WORKER-VALIDATION-DISPARO ${history_id}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
+                    
+                    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+                        const batchStart = batchIndex * batchSize;
+                        const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
+                        const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
+                        
+                        // Calcular delay base para este batch (delay escalonado entre batches)
+                        const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
+                        
+                        // Obter bot_token do primeiro contato do batch para rate limiting
+                        // (assumindo que batches são agrupados por bot quando possível)
+                        const firstContactBotId = batchContacts[0]?.bot_id;
+                        const botToken = botTokenMap.get(firstContactBotId) || '';
+                        
+                        const batchPayload = {
+                            history_id: history_id,
+                            contacts: batchContacts,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            batch_index: batchIndex,
+                            total_batches: totalBatches
+                        };
+                        
+                        qstashPromises.push(
+                            qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
+                                body: batchPayload,
+                                delay: `${batchDelaySeconds}s`, 
+                                retries: 2,
+                                headers: {
+                                    'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
+                                    'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
+                                    'Upstash-RateLimit-Window': '1s',
+                                    'Upstash-RateLimit-Key': botToken
+                                }
+                            })
+                        );
                     }
                     
                     if (qstashPromises.length > 0) {
-                        await publishQStashInBatches(qstashPromises, 10, 500);
+                        console.log(`[WORKER-VALIDATION-DISPARO] Publicando ${qstashPromises.length} batches no QStash...`);
+                        await publishQStashInBatches(qstashPromises);
                     }
                     
                     console.log(`[WORKER-VALIDATION-DISPARO] Disparo ${history_id} processado com sucesso em background.`);
@@ -1289,69 +1332,69 @@ app.post(
                         botTokenMap.set(bot.id, bot.bot_token);
                     });
                     
-                    let messageCounter = 0;
-                    const delayBetweenMessages = 2; // 2 segundos de atraso entre cada contato (aumentado para margem de segurança)
-                    const qstashPromises = [];
-                    const CONTACTS_CHUNK_SIZE = 500;
-                    const contactChunks = [];
-                    
-                    for (let i = 0; i < uniqueContacts.length; i += CONTACTS_CHUNK_SIZE) {
-                        contactChunks.push(uniqueContacts.slice(i, i + CONTACTS_CHUNK_SIZE));
-                    }
-                    
-                    console.log(`[DISPARO-AGENDADO] Processando ${uniqueContacts.length} contatos em ${contactChunks.length} chunks`);
-                    
-                    for (const contactChunk of contactChunks) {
-                        for (const contact of contactChunk) {
-                            const userVariables = {
-                                primeiro_nome: contact.first_name || '',
-                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                            };
-                            
-                            const payload = {
-                                history_id: history_id,
-                                chat_id: contact.chat_id,
-                                bot_id: contact.bot_id_source,
-                                flow_nodes: JSON.stringify(flowNodes),
-                                flow_edges: JSON.stringify(flowEdges),
-                                start_node_id: startNodeId,
-                                variables_json: JSON.stringify(userVariables)
-                            };
-                            
-                            const totalDelaySeconds = messageCounter * delayBetweenMessages;
-                            
-                            // Obter bot_token para usar como chave de rate limiting
-                            const botToken = botTokenMap.get(contact.bot_id_source) || '';
-                            
-                            qstashPromises.push(
-                                qstashClient.publishJSON({
-                                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo`, 
-                                    body: payload,
-                                    delay: `${totalDelaySeconds}s`, 
-                                    retries: 2,
-                                    // Rate limiting distribuído via QStash
-                                    headers: {
-                                        'Upstash-Concurrency': '10', // Aumentado para 10 para permitir mais paralelismo
-                                        'Upstash-RateLimit-Max': '50', // 50 requisições por janela (aumentado para melhor throughput)
-                                        'Upstash-RateLimit-Window': '1s', // Janela de 1 segundo
-                                        'Upstash-RateLimit-Key': botToken // Rate limit por bot_token
-                                    }
-                                })
-                            );
-                            
-                            messageCounter++; 
-                        }
+                    // Preparar contatos para batch processing
+                    const contactsForBatch = uniqueContacts.map(contact => {
+                        const userVariables = {
+                            primeiro_nome: contact.first_name || '',
+                            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                        };
                         
-                        if (qstashPromises.length > 0) {
-                            console.log(`[DISPARO-AGENDADO] Processando chunk com ${qstashPromises.length} promises...`);
-                            await publishQStashInBatches(qstashPromises, 10, 500);
-                            qstashPromises.length = 0;
-                        }
+                        return {
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source,
+                            variables_json: JSON.stringify(userVariables)
+                        };
+                    });
+                    
+                    // Agrupar contatos em batches
+                    const batchSize = DISPARO_BATCH_SIZE;
+                    const totalBatches = Math.ceil(contactsForBatch.length / batchSize);
+                    const qstashPromises = [];
+                    
+                    console.log(`[DISPARO-AGENDADO] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
+                    
+                    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+                        const batchStart = batchIndex * batchSize;
+                        const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
+                        const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
+                        
+                        // Calcular delay base para este batch (delay escalonado entre batches)
+                        const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
+                        
+                        // Obter bot_token do primeiro contato do batch para rate limiting
+                        const firstContactBotId = batchContacts[0]?.bot_id;
+                        const botToken = botTokenMap.get(firstContactBotId) || '';
+                        
+                        const batchPayload = {
+                            history_id: history_id,
+                            contacts: batchContacts,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            batch_index: batchIndex,
+                            total_batches: totalBatches
+                        };
+                        
+                        qstashPromises.push(
+                            qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
+                                body: batchPayload,
+                                delay: `${batchDelaySeconds}s`, 
+                                retries: 2,
+                                headers: {
+                                    'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
+                                    'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
+                                    'Upstash-RateLimit-Window': '1s',
+                                    'Upstash-RateLimit-Key': botToken
+                                }
+                            })
+                        );
                     }
                     
                     if (qstashPromises.length > 0) {
-                        await publishQStashInBatches(qstashPromises, 10, 500);
+                        console.log(`[DISPARO-AGENDADO] Publicando ${qstashPromises.length} batches no QStash...`);
+                        await publishQStashInBatches(qstashPromises);
                     }
                     
                     console.log(`[WORKER-SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso em background.`);
@@ -1717,6 +1760,26 @@ const REFRESH_TOKEN_TTL_SECONDS = resolvePositiveInt(
 const HOTTRACK_API_URL = process.env.HOTTRACK_API_URL || 'https://hottrack.vercel.app/api';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://hottrackerbot.netlify.app';
 const DOCUMENTATION_URL = process.env.DOCUMENTATION_URL || 'https://documentacaohot.netlify.app';
+
+// ==========================================================
+//          CONFIGURAÇÕES DE PERFORMANCE E OTIMIZAÇÃO
+// ==========================================================
+// Configurações de Validação/Higienização
+const VALIDATION_BATCH_SIZE = resolvePositiveInt(process.env.VALIDATION_BATCH_SIZE, 100);
+const VALIDATION_BATCH_DELAY = resolvePositiveInt(process.env.VALIDATION_BATCH_DELAY, 200);
+const VALIDATION_PARALLEL_BATCHES = resolvePositiveInt(process.env.VALIDATION_PARALLEL_BATCHES, 3);
+const VALIDATION_INTERNAL_CONCURRENCY = resolvePositiveInt(process.env.VALIDATION_INTERNAL_CONCURRENCY, 20);
+
+// Configurações de Disparo
+const DISPARO_DELAY_BETWEEN_MESSAGES = parseFloat(process.env.DISPARO_DELAY_BETWEEN_MESSAGES) || 0.3;
+const DISPARO_BATCH_SIZE = resolvePositiveInt(process.env.DISPARO_BATCH_SIZE, 200);
+const DISPARO_BATCH_DELAY_SECONDS = resolvePositiveInt(process.env.DISPARO_BATCH_DELAY_SECONDS, 60);
+
+// Configurações QStash
+const QSTASH_CONCURRENCY = resolvePositiveInt(process.env.QSTASH_CONCURRENCY, 30);
+const QSTASH_RATE_LIMIT_MAX = resolvePositiveInt(process.env.QSTASH_RATE_LIMIT_MAX, 100);
+const QSTASH_PUBLISH_BATCH_SIZE = resolvePositiveInt(process.env.QSTASH_PUBLISH_BATCH_SIZE, 50);
+const QSTASH_PUBLISH_DELAY = resolvePositiveInt(process.env.QSTASH_PUBLISH_DELAY, 100);
 
 // ==========================================================
 //          LÓGICA DE RETRY PARA O BANCO DE DADOS
@@ -2584,7 +2647,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 }
 
 // Função para processar promises do QStash em batches para evitar sobrecarga
-async function publishQStashInBatches(promises, batchSize = 10, delayMs = 500) {
+async function publishQStashInBatches(promises, batchSize = QSTASH_PUBLISH_BATCH_SIZE, delayMs = QSTASH_PUBLISH_DELAY) {
     const batches = [];
     for (let i = 0; i < promises.length; i += batchSize) {
         batches.push(promises.slice(i, i + batchSize));
@@ -9431,6 +9494,45 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 });
 
+// Função helper para processar batch de contatos com concorrência interna
+async function processBatchWithConcurrency(contacts, botTokenMap, dbCache, concurrency = VALIDATION_INTERNAL_CONCURRENCY) {
+    const results = [];
+    const queue = [...contacts];
+    
+    const workers = Array(Math.min(concurrency, contacts.length)).fill(null).map(async () => {
+        while (queue.length > 0) {
+            const contact = queue.shift();
+            if (!contact) break;
+            
+            // Verificar cache primeiro
+            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+                results.push(contact);
+                continue;
+            }
+            
+            const botToken = botTokenMap.get(contact.bot_id);
+            if (!botToken) {
+                results.push(contact);
+                continue;
+            }
+            
+            try {
+                await sendTelegramRequest(botToken, 'sendChatAction', {
+                    chat_id: contact.chat_id,
+                    action: 'typing'
+                }, {}, 2, 1000, contact.bot_id);
+            } catch (error) {
+                if (error.response?.status === 403 || error.response?.status === 400) {
+                    results.push(contact);
+                }
+            }
+        }
+    });
+    
+    await Promise.all(workers);
+    return results;
+}
+
 // Função auxiliar para validação de contatos (reutilizável)
 async function validateContactsForBots(botIds, sellerId, validationId = null) {
     // Buscar bot tokens
@@ -9455,53 +9557,52 @@ async function validateContactsForBots(botIds, sellerId, validationId = null) {
     `;
     
     const inactiveChatIds = [];
-    const BATCH_SIZE = 30;
+    const BATCH_SIZE = VALIDATION_BATCH_SIZE;
+    const BATCH_DELAY = VALIDATION_BATCH_DELAY;
+    const PARALLEL_BATCHES = VALIDATION_PARALLEL_BATCHES;
     
-    // Validar em batches
+    // Validar em batches com processamento paralelo
+    const batchPromises = [];
     for (let i = 0; i < allContacts.length; i += BATCH_SIZE) {
         const batch = allContacts.slice(i, i + BATCH_SIZE);
-        const batchInactive = [];
         
-        const promises = batch.map(contact => {
-            const botToken = botTokenMap.get(contact.bot_id);
-            if (!botToken) {
-                batchInactive.push(contact.chat_id);
-                return Promise.resolve();
-            }
-            
-            // Verificar cache ANTES de fazer requisição HTTP
-            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
-                batchInactive.push(contact.chat_id);
-                return Promise.resolve(); // Pula requisição HTTP
-            }
-            
-            // Só faz requisição se não estiver no cache
-            return sendTelegramRequest(botToken, 'sendChatAction', { 
-                chat_id: contact.chat_id, 
-                action: 'typing' 
-            }, {}, 3, 1500, contact.bot_id).catch(error => {
-                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
-                    batchInactive.push(contact.chat_id);
+        // Processar batch com concorrência interna
+        const batchPromise = processBatchWithConcurrency(batch, botTokenMap, dbCache, VALIDATION_INTERNAL_CONCURRENCY)
+            .then(batchInactive => {
+                // Converter objetos de contato para chat_ids
+                const batchInactiveChatIds = batchInactive.map(c => c.chat_id || c);
+                inactiveChatIds.push(...batchInactiveChatIds);
+                
+                // Se validationId fornecido, atualizar progresso durante validação
+                if (validationId) {
+                    const processedCount = Math.min(i + BATCH_SIZE, allContacts.length);
+                    return sqlTx`
+                        UPDATE contact_validation_jobs 
+                        SET processed_contacts = ${processedCount}, 
+                            inactive_contacts = ${JSON.stringify(inactiveChatIds)},
+                            updated_at = NOW()
+                        WHERE id = ${validationId}
+                    `;
                 }
             });
-        });
         
-        await Promise.all(promises);
+        batchPromises.push(batchPromise);
         
-        // Adicionar contatos inativos encontrados neste batch
-        inactiveChatIds.push(...batchInactive);
-        
-        // Se validationId fornecido, atualizar progresso durante validação
-        if (validationId) {
-            const processedCount = Math.min(i + BATCH_SIZE, allContacts.length);
-            await sqlTx`
-                UPDATE contact_validation_jobs 
-                SET processed_contacts = ${processedCount}, 
-                    inactive_contacts = ${JSON.stringify(inactiveChatIds)},
-                    updated_at = NOW()
-                WHERE id = ${validationId}
-            `;
+        // Limitar concorrência: processar múltiplos batches simultaneamente
+        if (batchPromises.length >= PARALLEL_BATCHES) {
+            await Promise.all(batchPromises);
+            batchPromises.length = 0;
+            
+            // Delay entre grupos de batches paralelos (exceto no último)
+            if (i + BATCH_SIZE < allContacts.length) {
+                await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+            }
         }
+    }
+    
+    // Processar batches restantes
+    if (batchPromises.length > 0) {
+        await Promise.all(batchPromises);
     }
     
     // Atualizar status final se validationId fornecido
@@ -9605,59 +9706,48 @@ app.post('/api/bots/validate-contacts', authenticateJwt, async (req, res) => {
                 `;
 
                 const inactiveContacts = [...groupsAndChannels];
-                const BATCH_SIZE = 30;
+                const BATCH_SIZE = VALIDATION_BATCH_SIZE;
+                const BATCH_DELAY = VALIDATION_BATCH_DELAY;
+                const PARALLEL_BATCHES = VALIDATION_PARALLEL_BATCHES;
 
-                // Validar apenas usuários individuais
+                // Validar apenas usuários individuais com processamento paralelo de batches
+                const batchPromises = [];
                 for (let i = 0; i < individualUsers.length; i += BATCH_SIZE) {
                     const batch = individualUsers.slice(i, i + BATCH_SIZE);
-                    const batchInactive = [];
                     
-                    const promises = batch.map(contact => {
-                        // Usar o bot_token do bot associado ao contato
-                        const botToken = botTokenMap.get(contact.bot_id);
-                        if (!botToken) {
-                            // Se não encontrar o token, considerar inativo
-                            batchInactive.push(contact);
-                            return Promise.resolve();
-                        }
+                    // Processar batch com concorrência interna
+                    const batchPromise = processBatchWithConcurrency(batch, botTokenMap, dbCache, VALIDATION_INTERNAL_CONCURRENCY)
+                        .then(batchInactive => {
+                            inactiveContacts.push(...batchInactive);
+                            
+                            // Atualizar progresso no banco
+                            const processedCount = Math.min(i + BATCH_SIZE, individualUsers.length);
+                            return sqlTx`
+                                UPDATE contact_validation_jobs 
+                                SET processed_contacts = ${processedCount}, 
+                                    inactive_contacts = ${JSON.stringify(inactiveContacts)},
+                                    updated_at = NOW()
+                                WHERE id = ${validationId}
+                            `;
+                        });
+                    
+                    batchPromises.push(batchPromise);
+                    
+                    // Limitar concorrência: processar múltiplos batches simultaneamente
+                    if (batchPromises.length >= PARALLEL_BATCHES) {
+                        await Promise.all(batchPromises);
+                        batchPromises.length = 0;
                         
-                        // Verificar cache ANTES de fazer requisição HTTP
-                        if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
-                            batchInactive.push(contact);
-                            return Promise.resolve(); // Pula requisição HTTP
+                        // Delay entre grupos de batches paralelos (exceto no último)
+                        if (i + BATCH_SIZE < individualUsers.length) {
+                            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
                         }
-                        
-                        // Só faz requisição se não estiver no cache
-                        return sendTelegramRequest(botToken, 'sendChatAction', { 
-                            chat_id: contact.chat_id, 
-                            action: 'typing' 
-                        }, {}, 3, 1500, contact.bot_id)
-                            .catch(error => {
-                                if (error.response && (error.response.status === 403 || error.response.status === 400)) {
-                                    batchInactive.push(contact);
-                                }
-                            });
-                    });
-
-                    await Promise.all(promises);
-                    
-                    // Adicionar contatos inativos encontrados neste batch
-                    inactiveContacts.push(...batchInactive);
-                    
-                    // Atualizar progresso no banco
-                    const processedCount = Math.min(i + BATCH_SIZE, individualUsers.length);
-                    await sqlTx`
-                        UPDATE contact_validation_jobs 
-                        SET processed_contacts = ${processedCount}, 
-                            inactive_contacts = ${JSON.stringify(inactiveContacts)},
-                            updated_at = NOW()
-                        WHERE id = ${validationId}
-                    `;
-
-                    // Delay entre batches (exceto no último)
-                    if (i + BATCH_SIZE < individualUsers.length) {
-                        await new Promise(resolve => setTimeout(resolve, 1100));
                     }
+                }
+                
+                // Processar batches restantes
+                if (batchPromises.length > 0) {
+                    await Promise.all(batchPromises);
                 }
 
                 // Finalizar validação
