@@ -302,12 +302,53 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     }
 }
 
-async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
+async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption, botId = null) {
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
 
+    // VERIFICAR CACHE ANTES DE QUALQUER OPERAÇÃO
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mídia.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        } else if (!botId && dbCache.isBotTokenBlocked(destinationBotToken, chatId)) {
+            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot (token). Pulando envio de mídia.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        }
+    }
+    
+    // Para vídeos, tentar usar file_id diretamente primeiro (sem baixar)
+    // Isso evita baixar arquivos grandes desnecessariamente e reduz tráfego de rede
+    if (fileType === 'video') {
+        try {
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            const method = methodMap[fileType];
+            const field = fieldMap[fileType];
+            const timeout = 120000;
+            
+            const result = await sendTelegramRequest(destinationBotToken, method, { 
+                chat_id: chatId, 
+                [field]: fileId, 
+                caption 
+            }, { timeout }, 3, 1500, botId);
+            
+            // Se funcionou, retornar
+            if (result && result.ok) {
+                return result;
+            }
+        } catch (error) {
+            // Se file_id não funcionou, continuar para tentar baixar
+            // Mas só logar se não for erro comum (403, 400 com wrong file identifier)
+            if (error.response?.status !== 400 && error.response?.status !== 403) {
+                console.debug(`[Flow Media] file_id direto falhou, tentando download: ${error.message}`);
+            }
+        }
+    }
+    
+    // Para imagens/áudio ou se vídeo falhou, tentar baixar normalmente
     try {
-        const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
+        const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId }, {}, 3, 1500, null);
         if (!fileInfo.ok) {
             // Se getFile falhar com "file is too big", tentar usar file_id diretamente
             if (fileInfo.error_code === 400 && fileInfo.description && fileInfo.description.includes('too big')) {
@@ -316,12 +357,12 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
                 const method = methodMap[fileType];
                 const field = fieldMap[fileType];
-                const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+                const timeout = fileType === 'video' ? 120000 : 60000;
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
                     caption 
-                }, { timeout });
+                }, { timeout }, 3, 1500, botId);
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
         }
@@ -342,33 +383,33 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
         const method = methodMap[fileType];
         const field = fieldMap[fileType];
         const fileName = fileNameMap[fileType];
-        const timeout = fileType === 'video' ? 120000 : 30000; // Timeout maior para vídeos
+        const timeout = fileType === 'video' ? 120000 : 30000;
 
         if (!method) throw new Error('Tipo de arquivo não suportado.');
 
         formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
 
-        return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
+        return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout }, 3, 1500, botId);
     } catch (error) {
-        // Se falhar ao baixar o arquivo (timeout, network error, etc.), tentar usar file_id diretamente
-        if (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED')) {
+        // Se falhar ao baixar, tentar file_id como último recurso (apenas se não for vídeo, pois já tentamos)
+        if (fileType !== 'video' && (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED'))) {
             console.warn(`[Flow Media] Erro ao baixar arquivo (${error.message}). Tentando usar file_id diretamente: ${fileId}`);
             const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
             const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
             const method = methodMap[fileType];
             const field = fieldMap[fileType];
-            const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+            const timeout = fileType === 'video' ? 120000 : 60000;
             return await sendTelegramRequest(destinationBotToken, method, { 
                 chat_id: chatId, 
                 [field]: fileId, 
                 caption 
-            }, { timeout });
+            }, { timeout }, 3, 1500, botId);
         }
         throw error;
     }
 }
 
-async function handleMediaNode(node, botToken, chatId, caption) {
+async function handleMediaNode(node, botToken, chatId, caption, botId = null) {
     const type = node.type;
     const nodeData = node.data || {};
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
@@ -379,6 +420,17 @@ async function handleMediaNode(node, botToken, chatId, caption) {
         return null;
     }
 
+    // Verificar cache antes de processar mídia
+    if (chatId && chatId !== 'unknown' && chatId !== null) {
+        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mídia.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot (token). Pulando envio de mídia.`);
+            return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
+        }
+    }
+
     const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
     let response;
     const timeout = type === 'video' ? 120000 : 30000; // Timeout maior para vídeos
@@ -387,12 +439,12 @@ async function handleMediaNode(node, botToken, chatId, caption) {
         if (type === 'audio') {
             const duration = parseInt(nodeData.durationInSeconds, 10) || 0;
             if (duration > 0) {
-                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' });
+                await sendTelegramRequest(botToken, 'sendChatAction', { chat_id: chatId, action: 'record_voice' }, {}, 3, 1500, botId);
                 await new Promise(resolve => setTimeout(resolve, duration * 1000));
             }
         }
         try {
-            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption);
+            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
         } catch (error) {
             // Se sendMediaAsProxy falhar, tentar usar file_id diretamente como fallback
             console.warn(`[Flow Media] Erro ao enviar mídia via proxy (${error.message}). Tentando file_id diretamente.`);
@@ -404,7 +456,7 @@ async function handleMediaNode(node, botToken, chatId, caption) {
                 chat_id: chatId, 
                 [field]: fileIdentifier, 
                 caption 
-            }, { timeout });
+            }, { timeout }, 3, 1500, botId);
         }
     } else {
         const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
@@ -414,7 +466,7 @@ async function handleMediaNode(node, botToken, chatId, caption) {
         const field = fieldMap[type];
         
         const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-        response = await sendTelegramRequest(botToken, method, payload, { timeout });
+        response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
     }
     
     return response;
@@ -763,7 +815,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    const response = await handleMediaNode(action, botToken, chatId, caption);
+                    const response = await handleMediaNode(action, botToken, chatId, caption, botId);
 
                     if (response && response.ok) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
