@@ -5956,22 +5956,42 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 // Adiciona verificação para IPs locais comuns
                 const isLocalIp = ip_address === '::1' || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.') || ip_address.startsWith('10.');
                 if (ip_address && !isLocalIp) {
-                    try {
-                        const geo = await apiRateLimiter.getTransactionStatus({
-                            provider: 'ip-api',
-                            sellerId: 0, // Global, não por seller
-                            transactionId: ip_address,
-                            url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
-                            headers: {}
-                        });
-                        if (geo.status === 'success') {
-                            city = geo.city || city;
-                            state = geo.regionName || state;
-                        } else {
-                             logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                    // Verificar cache ANTES de chamar API (cache de 24 horas)
+                    const geoCacheKey = `ip_geo:${ip_address}`;
+                    const cachedGeo = dbCache.get(geoCacheKey);
+                    
+                    if (cachedGeo) {
+                        city = cachedGeo.city || city;
+                        state = cachedGeo.state || state;
+                        logger.debug(`[GEO] Usando geolocalização em cache para IP ${ip_address}: ${city}, ${state}`);
+                    } else {
+                        // Só chamar API se não estiver em cache
+                        try {
+                            const geo = await apiRateLimiter.getTransactionStatus({
+                                provider: 'ip-api',
+                                sellerId: 0, // Global, não por seller
+                                transactionId: ip_address,
+                                url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
+                                headers: {}
+                            });
+                            if (geo.status === 'success') {
+                                city = geo.city || city;
+                                state = geo.regionName || state;
+                                // Cachear resultado por 24 horas
+                                dbCache.set(geoCacheKey, { city, state }, 24 * 60 * 60 * 1000);
+                                logger.debug(`[GEO] Geolocalização obtida e cacheada para IP ${ip_address}: ${city}, ${state}`);
+                            } else {
+                                logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                            }
+                        } catch (geoError) {
+                            // Se der 429, não tentar novamente - usar valores padrão
+                            if (geoError.response?.status === 429) {
+                                logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
+                                // Não fazer nada, usar city/state padrão já definidos
+                            } else {
+                                logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                            }
                         }
-                    } catch (geoError) {
-                         logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
                     }
                 } else if (isLocalIp) {
                      logger.debug(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
