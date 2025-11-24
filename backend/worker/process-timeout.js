@@ -14,6 +14,7 @@ const { sqlTx, sqlWithRetry } = require('../db');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
+const apiRateLimiter = require('../shared/api-rate-limiter');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -25,10 +26,7 @@ const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 // ==========================================================
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
-// Cache para respeitar rate limit da PushinPay (1/min por transação)
-const pushinpayLastCheckAt = new Map();
-const wiinpayLastCheckAt = new Map();
-const paradiseLastCheckAt = new Map();
+// Rate limiting agora é gerenciado pelo módulo api-rate-limiter
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;
@@ -116,35 +114,65 @@ function parseWiinpayPayment(rawData) {
     };
 }
 
-async function getWiinpayPaymentStatus(paymentId, apiKey) {
+async function getWiinpayPaymentStatus(paymentId, apiKey, sellerId = null) {
     if (!apiKey) {
         throw new Error('Credenciais da WiinPay não configuradas.');
     }
-    const response = await axios.get(`https://api-v2.wiinpay.com.br/payment/list/${paymentId}`, {
-        headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${apiKey}`
-        }
-    });
-
-    const data = Array.isArray(response.data) ? response.data[0] : response.data;
-    return parseWiinpayPayment(data);
+    // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
+    if (sellerId) {
+        const response = await apiRateLimiter.getTransactionStatus({
+            provider: 'wiinpay',
+            sellerId: sellerId,
+            transactionId: paymentId,
+            url: `https://api-v2.wiinpay.com.br/payment/list/${paymentId}`,
+            headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${apiKey}`
+            }
+        });
+        const data = Array.isArray(response) ? response[0] : response;
+        return parseWiinpayPayment(data);
+    } else {
+        const response = await axios.get(`https://api-v2.wiinpay.com.br/payment/list/${paymentId}`, {
+            headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${apiKey}`
+            }
+        });
+        const data = Array.isArray(response.data) ? response.data[0] : response.data;
+        return parseWiinpayPayment(data);
+    }
 }
 
-async function getParadisePaymentStatus(transactionId, secretKey) {
+async function getParadisePaymentStatus(transactionId, secretKey, sellerId = null) {
     if (!secretKey) {
         throw new Error('Credenciais da Paradise não configuradas.');
     }
     
     try {
-        const response = await axios.get(`https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`, {
-            headers: {
-                'X-API-Key': secretKey,
-                'Content-Type': 'application/json',
-            },
-        });
+        // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
+        let data;
+        if (sellerId) {
+            data = await apiRateLimiter.getTransactionStatus({
+                provider: 'paradise',
+                sellerId: sellerId,
+                transactionId: transactionId,
+                url: `https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`,
+                headers: {
+                    'X-API-Key': secretKey,
+                    'Content-Type': 'application/json',
+                }
+            });
+        } else {
+            const response = await axios.get(`https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`, {
+                headers: {
+                    'X-API-Key': secretKey,
+                    'Content-Type': 'application/json',
+                },
+            });
+            data = response.data;
+        }
 
-        const data = response.data;
         const status = String(data?.status || '').toLowerCase();
         const customerData = data?.customer_data?.customer || {};
 
@@ -1215,44 +1243,43 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
 
                     if (transaction.provider === 'pushinpay') {
-                        const last = pushinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
-                        const now = Date.now();
-                        if (now - last >= 60_000) {
-                            const resp = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                                { headers: { Authorization: `Bearer ${seller.pushinpay_token}`, Accept: 'application/json', 'Content-Type': 'application/json' } });
-                            providerStatus = String(resp.data.status || '').toLowerCase();
-                            customerData = { name: resp.data.payer_name, document: resp.data.payer_national_registration };
-                            pushinpayLastCheckAt.set(transaction.provider_transaction_id, now);
-                        }
+                        const resp = await apiRateLimiter.getTransactionStatus({
+                            provider: 'pushinpay',
+                            sellerId: seller.id,
+                            transactionId: transaction.provider_transaction_id,
+                            url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
+                            headers: { 
+                                Authorization: `Bearer ${seller.pushinpay_token}`, 
+                                Accept: 'application/json', 
+                                'Content-Type': 'application/json' 
+                            }
+                        });
+                        providerStatus = String(resp.status || '').toLowerCase();
+                        customerData = { name: resp.payer_name, document: resp.payer_national_registration };
                     } else if (transaction.provider === 'syncpay') {
                         const syncPayToken = await getSyncPayAuthToken(seller);
-                        const resp = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                            { headers: { 'Authorization': `Bearer ${syncPayToken}` } });
-                        providerStatus = String(resp.data.status || '').toLowerCase();
-                        customerData = resp.data.payer || {};
+                        const resp = await apiRateLimiter.getTransactionStatus({
+                            provider: 'syncpay',
+                            sellerId: seller.id,
+                            transactionId: transaction.provider_transaction_id,
+                            url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
+                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
+                        });
+                        providerStatus = String(resp.status || '').toLowerCase();
+                        customerData = resp.payer || {};
                     } else if (transaction.provider === 'wiinpay') {
                         const wiinpayApiKey = getSellerWiinpayApiKey(seller);
                         if (wiinpayApiKey) {
-                            const now = Date.now();
-                            const last = wiinpayLastCheckAt.get(transaction.provider_transaction_id) || 0;
-                            if (now - last >= 60_000) {
-                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
-                                providerStatus = result.status || null;
-                                customerData = result.customer || {};
-                                wiinpayLastCheckAt.set(transaction.provider_transaction_id, now);
-                            }
+                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey, seller.id);
+                            providerStatus = result.status || null;
+                            customerData = result.customer || {};
                         }
                     } else if (transaction.provider === 'paradise') {
                         const paradiseSecretKey = seller.paradise_secret_key;
                         if (paradiseSecretKey) {
-                            const now = Date.now();
-                            const last = paradiseLastCheckAt.get(transaction.provider_transaction_id) || 0;
-                            if (now - last >= 60_000) {
-                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
-                                providerStatus = result.status || null;
-                                customerData = result.customer || {};
-                                paradiseLastCheckAt.set(transaction.provider_transaction_id, now);
-                            }
+                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey, seller.id);
+                            providerStatus = result.status || null;
+                            customerData = result.customer || {};
                         }
                     }
                     
