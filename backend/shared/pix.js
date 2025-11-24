@@ -1,5 +1,6 @@
 const axiosDefault = require('axios');
 const { v4: uuidv4Default } = require('uuid');
+const apiRateLimiter = require('./api-rate-limiter');
 
 function createPixService({
   sql,
@@ -487,15 +488,19 @@ function createPixService({
       if (apiKey !== adminApiKey && commission_cents > 0 && pushinpaySplitAccountId) {
         payload.split_rules = [{ value: commission_cents, account_id: pushinpaySplitAccountId }];
       }
-      const pushinpayResponse = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', payload, {
+      const pushinpayResponse = await apiRateLimiter.createTransaction({
+        provider: 'pushinpay',
+        sellerId: seller.id,
+        url: 'https://api.pushinpay.com.br/api/pix/cashIn',
         headers: { Authorization: `Bearer ${seller.pushinpay_token}` },
+        data: payload
       });
-      pixData = pushinpayResponse.data;
+      pixData = pushinpayResponse;
       acquirer = 'Woovi';
       return {
         qr_code_text: pixData.qr_code,
         qr_code_base64: pixData.qr_code_base64,
-        transaction_id: pushinpayResponse.data.id || pushinpayResponse.data.transaction_id || pushinpayResponse.data.identifier,
+        transaction_id: pushinpayResponse.id || pushinpayResponse.transaction_id || pushinpayResponse.identifier,
         acquirer,
         provider,
       };
