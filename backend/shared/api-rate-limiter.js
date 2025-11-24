@@ -67,7 +67,7 @@ class ApiRateLimiter {
         // Cleanup periódico
         this.lastCleanup = Date.now();
         this.CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutos
-        this.CACHE_MAX_AGE = 30 * 60 * 1000; // 30 minutos
+        this.CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 horas (consistente com TTL de ip-api)
     }
 
     /**
@@ -92,7 +92,7 @@ class ApiRateLimiter {
         
         // Limpar limiters não utilizados há muito tempo
         for (const [key, limiter] of this.globalLimiters.entries()) {
-            if (now - limiter.lastRequest > 10 * 60 * 1000 && limiter.queue.length === 0) {
+            if (now - limiter.lastRequest > 10 * 60 * 1000 && limiter.queue.length === 0 && limiter.activeRequests === 0) {
                 this.globalLimiters.delete(key);
             }
         }
@@ -111,13 +111,15 @@ class ApiRateLimiter {
             this.globalLimiters.set(key, {
                 lastRequest: 0,
                 queue: [],
-                processing: false
+                processing: false,
+                activeRequests: 0,
+                maxConcurrency: provider === 'ip-api' ? 2 : 1
             });
         }
         
         const limiter = this.globalLimiters.get(key);
         
-        // Para ip-api, usar fila real para evitar requisições simultâneas
+        // Para ip-api, usar fila real com concorrência limitada
         if (provider === 'ip-api') {
             return new Promise((resolve) => {
                 limiter.queue.push(resolve);
@@ -139,29 +141,41 @@ class ApiRateLimiter {
     }
 
     /**
-     * Processa fila de requisições sequencialmente (para ip-api)
+     * Processa fila de requisições com concorrência limitada (para ip-api)
      */
     async _processQueue(provider, sellerId, limiter, config) {
-        // Evitar processar múltiplas filas simultaneamente
-        if (limiter.processing) return;
-        limiter.processing = true;
-        
-        while (limiter.queue.length > 0) {
+        // Processar enquanto houver espaço na concorrência e itens na fila
+        while (limiter.queue.length > 0 && limiter.activeRequests < limiter.maxConcurrency) {
             const resolve = limiter.queue.shift();
-            const now = Date.now();
-            const timeSinceLastRequest = now - limiter.lastRequest;
+            limiter.activeRequests++;
             
-            // Aguardar tempo necessário antes de processar próxima requisição
-            if (timeSinceLastRequest < config.globalRateLimit) {
-                const waitTime = config.globalRateLimit - timeSinceLastRequest;
-                await new Promise(res => setTimeout(res, waitTime));
-            }
-            
-            limiter.lastRequest = Date.now();
-            resolve(); // Libera a requisição para continuar
+            // Processar esta requisição em background
+            (async () => {
+                try {
+                    const now = Date.now();
+                    const timeSinceLastRequest = now - limiter.lastRequest;
+                    
+                    // Aguardar tempo necessário antes de processar
+                    if (timeSinceLastRequest < config.globalRateLimit) {
+                        const waitTime = config.globalRateLimit - timeSinceLastRequest;
+                        await new Promise(res => setTimeout(res, waitTime));
+                    }
+                    
+                    limiter.lastRequest = Date.now();
+                    resolve(); // Libera a requisição para continuar
+                } catch (error) {
+                    // Em caso de erro, ainda liberar a requisição
+                    resolve();
+                    console.error(`[API Rate Limiter] Erro ao processar fila para ${provider}:`, error);
+                } finally {
+                    limiter.activeRequests--;
+                    // Tentar processar próximo item da fila
+                    if (limiter.queue.length > 0) {
+                        this._processQueue(provider, sellerId, limiter, config);
+                    }
+                }
+            })();
         }
-        
-        limiter.processing = false;
     }
 
     /**
