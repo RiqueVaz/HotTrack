@@ -1562,6 +1562,9 @@ const PARADISE_SPLIT_RECIPIENT_ID = process.env.PARADISE_SPLIT_RECIPIENT_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+
+// Map de promises pendentes para evitar queries duplicadas em getClickGeo
+const pendingGeoQueries = new Map();
 const TAG_TITLE_MAX_LENGTH = 12;
 const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -1686,40 +1689,59 @@ async function getClickGeo(clickId, sellerId) {
         return cached;
     }
     
-    // PRIMEIRO: Buscar na tabela clicks (dados completos com geolocalização)
-    const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${clickId} AND seller_id = ${sellerId}`;
-    
-    if (clickResult.length > 0) {
-        // Click encontrado em clicks - salvar exists: false para indicar que não precisa verificar telegram_chats
-        const geo = { 
-            city: clickResult[0].city, 
-            state: clickResult[0].state,
-            exists: false // Indica que foi encontrado em clicks, não precisa verificar telegram_chats
-        };
-        dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
-        return geo;
+    // Verificar se já existe query em andamento para este click_id
+    const pendingKey = `click_geo_pending:${clickId}:${sellerId}`;
+    if (pendingGeoQueries.has(pendingKey)) {
+        // Aguardar query existente para evitar duplicação
+        return await pendingGeoQueries.get(pendingKey);
     }
     
-    // FALLBACK: Verificar se o click_id existe em telegram_chats
-    // Se existe em telegram_chats mas não em clicks, retornar null/null (sem geolocalização)
-    const telegramChatResult = await sqlTx`
-        SELECT 1 FROM telegram_chats 
-        WHERE click_id = ${clickId} AND seller_id = ${sellerId} 
-        LIMIT 1
-    `;
+    // Criar promise para esta query
+    const queryPromise = (async () => {
+        try {
+            // PRIMEIRO: Buscar na tabela clicks (dados completos com geolocalização)
+            const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${clickId} AND seller_id = ${sellerId}`;
+            
+            if (clickResult.length > 0) {
+                // Click encontrado em clicks - salvar exists: false para indicar que não precisa verificar telegram_chats
+                const geo = { 
+                    city: clickResult[0].city, 
+                    state: clickResult[0].state,
+                    exists: false // Indica que foi encontrado em clicks, não precisa verificar telegram_chats
+                };
+                dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
+                return geo;
+            }
+            
+            // FALLBACK: Verificar se o click_id existe em telegram_chats
+            // Se existe em telegram_chats mas não em clicks, retornar null/null (sem geolocalização)
+            const telegramChatResult = await sqlTx`
+                SELECT 1 FROM telegram_chats 
+                WHERE click_id = ${clickId} AND seller_id = ${sellerId} 
+                LIMIT 1
+            `;
+            
+            if (telegramChatResult.length > 0) {
+                // Click existe em telegram_chats mas não tem geolocalização
+                // Retornar null/null para indicar que existe mas sem dados de geolocalização
+                // Cachear também para evitar consultas repetidas
+                const geo = { city: null, state: null, exists: true };
+                dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000);
+                return geo;
+            }
+            
+            // Não encontrado em nenhuma tabela
+            // Não definir exists para que o endpoint saiba que precisa retornar 404
+            return { city: null, state: null };
+        } finally {
+            // Sempre remover da lista de pendentes ao finalizar
+            pendingGeoQueries.delete(pendingKey);
+        }
+    })();
     
-    if (telegramChatResult.length > 0) {
-        // Click existe em telegram_chats mas não tem geolocalização
-        // Retornar null/null para indicar que existe mas sem dados de geolocalização
-        // Cachear também para evitar consultas repetidas
-        const geo = { city: null, state: null, exists: true };
-        dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000);
-        return geo;
-    }
-    
-    // Não encontrado em nenhuma tabela
-    // Não definir exists para que o endpoint saiba que precisa retornar 404
-    return { city: null, state: null };
+    // Adicionar à lista de pendentes antes de iniciar
+    pendingGeoQueries.set(pendingKey, queryPromise);
+    return await queryPromise;
 }
 
 // ==========================================================
@@ -5728,52 +5750,45 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 // Adiciona verificação para IPs locais comuns
                 const isLocalIp = ip_address === '::1' || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.') || ip_address.startsWith('10.');
                 if (ip_address && !isLocalIp) {
-                    // Verificar cache ANTES de chamar API (cache de 24 horas)
-                    const geoCacheKey = `ip_geo:${ip_address}`;
-                    const cachedGeo = dbCache.get(geoCacheKey);
-                    
-                    if (cachedGeo) {
-                        city = cachedGeo.city || city;
-                        state = cachedGeo.state || state;
-                        logger.debug(`[GEO] Usando geolocalização em cache para IP ${ip_address}: ${city}, ${state}`);
-                    } else {
-                        // Só chamar API se não estiver em cache
-                        // Adicionar delay aleatório (0-500ms) para evitar picos simultâneos
-                        await new Promise(resolve => setTimeout(resolve, Math.random() * 500));
-                        
-                        try {
-                            const geo = await apiRateLimiter.getTransactionStatus({
-                                provider: 'ip-api',
-                                sellerId: 0, // Global, não por seller
-                                transactionId: ip_address,
-                                url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
-                                headers: {}
-                            });
-                            if (geo.status === 'success') {
-                                city = geo.city || city;
-                                state = geo.regionName || state;
-                                // Cachear resultado por 24 horas
-                                dbCache.set(geoCacheKey, { city, state }, 24 * 60 * 60 * 1000);
-                                logger.debug(`[GEO] Geolocalização obtida e cacheada para IP ${ip_address}: ${city}, ${state}`);
-                            } else {
-                                logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
-                            }
-                        } catch (geoError) {
-                            // Se der 429, não tentar novamente - usar valores padrão
-                            if (geoError.response?.status === 429) {
-                                logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
-                                // Não fazer nada, usar city/state padrão já definidos
-                            } else {
-                                logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
-                            }
+                    // Usar apenas apiRateLimiter que já tem cache interno
+                    try {
+                        const geo = await apiRateLimiter.getTransactionStatus({
+                            provider: 'ip-api',
+                            sellerId: 0, // Global, não por seller
+                            transactionId: ip_address,
+                            url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
+                            headers: {}
+                        });
+                        if (geo.status === 'success') {
+                            city = geo.city || city;
+                            state = geo.regionName || state;
+                            logger.debug(`[GEO] Geolocalização obtida para IP ${ip_address}: ${city}, ${state}`);
+                        } else {
+                            logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                        }
+                    } catch (geoError) {
+                        // Se der 429, não tentar novamente - usar valores padrão
+                        if (geoError.response?.status === 429) {
+                            logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
+                        } else {
+                            logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
                         }
                     }
                 } else if (isLocalIp) {
                      logger.debug(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
-                     city = 'Local'; // Ou mantenha Desconhecida
+                     city = 'Local';
                      state = 'Local';
                 }
                 await sqlTx`UPDATE clicks SET city = ${city}, state = ${state} WHERE id = ${click_record_id}`;
+                
+                // Invalidar cache de getClickGeo após atualização
+                const [clickRecord] = await sqlTx`SELECT click_id, seller_id FROM clicks WHERE id = ${click_record_id}`;
+                if (clickRecord?.click_id) {
+                    const cacheKey = `click_geo:${clickRecord.click_id}:${clickRecord.seller_id}`;
+                    dbCache.delete(cacheKey);
+                    logger.debug(`[CACHE] Cache invalidado para click_id ${clickRecord.click_id} após atualização de geolocalização.`);
+                }
+                
                 logger.debug(`[BACKGROUND] Geolocalização atualizada para o clique ${click_record_id} -> Cidade: ${city}, Estado: ${state}.`);
 
 
