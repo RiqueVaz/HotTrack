@@ -48,6 +48,13 @@ class ApiRateLimiter {
                 retryDelay: 2000,
                 timeout: 10000
             }],
+            ['ip-api', {
+                globalRateLimit: 1333, // 45 req/min = 1 req a cada 1.33s
+                cacheTTL: 3600_000, // 1 hora
+                maxRetries: 2,
+                retryDelay: 2000,
+                timeout: 5000
+            }],
             ['default', {
                 globalRateLimit: 1000, // 1 req/segundo padrão
                 cacheTTL: 30_000, // 30 segundos padrão
