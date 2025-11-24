@@ -1679,9 +1679,18 @@ async function getClickGeo(clickId, sellerId) {
     const cached = dbCache.get(cacheKey);
     
     if (cached !== null) {
-        return cached;
+        // Garantir que o objeto retornado tem a propriedade 'exists' para compatibilidade
+        // Se tem city ou state, exists é false (não precisa verificar telegram_chats)
+        // Se não tem city nem state mas está em cache, pode ser que exista em telegram_chats
+        const result = { ...cached };
+        if (result.exists === undefined) {
+            // Cache antigo sem 'exists' - se tem city/state, não precisa verificar
+            result.exists = (result.city || result.state) ? false : undefined;
+        }
+        return result;
     }
     
+    // PRIMEIRO: Buscar na tabela clicks (dados completos com geolocalização)
     const clickResult = await sqlTx`SELECT city, state FROM clicks WHERE click_id = ${clickId} AND seller_id = ${sellerId}`;
     
     if (clickResult.length > 0) {
@@ -1690,7 +1699,25 @@ async function getClickGeo(clickId, sellerId) {
         return geo;
     }
     
-    return { city: null, state: null };
+    // FALLBACK: Verificar se o click_id existe em telegram_chats
+    // Se existe em telegram_chats mas não em clicks, retornar null/null (sem geolocalização)
+    const telegramChatResult = await sqlTx`
+        SELECT 1 FROM telegram_chats 
+        WHERE click_id = ${clickId} AND seller_id = ${sellerId} 
+        LIMIT 1
+    `;
+    
+    if (telegramChatResult.length > 0) {
+        // Click existe em telegram_chats mas não tem geolocalização
+        // Retornar null/null para indicar que existe mas sem dados de geolocalização
+        // Cachear também para evitar consultas repetidas
+        const geo = { city: null, state: null, exists: true };
+        dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000);
+        return geo;
+    }
+    
+    // Não encontrado em nenhuma tabela
+    return { city: null, state: null, exists: false };
 }
 
 // ==========================================================
@@ -5780,7 +5807,40 @@ app.post('/api/click/info', logApiRequest, async (req, res) => {
         
         const geo = await getClickGeo(db_click_id, seller_id);
         
+        // Se não tem city nem state, verificar se o click existe
         if (!geo.city && !geo.state) {
+            // Se geo.exists é true, significa que o click existe em telegram_chats mas não tem geolocalização
+            // Se geo.exists é undefined, pode ser cache antigo - verificar novamente
+            if (geo.exists === true) {
+                // Click existe mas não tem geolocalização - retornar sucesso com null
+                return res.status(200).json({ 
+                    status: 'success', 
+                    city: null, 
+                    state: null,
+                    message: 'Click encontrado mas sem dados de geolocalização'
+                });
+            }
+            
+            // Se geo.exists é undefined (cache antigo), verificar em telegram_chats
+            if (geo.exists === undefined) {
+                const telegramChatCheck = await sqlTx`
+                    SELECT 1 FROM telegram_chats 
+                    WHERE click_id = ${db_click_id} AND seller_id = ${seller_id} 
+                    LIMIT 1
+                `;
+                
+                if (telegramChatCheck.length > 0) {
+                    // Click existe em telegram_chats - retornar sucesso com null
+                    return res.status(200).json({ 
+                        status: 'success', 
+                        city: null, 
+                        state: null,
+                        message: 'Click encontrado mas sem dados de geolocalização'
+                    });
+                }
+            }
+            
+            // Click não existe em nenhuma tabela - retornar 404
             console.warn(`[CLICK INFO NOT FOUND] Vendedor (ID: ${seller_id}, Email: ${seller_email}) tentou consultar o click_id "${click_id}", mas não foi encontrado.`);
             return res.status(404).json({ message: 'Click ID não encontrado para este vendedor.' });
         }
