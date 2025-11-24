@@ -50,9 +50,9 @@ class ApiRateLimiter {
             }],
             ['ip-api', {
                 globalRateLimit: 1333, // 45 req/min = 1 req a cada 1.33s
-                cacheTTL: 3600_000, // 1 hora
-                maxRetries: 2,
-                retryDelay: 2000,
+                cacheTTL: 24 * 3600_000, // 24 horas (IPs não mudam de localização)
+                maxRetries: 1, // Reduzir retries para evitar mais 429s
+                retryDelay: 5000, // Aumentar delay entre retries
                 timeout: 5000
             }],
             ['default', {
@@ -234,8 +234,22 @@ class ApiRateLimiter {
             } catch (error) {
                 lastError = error;
 
-                // Se for 429, aguardar mais tempo
+                // Se for 429, tratamento especial para ip-api (não retry)
                 if (error.response?.status === 429) {
+                    // Para ip-api, não fazer retry em caso de 429 - cache já deve ter o valor
+                    if (provider === 'ip-api') {
+                        // Log apenas ocasionalmente para não saturar logs
+                        if (attempt === 0 || Math.random() < 0.05) {
+                            console.warn(
+                                `[API Rate Limiter] Rate limit 429 para ${provider} (seller ${sellerId}). ` +
+                                `Não tentando novamente (cache deve ter o valor).`
+                            );
+                        }
+                        // Não fazer retry para ip-api em caso de 429
+                        throw error;
+                    }
+                    
+                    // Para outros provedores, comportamento normal
                     const retryAfter = parseInt(
                         error.response.headers['retry-after'] || 
                         error.response.headers['Retry-After'] || 
