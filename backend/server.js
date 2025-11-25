@@ -9306,7 +9306,11 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
         }
     }
     if (validAutomaticTags.includes('Pagante')) {
-        tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+        if (filterMode === 'exclude') {
+            tagQuery += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+        } else {
+            tagQuery += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+        }
     }
     
     // Adicionar WHERE para exclusão se necessário
