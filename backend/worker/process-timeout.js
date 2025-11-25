@@ -1314,60 +1314,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
                     }
 
+                    // Confiar apenas no webhook para atualizações de status
+                    // Não fazer requisições síncronas às APIs de pagamento
                     if (transaction.status === 'paid') {
-                        return 'paid'; // Sinaliza para 'processFlow'
-                    }
-
-                    const paidStatuses = new Set(['paid', 'completed', 'approved', 'success']);
-                    let providerStatus = null;
-                    let customerData = {};
-                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
-
-                    if (transaction.provider === 'pushinpay') {
-                        const resp = await apiRateLimiter.getTransactionStatus({
-                            provider: 'pushinpay',
-                            sellerId: seller.id,
-                            transactionId: transaction.provider_transaction_id,
-                            url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                            headers: { 
-                                Authorization: `Bearer ${seller.pushinpay_token}`, 
-                                Accept: 'application/json', 
-                                'Content-Type': 'application/json' 
-                            }
-                        });
-                        providerStatus = String(resp.status || '').toLowerCase();
-                        customerData = { name: resp.payer_name, document: resp.payer_national_registration };
-                    } else if (transaction.provider === 'syncpay') {
-                        const syncPayToken = await getSyncPayAuthToken(seller);
-                        const resp = await apiRateLimiter.getTransactionStatus({
-                            provider: 'syncpay',
-                            sellerId: seller.id,
-                            transactionId: transaction.provider_transaction_id,
-                            url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                        });
-                        providerStatus = String(resp.status || '').toLowerCase();
-                        customerData = resp.payer || {};
-                    } else if (transaction.provider === 'wiinpay') {
-                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                        if (wiinpayApiKey) {
-                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey, seller.id);
-                            providerStatus = result.status || null;
-                            customerData = result.customer || {};
-                        }
-                    } else if (transaction.provider === 'paradise') {
-                        const paradiseSecretKey = seller.paradise_secret_key;
-                        if (paradiseSecretKey) {
-                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey, seller.id);
-                            providerStatus = result.status || null;
-                            customerData = result.customer || {};
-                        }
-                    }
-                    
-                    // Normalizar providerStatus para lowercase antes de comparar
-                    const normalizedProviderStatus = providerStatus ? String(providerStatus).toLowerCase() : null;
-                    if (normalizedProviderStatus && paidStatuses.has(normalizedProviderStatus)) {
-                        await handleSuccessfulPayment(transaction.id, customerData);
+                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                        // Webhook já salvou customerData quando atualizou status
+                        await handleSuccessfulPayment(transaction.id, {});
                         return 'paid'; // Sinaliza para 'processFlow'
                     } else {
                         return 'pending'; // Sinaliza para 'processFlow'
