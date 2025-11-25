@@ -21,11 +21,11 @@ class ApiRateLimiter {
         // Configurações por provedor
         this.providerConfigs = new Map([
             ['pushinpay', {
-                globalRateLimit: 1000, // 1 requisição por segundo
+                globalRateLimit: 500, // 2 requisições por segundo (reduzido de 1000)
                 cacheTTL: 60_000, // 1 minuto de cache
-                maxRetries: 3,
-                retryDelay: 2000, // 2 segundos base
-                timeout: 10000 // 10 segundos
+                maxRetries: 1, // Reduzido de 3 para 1 (sem retry para evitar delays)
+                retryDelay: 500, // Reduzido de 2000 para 500ms
+                timeout: 5000 // Reduzido de 10000 para 5000ms (5 segundos)
             }],
             ['syncpay', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
