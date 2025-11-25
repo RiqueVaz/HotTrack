@@ -317,36 +317,8 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
         }
     }
     
-    // Para vídeos, tentar usar file_id diretamente primeiro (sem baixar)
-    // Isso evita baixar arquivos grandes desnecessariamente e reduz tráfego de rede
-    if (fileType === 'video') {
-        try {
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[fileType];
-            const field = fieldMap[fileType];
-            const timeout = 120000;
-            
-            const result = await sendTelegramRequest(destinationBotToken, method, { 
-                chat_id: chatId, 
-                [field]: fileId, 
-                caption 
-            }, { timeout }, 3, 1500, botId);
-            
-            // Se funcionou, retornar
-            if (result && result.ok) {
-                return result;
-            }
-        } catch (error) {
-            // Se file_id não funcionou, continuar para tentar baixar
-            // Mas só logar se não for erro comum (403, 400 com wrong file identifier)
-            if (error.response?.status !== 400 && error.response?.status !== 403) {
-                console.debug(`[Flow Media] file_id direto falhou, tentando download: ${error.message}`);
-            }
-        }
-    }
-    
-    // Para imagens/áudio ou se vídeo falhou, tentar baixar normalmente
+    // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam ser baixados e reenviados
+    // Não tentar usar file_id diretamente pois não funcionará com o bot do usuário
     try {
         const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId }, {}, 3, 1500, null);
         if (!fileInfo.ok) {
@@ -391,20 +363,8 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
         return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout }, 3, 1500, botId);
     } catch (error) {
-        // Se falhar ao baixar, tentar file_id como último recurso (apenas se não for vídeo, pois já tentamos)
-        if (fileType !== 'video' && (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED'))) {
-            console.warn(`[Flow Media] Erro ao baixar arquivo (${error.message}). Tentando usar file_id diretamente: ${fileId}`);
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[fileType];
-            const field = fieldMap[fileType];
-            const timeout = fileType === 'video' ? 120000 : 60000;
-            return await sendTelegramRequest(destinationBotToken, method, { 
-                chat_id: chatId, 
-                [field]: fileId, 
-                caption 
-            }, { timeout }, 3, 1500, botId);
-        }
+        // Se falhar ao baixar, não tentar file_id direto pois é arquivo da biblioteca (file_id do bot de storage)
+        // O file_id não funcionará com o bot do usuário
         throw error;
     }
 }
@@ -443,21 +403,9 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null) {
                 await new Promise(resolve => setTimeout(resolve, duration * 1000));
             }
         }
-        try {
-            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
-        } catch (error) {
-            // Se sendMediaAsProxy falhar, tentar usar file_id diretamente como fallback
-            console.warn(`[Flow Media] Erro ao enviar mídia via proxy (${error.message}). Tentando file_id diretamente.`);
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[type];
-            const field = fieldMap[type];
-            response = await sendTelegramRequest(botToken, method, { 
-                chat_id: chatId, 
-                [field]: fileIdentifier, 
-                caption 
-            }, { timeout }, 3, 1500, botId);
-        }
+        // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam usar proxy
+        // Não tentar file_id direto pois não funcionará com o bot do usuário
+        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
     } else {
         const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
         const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };

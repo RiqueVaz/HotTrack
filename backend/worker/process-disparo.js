@@ -211,37 +211,8 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
     
-    // Para vídeos, tentar usar file_id diretamente primeiro (sem baixar)
-    // Isso evita baixar arquivos grandes desnecessariamente e reduz tráfego de rede
-    if (fileType === 'video') {
-        try {
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[fileType];
-            const field = fieldMap[fileType];
-            const timeout = 120000;
-            
-            const result = await sendTelegramRequest(destinationBotToken, method, { 
-                chat_id: chatId, 
-                [field]: fileId, 
-                caption, 
-                parse_mode: 'HTML' 
-            }, { timeout });
-            
-            // Se funcionou, retornar
-            if (result && result.ok) {
-                return result;
-            }
-        } catch (error) {
-            // Se file_id não funcionou, continuar para tentar baixar
-            // Mas só logar se não for erro comum (403, 400 com wrong file identifier)
-            if (error.response?.status !== 400 && error.response?.status !== 403) {
-                logger.debug(`[WORKER-DISPARO] file_id direto falhou, tentando download: ${error.message}`);
-            }
-        }
-    }
-    
-    // Para imagens/áudio ou se vídeo falhou, tentar baixar normalmente
+    // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam ser baixados e reenviados
+    // Não tentar usar file_id diretamente pois não funcionará com o bot do usuário
     try {
         const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
         if (!fileInfo.ok) {
@@ -283,20 +254,8 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
         return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
     } catch (error) {
-        // Se falhar ao baixar, tentar file_id como último recurso (apenas se não for vídeo, pois já tentamos)
-        if (fileType !== 'video' && (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED'))) {
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[fileType];
-            const field = fieldMap[fileType];
-            const timeout = fileType === 'video' ? 120000 : 60000;
-            return await sendTelegramRequest(destinationBotToken, method, { 
-                chat_id: chatId, 
-                [field]: fileId, 
-                caption, 
-                parse_mode: 'HTML' 
-            }, { timeout });
-        }
+        // Se falhar ao baixar, não tentar file_id direto pois é arquivo da biblioteca (file_id do bot de storage)
+        // O file_id não funcionará com o bot do usuário
         throw error;
     }
 }
@@ -790,31 +749,9 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 if (fileId) {
                     const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
                     if (isLibraryFile) {
-                        try {
-                            await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
-                        } catch (error) {
-                            // Reduzir logging - só logar se não for erro comum esperado (400, 403)
-                            // Para vídeos, sendMediaAsProxy já tentou file_id diretamente, então não tentar novamente
-                            if (action.type !== 'video' && error.response?.status !== 400 && error.response?.status !== 403) {
-                                logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao enviar mídia via proxy. Tentando file_id diretamente.`);
-                            }
-                            // Tentar file_id diretamente apenas se não for vídeo (vídeo já tentou no sendMediaAsProxy)
-                            if (action.type !== 'video') {
-                                try {
-                                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                                    const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                                    const timeout = action.type === 'video' ? 120000 : 60000;
-                                    await sendTelegramRequest(botToken, method, { 
-                                        chat_id: chatId, 
-                                        [field]: fileId, 
-                                        caption, 
-                                        parse_mode: 'HTML' 
-                                    }, { timeout });
-                                } catch (fallbackError) {
-                                    // Silenciar erro de fallback para reduzir logging excessivo
-                                }
-                            }
-                        }
+                        // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam usar proxy
+                        // Não tentar file_id direto pois não funcionará com o bot do usuário
+                        await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
                     } else {
                         const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
                         const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
