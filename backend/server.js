@@ -6126,116 +6126,12 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
             return res.status(404).json({ status: 'not_found', message: 'Transação não encontrada.' });
         }
 
-        let currentStatus = transaction.status;
-        let customerData = {};
-
-        // Se ainda pendente e passível de consulta, tenta confirmar no provedor
-        if (currentStatus === 'pending' && transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
-            try {
-                let providerStatus;
-                if (transaction.provider === 'syncpay') {
-                    const syncPayToken = await getSyncPayAuthToken(seller);
-                    const response = await apiRateLimiter.getTransactionStatus({
-                        provider: 'syncpay',
-                        sellerId: seller.id,
-                        transactionId: transaction.provider_transaction_id,
-                        url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                        headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                    });
-                    providerStatus = response.status;
-                    customerData = response.payer;
-                } else if (transaction.provider === 'pushinpay') {
-                    const response = await apiRateLimiter.getTransactionStatus({
-                        provider: 'pushinpay',
-                        sellerId: seller.id,
-                        transactionId: transaction.provider_transaction_id,
-                        url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                        headers: { 
-                            Authorization: `Bearer ${seller.pushinpay_token}`,
-                            Accept: 'application/json',
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    providerStatus = response.status;
-                    // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
-                    customerData = { name: response.payer_name, document: response.payer_national_registration };
-                } else if (transaction.provider === 'wiinpay') {
-                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                    if (wiinpayApiKey) {
-                        const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey, seller.id);
-                        providerStatus = result.status;
-                        customerData = result.customer || {};
-                    } else {
-                        console.warn(`[PIX Status] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
-                    }
-                } else if (transaction.provider === 'paradise') {
-                    const paradiseSecretKey = seller.paradise_secret_key;
-                    if (paradiseSecretKey) {
-                        const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey, seller.id);
-                        providerStatus = result.status;
-                        customerData = result.customer || {};
-                    } else {
-                        console.warn(`[PIX Status] Seller ${seller.id} sem chave Paradise configurada para consulta.`);
-                    }
-                }
-
-                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
-                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
-
-                if (paidStatuses.has(normalizedProviderStatus)) {
-                    await handleSuccessfulPayment(transaction.id, customerData);
-                    currentStatus = 'paid';
-                }
-            } catch (providerError) {
-                if (!providerError.response || providerError.response.status !== 404) {
-                    console.error(`Falha ao consultar o provedor (${transaction.provider}) para a transação ${transaction.id}:`, providerError.message);
-                }
-                // Continua retornando pending se não conseguiu confirmar
-            }
-        }
+        // Confiar apenas no webhook para atualizações de status
+        // Não fazer requisições síncronas às APIs de pagamento
+        const currentStatus = transaction.status;
 
         // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
-        if (currentStatus === 'paid') {
-            // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
-            if (Object.keys(customerData).length > 0) {
-                await handleSuccessfulPayment(transaction.id, customerData);
-            } else {
-                // Tentar buscar customerData do provider se possível
-                if (transaction.provider !== 'oasyfy' && transaction.provider !== 'cnpay' && transaction.provider !== 'brpix') {
-                    try {
-                        if (transaction.provider === 'syncpay') {
-                            const syncPayToken = await getSyncPayAuthToken(seller);
-                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                            });
-                            customerData = response.data.payer || {};
-                        } else if (transaction.provider === 'pushinpay') {
-                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                        } else if (transaction.provider === 'wiinpay') {
-                            const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                            if (wiinpayApiKey) {
-                                const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey);
-                                customerData = result.customer || {};
-                            }
-                        } else if (transaction.provider === 'paradise') {
-                            const paradiseSecretKey = seller.paradise_secret_key;
-                            if (paradiseSecretKey) {
-                                const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey);
-                                customerData = result.customer || {};
-                            }
-                        }
-                        
-                        if (Object.keys(customerData).length > 0) {
-                            await handleSuccessfulPayment(transaction.id, customerData);
-                        }
-                    } catch (error) {
-                        console.error(`[PIX Status] Erro ao tentar enviar eventos para transação já paga:`, error.message);
-                    }
-                }
-            }
-        }
-
+        // Usar dados do banco (webhook já salvou customerData quando atualizou status)
         if (currentStatus === 'paid') {
             let redirectUrl = null;
             // Se veio de checkout hospedado, tenta buscar URL de sucesso no config
@@ -7002,110 +6898,12 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     let customerData = {};
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
 
-                    // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                    // Confiar apenas no webhook para atualizações de status
+                    // Não fazer requisições síncronas às APIs de pagamento
                     if (transaction.status === 'paid') {
-                        // Se temos customerData, usar. Caso contrário, handleSuccessfulPayment usará valores padrão
-                        if (Object.keys(customerData).length === 0) {
-                            // Tentar buscar dados do cliente do provider
-                            try {
-                                if (transaction.provider === 'pushinpay') {
-                                    const resp = await apiRateLimiter.getTransactionStatus({
-                                        provider: 'pushinpay',
-                                        sellerId: seller.id,
-                                        transactionId: transaction.provider_transaction_id,
-                                        url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                                        headers: { 
-                                            Authorization: `Bearer ${seller.pushinpay_token}`, 
-                                            Accept: 'application/json', 
-                                            'Content-Type': 'application/json' 
-                                        }
-                                    });
-                                    customerData = { name: resp.payer_name, document: resp.payer_national_registration };
-                                } else if (transaction.provider === 'syncpay') {
-                                    const syncPayToken = await getSyncPayAuthToken(seller);
-                                    const resp = await apiRateLimiter.getTransactionStatus({
-                                        provider: 'syncpay',
-                                        sellerId: seller.id,
-                                        transactionId: transaction.provider_transaction_id,
-                                        url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                                        headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                                    });
-                                    customerData = resp.payer || {};
-                                } else if (transaction.provider === 'wiinpay') {
-                                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                                    if (wiinpayApiKey) {
-                                        const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey, seller.id);
-                                        customerData = result.customer || {};
-                                    }
-                                } else if (transaction.provider === 'paradise') {
-                                    const paradiseSecretKey = seller.paradise_secret_key;
-                                    if (paradiseSecretKey) {
-                                        const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey, seller.id);
-                                        customerData = result.customer || {};
-                                    }
-                                }
-                            } catch (error) {
-                                console.error(`[PIX][action_check_pix] Erro ao buscar dados do cliente:`, error.message);
-                            }
-                        }
-                        
                         // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
-                        if (Object.keys(customerData).length > 0) {
-                            await handleSuccessfulPayment(transaction.id, customerData);
-                        }
-                        return 'paid'; // Sinaliza para 'processFlow' seguir pelo handle 'a'
-                    }
-
-                    // Se não está paga, consultar o provider normalmente
-                    if (transaction.provider === 'pushinpay') {
-                        const resp = await apiRateLimiter.getTransactionStatus({
-                            provider: 'pushinpay',
-                            sellerId: seller.id,
-                            transactionId: transaction.provider_transaction_id,
-                            url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                            headers: { 
-                                Authorization: `Bearer ${seller.pushinpay_token}`, 
-                                Accept: 'application/json', 
-                                'Content-Type': 'application/json' 
-                            }
-                        });
-                        providerStatus = String(resp.status || '').toLowerCase();
-                        customerData = { name: resp.payer_name, document: resp.payer_national_registration };
-                    } else if (transaction.provider === 'syncpay') {
-                        const syncPayToken = await getSyncPayAuthToken(seller);
-                        const resp = await apiRateLimiter.getTransactionStatus({
-                            provider: 'syncpay',
-                            sellerId: seller.id,
-                            transactionId: transaction.provider_transaction_id,
-                            url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                            headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                        });
-                        providerStatus = String(resp.status || '').toLowerCase();
-                        customerData = resp.payer || {};
-                    } else if (transaction.provider === 'wiinpay') {
-                        const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                        if (wiinpayApiKey) {
-                            const result = await getWiinpayPaymentStatus(transaction.provider_transaction_id, wiinpayApiKey, seller.id);
-                            providerStatus = result.status || null;
-                            customerData = result.customer || {};
-                        } else {
-                            console.warn(`${logPrefix} Seller ${sellerId} sem chave WiinPay configurada.`);
-                        }
-                    } else if (transaction.provider === 'paradise') {
-                        const paradiseSecretKey = seller.paradise_secret_key;
-                        if (paradiseSecretKey) {
-                            const result = await getParadisePaymentStatus(transaction.provider_transaction_id, paradiseSecretKey, seller.id);
-                            providerStatus = result.status || null;
-                            customerData = result.customer || {};
-                        } else {
-                            console.warn(`${logPrefix} Seller ${sellerId} sem chave Paradise configurada.`);
-                        }
-                    }
-                    
-                    // Normalizar providerStatus para lowercase antes de comparar
-                    const normalizedProviderStatus = providerStatus ? String(providerStatus).toLowerCase() : null;
-                    if (normalizedProviderStatus && paidStatuses.has(normalizedProviderStatus)) {
-                        await handleSuccessfulPayment(transaction.id, customerData); // Atualiza o DB
+                        // Webhook já salvou customerData quando atualizou status
+                        await handleSuccessfulPayment(transaction.id, {});
                         return 'paid'; // Sinaliza para 'processFlow' seguir pelo handle 'a'
                     } else {
                         return 'pending'; // Sinaliza para 'processFlow' seguir pelo handle 'b'
@@ -8922,90 +8720,7 @@ app.post('/api/webhook/wiinpay', async (req, res) => {
     res.sendStatus(200);
 });
 // As funções compartilhadas são chamadas diretamente com objetos
-async function checkPendingTransactions() {
-    try {
-        const pendingTransactions = await sqlTx`
-            SELECT id, provider, provider_transaction_id, click_id_internal, status
-            FROM pix_transactions WHERE status = 'pending' AND created_at > NOW() - INTERVAL '30 minutes'`;
-
-        if (pendingTransactions.length === 0) return;
-        
-        for (const tx of pendingTransactions) {
-            if (tx.provider === 'oasyfy' || tx.provider === 'cnpay' || tx.provider === 'brpix') {
-                continue;
-            }
-
-            try {
-                const [seller] = await sqlTx`
-                    SELECT *
-                    FROM sellers s JOIN clicks c ON c.seller_id = s.id
-                    WHERE c.id = ${tx.click_id_internal}`;
-                if (!seller) continue;
-
-                let providerStatus, customerData = {};
-                if (tx.provider === 'syncpay') {
-                    const syncPayToken = await getSyncPayAuthToken(seller);
-                    const response = await apiRateLimiter.getTransactionStatus({
-                        provider: 'syncpay',
-                        sellerId: seller.id,
-                        transactionId: tx.provider_transaction_id,
-                        url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${tx.provider_transaction_id}`,
-                        headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                    });
-                    providerStatus = response.status;
-                    customerData = response.payer;
-                } else if (tx.provider === 'pushinpay') {
-                    const response = await apiRateLimiter.getTransactionStatus({
-                        provider: 'pushinpay',
-                        sellerId: seller.id,
-                        transactionId: tx.provider_transaction_id,
-                        url: `https://api.pushinpay.com.br/api/transactions/${tx.provider_transaction_id}`,
-                        headers: { 
-                            Authorization: `Bearer ${seller.pushinpay_token}`,
-                            Accept: 'application/json',
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    providerStatus = response.status;
-                    // CORREÇÃO: Campo correto é 'payer_national_registration' conforme documentação PushinPay
-                    customerData = { name: response.payer_name, document: response.payer_national_registration };
-                } else if (tx.provider === 'wiinpay') {
-                    const wiinpayApiKey = getSellerWiinpayApiKey(seller);
-                    if (wiinpayApiKey) {
-                        const result = await getWiinpayPaymentStatus(tx.provider_transaction_id, wiinpayApiKey, seller.id);
-                        providerStatus = result.status;
-                        customerData = result.customer || {};
-                    } else {
-                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave WiinPay configurada para consulta.`);
-                    }
-                } else if (tx.provider === 'paradise') {
-                    const paradiseSecretKey = seller.paradise_secret_key;
-                    if (paradiseSecretKey) {
-                        const result = await getParadisePaymentStatus(tx.provider_transaction_id, paradiseSecretKey, seller.id);
-                        providerStatus = result.status;
-                        customerData = result.customer || {};
-                    } else {
-                        console.warn(`[checkPendingTransactions] Seller ${seller.id} sem chave Paradise configurada para consulta.`);
-                    }
-                }
-                
-                const normalizedProviderStatus = String(providerStatus || '').toLowerCase();
-                const paidStatuses = new Set(['paid', 'completed', 'approved', 'success', 'received']);
-
-                if (paidStatuses.has(normalizedProviderStatus) && tx.status !== 'paid') {
-                     await handleSuccessfulPayment(tx.id, customerData);
-                }
-            } catch (error) {
-                if (!error.response || error.response.status !== 404) {
-                    console.error(`Erro ao verificar transação ${tx.id} (${tx.provider}):`, error.response?.data || error.message);
-                }
-            }
-            await new Promise(resolve => setTimeout(resolve, 200)); 
-        }
-    } catch (error) {
-        console.error("Erro na rotina de verificação geral:", error.message);
-    }
-}
+// Função checkPendingTransactions removida - confiar apenas em webhooks para atualizações de status
 
 app.post('/api/webhook/syncpay', async (req, res) => {
     try {
@@ -11626,74 +11341,12 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
                     continue;
                 }
 
-                // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                // Confiar apenas no webhook para atualizações de status
+                // Não fazer requisições síncronas às APIs de pagamento
                 if (transaction.status === 'paid') {
-                    // Tentar buscar dados do cliente do provider se possível
-                    let customerData = {};
-                    try {
-                        if (transaction.provider === 'syncpay') {
-                            const syncPayToken = await getSyncPayAuthToken(seller);
-                            const response = await axios.get(`${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`, {
-                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                            });
-                            customerData = response.data.payer || {};
-                        } else if (transaction.provider === 'pushinpay') {
-                            const response = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`, { headers: { Authorization: `Bearer ${seller.pushinpay_token}` } });
-                            customerData = { name: response.data.payer_name, document: response.data.payer_national_registration };
-                        }
-                        
-                        // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
-                        if (Object.keys(customerData).length > 0) {
-                            await handleSuccessfulPayment(transaction.id, customerData);
-                        }
-                    } catch (error) {
-                        console.error(`[Check Conversions] Erro ao tentar enviar eventos para transação já paga:`, error.message);
-                    }
-                    
-                    await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
-                    updatedCount++;
-                    continue;
-                }
-
-                // Se não está paga, verificar no provedor
-                let providerStatus, customerData = {};
-                    try {
-                        if (transaction.provider === 'syncpay') {
-                            const syncPayToken = await getSyncPayAuthToken(seller);
-                            const response = await apiRateLimiter.getTransactionStatus({
-                                provider: 'syncpay',
-                                sellerId: seller.id,
-                                transactionId: transaction.provider_transaction_id,
-                                url: `${SYNCPAY_API_BASE_URL}/api/partner/v1/transaction/${transaction.provider_transaction_id}`,
-                                headers: { 'Authorization': `Bearer ${syncPayToken}` }
-                            });
-                            providerStatus = response.status;
-                            customerData = response.payer;
-                        } else if (transaction.provider === 'pushinpay') {
-                            const response = await apiRateLimiter.getTransactionStatus({
-                                provider: 'pushinpay',
-                                sellerId: seller.id,
-                                transactionId: transaction.provider_transaction_id,
-                                url: `https://api.pushinpay.com.br/api/transactions/${transaction.provider_transaction_id}`,
-                                headers: { 
-                                    Authorization: `Bearer ${seller.pushinpay_token}`,
-                                    Accept: 'application/json',
-                                    'Content-Type': 'application/json'
-                                }
-                            });
-                            providerStatus = response.status;
-                            customerData = { name: response.payer_name, document: response.payer_national_registration };
-                    } else if (transaction.provider === 'oasyfy' || transaction.provider === 'cnpay' || transaction.provider === 'brpix') {
-                        // Não consultamos, depende do webhook
-                        continue;
-                    }
-                } catch (providerError) {
-                    console.error(`Falha ao consultar o provedor para a transação ${transaction.id}:`, providerError.message);
-                    continue;
-                }
-
-                if (providerStatus === 'paid' || providerStatus === 'COMPLETED') {
-                    await handleSuccessfulPayment(transaction.id, customerData);
+                    // Tentar enviar eventos (handleSuccessfulPayment é idempotente)
+                    // Webhook já salvou customerData quando atualizou status
+                    await handleSuccessfulPayment(transaction.id, {});
                     await sqlWithRetry(`UPDATE disparo_log SET status = 'CONVERTED' WHERE id = $1`, [log.id]);
                     updatedCount++;
                 }
