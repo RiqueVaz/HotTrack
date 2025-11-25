@@ -6116,11 +6116,25 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
         }
 
         // Busca a transação e dados do clique associado (inclui checkout_id e click_id originais)
-        const [transaction] = await sqlTx`
+        // Otimização: tentar primeiro por provider_transaction_id (tem índice), depois por pix_id
+        let [transaction] = await sqlTx`
             SELECT pt.*, c.checkout_id, c.click_id
-            FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
-            WHERE (pt.provider_transaction_id = ${transaction_id} OR pt.pix_id = ${transaction_id})
-              AND c.seller_id = ${seller.id}`;
+            FROM pix_transactions pt 
+            JOIN clicks c ON pt.click_id_internal = c.id
+            WHERE pt.provider_transaction_id = ${transaction_id}
+              AND c.seller_id = ${seller.id}
+            LIMIT 1`;
+        
+        // Se não encontrou por provider_transaction_id, tentar por pix_id
+        if (!transaction) {
+            [transaction] = await sqlTx`
+                SELECT pt.*, c.checkout_id, c.click_id
+                FROM pix_transactions pt 
+                JOIN clicks c ON pt.click_id_internal = c.id
+                WHERE pt.pix_id = ${transaction_id}
+                  AND c.seller_id = ${seller.id}
+                LIMIT 1`;
+        }
 
         if (!transaction) {
             return res.status(404).json({ status: 'not_found', message: 'Transação não encontrada.' });
