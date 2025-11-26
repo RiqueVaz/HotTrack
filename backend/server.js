@@ -2590,16 +2590,21 @@ async function processStepsForQStashBatch(steps, sellerId) {
     }
     
     try {
-        // Busca todos os file_ids de uma vez usando IN
+        // Busca todos os file_ids de uma vez usando IN (incluindo informações do R2)
         const fileIdsArray = Array.from(fileIdsToLookup);
         const mediaResults = await sqlWithRetry(
-            sqlTx`SELECT id, file_id FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
+            sqlTx`SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
         );
         
-        // Cria um Map de file_id -> media_id para lookup rápido
-        const fileIdToMediaId = new Map();
+        // Cria um Map de file_id -> dados completos da mídia para lookup rápido
+        const fileIdToMediaData = new Map();
         for (const media of mediaResults) {
-            fileIdToMediaId.set(media.file_id, media.id);
+            fileIdToMediaData.set(media.file_id, {
+                id: media.id,
+                storage_url: media.storage_url,
+                storage_type: media.storage_type,
+                migration_status: media.migration_status
+            });
         }
         
         // Processa cada step e armazena no cache
@@ -2624,12 +2629,18 @@ async function processStepsForQStashBatch(steps, sellerId) {
                 continue;
             }
             
-            const mediaId = fileIdToMediaId.get(fileUrl);
-            if (mediaId) {
-                // Cria uma cópia do step substituindo file_id por mediaLibraryId
+            const mediaData = fileIdToMediaData.get(fileUrl);
+            if (mediaData) {
+                // Cria uma cópia do step substituindo file_id por mediaLibraryId e adicionando informações do R2
                 const processedStep = { ...step };
                 processedStep[urlMap[step.type]] = null;
-                processedStep.mediaLibraryId = mediaId;
+                processedStep.mediaLibraryId = mediaData.id;
+                // Adicionar informações do R2 quando disponíveis (para workers usarem diretamente)
+                if (mediaData.storage_url && mediaData.storage_type === 'r2') {
+                    processedStep.storageUrl = mediaData.storage_url;
+                    processedStep.storageType = mediaData.storage_type;
+                }
+                processedStep.migrationStatus = mediaData.migration_status;
                 processedStepsCache.set(stepKey, processedStep);
             } else {
                 // Não encontrado na biblioteca, mantém original
@@ -2667,9 +2678,9 @@ async function processStepForQStash(step, sellerId) {
     }
     
     try {
-        // Busca o ID da biblioteca de mídia pelo file_id
+        // Busca o ID da biblioteca de mídia pelo file_id (incluindo informações do R2)
         const [media] = await sqlWithRetry(
-            'SELECT id FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+            'SELECT id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
             [fileUrl, sellerId]
         );
         
@@ -2678,12 +2689,18 @@ async function processStepForQStash(step, sellerId) {
             return step; // Retorna o step original se não encontrar
         }
         
-        // Cria uma cópia do step substituindo file_id por mediaLibraryId
+        // Cria uma cópia do step substituindo file_id por mediaLibraryId e adicionando informações do R2
         const processedStep = { ...step };
         processedStep[urlMap[step.type]] = null; // Remove o file_id
         processedStep.mediaLibraryId = media.id; // Adiciona o ID da biblioteca
+        // Adicionar informações do R2 quando disponíveis (para workers usarem diretamente)
+        if (media.storage_url && media.storage_type === 'r2') {
+            processedStep.storageUrl = media.storage_url;
+            processedStep.storageType = media.storage_type;
+        }
+        processedStep.migrationStatus = media.migration_status;
         
-        console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}`);
+        console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}${media.storage_url ? ' (R2 disponível)' : ''}`);
         
         return processedStep;
     } catch (error) {
