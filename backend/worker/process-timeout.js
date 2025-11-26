@@ -16,6 +16,7 @@ const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEvent
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 const apiRateLimiter = require('../shared/api-rate-limiter');
 const dbCache = require('../shared/db-cache');
+const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -369,7 +370,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
-async function handleMediaNode(node, botToken, chatId, caption, botId = null) {
+async function handleMediaNode(node, botToken, chatId, caption, botId = null, sellerId = null) {
     const type = node.type;
     const nodeData = node.data || {};
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
@@ -403,18 +404,109 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null) {
                 await new Promise(resolve => setTimeout(resolve, duration * 1000));
             }
         }
-        // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam usar proxy
-        // Não tentar file_id direto pois não funcionará com o bot do usuário
-        response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
+        
+        // Buscar mídia no banco para verificar se tem storage_url
+        let media = null;
+        if (sellerId) {
+            try {
+                const [mediaResult] = await sqlWithRetry(
+                    'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+                    [fileIdentifier, sellerId]
+                );
+                if (mediaResult) {
+                    media = mediaResult;
+                }
+            } catch (error) {
+                console.warn(`[Timeout Media] Erro ao buscar mídia no banco:`, error.message);
+            }
+        }
+        
+        // Tentar usar storage_url se disponível
+        if (media && media.storage_url && media.storage_type === 'r2') {
+            try {
+                const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+                const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+                const method = methodMap[type];
+                const field = fieldMap[type];
+                
+                response = await sendTelegramRequest(botToken, method, {
+                    chat_id: chatId,
+                    [field]: media.storage_url,
+                    caption: caption,
+                    parse_mode: 'HTML'
+                }, { timeout }, 3, 1500, botId);
+            } catch (urlError) {
+                console.warn(`[Timeout Media] Erro ao enviar via R2 URL, tentando fallback:`, urlError.message);
+                // Continuar para fallback
+                response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
+            }
+        }
+        // Tentar migrar sob demanda se não está migrado
+        else if (media && media.storage_type === 'telegram' && media.migration_status !== 'migrated' && sellerId) {
+            try {
+                console.log(`[Timeout Media] Migrando mídia ${media.id} sob demanda...`);
+                await migrateMediaOnDemand(media.id);
+                
+                const [migratedMedia] = await sqlWithRetry(
+                    'SELECT storage_url FROM media_library WHERE id = $1',
+                    [media.id]
+                );
+                
+                if (migratedMedia?.storage_url) {
+                    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+                    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+                    const method = methodMap[type];
+                    const field = fieldMap[type];
+                    
+                    response = await sendTelegramRequest(botToken, method, {
+                        chat_id: chatId,
+                        [field]: migratedMedia.storage_url,
+                        caption: caption,
+                        parse_mode: 'HTML'
+                    }, { timeout }, 3, 1500, botId);
+                } else {
+                    throw new Error('Migração não retornou storage_url');
+                }
+            } catch (migrationError) {
+                console.error(`[Timeout Media] Erro na migração sob demanda:`, migrationError.message);
+                // Fallback para método antigo
+                response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
+            }
+        }
+        // Fallback: método antigo
+        else {
+            response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
+        }
     } else {
-        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-        
-        const method = methodMap[type];
-        const field = fieldMap[type];
-        
-        const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
-        response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+        // Se não é da biblioteca, pode ser URL direta ou file_id de outro bot
+        if (fileIdentifier.startsWith('http://') || fileIdentifier.startsWith('https://')) {
+            // URL direta - Telegram pode baixar e enviar
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            const method = methodMap[type];
+            const field = fieldMap[type];
+            
+            if (!method) {
+                console.warn(`[Timeout Media] Tipo de mídia não suportado: ${type}`);
+                return null;
+            }
+            
+            response = await sendTelegramRequest(botToken, method, {
+                chat_id: chatId,
+                [field]: fileIdentifier,
+                caption: caption,
+                parse_mode: 'HTML'
+            }, { timeout }, 3, 1500, botId);
+        } else {
+            // file_id direto de outro bot
+            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+            const method = methodMap[type];
+            const field = fieldMap[type];
+            
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+            response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+        }
     }
     
     return response;
@@ -763,7 +855,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    const response = await handleMediaNode(action, botToken, chatId, caption, botId);
+                    const response = await handleMediaNode(action, botToken, chatId, caption, botId, sellerId);
 
                     if (response && response.ok) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');

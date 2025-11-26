@@ -9237,6 +9237,18 @@ function generatePreviewHTML(data) {
             if (/(\.mp3|\.wav|\.ogg)$/.test(name)) return 'audio';
             return 'image';
         };
+        // Helper para construir URL de preview - usa storage_url se disponível
+        const getMediaPreviewUrl = (item, useThumbnail = true) => {
+            if (useThumbnail && item.thumbnail_storage_url) {
+                return item.thumbnail_storage_url;
+            }
+            if (item.storage_url) {
+                return item.storage_url;
+            }
+            // Fallback para método antigo
+            const fileId = useThumbnail ? (item.thumbnail_file_id || item.file_id) : item.file_id;
+            return `${API_BASE_URL}/api/media/preview/storage/${fileId}`;
+        };
         const filtered = media.filter(item => resolveType(item) === activeTab);
         const handleFileChange = (e) => {
             const file = e.target.files[0];
@@ -9284,15 +9296,15 @@ function generatePreviewHTML(data) {
                     {filtered.map(item => (
                         <div key={item.id} className="bot-card">
                              {resolveType(item) === 'image' ? (
-                                <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                <img src={getMediaPreviewUrl(item, true)} className="media-preview" alt={item.file_name} />
                              ) : resolveType(item) === 'video' ? (
-                                item.thumbnail_file_id ? (
-                                    <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
+                                item.thumbnail_file_id || item.thumbnail_storage_url ? (
+                                    <img src={getMediaPreviewUrl(item, true)} className="media-preview" alt={item.file_name} />
                                 ) : (
-                                    <video src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
+                                    <video src={getMediaPreviewUrl(item, false)} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
                                 )
                              ) : (
-                                <audio src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" controls />
+                                <audio src={getMediaPreviewUrl(item, false)} className="media-preview" controls />
                              )}
                              <h3 style={{fontSize: '1.1rem', marginBottom: '0.5rem'}}>{item.file_name}</h3>
                              <p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', wordBreak: 'break-all', flexGrow: 1, marginBottom: '1rem'}}>File ID: {item.file_id}</p>
@@ -9575,6 +9587,18 @@ function generatePreviewHTML(data) {
             if (/(\.mp3|\.wav|\.ogg)$/.test(name)) return 'audio';
             return 'image';
         };
+        // Helper para construir URL de preview - usa storage_url se disponível
+        const getMediaPreviewUrl = (item, useThumbnail = true) => {
+            if (useThumbnail && item.thumbnail_storage_url) {
+                return item.thumbnail_storage_url;
+            }
+            if (item.storage_url) {
+                return item.storage_url;
+            }
+            // Fallback para método antigo
+            const fileId = useThumbnail ? (item.thumbnail_file_id || item.file_id) : item.file_id;
+            return `${API_BASE_URL}/api/media/preview/storage/${fileId}`;
+        };
         const allowed = Array.isArray(allowedTypes) ? allowedTypes : tabsAll;
         const displayed = media.filter(m => allowed.includes(resolveType(m)) && resolveType(m) === activeTab);
         return (
@@ -9595,15 +9619,15 @@ function generatePreviewHTML(data) {
                         {displayed.map(item => (
                             <div key={item.id} className="bot-card" onClick={() => onSelect(item)} style={{cursor: 'pointer'}}>
                                 {resolveType(item) === 'image' ? (
-                                    <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id || item.file_id}`} className="media-preview" alt={item.file_name} />
+                                    <img src={getMediaPreviewUrl(item, true)} className="media-preview" alt={item.file_name} />
                                  ) : resolveType(item) === 'video' ? (
-                                    item.thumbnail_file_id ? (
-                                        <img src={`${API_BASE_URL}/api/media/preview/storage/${item.thumbnail_file_id}`} className="media-preview" alt={item.file_name} />
+                                    item.thumbnail_file_id || item.thumbnail_storage_url ? (
+                                        <img src={getMediaPreviewUrl(item, true)} className="media-preview" alt={item.file_name} />
                                     ) : (
-                                        <video src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
+                                        <video src={getMediaPreviewUrl(item, false)} className="media-preview" muted autoPlay loop playsInline preload="metadata" />
                                     )
                                  ) : (
-                                    <audio src={`${API_BASE_URL}/api/media/preview/storage/${item.file_id}`} className="media-preview" controls />
+                                    <audio src={getMediaPreviewUrl(item, false)} className="media-preview" controls />
                                  )}
                                 <div className="bot-card-header" style={{padding: 0, marginBottom: 0}}><h3 style={{fontSize: '1.1rem'}}>{item.file_name}</h3></div>
                             </div>
