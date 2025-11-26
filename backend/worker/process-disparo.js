@@ -736,16 +736,29 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 let fileId = actionData.fileId || actionData.file_id || actionData.imageUrl || actionData.videoUrl || actionData.audioUrl;
                 const caption = await replaceVariables(actionData.caption || '', variables);
                 
-                // Se tem mediaLibraryId, buscar da biblioteca
+                // Se tem mediaLibraryId, buscar da biblioteca (ou usar dados do cache se disponíveis)
                 let media = null;
                 if (actionData.mediaLibraryId && !fileId) {
-                    const [mediaResult] = await sqlWithRetry(
-                        'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE id = $1 LIMIT 1',
-                        [actionData.mediaLibraryId]
-                    );
-                    if (mediaResult && mediaResult.file_id) {
-                        fileId = mediaResult.file_id;
-                        media = mediaResult;
+                    // Verificar se step já tem storageUrl (otimização - dados vêm do cache)
+                    if (action.storageUrl && action.storageType === 'r2') {
+                        // Usar storageUrl diretamente do step (cache hit - sem query ao banco!)
+                        media = {
+                            id: actionData.mediaLibraryId,
+                            storage_url: action.storageUrl,
+                            storage_type: 'r2',
+                            migration_status: action.migrationStatus || 'migrated'
+                        };
+                        fileId = null; // Não precisa buscar file_id
+                    } else {
+                        // Fallback: buscar do banco (mantém compatibilidade)
+                        const [mediaResult] = await sqlWithRetry(
+                            'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE id = $1 LIMIT 1',
+                            [actionData.mediaLibraryId]
+                        );
+                        if (mediaResult && mediaResult.file_id) {
+                            fileId = mediaResult.file_id;
+                            media = mediaResult;
+                        }
                     }
                 } else if (fileId) {
                     // Buscar mídia pelo file_id se não foi buscado por mediaLibraryId
@@ -761,12 +774,13 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     }
                 }
                 
-                if (fileId) {
+                // Processar envio de mídia (tanto com fileId quanto com media do cache)
+                if (fileId || media) {
                     let sent = false;
-                    const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                    const isLibraryFile = fileId ? (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC')) : (media && media.storage_type === 'r2');
                     
                     // Se tem mídia da biblioteca, tentar usar R2
-                    if (media && isLibraryFile) {
+                    if (media && (isLibraryFile || media.storage_type === 'r2')) {
                         // 1. Tentar usar storage_url se já está migrado
                         if (media.storage_url && media.storage_type === 'r2') {
                             try {
@@ -816,13 +830,27 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     
                     // 3. Fallback: método antigo
                     if (!sent) {
-                        if (isLibraryFile) {
-                            await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
-                        } else {
-                            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                            const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                            const timeout = action.type === 'video' ? 120000 : 60000;
-                            await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
+                        if (fileId) {
+                            const isLibraryFileFallback = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                            if (isLibraryFileFallback) {
+                                await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                            } else {
+                                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                const timeout = action.type === 'video' ? 120000 : 60000;
+                                await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
+                            }
+                        } else if (media && media.file_id) {
+                            // Se tem media mas não fileId, usar file_id da mídia
+                            const isLibraryFileFallback = media.file_id.startsWith('BAAC') || media.file_id.startsWith('AgAC') || media.file_id.startsWith('AwAC');
+                            if (isLibraryFileFallback) {
+                                await sendMediaAsProxy(botToken, chatId, media.file_id, action.type, caption);
+                            } else {
+                                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                const timeout = action.type === 'video' ? 120000 : 60000;
+                                await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: media.file_id, caption, parse_mode: 'HTML' }, { timeout });
+                            }
                         }
                     }
                 }

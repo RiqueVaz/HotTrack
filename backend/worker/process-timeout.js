@@ -405,9 +405,19 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
             }
         }
         
-        // Buscar mídia no banco para verificar se tem storage_url
+        // Buscar mídia no banco para verificar se tem storage_url (ou usar dados do cache se disponíveis)
         let media = null;
-        if (sellerId) {
+        // Verificar se node já tem storageUrl (otimização - dados vêm do cache/step processado)
+        if (nodeData.storageUrl && nodeData.storageType === 'r2') {
+            // Usar dados já disponíveis no node (cache hit - sem query ao banco!)
+            media = {
+                id: nodeData.mediaLibraryId,
+                storage_url: nodeData.storageUrl,
+                storage_type: 'r2',
+                migration_status: nodeData.migrationStatus || 'migrated'
+            };
+        } else if (sellerId) {
+            // Fallback: buscar do banco (mantém compatibilidade)
             try {
                 const [mediaResult] = await sqlWithRetry(
                     'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
