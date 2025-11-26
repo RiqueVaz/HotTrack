@@ -15,6 +15,7 @@ const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
+const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
 
 // Inicializar QStash client para delays longos
 const qstashClient = new Client({
@@ -736,27 +737,93 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 const caption = await replaceVariables(actionData.caption || '', variables);
                 
                 // Se tem mediaLibraryId, buscar da biblioteca
+                let media = null;
                 if (actionData.mediaLibraryId && !fileId) {
-                    const [media] = await sqlWithRetry(
-                        'SELECT file_id FROM media_library WHERE id = $1 LIMIT 1',
+                    const [mediaResult] = await sqlWithRetry(
+                        'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE id = $1 LIMIT 1',
                         [actionData.mediaLibraryId]
                     );
-                    if (media && media.file_id) {
-                        fileId = media.file_id;
+                    if (mediaResult && mediaResult.file_id) {
+                        fileId = mediaResult.file_id;
+                        media = mediaResult;
+                    }
+                } else if (fileId) {
+                    // Buscar mídia pelo file_id se não foi buscado por mediaLibraryId
+                    const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                    if (isLibraryFile && sellerId) {
+                        const [mediaResult] = await sqlWithRetry(
+                            'SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+                            [fileId, sellerId]
+                        );
+                        if (mediaResult) {
+                            media = mediaResult;
+                        }
                     }
                 }
                 
                 if (fileId) {
+                    let sent = false;
                     const isLibraryFile = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
-                    if (isLibraryFile) {
-                        // Arquivos da biblioteca têm file_id do bot de storage, então sempre precisam usar proxy
-                        // Não tentar file_id direto pois não funcionará com o bot do usuário
-                        await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
-                    } else {
-                        const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                        const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                        const timeout = action.type === 'video' ? 120000 : 60000;
-                        await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
+                    
+                    // Se tem mídia da biblioteca, tentar usar R2
+                    if (media && isLibraryFile) {
+                        // 1. Tentar usar storage_url se já está migrado
+                        if (media.storage_url && media.storage_type === 'r2') {
+                            try {
+                                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                const timeout = action.type === 'video' ? 120000 : 60000;
+                                await sendTelegramRequest(botToken, method, { 
+                                    chat_id: chatId, 
+                                    [field]: media.storage_url, 
+                                    caption, 
+                                    parse_mode: 'HTML' 
+                                }, { timeout });
+                                sent = true;
+                            } catch (urlError) {
+                                console.warn(`[Disparo Media] Erro ao enviar via R2 URL:`, urlError.message);
+                            }
+                        }
+                        
+                        // 2. Se não enviou e não está migrado, tentar migrar sob demanda
+                        if (!sent && media.storage_type === 'telegram' && media.migration_status !== 'migrated' && sellerId) {
+                            try {
+                                console.log(`[Disparo Media] Migrando mídia ${media.id} sob demanda...`);
+                                await migrateMediaOnDemand(media.id);
+                                
+                                const [migratedMedia] = await sqlWithRetry(
+                                    'SELECT storage_url FROM media_library WHERE id = $1',
+                                    [media.id]
+                                );
+                                
+                                if (migratedMedia?.storage_url) {
+                                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                    const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                    const timeout = action.type === 'video' ? 120000 : 60000;
+                                    await sendTelegramRequest(botToken, method, { 
+                                        chat_id: chatId, 
+                                        [field]: migratedMedia.storage_url, 
+                                        caption, 
+                                        parse_mode: 'HTML' 
+                                    }, { timeout });
+                                    sent = true;
+                                }
+                            } catch (migrationError) {
+                                console.error(`[Disparo Media] Erro na migração sob demanda:`, migrationError.message);
+                            }
+                        }
+                    }
+                    
+                    // 3. Fallback: método antigo
+                    if (!sent) {
+                        if (isLibraryFile) {
+                            await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                        } else {
+                            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                            const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                            const timeout = action.type === 'video' ? 120000 : 60000;
+                            await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
+                        }
                     }
                 }
             } else if (action.type === 'delay') {
