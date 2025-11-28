@@ -1507,13 +1507,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [transaction] = await sqlTx`
                         SELECT * FROM pix_transactions 
                         WHERE click_id_internal = ${click.id}
-                        ORDER BY 
-                            CASE status
-                                WHEN 'pending' THEN 1
-                                WHEN 'paid' THEN 2
-                                ELSE 3
-                            END,
-                            created_at DESC
+                        ORDER BY created_at DESC
                         LIMIT 1
                     `;
                     
