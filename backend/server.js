@@ -7067,7 +7067,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Buscar click
                     const [click] = await sqlTx`
-                        SELECT id FROM clicks 
+                        SELECT id, checkout_id FROM clicks 
                         WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
                     `;
                     
@@ -7075,14 +7075,35 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error(`Click não encontrado para click_id: ${variables.click_id}`);
                     }
                     
-                    // Buscar PIX mais recente do click_id, independente de status
-                    // Independente de ser do checkout ou do fluxo
-                    const [transaction] = await sqlTx`
-                        SELECT * FROM pix_transactions 
-                        WHERE click_id_internal = ${click.id}
-                        ORDER BY created_at DESC
-                        LIMIT 1
-                    `;
+                    let transaction = null;
+                    
+                    // Se o click tem checkout_id, buscar apenas PIX desse checkout
+                    if (click.checkout_id) {
+                        logger.debug(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id}. Buscando PIX específico do checkout.`);
+                        
+                        [transaction] = await sqlTx`
+                            SELECT * FROM pix_transactions 
+                            WHERE click_id_internal = ${click.id}
+                              AND checkout_id = ${click.checkout_id}
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        `;
+                        
+                        if (!transaction) {
+                            logger.debug(`${logPrefix} [action_check_pix] Nenhum PIX encontrado para checkout ${click.checkout_id}. Retornando pending.`);
+                            return 'pending';
+                        }
+                    } else {
+                        // Não tem checkout_id, buscar qualquer PIX do click_id
+                        logger.debug(`${logPrefix} [action_check_pix] Click não tem checkout_id. Buscando qualquer PIX do click_id.`);
+                        
+                        [transaction] = await sqlTx`
+                            SELECT * FROM pix_transactions 
+                            WHERE click_id_internal = ${click.id}
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        `;
+                    }
                     
                     if (!transaction) {
                         throw new Error("Nenhuma transação PIX encontrada para este click_id.");
@@ -12023,6 +12044,14 @@ app.post('/api/oferta/generate-pix', async (req, res) => {
             pixIpAddress,
             click.id
         );
+
+        // Atualizar checkout_id na transação PIX
+        await sqlTx`
+            UPDATE pix_transactions 
+            SET checkout_id = ${checkoutId}
+            WHERE id = ${pixResult.internal_transaction_id}
+        `;
+        console.log(`[Checkout PIX] checkout_id ${checkoutId} salvo na transação PIX ${pixResult.internal_transaction_id}`);
 
         // 3) Disparar eventos pós-geração de PIX
         const customerDataForUtmify = customer || { name: "Cliente Interessado", email: "cliente@email.com" };
