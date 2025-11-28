@@ -7835,7 +7835,6 @@ function generatePreviewHTML(data) {
                             <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                                 {disparoProgress.status === 'COMPLETED' ? '✓ Disparo Finalizado' :
                                  disparoProgress.status === 'FAILED' ? '✗ Disparo Falhou' :
-                                 disparoProgress.current_step === 'hygienizing' ? '🔍 Higienizando Contatos' : 
                                  disparoProgress.current_step === 'sending' ? '📤 Executando Disparos' :
                                  '⏳ Processando Disparo'}
                             </h3>
@@ -7862,24 +7861,16 @@ function generatePreviewHTML(data) {
                                         width: '12px',
                                         height: '12px',
                                         borderRadius: '50%',
-                                        background: disparoProgress.current_step === 'hygienizing' 
-                                            ? 'var(--accent-primary)' 
-                                            : disparoProgress.current_step === 'sending'
+                                        background: disparoProgress.current_step === 'sending'
                                             ? 'var(--accent-secondary)'
                                             : 'var(--text-secondary)',
                                         animation: disparoProgress.status !== 'PENDING' ? 'pulse 2s infinite' : 'none'
                                     }}></div>
                                     <strong style={{ color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                                        {disparoProgress.current_step === 'hygienizing' ? 'Etapa 1: Higienizando Contatos' :
-                                         disparoProgress.current_step === 'sending' ? 'Etapa 2: Executando Disparos' :
+                                        {disparoProgress.current_step === 'sending' ? 'Executando Disparos' :
                                          'Aguardando início...'}
                                     </strong>
                                 </div>
-                                {disparoProgress.current_step === 'hygienizing' && (
-                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, marginLeft: '1.75rem' }}>
-                                        Validando contatos ativos e removendo inativos...
-                                    </p>
-                                )}
                                 {disparoProgress.current_step === 'sending' && (
                                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, marginLeft: '1.75rem' }}>
                                         Enviando mensagens para os contatos válidos...
@@ -7923,75 +7914,8 @@ function generatePreviewHTML(data) {
                             </div>
                         )}
                         
-                        {/* Barras de Progresso Separadas */}
+                        {/* Barra de Progresso */}
                         <div style={{ marginBottom: '1rem' }}>
-                            {/* Barra de Higienização */}
-                            {disparoProgress.current_step === 'hygienizing' && (
-                                <div style={{ marginBottom: '0.75rem' }}>
-                                    <div style={{ 
-                                        display: 'flex', 
-                                        justifyContent: 'space-between', 
-                                        alignItems: 'center', 
-                                        marginBottom: '0.5rem' 
-                                    }}>
-                                        <span style={{ 
-                                            fontSize: '0.85rem', 
-                                            color: 'var(--text-secondary)', 
-                                            fontWeight: '500' 
-                                        }}>
-                                            Higienizando Contatos
-                                        </span>
-                                        <span style={{ 
-                                            fontSize: '0.85rem', 
-                                            color: 'var(--text-primary)', 
-                                            fontWeight: '600' 
-                                        }}>
-                                            {(() => {
-                                                const hygieneProgress = disparoProgress.total_contacts > 0
-                                                    ? Math.round((disparoProgress.processed_contacts / disparoProgress.total_contacts) * 100)
-                                                    : 0;
-                                                return `${hygieneProgress}%`;
-                                            })()}
-                                        </span>
-                                    </div>
-                                    <div style={{
-                                        width: '100%',
-                                        height: '28px',
-                                        background: 'var(--bg-secondary)',
-                                        borderRadius: '14px',
-                                        overflow: 'hidden',
-                                        position: 'relative'
-                                    }}>
-                                        <div style={{
-                                            height: '100%',
-                                            width: `${(() => {
-                                                const hygieneProgress = disparoProgress.total_contacts > 0
-                                                    ? Math.round((disparoProgress.processed_contacts / disparoProgress.total_contacts) * 100)
-                                                    : 0;
-                                                return hygieneProgress;
-                                            })()}%`,
-                                            background: disparoProgress.status === 'FAILED' 
-                                                ? 'var(--danger)' 
-                                                : 'linear-gradient(90deg, #059669, #10b981)',
-                                            transition: 'width 0.3s ease',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: 'white',
-                                            fontSize: '0.8rem',
-                                            fontWeight: '600'
-                                        }}>
-                                            {(() => {
-                                                const hygieneProgress = disparoProgress.total_contacts > 0
-                                                    ? Math.round((disparoProgress.processed_contacts / disparoProgress.total_contacts) * 100)
-                                                    : 0;
-                                                return `${hygieneProgress}%`;
-                                            })()}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                            
                             {/* Barra de Envio */}
                             {disparoProgress.current_step === 'sending' && (
                                 <div style={{ marginBottom: '0.75rem' }}>
@@ -8094,19 +8018,12 @@ function generatePreviewHTML(data) {
                         <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
                             <strong>Status:</strong> {
                                 disparoProgress.status === 'PENDING' ? 'Aguardando início...' :
-                                disparoProgress.status === 'HYGIENIZING' ? 'Higienizando contatos...' :
                                 disparoProgress.status === 'RUNNING' ? 'Enviando mensagens...' :
                                 disparoProgress.status === 'COMPLETED' ? 'Concluído!' :
                                 disparoProgress.status === 'FAILED' ? 'Falhou' :
                                 'Processando...'
                             }
                         </p>
-                        
-                        {disparoProgress.current_step === 'hygienizing' && (
-                            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                                <strong>Progresso:</strong> {disparoProgress.processed_contacts || 0} de {disparoProgress.total_contacts || 0} contatos processados
-                            </p>
-                        )}
                         
                         {disparoProgress.current_step === 'sending' && (
                             <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
@@ -8195,7 +8112,6 @@ function generatePreviewHTML(data) {
             RUNNING: { background: '#1d4ed8', color: '#dbeafe' },
             COMPLETED: { background: '#166534', color: '#dcfce7' },
             FAILED: { background: '#991b1b', color: '#fee2e2' },
-            HYGIENIZING: { background: '#059669', color: '#d1fae5' },
             CANCELLED: { background: '#6b7280', color: '#f3f4f6' }
         };
         const labels = {
@@ -8204,7 +8120,6 @@ function generatePreviewHTML(data) {
             RUNNING: 'Em Execução',
             COMPLETED: 'Concluído',
             FAILED: 'Falhou',
-            HYGIENIZING: 'Higienizando',
             CANCELLED: 'Cancelado'
         };
         return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{labels[status] || status}</span>
@@ -8344,7 +8259,7 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                    {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
+                                                    {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
@@ -8360,59 +8275,10 @@ function generatePreviewHTML(data) {
                                                 </div>
                                             </td>
                                         </tr>
-                                        {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
+                                        {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                             <tr>
                                                 <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
                                                     <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                                                        {/* Barra de Higienização */}
-                                                        {(item.status === 'HYGIENIZING' || item.current_step === 'hygienizing') && (
-                                                            <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
-                                                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                                                                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                                                        <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
-                                                                            Higienizando Contatos:
-                                                                        </span>
-                                                                        <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
-                                                                            {item.processed_contacts || 0} de {item.total_contacts || item.total_jobs || 0} processados
-                                                                        </span>
-                                                                    </div>
-                                                                    <span style={{
-                                                                        fontWeight: '700', 
-                                                                        fontSize: '0.9rem',
-                                                                        color: '#10b981',
-                                                                        textShadow: '0 0 8px rgba(16, 185, 129, 0.4)'
-                                                                    }}>
-                                                                        {(() => {
-                                                                            const total = item.total_contacts || item.total_jobs || 0;
-                                                                            const processed = item.processed_contacts || 0;
-                                                                            return total > 0 ? Math.round((processed / total) * 100) : 0;
-                                                                        })()}%
-                                                                    </span>
-                                                                </div>
-                                                                <div style={{
-                                                                    width: '100%',
-                                                                    height: '12px',
-                                                                    background: 'rgba(15, 23, 42, 0.6)',
-                                                                    borderRadius: '6px',
-                                                                    overflow: 'hidden',
-                                                                    position: 'relative',
-                                                                    border: '1px solid rgba(16, 185, 129, 0.2)',
-                                                                    boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
-                                                                }}>
-                                                                    <div style={{
-                                                                        height: '100%',
-                                                                        width: `${(() => {
-                                                                            const total = item.total_contacts || item.total_jobs || 0;
-                                                                            const processed = item.processed_contacts || 0;
-                                                                            return total > 0 ? Math.round((processed / total) * 100) : 0;
-                                                                        })()}%`,
-                                                                        background: 'linear-gradient(90deg, #059669 0%, #10b981 50%, #34d399 100%)',
-                                                                        transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-                                                                        borderRadius: '6px',
-                                                                        boxShadow: '0 0 12px rgba(16, 185, 129, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
-                                                                        position: 'relative',
-                                                                        overflow: 'hidden'
-                                                                    }}>
                                                                         <div style={{
                                                                             position: 'absolute',
                                                                             top: 0,
@@ -8703,7 +8569,6 @@ function generatePreviewHTML(data) {
                 COMPLETED: { background: '#166534', color: '#dcfce7' },
                 FAILED: { background: '#991b1b', color: '#fee2e2' },
                 CANCELLED: { background: '#6b7280', color: '#f3f4f6' },
-                HYGIENIZING: { background: '#059669', color: '#d1fae5' }
             };
             const labels = {
                 PENDING: 'Pendente',
@@ -8712,7 +8577,6 @@ function generatePreviewHTML(data) {
                 COMPLETED: 'Concluído',
                 FAILED: 'Falhou',
                 CANCELLED: 'Cancelado',
-                HYGIENIZING: 'Higienizando'
             };
             return <span style={{...styles[status], padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '600'}}>{labels[status] || status}</span>
         }
@@ -8769,7 +8633,7 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                    {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
+                                                    {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
@@ -8785,59 +8649,10 @@ function generatePreviewHTML(data) {
                                                 </div>
                                             </td>
                                         </tr>
-                                        {(item.status === 'RUNNING' || item.status === 'PENDING' || item.status === 'HYGIENIZING') && (
+                                        {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                             <tr>
                                                 <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
                                                     <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                                                        {/* Barra de Higienização */}
-                                                        {(item.status === 'HYGIENIZING' || item.current_step === 'hygienizing') && (
-                                                            <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
-                                                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                                                                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                                                        <span style={{fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '500'}}>
-                                                                            Higienizando Contatos:
-                                                                        </span>
-                                                                        <span style={{fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: '600'}}>
-                                                                            {item.processed_contacts || 0} de {item.total_contacts || item.total_jobs || 0} processados
-                                                                        </span>
-                                                                    </div>
-                                                                    <span style={{
-                                                                        fontWeight: '700', 
-                                                                        fontSize: '0.9rem',
-                                                                        color: '#10b981',
-                                                                        textShadow: '0 0 8px rgba(16, 185, 129, 0.4)'
-                                                                    }}>
-                                                                        {(() => {
-                                                                            const total = item.total_contacts || item.total_jobs || 0;
-                                                                            const processed = item.processed_contacts || 0;
-                                                                            return total > 0 ? Math.round((processed / total) * 100) : 0;
-                                                                        })()}%
-                                                                    </span>
-                                                                </div>
-                                                                <div style={{
-                                                                    width: '100%',
-                                                                    height: '12px',
-                                                                    background: 'rgba(15, 23, 42, 0.6)',
-                                                                    borderRadius: '6px',
-                                                                    overflow: 'hidden',
-                                                                    position: 'relative',
-                                                                    border: '1px solid rgba(16, 185, 129, 0.2)',
-                                                                    boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.3)'
-                                                                }}>
-                                                                    <div style={{
-                                                                        height: '100%',
-                                                                        width: `${(() => {
-                                                                            const total = item.total_contacts || item.total_jobs || 0;
-                                                                            const processed = item.processed_contacts || 0;
-                                                                            return total > 0 ? Math.round((processed / total) * 100) : 0;
-                                                                        })()}%`,
-                                                                        background: 'linear-gradient(90deg, #059669 0%, #10b981 50%, #34d399 100%)',
-                                                                        transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-                                                                        borderRadius: '6px',
-                                                                        boxShadow: '0 0 12px rgba(16, 185, 129, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
-                                                                        position: 'relative',
-                                                                        overflow: 'hidden'
-                                                                    }}>
                                                                         <div style={{
                                                                             position: 'absolute',
                                                                             top: 0,

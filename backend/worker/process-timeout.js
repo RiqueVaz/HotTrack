@@ -217,6 +217,23 @@ const normalizeChatIdentifier = (value) => {
     return trimmed;
 };
 
+// Função helper para marcar bloqueio na tabela bot_blocks
+async function markBotBlockedInDb(botId, chatId, sellerId) {
+    try {
+        await sqlWithRetry(
+            sqlTx`INSERT INTO bot_blocks (bot_id, chat_id, seller_id, detected_at, last_verified_at)
+                  VALUES (${botId}, ${chatId}, ${sellerId}, NOW(), NOW())
+                  ON CONFLICT (bot_id, chat_id) 
+                  DO UPDATE SET last_verified_at = NOW()`
+        );
+        // Também atualizar cache em memória (opcional, para performance)
+        const dbCache = require('../shared/db-cache');
+        dbCache.markBotBlocked(botId, chatId);
+    } catch (error) {
+        console.error(`[Bot Blocks] Erro ao marcar bloqueio: ${error.message}`);
+    }
+}
+
 async function sendTelegramRequest(botToken, method, data, options = {}, retries = 3, delay = 1500, botId = null) {
     const { headers = {}, responseType = 'json', timeout = 30000 } = options;
     const apiUrl = `https://api.telegram.org/bot${botToken}/${method}`;
@@ -241,6 +258,19 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     for (let i = 0; i < retries; i++) {
         try {
             const response = await axios.post(apiUrl, data, { headers, responseType, timeout });
+            // Se mensagem foi enviada com sucesso, verificar se havia bloqueio e remover
+            if (response.data && response.data.ok && chatId && chatId !== 'unknown' && botId) {
+                try {
+                    await sqlWithRetry(
+                        sqlTx`DELETE FROM bot_blocks WHERE bot_id = ${botId} AND chat_id = ${chatId}`
+                    );
+                    const dbCache = require('../shared/db-cache');
+                    dbCache.unmarkBotBlocked(botId, chatId);
+                } catch (unblockError) {
+                    // Não crítico, apenas logar
+                    console.debug(`[Bot Blocks] Erro ao remover bloqueio (não crítico): ${unblockError.message}`);
+                }
+            }
             return response.data;
         } catch (error) {
             const errorChatId = data?.chat_id || 'unknown';
@@ -250,10 +280,21 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 const dbCache = require('../shared/db-cache');
                 const description = error.response?.data?.description || 'Forbidden: bot was blocked by the user';
                 
-                // MARCAR NO CACHE QUANDO RECEBER 403
+                // MARCAR NO CACHE E NA TABELA QUANDO RECEBER 403
                 if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
                     if (botId) {
                         dbCache.markBotBlocked(botId, errorChatId);
+                        // Buscar seller_id do bot e inserir na tabela
+                        try {
+                            const [bot] = await sqlWithRetry(
+                                sqlTx`SELECT seller_id FROM telegram_bots WHERE id = ${botId}`
+                            );
+                            if (bot) {
+                                await markBotBlockedInDb(botId, errorChatId, bot.seller_id);
+                            }
+                        } catch (dbError) {
+                            console.warn(`[Bot Blocks] Erro ao buscar seller_id para bot ${botId}: ${dbError.message}`);
+                        }
                     } else {
                         dbCache.markBotTokenBlocked(botToken, errorChatId);
                     }
