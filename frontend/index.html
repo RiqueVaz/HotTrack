@@ -4093,7 +4093,21 @@
                 const container = document.getElementById('hotbot-container');
                 if (container) {
                     if (window.hotBotRoot) window.hotBotRoot.unmount();
-                    launchHotBot(container);
+                    // Verificar se launchHotBot está disponível (pode estar em script separado)
+                    if (typeof launchHotBot === 'function') {
+                        launchHotBot(container);
+                    } else if (window.launchHotBot) {
+                        window.launchHotBot(container);
+                    } else {
+                        console.warn('launchHotBot não está disponível. Aguardando carregamento...');
+                        setTimeout(() => {
+                            if (typeof launchHotBot === 'function') {
+                                launchHotBot(container);
+                            } else if (window.launchHotBot) {
+                                window.launchHotBot(container);
+                            }
+                        }, 100);
+                    }
                 }
             } 
             // Lógica de inicialização das outras páginas
@@ -5853,7 +5867,7 @@ function generatePreviewHTML(data) {
     // ==========================================================
 // == LÓGICA DO HOTBOT (COMPONENTES E ESTILOS PADRONIZADOS) ==
     // ==========================================================
-    function launchHotBot(containerElement) {
+    window.launchHotBot = function launchHotBot(containerElement) {
         const { useState, useCallback, useEffect, useRef, useMemo } = window.React;
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
@@ -8279,20 +8293,6 @@ function generatePreviewHTML(data) {
                                             <tr>
                                                 <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
                                                     <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                                                                        <div style={{
-                                                                            position: 'absolute',
-                                                                            top: 0,
-                                                                            left: '-100%',
-                                                                            width: '100%',
-                                                                            height: '100%',
-                                                                            background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
-                                                                            animation: 'shimmer 2s infinite'
-                                                                        }}></div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                        
                                                         {/* Barra de Envio */}
                                                         {(item.status === 'RUNNING' && (item.current_step === 'sending' || !item.current_step)) && (
                                                             <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
@@ -8653,20 +8653,6 @@ function generatePreviewHTML(data) {
                                             <tr>
                                                 <td colSpan="7" style={{padding: '0.75rem 1rem', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%)', borderTop: '1px solid rgba(56, 189, 248, 0.1)'}}>
                                                     <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                                                                        <div style={{
-                                                                            position: 'absolute',
-                                                                            top: 0,
-                                                                            left: '-100%',
-                                                                            width: '100%',
-                                                                            height: '100%',
-                                                                            background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent)',
-                                                                            animation: 'shimmer 2s infinite'
-                                                                        }}></div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                        
                                                         {/* Barra de Envio */}
                                                         {(item.status === 'RUNNING' && (item.current_step === 'sending' || !item.current_step)) && (
                                                             <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
