@@ -858,6 +858,42 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
 }
 
 /**
+ * Extrai checkoutId de uma URL de checkout
+ * @param {string} url - URL que pode conter /oferta/cko_xxx
+ * @returns {string|null} - checkoutId ou null se não for checkout
+ */
+function extractCheckoutIdFromUrl(url) {
+    try {
+        const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+        const pathMatch = urlObj.pathname.match(/\/oferta\/(cko_[a-f0-9-]+)/i);
+        return pathMatch ? pathMatch[1] : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Parse JSON field helper
+ */
+function parseJsonField(value, context) {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    if (typeof value === 'object') {
+        return value;
+    }
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value);
+        } catch (error) {
+            console.error(`[JSON] Falha ao converter ${context}:`, error);
+            throw new Error(`JSON_PARSE_ERROR_${context}`);
+        }
+    }
+    return value;
+}
+
+/**
  * =================================================================
  * FUNÇÃO 'processActions' (O EXECUTOR) - VERSÃO NOVA
  * =================================================================
@@ -889,6 +925,25 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         const btnText = await replaceVariables(actionData.buttonText, variables);
                         let btnUrl = await replaceVariables(actionData.buttonUrl, variables);
                         
+                        // Se a URL for um checkout ou thank you page e tivermos click_id, adiciona como parâmetro
+                        if (variables.click_id && (btnUrl.includes('/oferta/') || btnUrl.includes('/obrigado/'))) {
+                            try {
+                                // Adiciona protocolo se não existir
+                                const urlWithProtocol = btnUrl.startsWith('http') ? btnUrl : `https://${btnUrl}`;
+                                const urlObj = new URL(urlWithProtocol);
+                                // Remove prefixo '/start ' se existir
+                                const cleanClickId = variables.click_id.replace('/start ', '');
+                                urlObj.searchParams.set('click_id', cleanClickId);
+                                btnUrl = urlObj.toString();
+                                
+                                // Log apropriado baseado no tipo de URL
+                                const urlType = btnUrl.includes('/obrigado/') ? 'thank you page' : 'checkout hospedado';
+                                console.log(`${logPrefix} [Flow Message] Adicionando click_id ${cleanClickId} ao botão de ${urlType}`);
+                            } catch (urlError) {
+                                console.error(`${logPrefix} [Flow Message] Erro ao processar URL: ${urlError.message}`);
+                            }
+                        }
+                        
                         // Converter HTTP para HTTPS (Telegram não aceita HTTP)
                         if (btnUrl.startsWith('http://')) {
                             btnUrl = btnUrl.replace('http://', 'https://');
@@ -905,6 +960,125 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 }
                             } catch (urlError) {
                                 console.warn(`${logPrefix} [Flow Message] Erro ao substituir localhost na URL: ${urlError.message}`);
+                            }
+                        }
+                        
+                        // Gerar PIX automático se for checkout e usuário ainda não acessou
+                        if (btnUrl.includes('/oferta/')) {
+                            try {
+                                const checkoutId = extractCheckoutIdFromUrl(btnUrl);
+                                if (checkoutId && variables.click_id) {
+                                    console.log(`${logPrefix} [Checkout Auto-PIX] Detectado checkout ${checkoutId} no botão. Verificando se deve gerar PIX...`);
+                                    
+                                    // Buscar click atual
+                                    const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                                    
+                                    if (click) {
+                                        // Verificar se click já tem checkout_id (usuário já acessou checkout)
+                                        if (!click.checkout_id) {
+                                            // Usuário ainda não acessou checkout, verificar PIX pendente
+                                            const [existingPendingPix] = await sqlTx`
+                                                SELECT * FROM pix_transactions 
+                                                WHERE click_id_internal = ${click.id} 
+                                                  AND status = 'pending'
+                                                ORDER BY created_at DESC 
+                                                LIMIT 1
+                                            `;
+                                            
+                                            if (existingPendingPix) {
+                                                // Já existe PIX pendente, usar esse
+                                                console.log(`${logPrefix} [Checkout Auto-PIX] PIX pendente já existe (${existingPendingPix.provider_transaction_id}). Usando existente.`);
+                                                variables.last_transaction_id = existingPendingPix.provider_transaction_id;
+                                                
+                                                // Atualizar last_transaction_id no banco
+                                                if (click.click_id) {
+                                                    await sqlTx`
+                                                        UPDATE telegram_chats 
+                                                        SET last_transaction_id = ${existingPendingPix.provider_transaction_id}
+                                                        WHERE click_id = ${click.click_id} 
+                                                          AND bot_id IN (SELECT id FROM telegram_bots WHERE seller_id = ${sellerId})
+                                                    `;
+                                                }
+                                            } else {
+                                                // Não existe PIX pendente, gerar novo
+                                                console.log(`${logPrefix} [Checkout Auto-PIX] Gerando PIX automático para checkout ${checkoutId}...`);
+                                                
+                                                // Buscar configuração do checkout
+                                                const [hostedCheckout] = await sqlTx`
+                                                    SELECT seller_id, config 
+                                                    FROM hosted_checkouts 
+                                                    WHERE id = ${checkoutId}
+                                                `;
+                                                
+                                                if (hostedCheckout && hostedCheckout.seller_id === sellerId) {
+                                                    try {
+                                                        const checkoutConfig = parseJsonField(hostedCheckout.config, `hosted_checkouts:${checkoutId}`);
+                                                        const firstPackage = checkoutConfig?.pricing?.packages?.[0];
+                                                        const value_cents = firstPackage?.value_cents || 100; // Valor mínimo R$ 1,00
+                                                        
+                                                        const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                                                        if (seller && seller.api_key) {
+                                                            const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                                                            const ip_address = click.ip_address;
+                                                            
+                                                            const pixResult = await generatePixWithFallback(
+                                                                seller,
+                                                                value_cents,
+                                                                hostPlaceholder,
+                                                                seller.api_key,
+                                                                ip_address,
+                                                                click.id
+                                                            );
+                                                            
+                                                            console.log(`${logPrefix} [Checkout Auto-PIX] PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                                                            
+                                                            // Atualizar variáveis e banco
+                                                            variables.last_transaction_id = pixResult.transaction_id;
+                                                            if (click.click_id) {
+                                                                await sqlTx`
+                                                                    UPDATE telegram_chats 
+                                                                    SET last_transaction_id = ${pixResult.transaction_id}
+                                                                    WHERE click_id = ${click.click_id} 
+                                                                      AND bot_id IN (SELECT id FROM telegram_bots WHERE seller_id = ${sellerId})
+                                                                `;
+                                                            }
+                                                            
+                                                            // Enviar eventos
+                                                            await sendMetaEventShared({
+                                                                eventName: 'InitiateCheckout',
+                                                                clickData: { ...click, checkout_id: checkoutId },
+                                                                transactionData: { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 },
+                                                                customerData: null,
+                                                                sqlTx: sqlTx
+                                                            });
+                                                            
+                                                            await sendEventToUtmifyShared({
+                                                                status: 'waiting_payment',
+                                                                clickData: { ...click, checkout_id: checkoutId },
+                                                                pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
+                                                                sellerData: seller,
+                                                                customerData: { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" },
+                                                                productData: { id: "prod_bot", name: checkoutConfig?.content?.main_title || "Produto (Checkout)" },
+                                                                sqlTx: sqlTx
+                                                            });
+                                                        }
+                                                    } catch (pixError) {
+                                                        console.error(`${logPrefix} [Checkout Auto-PIX] Erro ao gerar PIX automático:`, pixError.message);
+                                                        // Não falhar, continuar enviando mensagem
+                                                    }
+                                                } else {
+                                                    console.warn(`${logPrefix} [Checkout Auto-PIX] Checkout ${checkoutId} não encontrado ou não pertence ao seller ${sellerId}`);
+                                                }
+                                            }
+                                        } else {
+                                            console.log(`${logPrefix} [Checkout Auto-PIX] Click já tem checkout_id. Usuário provavelmente já acessou checkout. Não gerando PIX automático.`);
+                                        }
+                                    }
+                                }
+                            } catch (checkoutError) {
+                                console.error(`${logPrefix} [Checkout Auto-PIX] Erro ao processar checkout no botão:`, checkoutError.message);
+                                // Não falhar, continuar enviando mensagem
                             }
                         }
                         
