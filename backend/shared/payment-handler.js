@@ -42,9 +42,9 @@ async function handleSuccessfulPayment({
         
         const transaction = updateResult;
         logger.info(`[handleSuccessfulPayment] ===== PROCESSANDO PAGAMENTO TRANSACTION ${transaction_id} =====`);
-        logger.info(`[handleSuccessfulPayment] Valor: R$ ${parseFloat(transaction.pix_value).toFixed(2)}`);
-        logger.info(`[handleSuccessfulPayment] Status atualizado para: ${transaction.status}`);
-        logger.info(`[handleSuccessfulPayment] meta_event_id definido como: ${transaction.meta_event_id}`);
+        logger.debug(`[handleSuccessfulPayment] Valor: R$ ${parseFloat(transaction.pix_value).toFixed(2)}`);
+        logger.debug(`[handleSuccessfulPayment] Status atualizado para: ${transaction.status}`);
+        logger.debug(`[handleSuccessfulPayment] meta_event_id definido como: ${transaction.meta_event_id}`);
 
         // Notificação push (se configurada)
         if (adminSubscription && webpush) {
@@ -63,23 +63,23 @@ async function handleSuccessfulPayment({
         }
         
         // Buscar dados do clique e vendedor
-        logger.info(`[handleSuccessfulPayment] Buscando dados do clique (click_id_internal: ${transaction.click_id_internal})...`);
+        logger.debug(`[handleSuccessfulPayment] Buscando dados do clique (click_id_internal: ${transaction.click_id_internal})...`);
         const [click] = await sqlTx`SELECT * FROM clicks WHERE id = ${transaction.click_id_internal}`;
         if (!click) {
             logger.error(`[handleSuccessfulPayment] ✗ ERRO CRÍTICO: Clique não encontrado para transação ${transaction_id}`);
             logger.error(`[handleSuccessfulPayment] click_id_internal: ${transaction.click_id_internal}`);
             return;
         }
-        logger.info(`[handleSuccessfulPayment] ✓ Clique encontrado - ID: ${click.id}, pressel_id: ${click.pressel_id}, checkout_id: ${click.checkout_id}`);
+        logger.debug(`[handleSuccessfulPayment] ✓ Clique encontrado - ID: ${click.id}, pressel_id: ${click.pressel_id}, checkout_id: ${click.checkout_id}`);
         
-        logger.info(`[handleSuccessfulPayment] Buscando dados do vendedor (seller_id: ${click.seller_id})...`);
+        logger.debug(`[handleSuccessfulPayment] Buscando dados do vendedor (seller_id: ${click.seller_id})...`);
         const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${click.seller_id}`;
         if (!seller) {
             logger.error(`[handleSuccessfulPayment] ✗ ERRO CRÍTICO: Vendedor não encontrado para transação ${transaction_id}`);
             logger.error(`[handleSuccessfulPayment] seller_id: ${click.seller_id}`);
             return;
         }
-        logger.info(`[handleSuccessfulPayment] ✓ Vendedor encontrado - ID: ${seller.id}`);
+        logger.debug(`[handleSuccessfulPayment] ✓ Vendedor encontrado - ID: ${seller.id}`);
 
         const finalCustomerData = customerData || { name: "Cliente Pagante", document: null };
         const productData = { id: "prod_final", name: "Produto Vendido" };
@@ -87,7 +87,7 @@ async function handleSuccessfulPayment({
 
         // Enviar eventos (Utmify e Meta)
         // Se algum evento falhar, não abortar o processo (já marcamos como pago)
-        logger.info(`[handleSuccessfulPayment] Enviando evento para Utmify...`);
+        logger.debug(`[handleSuccessfulPayment] Enviando evento para Utmify...`);
         try {
             await sendEventToUtmify({
                 status: 'paid',
@@ -98,13 +98,13 @@ async function handleSuccessfulPayment({
                 productData: productData,
                 sqlTx: sqlTx
             });
-            logger.info(`[handleSuccessfulPayment] ✓ Evento Utmify enviado com sucesso`);
+            logger.debug(`[handleSuccessfulPayment] ✓ Evento Utmify enviado com sucesso`);
         } catch (error) {
             logger.error(`[handleSuccessfulPayment] ✗ Erro ao enviar evento Utmify:`, error.message);
             logger.error(`[handleSuccessfulPayment] Stack Utmify:`, error.stack);
         }
         
-        logger.info(`[handleSuccessfulPayment] Enviando evento Purchase para Meta...`);
+        logger.debug(`[handleSuccessfulPayment] Enviando evento Purchase para Meta...`);
         try {
             await sendMetaEvent({
                 eventName: 'Purchase',
@@ -112,7 +112,7 @@ async function handleSuccessfulPayment({
                 transactionData: transaction,
                 customerData: finalCustomerData
             });
-            logger.info(`[handleSuccessfulPayment] ✓ Chamada sendMetaEvent concluída`);
+            logger.debug(`[handleSuccessfulPayment] ✓ Chamada sendMetaEvent concluída`);
         } catch (error) {
             logger.error(`[handleSuccessfulPayment] ✗ Erro ao enviar evento Meta:`, error.message);
             logger.error(`[handleSuccessfulPayment] Stack Meta:`, error.stack);
@@ -120,12 +120,12 @@ async function handleSuccessfulPayment({
         
         // Verificar resultado final
         const [finalCheck] = await sqlTx`SELECT meta_event_id, status FROM pix_transactions WHERE id = ${transaction_id}`;
-        logger.info(`[handleSuccessfulPayment] Estado final - status: ${finalCheck?.status}, meta_event_id: ${finalCheck?.meta_event_id}`);
+        logger.debug(`[handleSuccessfulPayment] Estado final - status: ${finalCheck?.status}, meta_event_id: ${finalCheck?.meta_event_id}`);
         
         if (finalCheck?.meta_event_id) {
             const eventIdPattern = new RegExp(`^Purchase\\.${transaction_id}\\.[0-9]+$`);
             if (eventIdPattern.test(finalCheck.meta_event_id)) {
-                logger.info(`[handleSuccessfulPayment] ✓✓✓ Purchase enviado com SUCESSO para Meta! meta_event_id: ${finalCheck.meta_event_id}`);
+                logger.debug(`[handleSuccessfulPayment] ✓✓✓ Purchase enviado com SUCESSO para Meta! meta_event_id: ${finalCheck.meta_event_id}`);
             } else if (finalCheck.meta_event_id.includes('.processing')) {
                 logger.error(`[handleSuccessfulPayment] ⚠⚠⚠ PROBLEMA: Purchase NÃO foi enviado! meta_event_id ainda está como: ${finalCheck.meta_event_id}`);
             } else {
