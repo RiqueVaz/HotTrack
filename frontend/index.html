@@ -1242,14 +1242,161 @@
         .hotbot-scope .actions-panel::-webkit-scrollbar-thumb { background: var(--accent-primary); border-radius: 3px; }
         .hotbot-scope .actions-panel::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
         
+        /* Drawer backdrop */
+        .hotbot-scope .drawer-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+            display: none;
+        }
+        
+        .hotbot-scope .drawer-backdrop.active {
+            display: block;
+        }
+        
+        /* Botões de toggle para drawers (ocultos em desktop) */
+        .hotbot-scope .drawer-toggle-btn {
+            display: none;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            cursor: pointer;
+            padding: 0.5rem;
+            align-items: center;
+            justify-content: center;
+            min-width: 44px;
+            min-height: 44px;
+        }
+        
+        .hotbot-scope .drawer-toggle-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        
+        /* Media queries para responsividade do chat */
+        @media (max-width: 768px) {
+            .hotbot-scope .chat-container {
+                grid-template-columns: 1fr;
+                position: relative;
+                margin: 0 1rem 1rem 1rem !important;
+            }
+            
+            .hotbot-scope .conversations-panel {
+                position: fixed;
+                top: 0;
+                left: 0;
+                height: 100vh;
+                width: 85%;
+                max-width: 320px;
+                z-index: 1000;
+                background: var(--bg-secondary);
+                box-shadow: 2px 0 10px rgba(0, 0, 0, 0.3);
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                border-right: 1px solid var(--border-color);
+            }
+            
+            .hotbot-scope .conversations-panel.open {
+                transform: translateX(0);
+            }
+            
+            .hotbot-scope .contact-panel {
+                position: fixed;
+                top: 0;
+                right: 0;
+                left: auto;
+                height: 100vh;
+                width: 85%;
+                max-width: 320px;
+                z-index: 1000;
+                background: var(--bg-secondary);
+                box-shadow: -2px 0 10px rgba(0, 0, 0, 0.3);
+                transform: translateX(100%);
+                transition: transform 0.3s ease;
+                border-left: 1px solid var(--border-color);
+            }
+            
+            .hotbot-scope .contact-panel.open {
+                transform: translateX(0);
+            }
+            
+            .hotbot-scope .drawer-backdrop.active {
+                display: block;
+            }
+            
+            .hotbot-scope .drawer-toggle-btn {
+                display: flex;
+            }
+            
+            .hotbot-scope .chat-header {
+                padding: 0.75rem;
+            }
+            
+            .hotbot-scope .chat-header-actions {
+                display: flex;
+                gap: 0.5rem;
+            }
+            
+            .hotbot-scope .page-header {
+                padding: 1rem !important;
+                margin: 0 !important;
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .hotbot-scope .page-header .form-group,
+            .hotbot-scope .chat-bot-select {
+                min-width: auto !important;
+                width: 100%;
+            }
+            
+            .hotbot-scope .chat-container {
+                margin: 0 1rem 1rem 1rem !important;
+            }
+            
+            .hotbot-scope .chat-header h3 {
+                font-size: 1rem;
+            }
+            
+            .hotbot-scope .chat-input-form {
+                flex-wrap: wrap;
+            }
+            
+            .hotbot-scope .chat-input {
+                min-width: 0;
+                flex: 1 1 200px;
+            }
+            
+            .hotbot-scope .attach-btn {
+                min-width: 44px;
+                min-height: 44px;
+            }
+        }
+        
+        @media (max-width: 640px) {
+            .hotbot-scope .page-header {
+                padding: 0.75rem !important;
+            }
+            
+            .hotbot-scope .chat-container {
+                margin: 0 0.5rem 0.5rem 0.5rem !important;
+            }
+        }
+        
         /* Outros estilos do HotBot */
         .hotbot-scope .bot-card-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
         .hotbot-scope .bot-card-header h3 { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin:0; }
         .hotbot-scope .bot-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: auto; }
         .hotbot-scope .media-preview { width: 100%; height: 150px; object-fit: cover; border-radius: 0.5rem; margin-bottom: 1rem; background-color: var(--bg-primary); }
     
-        .hotbot-scope .login-overlay { position: fixed; inset: 0; background-color: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(8px); }
+        .hotbot-scope .login-overlay { position: fixed; inset: 0; background-color: rgba(15, 23, 42, 0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(8px); padding: 1rem; }
         .hotbot-scope .login-box { background-color: var(--bg-secondary); padding: 2rem; border-radius: 0.75rem; width: 100%; max-width: 420px; border: 1px solid var(--border-color); }
+        
+        .hotbot-scope .tag-manager-modal {
+            width: min(420px, 90%);
+        }
     
 
 	 .form-checkbox { accent-color: var(--accent-primary); }
@@ -1288,25 +1435,184 @@
         }
 
         /* Media queries para responsividade */
+        @media (max-width: 1024px) {
+            .hotbot-scope .page-header {
+                padding: 1.5rem 2rem !important;
+            }
+            
+            .hotbot-scope .grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 1rem;
+            }
+        }
+        
         @media (max-width: 768px) {
             .hotbot-nav-bar {
                 gap: 0.25rem;
+                padding: 0.5rem;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+            
+            .hotbot-nav-bar::-webkit-scrollbar {
+                display: none;
             }
             
             .hotbot-scope .nav-button {
                 padding: 0.5rem 1rem;
                 font-size: 0.875rem;
+                min-height: 44px;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+            
+            .hotbot-scope .nav-button span {
+                display: inline;
             }
             
             .hotbot-scope .page-header {
                 flex-direction: column;
                 gap: 1rem;
                 align-items: flex-start;
+                padding: 1rem !important;
             }
             
-            .hotbot-scope .grid {
-                grid-template-columns: 1fr;
+            .hotbot-scope .grid,
+            .grid {
+                grid-template-columns: 1fr !important;
                 gap: 1rem;
+            }
+            
+            .grid-cols-1.lg\\:grid-cols-3 {
+                grid-template-columns: 1fr !important;
+            }
+            
+            .lg\\:col-span-1,
+            .lg\\:col-span-2 {
+                grid-column: span 1 !important;
+            }
+            
+            .hotbot-scope .bot-card {
+                min-width: 0;
+            }
+            
+            .hotbot-scope .card {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            table {
+                min-width: 600px;
+            }
+            
+            .table-custom,
+            table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            .table-custom thead,
+            .table-custom tbody,
+            table thead,
+            table tbody {
+                display: table;
+                width: 100%;
+            }
+            
+            .table-custom th,
+            .table-custom td,
+            table th,
+            table td {
+                padding: 0.75rem 0.5rem;
+                font-size: 0.875rem;
+            }
+            
+            /* Paginação responsiva */
+            div[style*="justify-content: space-between"][style*="marginTop: '1.5rem'"] {
+                flex-direction: column !important;
+                gap: 0.75rem !important;
+                align-items: stretch !important;
+            }
+            
+            div[style*="justify-content: space-between"][style*="marginTop: '1.5rem'"] button {
+                width: 100% !important;
+            }
+            
+            .hotbot-scope .form-input,
+            .hotbot-scope .form-select,
+            .hotbot-scope .form-textarea {
+                min-height: 44px;
+                padding: 0.75rem;
+            }
+            
+            .hotbot-scope .form-group {
+                margin-bottom: 1rem;
+            }
+            
+            .hotbot-scope .btn {
+                min-height: 44px;
+                padding: 0.75rem 1rem;
+                touch-action: manipulation;
+            }
+            
+            .hotbot-scope .btn-sm {
+                min-height: 40px;
+                padding: 0.5rem 0.75rem;
+            }
+            
+            .hotbot-scope .modal.active {
+                padding: 1rem;
+            }
+            
+            .hotbot-scope .node-editor-modal,
+            .hotbot-scope .node-selector-modal,
+            .hotbot-scope .tag-manager-modal,
+            .hotbot-scope .login-box {
+                width: 100% !important;
+                max-width: 95% !important;
+                max-height: 95vh !important;
+                margin: 0.5rem;
+            }
+            
+            .hotbot-scope .node-editor-modal-header,
+            .hotbot-scope .node-selector-modal-header,
+            .hotbot-scope .tag-manager-header {
+                padding: 1rem;
+            }
+            
+            .hotbot-scope .node-editor-modal-content,
+            .hotbot-scope .node-selector-modal-content {
+                padding: 1rem;
+            }
+        }
+        
+        @media (max-width: 640px) {
+            .hotbot-scope .page-header {
+                padding: 0.75rem !important;
+            }
+            
+            .hotbot-nav-bar {
+                gap: 0.25rem;
+                padding: 0.5rem 0.25rem;
+            }
+            
+            .hotbot-scope .nav-button {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.8rem;
+                min-height: 44px;
+            }
+            
+            .hotbot-scope .nav-button span {
+                font-size: 0.75rem;
+            }
+            
+            .hotbot-scope .form-input,
+            .hotbot-scope .form-select,
+            .hotbot-scope .form-textarea {
+                font-size: 16px; /* Previne zoom no iOS */
             }
         }
     </style>
@@ -8731,6 +9037,8 @@ function generatePreviewHTML(data) {
         const [isLoadingTags, setIsLoadingTags] = useState(false);
         
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const [showConversationsDrawer, setShowConversationsDrawer] = useState(false);
+        const [showContactDrawer, setShowContactDrawer] = useState(false);
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
         const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
@@ -9119,6 +9427,10 @@ function generatePreviewHTML(data) {
         if (selectedChat?.chat_id !== user.chat_id) {
             setMessages([]);
             setSelectedChat(user);
+            // Fechar drawer de conversas em mobile ao selecionar
+            if (window.innerWidth <= 768) {
+                setShowConversationsDrawer(false);
+            }
         }
     }, [selectedChat]);
 
@@ -9339,11 +9651,33 @@ function generatePreviewHTML(data) {
                     </div>
                 )}
                 <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
-                    <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
+                    <div className="page-header" style={{padding: '2rem 3rem 2rem 3rem', margin: 0}}><h2>Chat ao Vivo</h2><div className="form-group chat-bot-select" style={{ marginBottom: 0, minWidth: '300px' }}><select id="botSelectChat" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione um Bot --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div></div>
+                    {(showConversationsDrawer || showContactDrawer) && (
+                        <div 
+                            className={`drawer-backdrop ${(showConversationsDrawer || showContactDrawer) ? 'active' : ''}`}
+                            onClick={() => {
+                                setShowConversationsDrawer(false);
+                                setShowContactDrawer(false);
+                            }}
+                        />
+                    )}
                     <div className="chat-container" style={{height: 'calc(100vh - 8.5rem)', margin: '0 3rem 2rem 3rem'}} >
-                        <div className="conversations-panel">
+                        <div className={`conversations-panel ${showConversationsDrawer ? 'open' : ''}`}>
                             <div className="conversations-header">
-                                <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                    <button 
+                                        className="drawer-toggle-btn" 
+                                        onClick={() => setShowConversationsDrawer(false)}
+                                        title="Fechar"
+                                        style={{display: showConversationsDrawer ? 'flex' : 'none'}}
+                                    >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                                        </svg>
+                                    </button>
+                                    <input type="text" className="form-input" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} style={{flex: 1}} />
+                                </div>
                                 <div className="tag-actions">
                                     <button
                                         type="button"
@@ -9433,11 +9767,24 @@ function generatePreviewHTML(data) {
                             {selectedChat ? (
                                 <>
                                     <div className="chat-header">
-                                        <div className="chat-header-main">
-                                            <h3>
-                                                {getFirstName(selectedChat)}
-                                                <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span>
-                                            </h3>
+                                        <div className="chat-header-main" style={{flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                                                <button 
+                                                    className="drawer-toggle-btn" 
+                                                    onClick={() => setShowConversationsDrawer(true)}
+                                                    title="Abrir lista de conversas"
+                                                >
+                                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                                                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                                                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                                                    </svg>
+                                                </button>
+                                                <h3 style={{margin: 0, flex: 1}}>
+                                                    {getFirstName(selectedChat)}
+                                                    <span style={{fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '400'}}>#{getLeadId(selectedChat)}</span>
+                                                </h3>
+                                            </div>
                                             <div className="chat-header-tags">
                                                 {(selectedChat.automatic_tags || []).map(tagName => (
                                                     <span key={`header-auto-${tagName}`} className="tag-badge tag-badge--auto">{tagName}</span>
@@ -9454,6 +9801,16 @@ function generatePreviewHTML(data) {
                                             </div>
                                         </div>
                                         <div className="chat-header-actions">
+                                            <button 
+                                                className="drawer-toggle-btn" 
+                                                onClick={() => setShowContactDrawer(true)}
+                                                title="Abrir detalhes do contato"
+                                            >
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                    <circle cx="12" cy="12" r="3"></circle>
+                                                    <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"></path>
+                                                </svg>
+                                            </button>
                                             <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selectedChat.chat_id)}>Excluir</button>
                                         </div>
                                     </div>
@@ -9484,9 +9841,22 @@ function generatePreviewHTML(data) {
                                 </div>
                             )}
                         </div>
-                        <div className="contact-panel">
+                        <div className={`contact-panel ${showContactDrawer ? 'open' : ''}`}>
                             {selectedChat ? (<>
-                                <h3>Detalhes</h3>
+                                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem'}}>
+                                    <h3 style={{margin: 0}}>Detalhes</h3>
+                                    <button 
+                                        className="drawer-toggle-btn" 
+                                        onClick={() => setShowContactDrawer(false)}
+                                        title="Fechar"
+                                        style={{display: showContactDrawer ? 'flex' : 'none'}}
+                                    >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                                        </svg>
+                                    </button>
+                                </div>
                                 <div className="contact-detail"><label>Nome</label><p>{`${selectedChat.first_name || ''} ${selectedChat.last_name || ''}`.trim() || 'Não informado'}</p></div>
                                 <div className="contact-detail">
                                     <label>Tags</label>
