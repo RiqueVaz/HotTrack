@@ -25,7 +25,7 @@ class ApiRateLimiter {
                 cacheTTL: 60_000, // 1 minuto de cache
                 maxRetries: 1, // Reduzido de 3 para 1 (sem retry para evitar delays)
                 retryDelay: 500, // Reduzido de 2000 para 500ms
-                timeout: 5000 // Reduzido de 10000 para 5000ms (5 segundos)
+                timeout: 20000 // Aumentado para 20 segundos para evitar timeouts em disparos simultâneos
             }],
             ['syncpay', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos

@@ -54,6 +54,8 @@ function createPixService({
     const response = await axios.post(`${synPayBaseUrl}/api/partner/v1/auth-token`, {
       client_id: seller.syncpay_client_id,
       client_secret: seller.syncpay_client_secret,
+    }, {
+      timeout: 15000 // 15 segundos para autenticação
     });
 
     const { access_token, expires_in } = response.data;
@@ -99,6 +101,7 @@ function createPixService({
           'Authorization': `Basic ${base64Credentials}`,
           'Content-Type': 'application/json',
         },
+        timeout: 15000 // 15 segundos para autenticação
       });
 
       const { access_token, expires_in } = response.data;
@@ -168,6 +171,7 @@ function createPixService({
 
       const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
         headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/json' },
+        timeout: 20000 // 20 segundos para geração de PIX
       });
       pixData = response.data;
       acquirer = 'BRPix';
@@ -211,6 +215,7 @@ function createPixService({
       }
       const response = await axios.post(`${synPayBaseUrl}/api/partner/v1/cash-in`, payload, {
         headers: { Authorization: `Bearer ${token}` },
+        timeout: 20000 // 20 segundos para geração de PIX
       });
       pixData = response.data;
       acquirer = 'SyncPay';
@@ -259,6 +264,7 @@ function createPixService({
       try {
         response = await axios.post('https://api-v2.wiinpay.com.br/payment/create', payload, {
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          timeout: 20000 // 20 segundos para geração de PIX
         });
       } catch (axiosError) {
         // Extrai a mensagem de erro corretamente, lidando com objetos aninhados
@@ -428,6 +434,7 @@ function createPixService({
 
       const response = await axios.post(apiUrl, payload, {
         headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey },
+        timeout: 20000 // 20 segundos para geração de PIX
       });
       pixData = response.data;
       acquirer = isCnpay ? 'CNPay' : 'Oasy.fy';
@@ -547,6 +554,7 @@ function createPixService({
             Authorization: `Bearer ${pixupToken}`,
             'Content-Type': 'application/json',
           },
+          timeout: 20000 // 20 segundos para geração de PIX
         });
       } catch (axiosError) {
         // Extrai a mensagem de erro corretamente
@@ -676,6 +684,7 @@ function createPixService({
             'X-API-Key': paradiseSecretKey,
             'Content-Type': 'application/json',
           },
+          timeout: 20000 // 20 segundos para geração de PIX
         });
       } catch (axiosError) {
         // Extrai a mensagem de erro corretamente
