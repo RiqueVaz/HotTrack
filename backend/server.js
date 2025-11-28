@@ -1528,6 +1528,9 @@ const QSTASH_RATE_LIMIT_MAX = resolvePositiveInt(process.env.QSTASH_RATE_LIMIT_M
 const QSTASH_PUBLISH_BATCH_SIZE = resolvePositiveInt(process.env.QSTASH_PUBLISH_BATCH_SIZE, 50);
 const QSTASH_PUBLISH_DELAY = resolvePositiveInt(process.env.QSTASH_PUBLISH_DELAY, 100);
 
+// Limite máximo de contatos por query para evitar sobrecarga de memória no PostgreSQL
+const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 50000);
+
 // ==========================================================
 //          LÓGICA DE RETRY PARA O BANCO DE DADOS
 // ==========================================================
@@ -8426,7 +8429,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
             }
             
-            tagQuery += ` ORDER BY bc.chat_id`;
+            tagQuery += ` ORDER BY bc.chat_id LIMIT $${paramOffset}`;
+            tagParams.push(MAX_CONTACTS_PER_QUERY);
             
             contacts = await sqlWithRetry(tagQuery, tagParams);
         } else {
@@ -8439,7 +8443,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             AND seller_id = ${sellerId}
                             AND chat_id > 0
                             AND chat_id != ALL(${excludeChatIds})
-                          ORDER BY chat_id, created_at DESC`
+                          ORDER BY chat_id, created_at DESC
+                          LIMIT ${MAX_CONTACTS_PER_QUERY}`
                 );
             } else {
                 contacts = await sqlWithRetry(
@@ -8448,7 +8453,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                           WHERE bot_id = ANY(${validBotIds}) 
                             AND seller_id = ${sellerId}
                             AND chat_id > 0
-                          ORDER BY chat_id, created_at DESC`
+                          ORDER BY chat_id, created_at DESC
+                          LIMIT ${MAX_CONTACTS_PER_QUERY}`
                 );
             }
         }
@@ -9423,7 +9429,8 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                     AND tc.chat_id > 0
                     AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
                     AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC`;
+                ORDER BY tc.chat_id, tc.created_at DESC
+                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
         } else {
             query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
                 FROM telegram_chats tc
@@ -9432,7 +9439,8 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                     AND tc.seller_id = ${sellerId}
                     AND tc.chat_id > 0
                     AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC`;
+                ORDER BY tc.chat_id, tc.created_at DESC
+                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
         }
         return await sqlWithRetry(query);
     }
@@ -9479,7 +9487,8 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                     AND tc.chat_id > 0
                     AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
                     AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC`;
+                ORDER BY tc.chat_id, tc.created_at DESC
+                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
         } else {
             query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
                 FROM telegram_chats tc
@@ -9488,7 +9497,8 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                     AND tc.seller_id = ${sellerId}
                     AND tc.chat_id > 0
                     AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC`;
+                ORDER BY tc.chat_id, tc.created_at DESC
+                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
         }
         return await sqlWithRetry(query);
     }
@@ -9600,7 +9610,8 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
         }
     }
     
-    tagQuery += ` ORDER BY bc.chat_id`;
+    tagQuery += ` ORDER BY bc.chat_id LIMIT $${paramOffset}`;
+    tagParams.push(MAX_CONTACTS_PER_QUERY);
     
     return await sqlWithRetry(tagQuery, tagParams);
 }
