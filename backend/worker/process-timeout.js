@@ -362,7 +362,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
 
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption, botId = null) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || null;
+    caption = caption || "";
     
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
@@ -394,7 +394,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
-                    caption: caption || null 
+                    caption: caption || ""
                 }, { timeout }, 3, 1500, botId);
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
@@ -432,7 +432,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
 async function handleMediaNode(node, botToken, chatId, caption, botId = null, sellerId = null) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || null;
+    caption = caption || "";
     
     const type = node.type;
     const nodeData = node.data || {};
@@ -577,7 +577,7 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || null };
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
             response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
         }
     }
@@ -938,7 +938,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-                    caption = caption || null;
+                    caption = caption || "";
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
                     if (caption && caption.length > 1024) {
