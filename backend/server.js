@@ -8601,7 +8601,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
                             body: batchPayload,
                             delay: `${batchDelaySeconds}s`, 
-                            retries: 2,
+                    retries: 2,
                             headers: {
                                 'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
                                 'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
