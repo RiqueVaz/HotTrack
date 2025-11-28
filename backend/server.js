@@ -2537,7 +2537,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
 // Função original mantida para compatibilidade
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || null;
+    caption = caption || "";
     
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
@@ -2556,7 +2556,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
-                    caption: caption || null 
+                    caption: caption || ""
                 }, { timeout });
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
@@ -2598,7 +2598,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
             return await sendTelegramRequest(destinationBotToken, method, { 
                 chat_id: chatId, 
                 [field]: fileId, 
-                caption: caption || null 
+                caption: caption || ""
             }, { timeout });
         }
         throw error;
@@ -2785,7 +2785,7 @@ async function processStepForQStash(step, sellerId) {
 
 async function handleMediaNode(node, botToken, chatId, caption, sellerId = null) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || null;
+    caption = caption || "";
     
     const type = node.type;
     const nodeData = node.data || {};
@@ -2822,7 +2822,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             response = await sendTelegramRequest(botToken, method, { 
                 chat_id: chatId, 
                 [field]: fileIdentifier, 
-                caption: caption || null 
+                caption: caption || ""
             }, { timeout });
         }
     } else {
@@ -2840,7 +2840,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
                 return null;
             }
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || null };
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
         } else {
             // File_id de outro bot ou URL não reconhecida
@@ -2850,7 +2850,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || null };
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
         }
     }
@@ -6606,6 +6606,21 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             }
         }
         
+        // Buscar last_transaction_id se não estiver disponível
+        if (!variables.last_transaction_id) {
+            const [chatData] = await sqlTx`
+                SELECT last_transaction_id 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND last_transaction_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+            `;
+            
+            if (chatData && chatData.last_transaction_id) {
+                variables.last_transaction_id = chatData.last_transaction_id;
+                logger.debug(`${logPrefix} last_transaction_id buscado do banco: ${chatData.last_transaction_id}`);
+            }
+        }
+        
         // Buscar cidade e estado se não estiverem disponíveis e tivermos click_id
         if ((!variables.cidade || !variables.estado) && clickIdToUse) {
             const db_click_id = clickIdToUse.startsWith('/start ') ? clickIdToUse : `/start ${clickIdToUse}`;
@@ -6766,7 +6781,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     let caption = await replaceVariables(actionData.caption, variables);
                     
                     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-                    caption = caption || null;
+                    caption = caption || "";
                     
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
                     if (caption && caption.length > 1024) {
