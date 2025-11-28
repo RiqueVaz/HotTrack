@@ -4095,7 +4095,7 @@
                     if (window.hotBotRoot) window.hotBotRoot.unmount();
                     // Verificar se launchHotBot está disponível (pode estar em script separado)
                     if (typeof launchHotBot === 'function') {
-                        launchHotBot(container);
+                    launchHotBot(container);
                     } else if (window.launchHotBot) {
                         window.launchHotBot(container);
                     } else {
