@@ -30,6 +30,22 @@ const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 // ==========================================================
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+
+// Cleanup automático do cache de tokens SyncPay (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [sellerId, tokenData] of syncPayTokenCache.entries()) {
+        if (tokenData.expiresAt && now > tokenData.expiresAt) {
+            syncPayTokenCache.delete(sellerId);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0 && (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true')) {
+        console.log(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache (worker-disparo)`);
+    }
+}, 5 * 60 * 1000); // A cada 5 minutos
+
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
 const CNPAY_SPLIT_PRODUCER_ID = process.env.CNPAY_SPLIT_PRODUCER_ID;

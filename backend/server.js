@@ -24,6 +24,10 @@ const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
 const { sqlTx, sqlWithRetry } = require('./db');
+
+// Helper para reduzir logs em produção (economiza memória)
+const isDev = process.env.NODE_ENV !== 'production';
+const shouldLogDebug = () => isDev || process.env.ENABLE_VERBOSE_LOGS === 'true';
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
 const apiRateLimiter = require('./shared/api-rate-limiter');
@@ -243,7 +247,7 @@ app.post(
       }
 
       // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-      console.log("[WORKER-TIMEOUT] Assinatura válida. Aceitando timeout para processamento em background.");
+      if (shouldLogDebug()) logger.debug("[WORKER-TIMEOUT] Assinatura válida. Aceitando timeout para processamento em background.");
       res.status(200).json({ message: 'Worker de timeout aceito para processamento.' });
 
       // 4. Processar timeout em background (não bloqueia resposta HTTP)
@@ -252,7 +256,7 @@ app.post(
         try {
           // Chamar função pura de processamento (não depende de req/res)
           await processTimeoutData(bodyData);
-          console.log("[WORKER-TIMEOUT] Timeout processado com sucesso em background.");
+          if (shouldLogDebug()) logger.debug("[WORKER-TIMEOUT] Timeout processado com sucesso em background.");
         } catch (bgError) {
           console.error("[WORKER-TIMEOUT] Erro ao processar timeout em background:", bgError);
           console.error("[WORKER-TIMEOUT] Stack trace:", bgError.stack);
@@ -290,7 +294,7 @@ app.post(
        }
     
        // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-       console.log("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento em background.");
+       if (shouldLogDebug()) logger.debug("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento em background.");
        res.status(200).json({ message: 'Worker de disparo aceito para processamento.' });
     
        // 3. Processar disparo em background (não bloqueia resposta HTTP)
@@ -299,7 +303,7 @@ app.post(
          try {
            // Chamar função pura de processamento (não depende de req/res)
            await processDisparoData(bodyData);
-           console.log("[WORKER-DISPARO] Disparo processado com sucesso em background.");
+           if (shouldLogDebug()) logger.debug("[WORKER-DISPARO] Disparo processado com sucesso em background.");
          } catch (bgError) {
            console.error("[WORKER-DISPARO] Erro ao processar disparo em background:", bgError);
            console.error("[WORKER-DISPARO] Stack trace:", bgError.stack);
@@ -338,7 +342,7 @@ app.post(
             }
             
             // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-            console.log("[WORKER-DISPARO-BATCH] Assinatura válida. Aceitando batch de disparo para processamento em background.");
+            if (shouldLogDebug()) logger.debug("[WORKER-DISPARO-BATCH] Assinatura válida. Aceitando batch de disparo para processamento em background.");
             res.status(200).json({ message: 'Worker de disparo batch aceito para processamento.' });
             
             // 3. Processar batch em background (não bloqueia resposta HTTP)
@@ -347,7 +351,7 @@ app.post(
                 try {
                     // Chamar função pura de processamento em batch
                     await processDisparoBatchData(bodyData);
-                    console.log(`[WORKER-DISPARO-BATCH] Batch ${bodyData.batch_index + 1}/${bodyData.total_batches} processado com sucesso em background.`);
+                    if (shouldLogDebug()) logger.debug(`[WORKER-DISPARO-BATCH] Batch ${bodyData.batch_index + 1}/${bodyData.total_batches} processado com sucesso em background.`);
                 } catch (bgError) {
                     console.error("[WORKER-DISPARO-BATCH] Erro ao processar batch de disparo em background:", bgError);
                     console.error("[WORKER-DISPARO-BATCH] Stack trace:", bgError.stack);
@@ -385,7 +389,7 @@ app.post(
             }
             
             // 2. Responder IMEDIATAMENTE ao QStash
-            console.log("[WORKER-DISPARO-DELAY] Assinatura válida. Aceitando continuação de disparo após delay.");
+            if (shouldLogDebug()) logger.debug("[WORKER-DISPARO-DELAY] Assinatura válida. Aceitando continuação de disparo após delay.");
             res.status(200).json({ message: 'Continuação de disparo após delay aceita para processamento.' });
             
             // 3. Processar em background
@@ -1107,6 +1111,10 @@ app.post(
                     }
                     
                     console.log(`[WORKER-SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso em background.`);
+                    
+                    // Limpar Maps temporários para liberar memória
+                    if (typeof allContacts !== 'undefined') allContacts.clear();
+                    if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
                 } catch (bgError) {
                     console.error("[WORKER-SCHEDULED-DISPARO] Erro ao processar disparo agendado em background:", bgError);
                     console.error("[WORKER-SCHEDULED-DISPARO] Stack trace:", bgError.stack);
@@ -1193,6 +1201,21 @@ const adminAllowedOrigins = [
 // Cache para domínios permitidos por pressel (performance)
 const allowedDomainsCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+// Cleanup automático do cache de domínios permitidos (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [key, cacheData] of allowedDomainsCache.entries()) {
+        if (cacheData.timestamp && now - cacheData.timestamp > CACHE_TTL) {
+            allowedDomainsCache.delete(key);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0 && shouldLogDebug()) {
+        logger.debug(`[Memory Cleanup] Removidas ${cleaned} entradas expiradas do allowedDomainsCache`);
+    }
+}, 10 * 60 * 1000); // A cada 10 minutos
 
 // Rate limiting simples para registerClick
 const rateLimitMap = new Map();
@@ -1287,6 +1310,21 @@ function webhookRateLimitMiddleware(req, res, next) {
 const workerDisparoRateLimit = new Map();
 const WORKER_DISPARO_RATE_LIMIT_WINDOW = 10 * 1000; // 10 segundos
 const WORKER_DISPARO_MAX_CONCURRENT = 5; // Máximo 5 workers simultâneos
+
+// Limpar entradas expiradas do workerDisparoRateLimit periodicamente (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [key, data] of workerDisparoRateLimit.entries()) {
+        if (data.resetTime && now > data.resetTime) {
+            workerDisparoRateLimit.delete(key);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0 && shouldLogDebug()) {
+        logger.debug(`[Memory Cleanup] Removidas ${cleaned} entradas expiradas do workerDisparoRateLimit`);
+    }
+}, 2 * 60 * 1000); // Limpar a cada 2 minutos
 
 function workerDisparoRateLimitMiddleware(req, res, next) {
     const now = Date.now();
@@ -1529,8 +1567,39 @@ const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
 
+// Cleanup automático do cache de tokens SyncPay (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [sellerId, tokenData] of syncPayTokenCache.entries()) {
+        if (tokenData.expiresAt && now > tokenData.expiresAt) {
+            syncPayTokenCache.delete(sellerId);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0 && shouldLogDebug()) {
+        logger.debug(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache`);
+    }
+}, 5 * 60 * 1000); // A cada 5 minutos
+
 // Map de promises pendentes para evitar queries duplicadas em getClickGeo
 const pendingGeoQueries = new Map();
+
+// Cleanup automático de promises pendentes de geolocalização (evita memory leak)
+setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [key, queryData] of pendingGeoQueries.entries()) {
+        // Limpar promises com mais de 5 minutos (timeout de queries de geolocalização)
+        if (queryData.timestamp && now - queryData.timestamp > 5 * 60 * 1000) {
+            pendingGeoQueries.delete(key);
+            cleaned++;
+        }
+    }
+    if (cleaned > 0 && shouldLogDebug()) {
+        logger.debug(`[Memory Cleanup] Removidas ${cleaned} promises expiradas do pendingGeoQueries`);
+    }
+}, 5 * 60 * 1000); // A cada 5 minutos
 const TAG_TITLE_MAX_LENGTH = 12;
 const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -2641,9 +2710,13 @@ async function processStepsForQStashBatch(steps, sellerId) {
                 processedStepsCache.set(stepKey, step);
             }
         }
+        
+        // Limpar Map temporário após uso (economiza memória)
+        fileIdToMediaData.clear();
     } catch (error) {
         console.error(`[processStepsForQStashBatch] Erro ao processar steps em batch:`, error);
         // Em caso de erro, retorna cache vazio e o código vai usar processStepForQStash individual
+        if (typeof fileIdToMediaData !== 'undefined') fileIdToMediaData.clear();
     }
     
     return processedStepsCache;
@@ -8618,6 +8691,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 console.log(`[DISPARO ${historyId}] Disparo processado com sucesso em background.`);
+                
+                // Limpar Maps temporários para liberar memória
+                if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
             } catch (bgError) {
                 console.error("Erro no processamento em background do disparo:", bgError);
                 // Atualizar status para erro se possível
@@ -8628,6 +8704,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 } catch (updateError) {
                     console.error("Erro ao atualizar status para FAILED:", updateError);
                 }
+            } finally {
+                // Garantir limpeza de Maps mesmo em caso de erro
+                if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
             }
         })();
     

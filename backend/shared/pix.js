@@ -42,9 +42,17 @@ function createPixService({
       throw new Error('createPixService: syncPayTokenCache não foi fornecido.');
     }
 
+    // Limpar tokens expirados antes de verificar cache (cleanup proativo)
+    const now = Date.now();
     const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
-      return cachedToken.accessToken;
+    if (cachedToken) {
+      if (cachedToken.expiresAt && now > cachedToken.expiresAt) {
+        // Token expirado, remover do cache
+        syncPayTokenCache.delete(seller.id);
+      } else if (cachedToken.expiresAt && cachedToken.expiresAt > now + 60000) {
+        // Token válido e ainda tem mais de 1 minuto
+        return cachedToken.accessToken;
+      }
     }
 
     if (!seller.syncpay_client_id || !seller.syncpay_client_secret) {
@@ -74,9 +82,17 @@ function createPixService({
     }
 
     const cacheKey = seller.id;
+    // Limpar tokens expirados antes de verificar cache (cleanup proativo)
+    const now = Date.now();
     const cachedToken = pixupTokenCache.get(cacheKey);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
-      return cachedToken.accessToken;
+    if (cachedToken) {
+      if (cachedToken.expiresAt && now > cachedToken.expiresAt) {
+        // Token expirado, remover do cache
+        pixupTokenCache.delete(cacheKey);
+      } else if (cachedToken.expiresAt && cachedToken.expiresAt > now + 60000) {
+        // Token válido e ainda tem mais de 1 minuto
+        return cachedToken.accessToken;
+      }
     }
 
     // OAuth2 com Basic Auth conforme documentação Pixup
@@ -94,7 +110,9 @@ function createPixService({
 
     try {
       // Log para debug (não logar as credenciais completas por segurança)
-      console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Tentando obter token OAuth2`);
+      if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true') {
+        console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Tentando obter token OAuth2`);
+      }
       
       const response = await axios.post('https://api.pixupbr.com/v2/oauth/token', {}, {
         headers: {
@@ -111,7 +129,9 @@ function createPixService({
 
       const expiresAt = Date.now() + (expires_in * 1000);
       pixupTokenCache.set(cacheKey, { accessToken: access_token, expiresAt });
-      console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Token obtido com sucesso, expira em ${expires_in}s`);
+      if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true') {
+        console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Token obtido com sucesso, expira em ${expires_in}s`);
+      }
       return access_token;
     } catch (error) {
       // Log detalhado do erro para debug
