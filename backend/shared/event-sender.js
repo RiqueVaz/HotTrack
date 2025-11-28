@@ -78,6 +78,19 @@ async function sendEventToUtmify({
         const utmifyApiToken = integration.api_token;
         logger.info(`[Utmify] Token encontrado. Montando payload...`);
         
+        // Log dos dados do click recebidos para debug
+        logger.info(`[Utmify] Dados do click recebidos:`, {
+            id: clickData.id,
+            pressel_id: clickData.pressel_id,
+            checkout_id: clickData.checkout_id,
+            utm_source: clickData.utm_source,
+            utm_campaign: clickData.utm_campaign,
+            utm_medium: clickData.utm_medium,
+            utm_content: clickData.utm_content,
+            utm_term: clickData.utm_term,
+            click_id: clickData.click_id
+        });
+        
         const createdAt = (pixData.created_at || new Date()).toISOString().replace('T', ' ').substring(0, 19);
         const approvedDate = status === 'paid' ? (pixData.paid_at || new Date()).toISOString().replace('T', ' ').substring(0, 19) : null;
         const payload = {
@@ -119,6 +132,10 @@ async function sendEventToUtmify({
             },
             isTest: false
         };
+
+        // Log do payload completo antes de enviar
+        logger.info(`[Utmify] Payload completo que será enviado:`, JSON.stringify(payload, null, 2));
+        logger.info(`[Utmify] TrackingParameters no payload:`, JSON.stringify(payload.trackingParameters, null, 2));
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
         logger.info(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
