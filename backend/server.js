@@ -6254,9 +6254,16 @@ app.get('/api/pix/status/:transaction_id', async (req, res) => {
         // Não fazer requisições síncronas às APIs de pagamento
         const currentStatus = transaction.status;
 
-        // Se já está paga, tentar enviar eventos (handleSuccessfulPayment é idempotente)
-        // Usar dados do banco (webhook já salvou customerData quando atualizou status)
+        // Se já está paga, garantir que eventos de tracking sejam enviados
+        // handleSuccessfulPayment é idempotente, então é seguro chamar múltiplas vezes
         if (currentStatus === 'paid') {
+            try {
+                await handleSuccessfulPayment(transaction.id, {});
+            } catch (error) {
+                // Log do erro mas não bloqueia a resposta
+                console.error(`[PIX Status] Erro ao processar eventos de tracking para transação ${transaction.id}:`, error);
+            }
+            
             let redirectUrl = null;
             // Se veio de checkout hospedado, tenta buscar URL de sucesso no config
             if (transaction.checkout_id && String(transaction.checkout_id).startsWith('cko_')) {
