@@ -2536,6 +2536,9 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
 
 // Função original mantida para compatibilidade
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
+    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
+    caption = caption || null;
+    
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
 
@@ -2553,7 +2556,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
-                    caption 
+                    caption: caption || null 
                 }, { timeout });
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
@@ -2595,7 +2598,7 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
             return await sendTelegramRequest(destinationBotToken, method, { 
                 chat_id: chatId, 
                 [field]: fileId, 
-                caption 
+                caption: caption || null 
             }, { timeout });
         }
         throw error;
@@ -2781,6 +2784,9 @@ async function processStepForQStash(step, sellerId) {
 }
 
 async function handleMediaNode(node, botToken, chatId, caption, sellerId = null) {
+    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
+    caption = caption || null;
+    
     const type = node.type;
     const nodeData = node.data || {};
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
@@ -2816,7 +2822,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             response = await sendTelegramRequest(botToken, method, { 
                 chat_id: chatId, 
                 [field]: fileIdentifier, 
-                caption 
+                caption: caption || null 
             }, { timeout });
         }
     } else {
@@ -2834,7 +2840,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
                 return null;
             }
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || null };
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
         } else {
             // File_id de outro bot ou URL não reconhecida
@@ -2844,7 +2850,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption };
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || null };
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
         }
     }
@@ -6759,6 +6765,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 try {
                     let caption = await replaceVariables(actionData.caption, variables);
                     
+                    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
+                    caption = caption || null;
+                    
                     // Validação do tamanho da legenda (limite do Telegram: 1024 caracteres)
                     if (caption && caption.length > 1024) {
                         logger.warn(`${logPrefix} [Flow Media] Legenda excede limite de 1024 caracteres. Truncando...`);
@@ -10383,13 +10392,17 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
                     req.user.id
                 );
 
+                // Gerar file_id temporário único para R2 (mídias que não passam pelo Telegram)
+                // Formato: R2_timestamp_sellerId_randomHex
+                const r2FileId = `R2_${Date.now()}_${req.user.id}_${crypto.randomBytes(8).toString('hex')}`;
+
                 // Salvar no banco com R2
                 const [newMedia] = await sqlWithRetry(`
                     INSERT INTO media_library 
-                    (seller_id, file_name, file_type, storage_url, storage_key, storage_type, migration_status)
-                    VALUES ($1, $2, $3, $4, $5, 'r2', 'migrated')
-                    RETURNING id, file_name, file_type, storage_url, storage_key, storage_type;
-                `, [req.user.id, fileName, fileType, publicUrl, storageKey]);
+                    (seller_id, file_name, file_id, file_type, storage_url, storage_key, storage_type, migration_status)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'r2', 'migrated')
+                    RETURNING id, file_name, file_id, file_type, storage_url, storage_key, storage_type;
+                `, [req.user.id, fileName, r2FileId, fileType, publicUrl, storageKey]);
 
                 return res.status(201).json(newMedia);
             } catch (r2Error) {

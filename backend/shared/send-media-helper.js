@@ -11,6 +11,9 @@ const { migrateMediaOnDemand } = require('./migrate-media-on-demand');
  */
 function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logger = console) {
     return async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
+    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
+    caption = caption || null;
+    
     // 1. Tentar buscar mídia no banco pelo file_id
     if (sellerId) {
         const [media] = await sqlWithRetry(`
@@ -34,7 +37,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                     return await sendTelegramRequest(destinationBotToken, method, {
                         chat_id: chatId,
                         [field]: media.storage_url, // Telegram aceita URL direta!
-                        caption: caption,
+                        caption: caption || null,
                         parse_mode: 'HTML'
                     }, { timeout: fileType === 'video' ? 120000 : 60000 });
                 } catch (urlError) {
@@ -63,7 +66,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                         return await sendTelegramRequest(destinationBotToken, method, {
                             chat_id: chatId,
                             [field]: migratedMedia.storage_url,
-                            caption: caption,
+                            caption: caption || null,
                             parse_mode: 'HTML'
                         }, { timeout: fileType === 'video' ? 120000 : 60000 });
                     }
