@@ -6606,6 +6606,21 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             }
         }
         
+        // Buscar last_transaction_id se não estiver disponível
+        if (!variables.last_transaction_id) {
+            const [chatData] = await sqlTx`
+                SELECT last_transaction_id 
+                FROM telegram_chats 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND last_transaction_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+            `;
+            
+            if (chatData && chatData.last_transaction_id) {
+                variables.last_transaction_id = chatData.last_transaction_id;
+                logger.debug(`${logPrefix} last_transaction_id buscado do banco: ${chatData.last_transaction_id}`);
+            }
+        }
+        
         // Buscar cidade e estado se não estiverem disponíveis e tivermos click_id
         if ((!variables.cidade || !variables.estado) && clickIdToUse) {
             const db_click_id = clickIdToUse.startsWith('/start ') ? clickIdToUse : `/start ${clickIdToUse}`;
