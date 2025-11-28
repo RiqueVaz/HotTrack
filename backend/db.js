@@ -23,16 +23,17 @@ const resolveSslOption = () => {
 
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
-    // Usar PG_POOL_MAX da env (35) - está ok para 1 réplica com DEFAULT_POOL_SIZE=50
-    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 35,
+    // Pool reduzido de 35 para 20 para economizar memória do PostgreSQL
+    // 20 conexões ainda é suficiente para a carga atual
+    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 20,
     
     // Timeout maior para dar tempo ao pgbouncer processar quando há fila
     // Em picos de tráfego, o pgbouncer pode demorar mais para alocar conexões
     connect_timeout: parsePositiveInt(process.env.PG_CONNECT_TIMEOUT) || 60,
     
-    // Idle timeout maior para evitar reconexões desnecessárias
-    // O pgbouncer gerencia isso bem, então podemos manter conexões vivas por mais tempo
-    idle_timeout: parsePositiveInt(process.env.PG_IDLE_TIMEOUT) || 120,
+    // Idle timeout aumentado de 120s para 300s (5 min) para reduzir reconexões frequentes
+    // Isso reduz o overhead de criar/destruir conexões e economiza memória
+    idle_timeout: parsePositiveInt(process.env.PG_IDLE_TIMEOUT) || 300,
     
     // PgBouncer-friendly: desabilita prepared statements (incompatível com transaction mode)
     prepare: false,
