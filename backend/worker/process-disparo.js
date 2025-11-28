@@ -15,6 +15,7 @@ const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
+const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
 
 // Inicializar QStash client para delays longos
@@ -702,6 +703,21 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
     }
 }
 
+// Wrapper para handleSuccessfulPayment que passa as dependências necessárias
+async function handleSuccessfulPayment(transaction_id, customerData) {
+    return await handleSuccessfulPaymentShared({
+        transaction_id,
+        customerData,
+        sqlTx,
+        adminSubscription: null, // Worker não tem notificações push
+        webpush: null, // Worker não tem notificações push
+        sendEventToUtmify: ({ status, clickData, pixData, sellerData, customerData, productData }) => 
+            sendEventToUtmifyShared({ status, clickData, pixData, sellerData, customerData, productData, sqlTx }),
+        sendMetaEvent: ({ eventName, clickData, transactionData, customerData }) => 
+            sendMetaEventShared({ eventName, clickData, transactionData, customerData, sqlTx })
+    });
+}
+
 /**
  * Extrai checkoutId de uma URL de checkout
  * @param {string} url - URL que pode conter /oferta/cko_xxx
@@ -817,121 +833,26 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             }
                         }
                         
-                        // Gerar PIX automático se for checkout e usuário ainda não acessou
+                        // Marcar checkout_id quando botão de checkout é enviado (para rastreamento)
                         if (btnUrl.includes('/oferta/')) {
                             try {
                                 const checkoutId = extractCheckoutIdFromUrl(btnUrl);
                                 if (checkoutId && variables.click_id) {
-                                    logger.debug(`${logPrefix} [Checkout Auto-PIX] Detectado checkout ${checkoutId} no botão. Verificando se deve gerar PIX...`);
+                                    const db_click_id = variables.click_id.startsWith('/start ') 
+                                        ? variables.click_id 
+                                        : `/start ${variables.click_id}`;
                                     
-                                    // Buscar click atual
-                                    const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
-                                    const [click] = await sqlWithRetry(sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`);
-                                    
-                                    if (click) {
-                                        // Verificar se click já tem checkout_id (usuário já acessou checkout)
-                                        if (!click.checkout_id) {
-                                            // Usuário ainda não acessou checkout, verificar PIX pendente
-                                            const [existingPendingPix] = await sqlWithRetry(sqlTx`
-                                                SELECT * FROM pix_transactions 
-                                                WHERE click_id_internal = ${click.id} 
-                                                  AND status = 'pending'
-                                                ORDER BY created_at DESC 
-                                                LIMIT 1
-                                            `);
-                                            
-                                            if (existingPendingPix) {
-                                                // Já existe PIX pendente, usar esse
-                                                logger.debug(`${logPrefix} [Checkout Auto-PIX] PIX pendente já existe (${existingPendingPix.provider_transaction_id}). Usando existente.`);
-                                                variables.last_transaction_id = existingPendingPix.provider_transaction_id;
-                                                
-                                                // Atualizar last_transaction_id no banco
-                                                if (click.click_id) {
-                                                    await sqlWithRetry(sqlTx`
-                                                        UPDATE telegram_chats 
-                                                        SET last_transaction_id = ${existingPendingPix.provider_transaction_id}
-                                                        WHERE click_id = ${click.click_id} 
-                                                          AND bot_id IN (SELECT id FROM telegram_bots WHERE seller_id = ${sellerId})
-                                                    `);
-                                                }
-                                            } else {
-                                                // Não existe PIX pendente, gerar novo
-                                                logger.debug(`${logPrefix} [Checkout Auto-PIX] Gerando PIX automático para checkout ${checkoutId}...`);
-                                                
-                                                // Buscar configuração do checkout
-                                                const [hostedCheckout] = await sqlWithRetry(sqlTx`
-                                                    SELECT seller_id, config 
-                                                    FROM hosted_checkouts 
-                                                    WHERE id = ${checkoutId}
-                                                `);
-                                                
-                                                if (hostedCheckout && hostedCheckout.seller_id === sellerId) {
-                                                    try {
-                                                        const checkoutConfig = parseJsonField(hostedCheckout.config, `hosted_checkouts:${checkoutId}`);
-                                                        const firstPackage = checkoutConfig?.pricing?.packages?.[0];
-                                                        const value_cents = firstPackage?.value_cents || 100; // Valor mínimo R$ 1,00
-                                                        
-                                                        const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`);
-                                                        if (seller && seller.api_key) {
-                                                            const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                                                            const ip_address = click.ip_address;
-                                                            
-                                                            const pixResult = await generatePixWithFallback(
-                                                                seller,
-                                                                value_cents,
-                                                                hostPlaceholder,
-                                                                seller.api_key,
-                                                                ip_address,
-                                                                click.id
-                                                            );
-                                                            
-                                                            logger.debug(`${logPrefix} [Checkout Auto-PIX] PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
-                                                            
-                                                            // Atualizar variáveis e banco
-                                                            variables.last_transaction_id = pixResult.transaction_id;
-                                                            if (click.click_id) {
-                                                                await sqlWithRetry(sqlTx`
-                                                                    UPDATE telegram_chats 
-                                                                    SET last_transaction_id = ${pixResult.transaction_id}
-                                                                    WHERE click_id = ${click.click_id} 
-                                                                      AND bot_id IN (SELECT id FROM telegram_bots WHERE seller_id = ${sellerId})
-                                                                `);
-                                                            }
-                                                            
-                                                            // Enviar eventos
-                                                            await sendMetaEventShared({
-                                                                eventName: 'InitiateCheckout',
-                                                                clickData: { ...click, checkout_id: checkoutId },
-                                                                transactionData: { id: pixResult.internal_transaction_id, pix_value: value_cents / 100 },
-                                                                customerData: null,
-                                                                sqlTx: sqlTx
-                                                            });
-                                                            
-                                                            await sendEventToUtmifyShared({
-                                                                status: 'waiting_payment',
-                                                                clickData: { ...click, checkout_id: checkoutId },
-                                                                pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: value_cents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
-                                                                sellerData: seller,
-                                                                customerData: { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" },
-                                                                productData: { id: "prod_bot", name: checkoutConfig?.content?.main_title || "Produto (Checkout)" },
-                                                                sqlTx: sqlTx
-                                                            });
-                                                        }
-                                                    } catch (pixError) {
-                                                        logger.error(`${logPrefix} [Checkout Auto-PIX] Erro ao gerar PIX automático:`, pixError.message);
-                                                        // Não falhar, continuar enviando mensagem
-                                                    }
-                                                } else {
-                                                    logger.warn(`${logPrefix} [Checkout Auto-PIX] Checkout ${checkoutId} não encontrado ou não pertence ao seller ${sellerId}`);
-                                                }
-                                            }
-                                        } else {
-                                            logger.debug(`${logPrefix} [Checkout Auto-PIX] Click já tem checkout_id. Usuário provavelmente já acessou checkout. Não gerando PIX automático.`);
-                                        }
-                                    }
+                                    await sqlWithRetry(sqlTx`
+                                        UPDATE clicks 
+                                        SET checkout_id = ${checkoutId}
+                                        WHERE click_id = ${db_click_id} 
+                                          AND seller_id = ${sellerId}
+                                          AND (checkout_id IS NULL OR checkout_id != ${checkoutId})
+                                    `);
+                                    logger.debug(`${logPrefix} [Checkout Button] checkout_id ${checkoutId} marcado no click para rastreamento`);
                                 }
                             } catch (checkoutError) {
-                                logger.error(`${logPrefix} [Checkout Auto-PIX] Erro ao processar checkout no botão:`, checkoutError.message);
+                                logger.error(`${logPrefix} [Checkout Button] Erro ao marcar checkout_id:`, checkoutError.message);
                                 // Não falhar, continuar enviando mensagem
                             }
                         }
@@ -1278,113 +1199,57 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     }
                 }
             } else if (action.type === 'action_check_pix') {
-                // Verificar PIX - implementação completa para disparos
+                // Verificar PIX - sempre busca o último PIX gerado
                 try {
-                    let transactionId = variables.last_transaction_id;
-                    let transaction = null;
-                    
-                    logger.debug(`${logPrefix} [${actionIndex}/${actions.length}] Verificando status do PIX. transaction_id=${transactionId}`);
-                    
-                    // Se não tem transactionId nas variáveis, tenta buscar do banco como fallback
-                    if (!transactionId) {
-                        logger.info(`${logPrefix} [action_check_pix] last_transaction_id não encontrado nas variáveis. Tentando buscar do banco de dados...`);
-                        
-                        // Tenta buscar através do click_id nas variáveis
-                        if (variables.click_id) {
-                            const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
-                            const [click] = await sqlWithRetry(sqlTx`SELECT id FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`);
-                            
-                            if (click) {
-                                const [recentTransaction] = await sqlWithRetry(sqlTx`
-                                    SELECT * FROM pix_transactions 
-                                    WHERE click_id_internal = ${click.id} 
-                                    ORDER BY created_at DESC 
-                                    LIMIT 1
-                                `);
-                                if (recentTransaction) {
-                                    transactionId = recentTransaction.provider_transaction_id;
-                                    transaction = recentTransaction;
-                                    logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do click_id: ${transactionId}`);
-                                }
-                            }
-                        }
-                        
-                        // Se ainda não encontrou, tenta buscar através do telegram_chats.last_transaction_id
-                        if (!transactionId) {
-                            const [chat] = await sqlWithRetry(sqlTx`
-                                SELECT last_transaction_id 
-                                FROM telegram_chats 
-                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND last_transaction_id IS NOT NULL 
-                                ORDER BY created_at DESC 
-                                LIMIT 1
-                            `);
-                            if (chat && chat.last_transaction_id) {
-                                transactionId = chat.last_transaction_id;
-                                logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do telegram_chats.last_transaction_id: ${transactionId}`);
-                            }
-                        }
-                        
-                        // Se ainda não encontrou, busca transações através do chat_id e bot_id diretamente
-                        // Isso permite encontrar transações de checkout mesmo se last_transaction_id não foi atualizado
-                        if (!transactionId) {
-                            // Buscar click_id do telegram_chats para este chat
-                            const [chatData] = await sqlWithRetry(sqlTx`
-                                SELECT click_id 
-                                FROM telegram_chats 
-                                WHERE chat_id = ${chatId} AND bot_id = ${botId} AND click_id IS NOT NULL
-                                ORDER BY created_at DESC 
-                                LIMIT 1
-                            `);
-                            
-                            if (chatData && chatData.click_id) {
-                                const db_click_id = chatData.click_id.startsWith('/start ') ? chatData.click_id : `/start ${chatData.click_id}`;
-                                // Buscar click único com esse click_id
-                                const [click] = await sqlWithRetry(sqlTx`
-                                    SELECT id FROM clicks 
-                                    WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
-                                    LIMIT 1
-                                `);
-                                
-                                if (click) {
-                                    // Buscar transação mais recente associada a esse click
-                                    const [recentTransaction] = await sqlWithRetry(sqlTx`
-                                        SELECT * FROM pix_transactions 
-                                        WHERE click_id_internal = ${click.id}
-                                        ORDER BY created_at DESC 
-                                        LIMIT 1
-                                    `);
-                                    
-                                    if (recentTransaction) {
-                                        transactionId = recentTransaction.provider_transaction_id;
-                                        transaction = recentTransaction;
-                                        logger.info(`${logPrefix} [action_check_pix] Transação encontrada através do chat_id/bot_id (checkout): ${transactionId}`);
-                                    }
-                                }
-                            }
-                        }
-                        
-                        if (!transactionId) {
-                            throw new Error("Nenhum ID de transação PIX encontrado nas variáveis nem no banco de dados.");
-                        }
+                    if (!variables.click_id) {
+                        throw new Error("click_id não encontrado nas variáveis do fluxo.");
                     }
                     
-                    // Se ainda não tem a transação, busca pelo transactionId
+                    const db_click_id = variables.click_id.startsWith('/start ') 
+                        ? variables.click_id 
+                        : `/start ${variables.click_id}`;
+                    
+                    // Buscar click
+                    const [click] = await sqlWithRetry(sqlTx`
+                        SELECT id FROM clicks 
+                        WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                    `);
+                    
+                    if (!click) {
+                        throw new Error(`Click não encontrado para click_id: ${variables.click_id}`);
+                    }
+                    
+                    // Buscar PIX mais recente do click_id, priorizando por status
+                    // Independente de ser do checkout ou do fluxo
+                    const [transaction] = await sqlWithRetry(sqlTx`
+                        SELECT * FROM pix_transactions 
+                        WHERE click_id_internal = ${click.id}
+                        ORDER BY 
+                            CASE status
+                                WHEN 'pending' THEN 1
+                                WHEN 'paid' THEN 2
+                                ELSE 3
+                            END,
+                            created_at DESC
+                        LIMIT 1
+                    `);
+                    
                     if (!transaction) {
-                        [transaction] = await sqlWithRetry(sqlTx`SELECT * FROM pix_transactions WHERE provider_transaction_id = ${transactionId}`);
-                        if (!transaction) throw new Error(`Transação ${transactionId} não encontrada.`);
+                        throw new Error("Nenhuma transação PIX encontrada para este click_id.");
                     }
                     
-                    // Verificar status da transação
+                    logger.info(`${logPrefix} [action_check_pix] Transação encontrada: ${transaction.provider_transaction_id}, status: ${transaction.status}`);
+                    
+                    // Verificar status
                     if (transaction.status === 'paid') {
                         logger.debug(`${logPrefix} [action_check_pix] PIX está pago. Retornando 'paid'.`);
-                        return 'paid'; // Sinaliza para processDisparoFlow seguir pelo handle 'a'
+                        return 'paid';
                     } else {
                         logger.debug(`${logPrefix} [action_check_pix] PIX está pendente (status: ${transaction.status}). Retornando 'pending'.`);
-                        return 'pending'; // Sinaliza para processDisparoFlow seguir pelo handle 'b'
+                        return 'pending';
                     }
                 } catch (error) {
-                    logger.error(`${logPrefix} [action_check_pix] Erro ao verificar PIX:`, error.message);
-                    // Em caso de erro, seguir pelo handle padrão (como se fosse pending)
+                    logger.error(`${logPrefix} [action_check_pix] Erro: ${error.message}`);
                     return 'pending';
                 }
             } else {
