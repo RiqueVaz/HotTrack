@@ -8482,16 +8482,14 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 // ==========================================================
                 console.log(`[DISPARO ${historyId}] Criando job de validação de contatos...`);
                 
-                // Buscar todos os contatos para criar o job de validação
-                const allContactsForValidation = await sqlWithRetry(
-                    sqlTx`SELECT DISTINCT ON (chat_id) chat_id, bot_id
-                          FROM telegram_chats 
-                          WHERE bot_id = ANY(${validBotIds}) 
-                            AND seller_id = ${sellerId}
-                          ORDER BY chat_id, created_at DESC`
-                );
+                // Usar uniqueContacts (já calculado com filtros) ao invés de buscar todos os contatos novamente
+                // Converter uniqueContacts para o formato esperado: { chat_id, bot_id }
+                const contactsForValidation = uniqueContacts.map(c => ({
+                    chat_id: c.chat_id,
+                    bot_id: c.bot_id_source || validBotIds[0] // Usar bot_id_source se disponível, senão usar o primeiro bot
+                }));
                 
-                if (allContactsForValidation.length === 0) {
+                if (contactsForValidation.length === 0) {
                     console.log(`[DISPARO ${historyId}] Nenhum contato encontrado para validação.`);
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
@@ -8502,15 +8500,15 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 // Separar usuários individuais de grupos/canais
-                const individualUsers = allContactsForValidation.filter(c => c.chat_id > 0);
-                const groupsAndChannels = allContactsForValidation.filter(c => c.chat_id < 0);
+                const individualUsers = contactsForValidation.filter(c => c.chat_id > 0);
+                const groupsAndChannels = contactsForValidation.filter(c => c.chat_id < 0);
                 
-                // Criar registro de validação
+                // Criar registro de validação usando o número correto de contatos filtrados
                 const [validationJob] = await sqlWithRetry(
                     sqlTx`INSERT INTO contact_validation_jobs (
                               seller_id, bot_ids, status, total_contacts, processed_contacts, inactive_contacts
                           ) VALUES (
-                              ${sellerId}, ${JSON.stringify(validBotIds)}, 'PENDING', ${allContactsForValidation.length}, 0, ${JSON.stringify(groupsAndChannels)}
+                              ${sellerId}, ${JSON.stringify(validBotIds)}, 'PENDING', ${contactsForValidation.length}, 0, ${JSON.stringify(groupsAndChannels)}
                           ) RETURNING id`
                 );
                 
@@ -11282,7 +11280,7 @@ app.get('/api/disparos/status/:historyId', authenticateJwt, async (req, res) => 
             current_step: history.current_step,
             progress_percentage: progressPercentage,
             processed_contacts: processedContacts,
-            total_contacts: history.total_sent || 0,
+            total_contacts: totalContacts, // Usar totalContacts do validationJob ao invés de history.total_sent
             sent_messages: sentMessages,
             total_messages: totalMessages,
             inactive_count: inactiveCount,
