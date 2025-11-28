@@ -9460,12 +9460,15 @@ async function processBatchWithConcurrency(contacts, botTokenMap, dbCache, concu
             }
             
             try {
-                await sendTelegramRequest(botToken, 'sendChatAction', {
-                    chat_id: contact.chat_id,
-                    action: 'typing'
+                // Usar getChat ao invés de sendChatAction - método mais apropriado para validação
+                // getChat verifica se o chat existe e se o bot tem acesso, sem enviar ação visível
+                await sendTelegramRequest(botToken, 'getChat', {
+                    chat_id: contact.chat_id
                 }, {}, 2, 1000, contact.bot_id);
             } catch (error) {
-                if (error.response?.status === 403 || error.response?.status === 400) {
+                // Tratar apenas erro 403 como inativo (bot bloqueado ou sem acesso)
+                // Erro 400 pode ter outras causas (formato inválido, etc.) e não deve ser tratado como inativo
+                if (error.response?.status === 403) {
                     results.push(contact);
                 }
             }
