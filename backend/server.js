@@ -6776,7 +6776,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                     
                                     await sqlTx`
                                         UPDATE clicks 
-                                        SET checkout_id = ${checkoutId}
+                                        SET checkout_id = ${checkoutId}, checkout_sent_at = NOW()
                                         WHERE click_id = ${db_click_id} 
                                           AND seller_id = ${sellerId}
                                           AND (checkout_id IS NULL OR checkout_id != ${checkoutId})
@@ -7067,7 +7067,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Buscar click
                     const [click] = await sqlTx`
-                        SELECT id, checkout_id FROM clicks 
+                        SELECT id, checkout_id, checkout_sent_at FROM clicks 
                         WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
                     `;
                     
@@ -7077,22 +7077,31 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     let transaction = null;
                     
-                    // Se o click tem checkout_id, buscar apenas PIX desse checkout
-                    if (click.checkout_id) {
-                        logger.debug(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id}. Buscando PIX específico do checkout.`);
+                    // Se o click tem checkout_id e checkout_sent_at, buscar último PIX gerado (do checkout OU do fluxo após checkout ser enviado)
+                    if (click.checkout_id && click.checkout_sent_at) {
+                        logger.debug(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id} e checkout_sent_at ${click.checkout_sent_at}. Buscando último PIX gerado (checkout ou fluxo após checkout).`);
                         
                         [transaction] = await sqlTx`
                             SELECT * FROM pix_transactions 
                             WHERE click_id_internal = ${click.id}
-                              AND checkout_id = ${click.checkout_id}
+                              AND (
+                                checkout_id = ${click.checkout_id} 
+                                OR (checkout_id IS NULL AND created_at > ${click.checkout_sent_at})
+                              )
                             ORDER BY created_at DESC
                             LIMIT 1
                         `;
+                    } else if (click.checkout_id) {
+                        // Tem checkout_id mas não tem checkout_sent_at (compatibilidade com dados antigos)
+                        logger.debug(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id} mas não tem checkout_sent_at. Buscando último PIX gerado (checkout ou fluxo).`);
                         
-                        if (!transaction) {
-                            logger.debug(`${logPrefix} [action_check_pix] Nenhum PIX encontrado para checkout ${click.checkout_id}. Retornando pending.`);
-                            return 'pending';
-                        }
+                        [transaction] = await sqlTx`
+                            SELECT * FROM pix_transactions 
+                            WHERE click_id_internal = ${click.id}
+                              AND (checkout_id = ${click.checkout_id} OR checkout_id IS NULL)
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        `;
                     } else {
                         // Não tem checkout_id, buscar qualquer PIX do click_id
                         logger.debug(`${logPrefix} [action_check_pix] Click não tem checkout_id. Buscando qualquer PIX do click_id.`);
