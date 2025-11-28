@@ -442,7 +442,7 @@ app.post(
                             
                             // Se delay foi agendado novamente, parar aqui
                             if (actionResult === 'delay_scheduled') {
-                                console.log(`[WORKER-DISPARO-DELAY] Novo delay agendado. Parando processamento.`);
+                                logger.debug(`[WORKER-DISPARO-DELAY] Novo delay agendado. Parando processamento.`);
                                 return;
                             }
                         } catch (error) {
@@ -475,7 +475,7 @@ app.post(
                         variables_json: JSON.stringify(parsedVariables)
                     });
                     
-                    console.log(`[WORKER-DISPARO-DELAY] Disparo ${history_id} continuado após delay com sucesso.`);
+                    logger.debug(`[WORKER-DISPARO-DELAY] Disparo ${history_id} continuado após delay com sucesso.`);
                 } catch (error) {
                     console.error("[WORKER-DISPARO-DELAY] Erro ao continuar disparo após delay:", error);
                     console.error("[WORKER-DISPARO-DELAY] Stack trace:", error.stack);

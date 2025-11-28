@@ -18,12 +18,12 @@ async function sendEventToUtmify({
     productData,
     sqlTx
 }) {
-    logger.info(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
+    logger.debug(`[Utmify] Iniciando envio de evento '${status}' para o clique ID: ${clickData.id}`);
     try {
         let integrationId = null;
 
         if (clickData.pressel_id) {
-            logger.info(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
+            logger.debug(`[Utmify] Clique originado da Pressel ID: ${clickData.pressel_id}`);
             const [pressel] = await sqlTx`SELECT utmify_integration_id FROM pressels WHERE id = ${clickData.pressel_id}`;
             if (pressel) {
                 integrationId = pressel.utmify_integration_id;
@@ -34,7 +34,7 @@ async function sendEventToUtmify({
             
             // Se começa com 'cko_', é um hosted_checkout (UUID)
             if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
-                logger.info(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}`);
+                logger.debug(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}`);
                 // Buscar utmify_integration_id do config do hosted_checkout
                 const [hostedCheckout] = await sqlTx`
                     SELECT config->'tracking'->>'utmify_integration_id' as utmify_integration_id 
@@ -46,22 +46,22 @@ async function sendEventToUtmify({
                     const parsedId = parseInt(hostedCheckout.utmify_integration_id);
                     if (!isNaN(parsedId)) {
                         integrationId = parsedId;
-                        logger.info(`[Utmify] Integração Utmify encontrada no checkout hospedado: ${integrationId}`);
+                        logger.debug(`[Utmify] Integração Utmify encontrada no checkout hospedado: ${integrationId}`);
                     } else {
                         logger.warn(`[Utmify] Valor inválido para utmify_integration_id no checkout hospedado: ${hostedCheckout.utmify_integration_id}`);
                     }
                 } else {
-                    logger.info(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}, mas nenhuma integração Utmify configurada.`);
+                    logger.debug(`[Utmify] Clique originado do Checkout Hospedado ID: ${checkoutId}, mas nenhuma integração Utmify configurada.`);
                 }
             } else {
-                logger.info(`[Utmify] Clique originado do Checkout ID: ${checkoutId}. Lógica de associação não implementada para checkouts antigos.`);
+                logger.debug(`[Utmify] Clique originado do Checkout ID: ${checkoutId}. Lógica de associação não implementada para checkouts antigos.`);
             }
         } else {
-            logger.info(`[Utmify] Clique ID ${clickData.id} não originado de Pressel ou Checkout Hospedado conhecido.`);
+            logger.debug(`[Utmify] Clique ID ${clickData.id} não originado de Pressel ou Checkout Hospedado conhecido.`);
         }
 
         if (!integrationId) {
-            logger.info(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
+            logger.debug(`[Utmify] Nenhuma conta Utmify vinculada à origem do clique ${clickData.id}. Abortando envio.`);
             return;
         }
 
@@ -76,10 +76,10 @@ async function sendEventToUtmify({
         }
 
         const utmifyApiToken = integration.api_token;
-        logger.info(`[Utmify] Token encontrado. Montando payload...`);
+        logger.debug(`[Utmify] Token encontrado. Montando payload...`);
         
         // Log dos dados do click recebidos para debug
-        logger.info(`[Utmify] Dados do click recebidos:`, {
+        logger.debug(`[Utmify] Dados do click recebidos:`, {
             id: clickData.id,
             pressel_id: clickData.pressel_id,
             checkout_id: clickData.checkout_id,
@@ -133,9 +133,9 @@ async function sendEventToUtmify({
             isTest: false
         };
 
-        // Log do payload completo antes de enviar
-        logger.info(`[Utmify] Payload completo que será enviado:`, JSON.stringify(payload, null, 2));
-        logger.info(`[Utmify] TrackingParameters no payload:`, JSON.stringify(payload.trackingParameters, null, 2));
+        // Log do payload completo antes de enviar (apenas em debug)
+        logger.debug(`[Utmify] Payload completo que será enviado:`, JSON.stringify(payload, null, 2));
+        logger.debug(`[Utmify] TrackingParameters no payload:`, JSON.stringify(payload.trackingParameters, null, 2));
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
         logger.info(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
