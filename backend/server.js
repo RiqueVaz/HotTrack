@@ -6774,14 +6774,24 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                         ? variables.click_id 
                                         : `/start ${variables.click_id}`;
                                     
+                                    // Atualizar checkout_id se necessário
                                     await sqlTx`
                                         UPDATE clicks 
-                                        SET checkout_id = ${checkoutId}, checkout_sent_at = NOW()
+                                        SET checkout_id = ${checkoutId}
                                         WHERE click_id = ${db_click_id} 
                                           AND seller_id = ${sellerId}
                                           AND (checkout_id IS NULL OR checkout_id != ${checkoutId})
                                     `;
-                                    logger.debug(`${logPrefix} [Checkout Button] checkout_id ${checkoutId} marcado no click para rastreamento`);
+                                    
+                                    // Sempre atualizar checkout_sent_at quando checkout_id corresponde
+                                    await sqlTx`
+                                        UPDATE clicks 
+                                        SET checkout_sent_at = NOW()
+                                        WHERE click_id = ${db_click_id} 
+                                          AND seller_id = ${sellerId}
+                                          AND checkout_id = ${checkoutId}
+                                    `;
+                                    logger.debug(`${logPrefix} [Checkout Button] checkout_id ${checkoutId} e checkout_sent_at marcados no click para rastreamento`);
                                 }
                             } catch (checkoutError) {
                                 logger.error(`${logPrefix} [Checkout Button] Erro ao marcar checkout_id:`, checkoutError.message);
