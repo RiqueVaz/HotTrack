@@ -1208,9 +1208,17 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
                             const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
                             try {
+                                // Buscar click completo do banco para garantir que todos os campos UTM estejam presentes
+                                const [fullClick] = await sqlWithRetry(sqlTx`
+                                    SELECT * FROM clicks WHERE id = ${click.id}
+                                `);
+                                
+                                // Usar o click completo do banco se encontrado, senão usar o original
+                                const clickToUse = fullClick || click;
+                                
                                 await sendEventToUtmifyShared({
                                     status: 'waiting_payment',
-                                    clickData: click,
+                                    clickData: clickToUse,
                                     pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
                                     sellerData: seller,
                                     customerData: customerDataForUtmify,
