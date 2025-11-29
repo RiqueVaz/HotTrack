@@ -860,39 +860,6 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                           AND checkout_id = ${checkoutId}
                                     `);
                                     
-                                    // Buscar dados do checkout para obter o valor
-                                    let checkoutValue = null;
-                                    const isHostedCheckout = String(checkoutId).startsWith('cko_');
-                                    
-                                    if (isHostedCheckout) {
-                                        // Buscar em hosted_checkouts
-                                        const [hostedCheckout] = await sqlWithRetry(sqlTx`
-                                            SELECT config 
-                                            FROM hosted_checkouts 
-                                            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
-                                        `);
-                                        if (hostedCheckout) {
-                                            try {
-                                                const config = typeof hostedCheckout.config === 'string' 
-                                                    ? JSON.parse(hostedCheckout.config) 
-                                                    : hostedCheckout.config;
-                                                checkoutValue = config?.value_cents || null;
-                                            } catch (e) {
-                                                logger.warn(`${logPrefix} [Checkout Button] Erro ao parsear config do hosted_checkout: ${e.message}`);
-                                            }
-                                        }
-                                    } else {
-                                        // Buscar em checkouts
-                                        const [checkout] = await sqlWithRetry(sqlTx`
-                                            SELECT fixed_value_cents, value_type 
-                                            FROM checkouts 
-                                            WHERE id = ${checkoutId} AND seller_id = ${sellerId}
-                                        `);
-                                        if (checkout && checkout.value_type === 'fixed' && checkout.fixed_value_cents) {
-                                            checkoutValue = checkout.fixed_value_cents;
-                                        }
-                                    }
-                                    
                                     // Buscar o click para obter o click_id_internal
                                     const [clickRecord] = await sqlWithRetry(sqlTx`
                                         SELECT id FROM clicks 
@@ -900,41 +867,30 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                     `);
                                     
                                     if (clickRecord) {
-                                        // Verificar se já existe uma transação PIX pendente para este checkout
-                                        const [existingTransaction] = await sqlWithRetry(sqlTx`
-                                            SELECT id FROM pix_transactions 
-                                            WHERE click_id_internal = ${clickRecord.id} 
-                                              AND checkout_id = ${String(checkoutId)}
-                                              AND status = 'pending'
-                                            LIMIT 1
+                                        // Criar uma nova transação PIX pendente toda vez que o checkout for enviado
+                                        const tempTransactionId = `checkout_${checkoutId}_${clickRecord.id}_${Date.now()}`;
+                                        await sqlWithRetry(sqlTx`
+                                            INSERT INTO pix_transactions (
+                                                click_id_internal,
+                                                checkout_id,
+                                                pix_value,
+                                                status,
+                                                provider,
+                                                provider_transaction_id,
+                                                pix_id,
+                                                created_at
+                                            ) VALUES (
+                                                ${clickRecord.id},
+                                                ${String(checkoutId)},
+                                                1.00,
+                                                'pending',
+                                                'checkout',
+                                                ${tempTransactionId},
+                                                ${tempTransactionId},
+                                                NOW()
+                                            )
                                         `);
-                                        
-                                        // Se não existe, criar uma transação PIX pendente
-                                        if (!existingTransaction) {
-                                            const tempTransactionId = `checkout_${checkoutId}_${clickRecord.id}_${Date.now()}`;
-                                            await sqlWithRetry(sqlTx`
-                                                INSERT INTO pix_transactions (
-                                                    click_id_internal,
-                                                    checkout_id,
-                                                    pix_value,
-                                                    status,
-                                                    provider,
-                                                    provider_transaction_id,
-                                                    pix_id,
-                                                    created_at
-                                                ) VALUES (
-                                                    ${clickRecord.id},
-                                                    ${String(checkoutId)},
-                                                    ${checkoutValue ? checkoutValue / 100 : null},
-                                                    'pending',
-                                                    'checkout',
-                                                    ${tempTransactionId},
-                                                    ${tempTransactionId},
-                                                    NOW()
-                                                )
-                                            `);
-                                            logger.debug(`${logPrefix} [Checkout Button] Transação PIX pendente criada para checkout ${checkoutId}`);
-                                        }
+                                        logger.debug(`${logPrefix} [Checkout Button] Transação PIX pendente criada para checkout ${checkoutId}`);
                                     }
                                     
                                     logger.debug(`${logPrefix} [Checkout Button] checkout_id ${checkoutId} e checkout_sent_at marcados no click para rastreamento`);
