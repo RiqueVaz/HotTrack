@@ -16,6 +16,7 @@ const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEvent
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
 const apiRateLimiter = require('../shared/api-rate-limiter');
 const dbCache = require('../shared/db-cache');
+const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
@@ -52,9 +53,7 @@ setInterval(() => {
         cleaned += toRemove;
     }
     
-    if (cleaned > 0 && (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true')) {
-        console.log(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache (worker-timeout)`);
-    }
+    // Removido log de memory cleanup - não é necessário em produção
 }, 5 * 60 * 1000); // A cada 5 minutos
 
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -274,10 +273,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         const dbCache = require('../shared/db-cache');
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            console.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando requisição.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-            console.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando requisição.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
     }
@@ -329,7 +328,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                     }
                 }
                 
-                console.warn(`[WORKER - Telegram API] O bot foi bloqueado pelo usuário. ChatID: ${errorChatId}`);
+                // Logar apenas ocasionalmente (1% das vezes) para evitar spam
+                if (shouldLogOccasionally(0.01)) {
+                    console.warn(`[WORKER - Telegram API] O bot foi bloqueado pelo usuário. ChatID: ${errorChatId}`);
+                }
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
@@ -383,10 +385,10 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     // VERIFICAR CACHE ANTES DE QUALQUER OPERAÇÃO
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mídia.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         } else if (!botId && dbCache.isBotTokenBlocked(destinationBotToken, chatId)) {
-            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot (token). Pulando envio de mídia.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
     }
@@ -466,10 +468,10 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
     // Verificar cache antes de processar mídia
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mídia.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-            console.warn(`[CACHE HIT] Chat ${chatId} bloqueou bot (token). Pulando envio de mídia.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
     }
@@ -742,7 +744,7 @@ async function sendTypingAction(chatId, botToken) {
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (dbCache.isBotTokenBlocked(botToken, chatId)) {
-            console.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando ação typing.`);
+            // Removido log de cache hit
             return;
         }
     }
@@ -755,17 +757,20 @@ async function sendTypingAction(chatId, botToken) {
         
         // Se retornou erro 403, o cache já foi atualizado pela sendTelegramRequest
         if (response && !response.ok && response.error_code === 403) {
-            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (typing). Ignorando.`);
+            // Removido log - não é crítico
             return;
         }
     } catch (error) {
         const errorData = error.response?.data;
         const description = errorData?.description || error.message;
         if (description?.includes('bot was blocked by the user')) {
-            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (typing). Ignorando.`);
+            // Removido log - não é crítico
             return;
         }
-        console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, errorData || error.message);
+        // Logar apenas em desenvolvimento ou se for erro crítico
+        if (shouldLogDebug() && error.response?.status !== 403) {
+            console.warn(`[WORKER - Flow Engine] Falha ao enviar ação 'typing':`, errorData || error.message);
+        }
     }
 }
 
@@ -775,10 +780,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
   // Verificar cache antes de enviar
   if (chatId && chatId !== 'unknown' && chatId !== null) {
       if (botId && dbCache.isBotBlocked(botId, chatId)) {
-          console.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mensagem.`);
+          // Removido log de cache hit
           return;
       } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-          console.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando envio de mensagem.`);
+          // Removido log de cache hit
           return;
       }
   }
@@ -807,17 +812,20 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
             `;
         } else if (response && !response.ok && response.error_code === 403) {
             // Se retornou erro 403, o cache já foi atualizado pela sendTelegramRequest
-            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (message). Ignorando.`);
+            // Removido log - não é crítico
             return;
         }
     } catch (error) {
         const errorData = error.response?.data;
         const description = errorData?.description || error.message;
         if (description?.includes('bot was blocked by the user')) {
-            console.debug(`[WORKER - Flow Engine] Chat ${chatId} bloqueou o bot (message). Ignorando.`);
+            // Removido log - não é crítico
             return;
         }
-        console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, errorData || error.message);
+        // Logar apenas erros críticos
+        if (shouldLogDebug() && error.response?.status !== 403) {
+            console.error(`[WORKER - Flow Engine] Erro ao enviar/salvar mensagem:`, errorData || error.message);
+        }
     }
 }
 
@@ -846,11 +854,11 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
             if (user) {
                 if (!variables.primeiro_nome) {
                     variables.primeiro_nome = user.first_name || '';
-                    console.log(`${logPrefix} primeiro_nome buscado do banco: ${variables.primeiro_nome}`);
+                    // Removido log de debug
                 }
                 if (!variables.nome_completo) {
                     variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
-                    console.log(`${logPrefix} nome_completo buscado do banco: ${variables.nome_completo}`);
+                    // Removido log de debug
                 }
             }
         }
@@ -868,7 +876,7 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
             if (chatData && chatData.click_id) {
                 clickIdToUse = chatData.click_id;
                 variables.click_id = clickIdToUse;
-                console.log(`${logPrefix} click_id buscado do banco: ${clickIdToUse}`);
+                // Removido log de debug
             }
         }
         
@@ -883,7 +891,7 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
             
             if (chatData && chatData.last_transaction_id) {
                 variables.last_transaction_id = chatData.last_transaction_id;
-                console.log(`${logPrefix} last_transaction_id buscado do banco: ${chatData.last_transaction_id}`);
+                // Removido log de debug
             }
         }
         
@@ -900,11 +908,11 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, l
             if (click) {
                 if (!variables.cidade) {
                     variables.cidade = click.city || '';
-                    console.log(`${logPrefix} cidade buscada do banco: ${variables.cidade}`);
+                    // Removido log de debug
                 }
                 if (!variables.estado) {
                     variables.estado = click.state || '';
-                    console.log(`${logPrefix} estado buscado do banco: ${variables.estado}`);
+                    // Removido log de debug
                 }
             } else {
                 // Se não encontrou click, definir valores vazios como fallback
@@ -965,7 +973,7 @@ function parseJsonField(value, context) {
  * (Colada da sua resposta anterior)
  */
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', currentNodeId = null, flowId = null, flowNodes = null, flowEdges = null) {
-    console.log(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+    // Removido log de debug - não é necessário em produção
     
     // Garantir que variáveis faltantes sejam buscadas do banco
     await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, logPrefix);
@@ -1249,7 +1257,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'action_create_invite_link':
                 try {
-                    console.log(`${logPrefix} Executando action_create_invite_link para chat ${chatId}`);
+                    // Removido log de debug
 
                     const [botInvite] = await sqlTx`
                         SELECT telegram_supergroup_id
@@ -1368,7 +1376,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
 
             case 'action_remove_user_from_group':
                 try {
-                    console.log(`${logPrefix} Executando action_remove_user_from_group para chat ${chatId}`);
+                    // Removido log de debug
 
                     const [bot] = await sqlTx`
                         SELECT telegram_supergroup_id
@@ -1494,7 +1502,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             
             case 'action_pix':
                 try {
-                    console.log(`${logPrefix} Executando action_pix para chat ${chatId}`);
+                    // Removido log de debug
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
@@ -1525,7 +1533,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Gera PIX e salva no banco
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    console.log(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                    // Removido log de debug - não é necessário em produção
                     
                     // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
@@ -1563,7 +1571,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    console.log(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+                    // Removido log de debug - não é necessário em produção
                     
                     // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
@@ -1577,7 +1585,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         productData: productDataForUtmify,
                         sqlTx: sqlTx
                     });
-                    console.log(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                    // Removido log de debug - não é necessário em produção
 
                     console.log(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
                 } catch (error) {
@@ -1615,7 +1623,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Se o click tem checkout_id e checkout_sent_at, buscar último PIX gerado (do checkout OU do fluxo após checkout ser enviado)
                     if (click.checkout_id && click.checkout_sent_at) {
-                        console.log(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id} e checkout_sent_at ${click.checkout_sent_at}. Buscando último PIX gerado (checkout ou fluxo após checkout).`);
+                        // Removido log de debug
                         
                         [transaction] = await sqlTx`
                             SELECT * FROM pix_transactions 
@@ -1629,7 +1637,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         `;
                     } else if (click.checkout_id) {
                         // Tem checkout_id mas não tem checkout_sent_at (compatibilidade com dados antigos)
-                        console.log(`${logPrefix} [action_check_pix] Click tem checkout_id ${click.checkout_id} mas não tem checkout_sent_at. Buscando último PIX gerado (checkout ou fluxo).`);
+                        // Removido log de debug
                         
                         [transaction] = await sqlTx`
                             SELECT * FROM pix_transactions 
@@ -1775,7 +1783,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  */
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
-    console.log(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    // Removido log de debug - não é necessário em produção
 
     // ==========================================================
     // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
@@ -1890,7 +1898,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 variables = { ...variables, ...parsedVariables };
 
             } else {
-                console.log(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
+                // Removido log de debug
                 await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
