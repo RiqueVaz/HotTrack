@@ -317,8 +317,8 @@ class ApiRateLimiter {
                 if (error.response?.status === 429) {
                     // Para ip-api, não fazer retry em caso de 429 - cache já deve ter o valor
                     if (provider === 'ip-api') {
-                        // Log apenas ocasionalmente para não saturar logs
-                        if (attempt === 0 || Math.random() < 0.05) {
+                        // Log apenas muito ocasionalmente (0.1% das vezes) para não saturar logs
+                        if (attempt === 0 && Math.random() < 0.001) {
                             console.warn(
                                 `[API Rate Limiter] Rate limit 429 para ${provider} (seller ${sellerId}). ` +
                                 `Não tentando novamente (cache deve ter o valor).`
@@ -335,8 +335,8 @@ class ApiRateLimiter {
                         String(config.retryDelay / 1000)
                     );
                     
-                    // Log apenas ocasionalmente para não saturar logs
-                    if (attempt === 0 || attempt === config.maxRetries - 1 || Math.random() < 0.1) {
+                    // Log apenas na última tentativa ou muito ocasionalmente
+                    if (attempt === config.maxRetries - 1 || (attempt === 0 && Math.random() < 0.01)) {
                         console.warn(
                             `[API Rate Limiter] Rate limit 429 para ${provider} (seller ${sellerId}). ` +
                             `Tentativa ${attempt + 1}/${config.maxRetries}. Aguardando ${retryAfter}s...`

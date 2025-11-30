@@ -14,6 +14,7 @@ const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter');
+const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
@@ -55,9 +56,7 @@ setInterval(() => {
         cleaned += toRemove;
     }
     
-    if (cleaned > 0 && (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true')) {
-        console.log(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache (worker-disparo)`);
-    }
+    // Removido log de memory cleanup - não é necessário em produção
 }, 5 * 60 * 1000); // A cada 5 minutos
 
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
@@ -143,10 +142,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         const dbCache = require('../shared/db-cache');
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando requisição.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando requisição.`);
+            // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
     }
@@ -197,7 +196,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                     }
                 }
                 
-                logger.debug(`[WORKER-DISPARO] Chat ${errorChatId} bloqueou o bot (method ${method}). Ignorando.`);
+                // Logar apenas ocasionalmente (1% das vezes) para evitar spam
+                if (shouldLogOccasionally(0.01)) {
+                    logger.debug(`[WORKER-DISPARO] Chat ${errorChatId} bloqueou o bot (method ${method}). Ignorando.`);
+                }
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 

@@ -24,10 +24,7 @@ const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
 const { sqlTx, sqlWithRetry } = require('./db');
-
-// Helper para reduzir logs em produção (economiza memória)
-const isDev = process.env.NODE_ENV !== 'production';
-const shouldLogDebug = () => isDev || process.env.ENABLE_VERBOSE_LOGS === 'true';
+const { shouldLogDebug, shouldLogOccasionally } = require('./shared/logger-helper');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
 const apiRateLimiter = require('./shared/api-rate-limiter');
@@ -1225,9 +1222,7 @@ setInterval(() => {
         cleaned += toRemove;
     }
     
-    if (cleaned > 0 && shouldLogDebug()) {
-        logger.debug(`[Memory Cleanup] Removidas ${cleaned} entradas expiradas do allowedDomainsCache`);
-    }
+    // Removido log de memory cleanup - não é necessário em produção
 }, 10 * 60 * 1000); // A cada 10 minutos
 
 // Rate limiting simples para registerClick
@@ -1335,7 +1330,7 @@ setInterval(() => {
         }
     }
     if (cleaned > 0 && shouldLogDebug()) {
-        logger.debug(`[Memory Cleanup] Removidas ${cleaned} entradas expiradas do workerDisparoRateLimit`);
+        // Removido log de memory cleanup
     }
 }, 2 * 60 * 1000); // Limpar a cada 2 minutos
 
@@ -1618,7 +1613,7 @@ setInterval(() => {
     }
     
     if (cleaned > 0 && shouldLogDebug()) {
-        logger.debug(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache`);
+        // Removido log de memory cleanup
     }
 }, 5 * 60 * 1000); // A cada 5 minutos
 
@@ -1650,7 +1645,7 @@ setInterval(() => {
     }
     
     if (cleaned > 0 && shouldLogDebug()) {
-        logger.debug(`[Memory Cleanup] Removidas ${cleaned} promises expiradas do pendingGeoQueries`);
+        // Removido log de memory cleanup
     }
 }, 5 * 60 * 1000); // A cada 5 minutos
 const TAG_TITLE_MAX_LENGTH = 12;
@@ -2317,10 +2312,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     // VERIFICAR CACHE ANTES DE TENTAR
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando requisição.`);
+            // Removido log de cache hit - não é necessário em produção
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando requisição.`);
+            // Removido log de cache hit - não é necessário em produção
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
     }
@@ -2344,8 +2339,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                     );
                     dbCache.unmarkBotBlocked(botId, chatId);
                 } catch (unblockError) {
-                    // Não crítico, apenas logar
-                    logger.debug(`[Bot Blocks] Erro ao remover bloqueio (não crítico): ${unblockError.message}`);
+                    // Não crítico - logar apenas em desenvolvimento
+                    if (shouldLogDebug()) {
+                        logger.debug(`[Bot Blocks] Erro ao remover bloqueio (não crítico): ${unblockError.message}`);
+                    }
                 }
             }
             return response.data;
@@ -2376,7 +2373,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                     }
                 }
                 
-                console.warn(`[TELEGRAM API WARN] O bot foi bloqueado pelo usuário. ChatID: ${errorChatId}`);
+                // Logar apenas ocasionalmente (1% das vezes) para evitar spam de logs
+                if (shouldLogOccasionally(0.01)) {
+                    logger.warn(`[TELEGRAM API] Bot bloqueado pelo usuário. ChatID: ${errorChatId}`);
+                }
                 return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
             }
 
@@ -2437,10 +2437,13 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                         dbCache.markBotTokenBlocked(botToken, chatId);
                     }
                 }
-                logger.debug(`[Telegram API] Chat ${chatId} bloqueou o bot (method ${method}). Ignorando.`);
+                // Removido log - não é crítico
                 return { ok: false, error_code: 403, description };
             }
-            console.error(`[TELEGRAM API ERROR] Method: ${method}, ChatID: ${chatId}:`, errorMessage || error.message);
+            // Logar apenas erros críticos (não 403 que já foi tratado)
+            if (error.response?.status !== 403 && shouldLogDebug()) {
+                console.error(`[TELEGRAM API ERROR] Method: ${method}, ChatID: ${chatId}:`, errorMessage || error.message);
+            }
             throw error;
         }
     }
@@ -6126,20 +6129,29 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                         if (geo.status === 'success') {
                             city = geo.city || city;
                             state = geo.regionName || state;
-                            logger.debug(`[GEO] Geolocalização obtida para IP ${ip_address}: ${city}, ${state}`);
+                            // Removido log de debug - não é necessário em produção
                         } else {
-                            logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                            // Logar apenas em desenvolvimento
+                            if (shouldLogDebug()) {
+                                logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                            }
                         }
                     } catch (geoError) {
                         // Se der 429, não tentar novamente - usar valores padrão
                         if (geoError.response?.status === 429) {
-                            logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
+                            // Logar apenas ocasionalmente (1% das vezes) para evitar spam
+                            if (shouldLogOccasionally(0.01)) {
+                                logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
+                            }
                         } else {
-                            logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                            // Logar apenas erros críticos
+                            if (shouldLogDebug()) {
+                                logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
+                            }
                         }
                     }
                 } else if (isLocalIp) {
-                     logger.debug(`[GEO] IP ${ip_address} é local. Pulando geolocalização.`);
+                     // Removido log de debug
                      city = 'Local';
                      state = 'Local';
                 }
@@ -6634,7 +6646,7 @@ async function sendTypingAction(chatId, botToken) {
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (dbCache.isBotTokenBlocked(botToken, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando ação typing.`);
+            // Removido log de cache hit
             return;
         }
     }
@@ -6647,11 +6659,14 @@ async function sendTypingAction(chatId, botToken) {
         
         // Se retornou erro 403, o cache já foi atualizado pela sendTelegramRequest
         if (response && !response.ok && response.error_code === 403) {
-            logger.debug(`[Flow Engine] Chat ${chatId} bloqueou o bot (typing). Ignorando.`);
+            // Removido log - não é crítico
             return;
         }
     } catch (error) {
-        console.warn(`[Flow Engine] Falha ao enviar ação 'typing' para ${chatId}:`, error.response?.data || error.message);
+        // Logar apenas em desenvolvimento ou se for erro crítico
+        if (shouldLogDebug() && error.response?.status !== 403) {
+            logger.warn(`[Flow Engine] Falha ao enviar ação 'typing' para ${chatId}:`, error.response?.data || error.message);
+        }
     }
 }
 
@@ -6672,10 +6687,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot ${botId}. Pulando envio de mensagem.`);
+            // Removido log de cache hit
             return;
         } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
-            logger.debug(`[CACHE] Chat ${chatId} bloqueou bot (token). Pulando envio de mensagem.`);
+            // Removido log de cache hit
             return;
         }
     }
@@ -6734,11 +6749,11 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             if (user) {
                 if (!variables.primeiro_nome) {
                     variables.primeiro_nome = user.first_name || '';
-                    logger.debug(`${logPrefix} primeiro_nome buscado do banco: ${variables.primeiro_nome}`);
+                    // Removido log de debug
                 }
                 if (!variables.nome_completo) {
                     variables.nome_completo = `${user.first_name || ''} ${user.last_name || ''}`.trim();
-                    logger.debug(`${logPrefix} nome_completo buscado do banco: ${variables.nome_completo}`);
+                    // Removido log de debug
                 }
             }
         }
@@ -6756,7 +6771,7 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             if (chatData && chatData.click_id) {
                 clickIdToUse = chatData.click_id;
                 variables.click_id = clickIdToUse;
-                logger.debug(`${logPrefix} click_id buscado do banco: ${clickIdToUse}`);
+                // Removido log de debug
             }
         }
         
@@ -6771,7 +6786,7 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             
             if (chatData && chatData.last_transaction_id) {
                 variables.last_transaction_id = chatData.last_transaction_id;
-                logger.debug(`${logPrefix} last_transaction_id buscado do banco: ${chatData.last_transaction_id}`);
+                // Removido log de debug
             }
         }
         
@@ -6788,11 +6803,11 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             if (click) {
                 if (!variables.cidade) {
                     variables.cidade = click.city || '';
-                    logger.debug(`${logPrefix} cidade buscada do banco: ${variables.cidade}`);
+                    // Removido log de debug
                 }
                 if (!variables.estado) {
                     variables.estado = click.state || '';
-                    logger.debug(`${logPrefix} estado buscado do banco: ${variables.estado}`);
+                    // Removido log de debug
                 }
             } else {
                 // Se não encontrou click, definir valores vazios como fallback
@@ -6831,7 +6846,7 @@ function extractCheckoutIdFromUrl(url) {
  * @returns {string} Retorna 'paid', 'pending', 'flow_forwarded', ou 'completed' para que o processFlow decida a navegação.
  */
 async function processActions(actions, chatId, botId, botToken, sellerId, variables, logPrefix = '[Actions]', currentNodeId = null, flowId = null, flowNodes = null, flowEdges = null) {
-    logger.debug(`${logPrefix} Iniciando processamento de ${actions.length} ações aninhadas para chat ${chatId}`);
+    // Removido log de debug - não é necessário em produção
 
     // Garantir que variáveis faltantes sejam buscadas do banco
     await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, sqlTx, logPrefix);
@@ -7714,7 +7729,7 @@ async function incrementNodeExecutionCount(flowId, nodeId) {
 
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
-    logger.debug(`${logPrefix} [Flow Engine] Iniciando processo para ${chatId}. Nó inicial: ${startNodeId || 'Padrão'}`);
+    // Removido log de debug - não é necessário em produção
 
     // ==========================================================
     // PASSO 1: CARREGAR VARIÁVEIS DO USUÁRIO E DO CLIQUE
@@ -7747,7 +7762,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
         // Mescla variáveis do banco com as iniciais (variáveis iniciais têm prioridade)
         variables = { ...parsedDbVariables, ...variables };
-        logger.debug(`${logPrefix} [Flow Engine] Variáveis do banco carregadas e mescladas. last_transaction_id: ${variables.last_transaction_id || 'não definido'}`);
+        // Removido log de debug
     }
     // ==========================================================
     // FIM DO PASSO 1
@@ -7865,7 +7880,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             } else {
                 // Nova conversa sem /start (ou estado expirado), reinicia
-                logger.debug(`${logPrefix} [Flow Engine] Nova conversa. Iniciando do gatilho.`);
+                // Removido log de debug
                 await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 const startNode = nodes.find(node => node.type === 'trigger');
                 currentNodeId = startNode ? findNextNode(startNode.id, 'a', edges) : null;
@@ -8136,23 +8151,23 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
     try {
         // Validação mais robusta da estrutura da mensagem
         if (!message) {
-            logger.debug('[Webhook] Requisição ignorada: objeto message ausente.');
+            // Removido log de debug - não é necessário em produção
             return;
         }
         
         if (!message.chat) {
-            logger.debug('[Webhook] Requisição ignorada: objeto chat ausente na mensagem.');
+            // Removido log de debug - não é necessário em produção
             return;
         }
         
         if (!message.chat.id) {
-            logger.debug('[Webhook] Requisição ignorada: chat.id ausente na mensagem.');
+            // Removido log de debug - não é necessário em produção
             return;
         }
         
         // Verifica se é uma mensagem válida (não callback_query, etc.)
         if (message.message_id === undefined) {
-            logger.debug('[Webhook] Requisição ignorada: message_id ausente (pode ser callback_query ou outro tipo).');
+            // Removido log de debug - não é necessário em produção
             return;
         }
         const chatId = message.chat.id;
@@ -8204,30 +8219,23 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
         // PRIORIDADE 2: Se não for /start, trata como uma resposta normal.
         const [userState] = await sqlTx`SELECT current_node_id, variables, scheduled_message_id, waiting_for_input, flow_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         
-        // LOG: Estado encontrado
-        logger.debug(`[Webhook] Estado encontrado para ${chatId}:`, userState ? {
-            current_node_id: userState.current_node_id,
-            waiting_for_input: userState.waiting_for_input,
-            has_scheduled_message: !!userState.scheduled_message_id,
-            variables_type: typeof userState.variables,
-            flow_id: userState.flow_id
-        } : 'NENHUM');
+        // Removido log de debug - não é necessário em produção
         
         if (userState && userState.waiting_for_input) {
-            logger.debug(`[Webhook] Usuário ${chatId} respondeu. Processando continuação do fluxo...`);
+            // Removido log de debug - não é necessário em produção
             
             // Parse das variáveis se necessário
             let parsedVariables = userState.variables;
             if (typeof parsedVariables === 'string') {
                 try {
                     parsedVariables = JSON.parse(parsedVariables);
-                    logger.debug(`[Webhook] Variáveis parseadas com sucesso:`, parsedVariables);
+                    // Removido log de debug
                 } catch (e) {
                     logger.error('[Webhook] Erro ao fazer parse das variáveis:', e);
                     parsedVariables = {};
                 }
             } else {
-                logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
+                // Removido log de debug
             }
             
             // Verificar se é um disparo (variáveis contêm informações de disparo)
