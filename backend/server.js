@@ -8153,85 +8153,158 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
         if (userState && userState.waiting_for_input) {
             logger.debug(`[Webhook] Usuário ${chatId} respondeu. Processando continuação do fluxo...`);
             
-            // Cancela o timeout, pois o usuário respondeu.
-            if (userState.scheduled_message_id) {
-                 try {
-                    await qstashClient.messages.delete(userState.scheduled_message_id);
-                    logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
-                } catch (e) { 
-                    logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
+            // Parse das variáveis se necessário
+            let parsedVariables = userState.variables;
+            if (typeof parsedVariables === 'string') {
+                try {
+                    parsedVariables = JSON.parse(parsedVariables);
+                    logger.debug(`[Webhook] Variáveis parseadas com sucesso:`, parsedVariables);
+                } catch (e) {
+                    logger.error('[Webhook] Erro ao fazer parse das variáveis:', e);
+                    parsedVariables = {};
                 }
-            }
-
-            // IMPORTANTE: Limpa o estado de espera ANTES de continuar o fluxo
-            await sqlTx`
-                UPDATE user_flow_states 
-                SET waiting_for_input = false, scheduled_message_id = NULL 
-                WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-            
-            logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
-
-            // Busca o fluxo correto: se houver flow_id no estado, usa esse fluxo específico
-            // Caso contrário, usa o fluxo ativo do bot (comportamento padrão)
-            let flow;
-            if (userState.flow_id) {
-                logger.debug(`[Webhook] Buscando fluxo específico pelo flow_id: ${userState.flow_id}`);
-                const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE id = ${userState.flow_id}`;
-                flow = flowResult;
             } else {
-                logger.debug(`[Webhook] Buscando fluxo ativo do bot (fallback)`);
-                const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
-                flow = flowResult;
+                logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
             }
-            logger.debug(`[Webhook] Flow encontrado:`, flow ? 'SIM' : 'NÃO');
             
-            if (flow && flow.nodes) {
-                logger.debug(`[Webhook] Flow.nodes tipo:`, typeof flow.nodes);
+            // Verificar se é um disparo (variáveis contêm informações de disparo)
+            const isDisparo = parsedVariables && (parsedVariables._disparo_is_waiting === true || parsedVariables._disparo_history_id);
+            
+            if (isDisparo) {
+                logger.debug(`[Webhook] Detectado que é continuação de disparo. History ID: ${parsedVariables._disparo_history_id}`);
                 
-                // IMPORTANTE: Parse correto do flow.nodes (pode ser string ou objeto)
-                const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                const nodes = flowData.nodes || [];
-                const edges = flowData.edges || [];
-                logger.debug(`[Webhook] Nodes: ${nodes.length}, Edges: ${edges.length}`);
+                // Cancela o timeout, pois o usuário respondeu.
+                if (userState.scheduled_message_id) {
+                    try {
+                        await qstashClient.messages.delete(userState.scheduled_message_id);
+                        logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                    } catch (e) { 
+                        logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
+                    }
+                }
                 
-                const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
-                logger.debug(`[Webhook] Próximo nó (handle 'a'):`, nextNodeId || 'NENHUM');
-                logger.debug(`[Webhook] Current node:`, userState.current_node_id);
-                logger.debug(`[Webhook] Edges disponíveis:`, edges.filter(e => e.source === userState.current_node_id));
-
-                if (nextNodeId) {
-                    // Parse das variáveis se necessário
-                    let parsedVariables = userState.variables;
-                    if (typeof parsedVariables === 'string') {
-                        try {
-                            parsedVariables = JSON.parse(parsedVariables);
-                            logger.debug(`[Webhook] Variáveis parseadas com sucesso:`, parsedVariables);
-                        } catch (e) {
-                            logger.error('[Webhook] Erro ao fazer parse das variáveis:', e);
-                            parsedVariables = {};
-                        }
-                    } else {
-                        logger.debug(`[Webhook] Variáveis já são objeto:`, parsedVariables);
+                // Limpa o estado de espera ANTES de continuar o fluxo
+                await sqlTx`
+                    UPDATE user_flow_states 
+                    SET waiting_for_input = false, scheduled_message_id = NULL 
+                    WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                
+                logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
+                
+                // Buscar fluxo de disparo
+                const disparoFlowId = parsedVariables._disparo_flow_id || userState.flow_id;
+                const historyId = parsedVariables._disparo_history_id;
+                
+                if (!disparoFlowId) {
+                    logger.error(`[Webhook] disparo_flow_id não encontrado para continuar disparo.`);
+                    await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    return;
+                }
+                
+                try {
+                    const [disparoFlow] = await sqlTx`SELECT nodes FROM disparo_flows WHERE id = ${disparoFlowId}`;
+                    
+                    if (!disparoFlow || !disparoFlow.nodes) {
+                        logger.error(`[Webhook] Fluxo de disparo ${disparoFlowId} não encontrado.`);
+                        await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        return;
                     }
                     
-                    logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}, flow_id: ${userState.flow_id || 'null'}`);
+                    const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+                    const nodes = flowData.nodes || [];
+                    const edges = flowData.edges || [];
                     
-                    try {
-                        // Passa nodes, edges e flow_id para garantir que o fluxo correto continue sendo usado
-                        await processFlow(chatId, botId, botToken, sellerId, nextNodeId, parsedVariables, nodes, edges, userState.flow_id);
-                        logger.debug(`[Webhook] Fluxo continuado com sucesso para ${chatId}`);
-                    } catch (error) {
-                        logger.error(`[Webhook] Erro ao continuar fluxo para ${chatId}:`, error);
-                        logger.error(`[Webhook] Stack trace:`, error.stack);
-                        // Limpa estado corrompido
+                    const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
+                    logger.debug(`[Webhook] Próximo nó (handle 'a'):`, nextNodeId || 'NENHUM');
+                    
+                    if (nextNodeId) {
+                        // Remover flags de disparo das variáveis antes de continuar
+                        const cleanVariables = { ...parsedVariables };
+                        delete cleanVariables._disparo_is_waiting;
+                        delete cleanVariables._disparo_history_id;
+                        delete cleanVariables._disparo_flow_id;
+                        
+                        // Importar e chamar processDisparoFlow
+                        const { processDisparoFlow } = require('./worker/process-disparo');
+                        await processDisparoFlow(chatId, botId, botToken, sellerId, nextNodeId, cleanVariables, nodes, edges, historyId);
+                        logger.debug(`[Webhook] Fluxo de disparo continuado com sucesso para ${chatId}`);
+                    } else {
+                        logger.debug(`[Webhook] Fim do fluxo de disparo após resposta do usuário (sem próximo nó).`);
                         await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     }
-                } else {
-                    logger.debug(`[Webhook] Fim do fluxo após resposta do usuário (sem próximo nó).`);
+                } catch (error) {
+                    logger.error(`[Webhook] Erro ao continuar fluxo de disparo para ${chatId}:`, error);
+                    logger.error(`[Webhook] Stack trace:`, error.stack);
                     await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 }
             } else {
-                 logger.error(`[Webhook] Fluxo para o bot ${botId} não encontrado ao tentar continuar.`);
+                // Fluxo normal (não é disparo)
+                // Cancela o timeout, pois o usuário respondeu.
+                if (userState.scheduled_message_id) {
+                     try {
+                        await qstashClient.messages.delete(userState.scheduled_message_id);
+                        logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
+                    } catch (e) { 
+                        logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
+                    }
+                }
+
+                // IMPORTANTE: Limpa o estado de espera ANTES de continuar o fluxo
+                await sqlTx`
+                    UPDATE user_flow_states 
+                    SET waiting_for_input = false, scheduled_message_id = NULL 
+                    WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                
+                logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
+
+                // Busca o fluxo correto: se houver flow_id no estado, usa esse fluxo específico
+                // Caso contrário, usa o fluxo ativo do bot (comportamento padrão)
+                let flow;
+                if (userState.flow_id) {
+                    logger.debug(`[Webhook] Buscando fluxo específico pelo flow_id: ${userState.flow_id}`);
+                    const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE id = ${userState.flow_id}`;
+                    flow = flowResult;
+                } else {
+                    logger.debug(`[Webhook] Buscando fluxo ativo do bot (fallback)`);
+                    const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
+                    flow = flowResult;
+                }
+                logger.debug(`[Webhook] Flow encontrado:`, flow ? 'SIM' : 'NÃO');
+                
+                if (flow && flow.nodes) {
+                    logger.debug(`[Webhook] Flow.nodes tipo:`, typeof flow.nodes);
+                    
+                    // IMPORTANTE: Parse correto do flow.nodes (pode ser string ou objeto)
+                    const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
+                    const nodes = flowData.nodes || [];
+                    const edges = flowData.edges || [];
+                    logger.debug(`[Webhook] Nodes: ${nodes.length}, Edges: ${edges.length}`);
+                    
+                    const nextNodeId = findNextNode(userState.current_node_id, 'a', edges);
+                    logger.debug(`[Webhook] Próximo nó (handle 'a'):`, nextNodeId || 'NENHUM');
+                    logger.debug(`[Webhook] Current node:`, userState.current_node_id);
+                    logger.debug(`[Webhook] Edges disponíveis:`, edges.filter(e => e.source === userState.current_node_id));
+
+                    if (nextNodeId) {
+                        logger.debug(`[Webhook] Chamando processFlow com nextNodeId: ${nextNodeId}, flow_id: ${userState.flow_id || 'null'}`);
+                        
+                        try {
+                            // Passa nodes, edges e flow_id para garantir que o fluxo correto continue sendo usado
+                            await processFlow(chatId, botId, botToken, sellerId, nextNodeId, parsedVariables, nodes, edges, userState.flow_id);
+                            logger.debug(`[Webhook] Fluxo continuado com sucesso para ${chatId}`);
+                        } catch (error) {
+                            logger.error(`[Webhook] Erro ao continuar fluxo para ${chatId}:`, error);
+                            logger.error(`[Webhook] Stack trace:`, error.stack);
+                            // Limpa estado corrompido
+                            await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        }
+                    } else {
+                        logger.debug(`[Webhook] Fim do fluxo após resposta do usuário (sem próximo nó).`);
+                        await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                    }
+                } else {
+                     logger.error(`[Webhook] Fluxo para o bot ${botId} não encontrado ao tentar continuar.`);
+                }
             }
         } else {
             logger.debug(`[Webhook] Mensagem de ${chatId} ignorada (não é /start e não há fluxo esperando resposta).`);

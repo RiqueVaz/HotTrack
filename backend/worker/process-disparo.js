@@ -497,11 +497,28 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                 // Processar ações do nó
                 const allActions = currentNode.data?.actions || [];
                 
-                logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${allActions.length} ação(ões): ${allActions.map(a => a.type).join(', ')}`);
+                // Verificar se o nó está configurado para 'waitForReply'
+                const willBeScheduled = currentNode.data?.waitForReply === true;
+                
+                // Se o nó será agendado (waitForReply), separa ações de mídia
+                let actionsToExecuteNow = allActions;
+                let scheduledMediaActions = [];
+                
+                if (willBeScheduled) {
+                    const mediaTypes = ['image', 'video', 'audio'];
+                    scheduledMediaActions = allActions.filter(a => mediaTypes.includes(a.type));
+                    actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
+                    
+                    if (scheduledMediaActions.length > 0) {
+                        logger.debug(`${logPrefix} [Flow Engine] Nó será agendado. Identificadas ${scheduledMediaActions.length} ação(ões) de mídia.`);
+                    }
+                }
+                
+                logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
                 
                 let actionResult;
                 try {
-                    actionResult = await processDisparoActions(allActions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
+                    actionResult = await processDisparoActions(actionsToExecuteNow, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
                     
                     // Se retornou transactionId (string que não é um código de controle), atualizar
                     if (actionResult && actionResult !== 'paid' && actionResult !== 'pending' && actionResult !== 'completed' && actionResult !== 'delay_scheduled') {
@@ -530,8 +547,117 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     break;
                 }
                 
-                // Ignorar waitForReply em disparos (sempre seguir pelo handle padrão)
-                // Em disparos, não há interação do usuário, então sempre seguir pelo handle 'a'
+                // Verifica se o nó está configurado para 'waitForReply'
+                if (willBeScheduled) {
+                    // Se houver mídias agendadas, envia ANTES de pausar
+                    if (scheduledMediaActions.length > 0) {
+                        logger.debug(`${logPrefix} [Flow Engine] Enviando ${scheduledMediaActions.length} mídia(s) antes de aguardar resposta.`);
+                        
+                        try {
+                            await processDisparoActions(scheduledMediaActions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
+                            logger.debug(`${logPrefix} [Flow Engine] Mídias enviadas antes de aguardar resposta.`);
+                        } catch (mediaError) {
+                            logger.error(`${logPrefix} [Flow Engine] Erro ao enviar mídias agendadas:`, mediaError);
+                            // Continua mesmo se falhar
+                        }
+                    }
+                    
+                    // Buscar disparo_flow_id do historyId
+                    let disparoFlowId = null;
+                    try {
+                        const [history] = await sqlWithRetry(sqlTx`
+                            SELECT disparo_flow_id 
+                            FROM disparo_history 
+                            WHERE id = ${historyId}
+                        `);
+                        if (history) {
+                            disparoFlowId = history.disparo_flow_id;
+                        }
+                    } catch (error) {
+                        logger.warn(`${logPrefix} Erro ao buscar disparo_flow_id (não crítico):`, error.message);
+                    }
+                    
+                    const noReplyNodeId = findNextNode(currentNode.id, 'b', flowEdges); // 'b' = Sem Resposta
+                    const timeoutMinutes = currentNode.data?.replyTimeout || 5;
+                    
+                    // Armazenar informações do disparo nas variables para recuperar depois
+                    const variablesWithDisparoInfo = {
+                        ...variables,
+                        _disparo_history_id: historyId,
+                        _disparo_flow_id: disparoFlowId,
+                        _disparo_is_waiting: true
+                    };
+                    
+                    try {
+                        // Agenda o worker de timeout
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { 
+                                chat_id: chatId, 
+                                bot_id: botId, 
+                                target_node_id: noReplyNodeId,
+                                variables: variablesWithDisparoInfo,
+                                is_disparo: true,
+                                history_id: historyId,
+                                disparo_flow_id: disparoFlowId,
+                                timestamp: Date.now()
+                            },
+                            delay: `${timeoutMinutes}m`,
+                            contentBasedDeduplication: false,
+                            method: "POST"
+                        });
+                        
+                        // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                        // Armazena informações do disparo nas variables
+                        await sqlWithRetry(sqlTx`
+                            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
+                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, ${disparoFlowId})
+                            ON CONFLICT (chat_id, bot_id)
+                            DO UPDATE SET 
+                                current_node_id = EXCLUDED.current_node_id,
+                                variables = EXCLUDED.variables,
+                                waiting_for_input = true,
+                                scheduled_message_id = EXCLUDED.scheduled_message_id,
+                                flow_id = EXCLUDED.flow_id
+                        `);
+                        
+                        logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                        
+                        // Atualizar disparo_log com status WAITING
+                        try {
+                            // Primeiro tenta atualizar se já existe um registro para este history_id/chat_id/bot_id
+                            const [existingLog] = await sqlWithRetry(sqlTx`
+                                SELECT id FROM disparo_log 
+                                WHERE history_id = ${historyId} AND chat_id = ${chatId} AND bot_id = ${botId}
+                                ORDER BY created_at DESC LIMIT 1
+                            `);
+                            
+                            if (existingLog) {
+                                await sqlWithRetry(sqlTx`
+                                    UPDATE disparo_log 
+                                    SET status = 'WAITING', details = 'Aguardando resposta do usuário'
+                                    WHERE id = ${existingLog.id}
+                                `);
+                            } else {
+                                // Se não existe, cria novo registro
+                                await sqlWithRetry(sqlTx`
+                                    INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details)
+                                    VALUES (${historyId}, ${chatId}, ${botId}, 'WAITING', 'Aguardando resposta do usuário')
+                                `);
+                            }
+                        } catch (logError) {
+                            logger.warn(`${logPrefix} Erro ao atualizar disparo_log (não crítico):`, logError.message);
+                        }
+                        
+                    } catch (error) {
+                        logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                        // Em caso de erro, continua o fluxo normalmente
+                    }
+                    
+                    // Para o processamento do fluxo para este contato
+                    currentNodeId = null;
+                    break;
+                }
                 
                 // Verifica se o resultado foi de um 'action_check_pix'
                 if (actionResult === 'paid') {
@@ -1547,4 +1673,4 @@ async function processDisparoBatchData(data) {
 }
 
 // Exportar funções para permitir uso em diferentes contextos
-module.exports = { handler, processDisparoData, processDisparoBatchData, findNextNode };
+module.exports = { handler, processDisparoData, processDisparoBatchData, findNextNode, processDisparoFlow };

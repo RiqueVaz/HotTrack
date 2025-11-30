@@ -2092,7 +2092,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 // Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
 async function processTimeoutData(data) {
     try {
-        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions } = data;
+        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions, is_disparo, history_id, disparo_flow_id } = data;
         const logPrefix = '[WORKER]';
 
         // Validação de dados obrigatórios
@@ -2100,7 +2100,7 @@ async function processTimeoutData(data) {
             throw new Error('chat_id e bot_id são obrigatórios.');
         }
 
-        console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}. Continue from delay: ${continue_from_delay || false}`);
+        console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}. Continue from delay: ${continue_from_delay || false}. Is disparo: ${is_disparo || false}`);
 
         // Buscar bot para obter o token e sellerId
         const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
@@ -2112,7 +2112,7 @@ async function processTimeoutData(data) {
 
         // Verificar estado atual do usuário
         const [currentState] = await sqlWithRetry(sqlTx`
-            SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id 
+            SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id, variables as state_variables
             FROM user_flow_states 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
@@ -2120,6 +2120,26 @@ async function processTimeoutData(data) {
         if (!currentState) {
             console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
             return { ignored: true, reason: 'no_user_state' };
+        }
+        
+        // Verificar se é disparo (pode vir do body ou das variables do estado)
+        let isDisparoTimeout = is_disparo === true;
+        let disparoHistoryId = history_id;
+        let disparoFlowId = disparo_flow_id;
+        
+        if (!isDisparoTimeout && currentState.state_variables) {
+            try {
+                const stateVars = typeof currentState.state_variables === 'string' 
+                    ? JSON.parse(currentState.state_variables) 
+                    : currentState.state_variables;
+                if (stateVars._disparo_is_waiting === true || stateVars._disparo_history_id) {
+                    isDisparoTimeout = true;
+                    disparoHistoryId = stateVars._disparo_history_id || history_id;
+                    disparoFlowId = stateVars._disparo_flow_id || disparo_flow_id || currentState.flow_id;
+                }
+            } catch (e) {
+                console.warn(`${logPrefix} [Timeout] Erro ao parsear variables do estado:`, e.message);
+            }
         }
         
         // Se é continuação após delay, não verificar waiting_for_input
@@ -2130,7 +2150,7 @@ async function processTimeoutData(data) {
             }
 
             // O usuário NÃO respondeu a tempo
-            console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout.`);
+            console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout. ${isDisparoTimeout ? '(DISPARO)' : ''}`);
             
             // Limpa o estado de 'espera' ANTES de processar o próximo nó
             await sqlWithRetry(sqlTx`
@@ -2138,7 +2158,44 @@ async function processTimeoutData(data) {
                 SET waiting_for_input = false, scheduled_message_id = NULL 
                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
         } else {
-            console.log(`${logPrefix} [Timeout] Continuando após delay agendado para ${chat_id}.`);
+            console.log(`${logPrefix} [Timeout] Continuando após delay agendado para ${chat_id}. ${isDisparoTimeout ? '(DISPARO)' : ''}`);
+        }
+        
+        // Se é disparo, processar usando processDisparoFlow
+        if (isDisparoTimeout && target_node_id) {
+            try {
+                if (!disparoFlowId) {
+                    throw new Error('disparo_flow_id não encontrado para continuar disparo após timeout.');
+                }
+                
+                const [disparoFlow] = await sqlWithRetry(sqlTx`
+                    SELECT nodes FROM disparo_flows WHERE id = ${disparoFlowId}
+                `);
+                
+                if (!disparoFlow || !disparoFlow.nodes) {
+                    throw new Error(`Fluxo de disparo ${disparoFlowId} não encontrado.`);
+                }
+                
+                const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+                const flowNodes = flowData.nodes || [];
+                const flowEdges = flowData.edges || [];
+                
+                // Limpar flags de disparo das variables
+                const cleanVariables = { ...variables };
+                if (cleanVariables._disparo_is_waiting !== undefined) delete cleanVariables._disparo_is_waiting;
+                if (cleanVariables._disparo_history_id !== undefined) delete cleanVariables._disparo_history_id;
+                if (cleanVariables._disparo_flow_id !== undefined) delete cleanVariables._disparo_flow_id;
+                
+                // Importar e chamar processDisparoFlow
+                const { processDisparoFlow } = require('./process-disparo');
+                await processDisparoFlow(chat_id, bot_id, botToken, sellerId, target_node_id, cleanVariables, flowNodes, flowEdges, disparoHistoryId);
+                
+                console.log(`${logPrefix} [Timeout] Fluxo de disparo continuado após timeout para ${chat_id}`);
+                return { processed: true, is_disparo: true };
+            } catch (error) {
+                console.error(`${logPrefix} [Timeout] Erro ao processar timeout de disparo:`, error);
+                throw error;
+            }
         }
 
         // Inicia o 'processFlow' a partir do nó de timeout (handle 'b')

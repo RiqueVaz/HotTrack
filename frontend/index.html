@@ -11107,7 +11107,7 @@ function generatePreviewHTML(data) {
                     </div>
                     <div className="node-editor-modal-footer">
                         <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            {!isDisparoFlow && !actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
+                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
@@ -11117,7 +11117,7 @@ function generatePreviewHTML(data) {
                                     Aguardar Resposta
                                 </label>
                             )}
-                            {!isDisparoFlow && nodeData.waitForReply && (
+                            {nodeData.waitForReply && (
                                 <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <label style={{fontSize: '0.85rem'}}>Tempo (min)</label>
                                     <input 
