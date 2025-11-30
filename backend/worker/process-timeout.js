@@ -444,6 +444,12 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
         return null;
     }
 
+    // Validar file_id antes de usar
+    if (typeof fileIdentifier !== 'string' || fileIdentifier.trim() === '') {
+        console.warn(`[Timeout Media] File ID inválido ou vazio para o nó de ${type} ${node.id}`);
+        return null;
+    }
+
     // Verificar cache antes de processar mídia
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         if (botId && dbCache.isBotBlocked(botId, chatId)) {
@@ -509,6 +515,14 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                     parse_mode: 'HTML'
                 }, { timeout }, 3, 1500, botId);
             } catch (urlError) {
+                // Verificar se é erro de file_id inválido
+                const urlErrorMessage = urlError.message || urlError.description || '';
+                const urlErrorResponseDesc = urlError.response?.data?.description || '';
+                if (urlErrorMessage.includes('wrong remote file identifier') || 
+                    urlErrorResponseDesc.includes('wrong remote file identifier')) {
+                    console.warn(`[Timeout Media] File ID inválido para ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
                 console.warn(`[Timeout Media] Erro ao enviar via R2 URL, tentando fallback:`, urlError.message);
                 // Continuar para fallback
                 response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
@@ -541,6 +555,14 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                     throw new Error('Migração não retornou storage_url');
                 }
             } catch (migrationError) {
+                // Verificar se é erro de file_id inválido
+                const migrationErrorMessage = migrationError.message || migrationError.description || '';
+                const migrationErrorResponseDesc = migrationError.response?.data?.description || '';
+                if (migrationErrorMessage.includes('wrong remote file identifier') || 
+                    migrationErrorResponseDesc.includes('wrong remote file identifier')) {
+                    console.warn(`[Timeout Media] File ID inválido na migração para ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
                 console.error(`[Timeout Media] Erro na migração sob demanda:`, migrationError.message);
                 // Fallback para método antigo
                 response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
@@ -564,12 +586,25 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                 return null;
             }
             
-            response = await sendTelegramRequest(botToken, method, {
-                chat_id: chatId,
-                [field]: fileIdentifier,
-                caption: caption,
-                parse_mode: 'HTML'
-            }, { timeout }, 3, 1500, botId);
+            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
+            // Remover campos undefined do payload
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === undefined) {
+                    delete payload[key];
+                }
+            });
+            try {
+                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+            } catch (urlError) {
+                const urlErrorMessage = urlError.message || urlError.description || '';
+                const urlErrorResponseDesc = urlError.response?.data?.description || '';
+                if (urlErrorMessage.includes('wrong remote file identifier') || 
+                    urlErrorResponseDesc.includes('wrong remote file identifier')) {
+                    console.warn(`[Timeout Media] File ID inválido para URL ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
+                throw urlError;
+            }
         } else {
             // file_id direto de outro bot
             const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
@@ -578,7 +613,24 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
             const field = fieldMap[type];
             
             const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+            // Remover campos undefined do payload
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === undefined) {
+                    delete payload[key];
+                }
+            });
+            try {
+                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+            } catch (fileIdError) {
+                const fileIdErrorMessage = fileIdError.message || fileIdError.description || '';
+                const fileIdErrorResponseDesc = fileIdError.response?.data?.description || '';
+                if (fileIdErrorMessage.includes('wrong remote file identifier') || 
+                    fileIdErrorResponseDesc.includes('wrong remote file identifier')) {
+                    console.warn(`[Timeout Media] File ID inválido para ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
+                throw fileIdError;
+            }
         }
     }
     
