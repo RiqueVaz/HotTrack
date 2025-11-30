@@ -28,6 +28,7 @@ const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 // ==========================================================
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100; // Limite máximo de tokens no cache
 
 // Cleanup automático do cache de tokens SyncPay (evita memory leak)
 setInterval(() => {
@@ -39,6 +40,18 @@ setInterval(() => {
             cleaned++;
         }
     }
+    
+    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
+    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
+        const entries = Array.from(syncPayTokenCache.entries())
+            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
+        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            syncPayTokenCache.delete(entries[i][0]);
+        }
+        cleaned += toRemove;
+    }
+    
     if (cleaned > 0 && (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true')) {
         console.log(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache (worker-timeout)`);
     }

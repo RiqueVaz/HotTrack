@@ -1201,6 +1201,7 @@ const adminAllowedOrigins = [
 // Cache para domínios permitidos por pressel (performance)
 const allowedDomainsCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+const MAX_ALLOWED_DOMAINS_CACHE_SIZE = 1000; // Limite máximo de entradas
 
 // Cleanup automático do cache de domínios permitidos (evita memory leak)
 setInterval(() => {
@@ -1212,6 +1213,18 @@ setInterval(() => {
             cleaned++;
         }
     }
+    
+    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
+    if (allowedDomainsCache.size >= MAX_ALLOWED_DOMAINS_CACHE_SIZE) {
+        const entries = Array.from(allowedDomainsCache.entries())
+            .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+        const toRemove = Math.floor(MAX_ALLOWED_DOMAINS_CACHE_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            allowedDomainsCache.delete(entries[i][0]);
+        }
+        cleaned += toRemove;
+    }
+    
     if (cleaned > 0 && shouldLogDebug()) {
         logger.debug(`[Memory Cleanup] Removidas ${cleaned} entradas expiradas do allowedDomainsCache`);
     }
@@ -1399,6 +1412,17 @@ async function isDomainAllowedForPressel(presselId, origin) {
 
     const isAllowed = result[0]?.count > 0;
     
+    // Verificar limite antes de atualizar cache
+    if (allowedDomainsCache.size >= MAX_ALLOWED_DOMAINS_CACHE_SIZE) {
+        // Remover 20% das entradas mais antigas
+        const entries = Array.from(allowedDomainsCache.entries())
+            .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+        const toRemove = Math.floor(MAX_ALLOWED_DOMAINS_CACHE_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            allowedDomainsCache.delete(entries[i][0]);
+        }
+    }
+    
     // Atualizar cache
     allowedDomainsCache.set(cacheKey, {
       allowed: isAllowed,
@@ -1569,6 +1593,7 @@ const PARADISE_SPLIT_RECIPIENT_ID = process.env.PARADISE_SPLIT_RECIPIENT_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
 const syncPayTokenCache = new Map();
+const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100; // Limite máximo de tokens no cache
 
 // Cleanup automático do cache de tokens SyncPay (evita memory leak)
 setInterval(() => {
@@ -1580,6 +1605,18 @@ setInterval(() => {
             cleaned++;
         }
     }
+    
+    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
+    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
+        const entries = Array.from(syncPayTokenCache.entries())
+            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
+        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            syncPayTokenCache.delete(entries[i][0]);
+        }
+        cleaned += toRemove;
+    }
+    
     if (cleaned > 0 && shouldLogDebug()) {
         logger.debug(`[Memory Cleanup] Removidos ${cleaned} tokens expirados do syncPayTokenCache`);
     }
@@ -1587,6 +1624,7 @@ setInterval(() => {
 
 // Map de promises pendentes para evitar queries duplicadas em getClickGeo
 const pendingGeoQueries = new Map();
+const MAX_PENDING_GEO_QUERIES_SIZE = 500; // Limite máximo de queries pendentes
 
 // Cleanup automático de promises pendentes de geolocalização (evita memory leak)
 setInterval(() => {
@@ -1599,6 +1637,18 @@ setInterval(() => {
             cleaned++;
         }
     }
+    
+    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
+    if (pendingGeoQueries.size >= MAX_PENDING_GEO_QUERIES_SIZE) {
+        const entries = Array.from(pendingGeoQueries.entries())
+            .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+        const toRemove = Math.floor(MAX_PENDING_GEO_QUERIES_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            pendingGeoQueries.delete(entries[i][0]);
+        }
+        cleaned += toRemove;
+    }
+    
     if (cleaned > 0 && shouldLogDebug()) {
         logger.debug(`[Memory Cleanup] Removidas ${cleaned} promises expiradas do pendingGeoQueries`);
     }
@@ -1732,9 +1782,10 @@ async function getClickGeo(clickId, sellerId) {
     
     // Verificar se já existe query em andamento para este click_id
     const pendingKey = `click_geo_pending:${clickId}:${sellerId}`;
-    if (pendingGeoQueries.has(pendingKey)) {
+    const pending = pendingGeoQueries.get(pendingKey);
+    if (pending) {
         // Aguardar query existente para evitar duplicação
-        return await pendingGeoQueries.get(pendingKey);
+        return await pending.promise;
     }
     
     // Criar promise para esta query
@@ -1781,7 +1832,19 @@ async function getClickGeo(clickId, sellerId) {
     })();
     
     // Adicionar à lista de pendentes antes de iniciar
-    pendingGeoQueries.set(pendingKey, queryPromise);
+    // Verificar limite antes de adicionar
+    if (pendingGeoQueries.size >= MAX_PENDING_GEO_QUERIES_SIZE) {
+        // Remover 20% das entradas mais antigas
+        const entries = Array.from(pendingGeoQueries.entries())
+            .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+        const toRemove = Math.floor(MAX_PENDING_GEO_QUERIES_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            pendingGeoQueries.delete(entries[i][0]);
+        }
+    }
+    
+    // Armazenar promise com timestamp para controle de limpeza
+    pendingGeoQueries.set(pendingKey, { promise: queryPromise, timestamp: Date.now() });
     return await queryPromise;
 }
 
