@@ -6772,7 +6772,6 @@ function generatePreviewHTML(data) {
     // Historico tab states
     const [history, setHistory] = useState([]);
     const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-    const [isChecking, setIsChecking] = useState(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
@@ -8086,18 +8085,6 @@ function generatePreviewHTML(data) {
         </div>
     );
 
-    const handleCheckConversions = async (historyId) => {
-        setIsChecking(historyId);
-        try {
-            const res = await App.apiRequest(`/api/disparos/check-conversions/${historyId}`, 'POST');
-            App.showToast(res.message, 'success');
-            fetchHistory(currentPage, false);
-        } catch (error) {
-            App.showToast('Erro ao verificar: ' + (error.response?.data?.message || error.message), 'error');
-        } finally {
-            setIsChecking(null);
-        }
-    };
     
     const [isCancelling, setIsCancelling] = useState(null);
     
@@ -8285,9 +8272,6 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                </button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -8478,7 +8462,6 @@ function generatePreviewHTML(data) {
     function DisparosHistoryPage() {
         const [history, setHistory] = useState([]);
         const [isLoading, setIsLoading] = useState(true);
-        const [isChecking, setIsChecking] = useState(null);
         const [pollingInterval, setPollingInterval] = useState(null);
 
         const fetchHistory = useCallback((showToast = true) => {
@@ -8531,18 +8514,6 @@ function generatePreviewHTML(data) {
             }
         }, [history, fetchHistory, pollingInterval]);
         
-        const handleCheckConversions = async (historyId) => {
-            setIsChecking(historyId);
-            try {
-                const res = await api.post(`/api/disparos/check-conversions/${historyId}`);
-                alert(res.data.message);
-                fetchHistory();
-            } catch (error) {
-                alert('Erro ao verificar: ' + (error.response?.data?.message || error.message));
-            } finally {
-                setIsChecking(null);
-            }
-        };
         
         const [isCancelling, setIsCancelling] = useState(null);
         
@@ -8645,9 +8616,6 @@ function generatePreviewHTML(data) {
                                                             {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
                                                         </button>
                                                     )}
-                                                <button className="btn btn-secondary btn-sm" onClick={() => handleCheckConversions(item.id)} disabled={isChecking === item.id}>
-                                                    {isChecking === item.id ? 'A verificar...' : 'Verificar PIX'}
-                                                </button>
                                                 </div>
                                             </td>
                                         </tr>
