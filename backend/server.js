@@ -2553,11 +2553,22 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 const method = methodMap[fileType];
                 const field = fieldMap[fileType];
                 const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+                try {
                 return await sendTelegramRequest(destinationBotToken, method, { 
                     chat_id: chatId, 
                     [field]: fileId, 
                     caption: caption || ""
                 }, { timeout });
+                } catch (bigFileError) {
+                    const bigFileErrorMessage = bigFileError.message || bigFileError.description || '';
+                    const bigFileErrorResponseDesc = bigFileError.response?.data?.description || '';
+                    if (bigFileErrorMessage.includes('wrong remote file identifier') || 
+                        bigFileErrorResponseDesc.includes('wrong remote file identifier')) {
+                        logger.warn(`[Flow Media] File ID inválido para arquivo grande ${fileType}. Pulando envio.`);
+                        return null;
+                    }
+                    throw bigFileError;
+                }
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
         }
@@ -2587,6 +2598,15 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
     return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
     } catch (error) {
+        // Verificar se é erro de file_id inválido
+        const errorMessage = error.message || error.description || '';
+        const responseDesc = error.response?.data?.description || '';
+        if (errorMessage.includes('wrong remote file identifier') || 
+            responseDesc.includes('wrong remote file identifier')) {
+            logger.warn(`[Flow Media] File ID inválido em sendMediaAsProxy para ${fileType}. Pulando envio.`);
+            return null;
+        }
+        
         // Se falhar ao baixar o arquivo (timeout, network error, etc.), tentar usar file_id diretamente
         if (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED')) {
             logger.warn(`[Flow Media] Erro ao baixar arquivo (${error.message}). Tentando usar file_id diretamente: ${fileId}`);
@@ -2595,11 +2615,22 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
             const method = methodMap[fileType];
             const field = fieldMap[fileType];
             const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
+            try {
             return await sendTelegramRequest(destinationBotToken, method, { 
                 chat_id: chatId, 
                 [field]: fileId, 
                 caption: caption || ""
             }, { timeout });
+            } catch (fallbackError) {
+                const fallbackErrorMessage = fallbackError.message || fallbackError.description || '';
+                const fallbackErrorResponseDesc = fallbackError.response?.data?.description || '';
+                if (fallbackErrorMessage.includes('wrong remote file identifier') || 
+                    fallbackErrorResponseDesc.includes('wrong remote file identifier')) {
+                    logger.warn(`[Flow Media] File ID inválido no fallback de sendMediaAsProxy para ${fileType}. Pulando envio.`);
+                    return null;
+                }
+                throw fallbackError;
+            }
         }
         throw error;
     }
@@ -2797,6 +2828,12 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
         return null;
     }
 
+    // Validar file_id antes de usar
+    if (typeof fileIdentifier !== 'string' || fileIdentifier.trim() === '') {
+        logger.warn(`[Flow Media] File ID inválido ou vazio para o nó de ${type} ${node.id}`);
+        return null;
+    }
+
     const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
     let response;
     const timeout = type === 'video' ? 120000 : 30000; // Timeout maior para vídeos
@@ -2813,17 +2850,37 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             // Usar nova função que suporta R2
             response = await sendMediaFromLibrary(botToken, chatId, fileIdentifier, type, caption, sellerId);
         } catch (error) {
+            // Verificar se é erro de file_id inválido
+            const errorMessage = error.message || error.description || '';
+            const responseDesc = error.response?.data?.description || '';
+            if (errorMessage.includes('wrong remote file identifier') || 
+                responseDesc.includes('wrong remote file identifier')) {
+                logger.warn(`[Flow Media] File ID inválido para ${type} (nó ${node.id}). Pulando envio.`);
+                return null; // Não tentar fallback se file_id é inválido
+            }
+            
             // Se sendMediaFromLibrary falhar, tentar usar file_id diretamente como fallback
             logger.warn(`[Flow Media] Erro ao enviar mídia via library (${error.message}). Tentando file_id diretamente.`);
             const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
             const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
             const method = methodMap[type];
             const field = fieldMap[type];
+            try {
             response = await sendTelegramRequest(botToken, method, { 
                 chat_id: chatId, 
                 [field]: fileIdentifier, 
                 caption: caption || ""
             }, { timeout });
+            } catch (fallbackError) {
+                const fallbackMessage = fallbackError.message || fallbackError.description || '';
+                const fallbackResponseDesc = fallbackError.response?.data?.description || '';
+                if (fallbackMessage.includes('wrong remote file identifier') || 
+                    fallbackResponseDesc.includes('wrong remote file identifier')) {
+                    logger.warn(`[Flow Media] File ID inválido no fallback para ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
+                throw fallbackError;
+            }
         }
     } else {
         // Se não é da biblioteca, pode ser URL direta ou file_id de outro bot
@@ -2841,7 +2898,24 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             }
             
             const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
+            // Remover campos undefined do payload
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === undefined) {
+                    delete payload[key];
+                }
+            });
+            try {
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
+            } catch (urlError) {
+                const urlErrorMessage = urlError.message || urlError.description || '';
+                const urlErrorResponseDesc = urlError.response?.data?.description || '';
+                if (urlErrorMessage.includes('wrong remote file identifier') || 
+                    urlErrorResponseDesc.includes('wrong remote file identifier')) {
+                    logger.warn(`[Flow Media] File ID inválido para URL ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
+                throw urlError;
+            }
         } else {
             // File_id de outro bot ou URL não reconhecida
             const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
@@ -2851,7 +2925,24 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             const field = fieldMap[type];
             
             const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
+            // Remover campos undefined do payload
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === undefined) {
+                    delete payload[key];
+                }
+            });
+            try {
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
+            } catch (fileIdError) {
+                const fileIdErrorMessage = fileIdError.message || fileIdError.description || '';
+                const fileIdErrorResponseDesc = fileIdError.response?.data?.description || '';
+                if (fileIdErrorMessage.includes('wrong remote file identifier') || 
+                    fileIdErrorResponseDesc.includes('wrong remote file identifier')) {
+                    logger.warn(`[Flow Media] File ID inválido para ${type} (nó ${node.id}). Pulando envio.`);
+                    return null;
+                }
+                throw fileIdError;
+            }
         }
     }
     

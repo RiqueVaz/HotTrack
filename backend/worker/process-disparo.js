@@ -282,12 +282,23 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 const method = methodMap[fileType];
                 const field = fieldMap[fileType];
                 const timeout = fileType === 'video' ? 120000 : 60000;
-                return await sendTelegramRequest(destinationBotToken, method, { 
-                    chat_id: chatId, 
-                    [field]: fileId, 
-                    caption, 
-                    parse_mode: 'HTML' 
-                }, { timeout });
+                try {
+                    return await sendTelegramRequest(destinationBotToken, method, { 
+                        chat_id: chatId, 
+                        [field]: fileId, 
+                        caption, 
+                        parse_mode: 'HTML' 
+                    }, { timeout });
+                } catch (bigFileError) {
+                    const bigFileErrorMessage = bigFileError.message || bigFileError.description || '';
+                    const bigFileErrorResponseDesc = bigFileError.response?.data?.description || '';
+                    if (bigFileErrorMessage.includes('wrong remote file identifier') || 
+                        bigFileErrorResponseDesc.includes('wrong remote file identifier')) {
+                        console.warn(`[Disparo Media] File ID inválido para arquivo grande ${fileType}. Pulando envio.`);
+                        return null;
+                    }
+                    throw bigFileError;
+                }
             }
             throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
         }
@@ -313,6 +324,14 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
         return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
     } catch (error) {
+        // Verificar se é erro de file_id inválido
+        const errorMessage = error.message || error.description || '';
+        const responseDesc = error.response?.data?.description || '';
+        if (errorMessage.includes('wrong remote file identifier') || 
+            responseDesc.includes('wrong remote file identifier')) {
+            console.warn(`[Disparo Media] File ID inválido em sendMediaAsProxy para ${fileType}. Pulando envio.`);
+            return null;
+        }
         // Se falhar ao baixar, não tentar file_id direto pois é arquivo da biblioteca (file_id do bot de storage)
         // O file_id não funcionará com o bot do usuário
         throw error;
