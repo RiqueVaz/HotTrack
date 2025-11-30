@@ -9,6 +9,9 @@ class DbCache {
         // Cache: key -> { value, expiresAt }
         this.cache = new Map();
         
+        // Limite máximo de entradas no cache (evita crescimento indefinido)
+        this.MAX_CACHE_SIZE = 10000;
+        
         // Cleanup periódico
         this.lastCleanup = Date.now();
         this.CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutos
@@ -42,6 +45,21 @@ class DbCache {
      * @param {number} ttlMs - Time to live em milissegundos
      */
     set(key, value, ttlMs) {
+        // Se cache está cheio, fazer limpeza agressiva
+        if (this.cache.size >= this.MAX_CACHE_SIZE) {
+            this._cleanup();
+            
+            // Se ainda estiver cheio após cleanup, remover 20% das entradas mais antigas
+            if (this.cache.size >= this.MAX_CACHE_SIZE) {
+                const entries = Array.from(this.cache.entries())
+                    .sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+                const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
+                for (let i = 0; i < toRemove && i < entries.length; i++) {
+                    this.cache.delete(entries[i][0]);
+                }
+            }
+        }
+        
         const expiresAt = Date.now() + ttlMs;
         this.cache.set(key, { value, expiresAt });
         

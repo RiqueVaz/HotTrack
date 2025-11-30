@@ -18,6 +18,9 @@ class ApiRateLimiter {
         // Cache por resource: `${provider}_${resourceId}` -> { data, timestamp }
         this.resourceCache = new Map();
         
+        // Limite máximo de entradas no resourceCache (evita crescimento indefinido)
+        this.MAX_RESOURCE_CACHE_SIZE = 5000;
+        
         // Configurações por provedor
         this.providerConfigs = new Map([
             ['pushinpay', {
@@ -87,6 +90,16 @@ class ApiRateLimiter {
         for (const [key, cached] of this.resourceCache.entries()) {
             if (now - cached.timestamp > this.CACHE_MAX_AGE) {
                 this.resourceCache.delete(key);
+            }
+        }
+        
+        // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
+        if (this.resourceCache.size >= this.MAX_RESOURCE_CACHE_SIZE) {
+            const entries = Array.from(this.resourceCache.entries())
+                .sort((a, b) => a[1].timestamp - b[1].timestamp);
+            const toRemove = Math.floor(this.MAX_RESOURCE_CACHE_SIZE * 0.2);
+            for (let i = 0; i < toRemove && i < entries.length; i++) {
+                this.resourceCache.delete(entries[i][0]);
             }
         }
         
@@ -203,6 +216,21 @@ class ApiRateLimiter {
      * Salva no cache
      */
     _setCache(provider, resourceId, data) {
+        // Se cache está cheio, fazer limpeza
+        if (this.resourceCache.size >= this.MAX_RESOURCE_CACHE_SIZE) {
+            this._cleanup();
+            
+            // Se ainda estiver cheio após cleanup, remover 20% das entradas mais antigas
+            if (this.resourceCache.size >= this.MAX_RESOURCE_CACHE_SIZE) {
+                const entries = Array.from(this.resourceCache.entries())
+                    .sort((a, b) => a[1].timestamp - b[1].timestamp);
+                const toRemove = Math.floor(this.MAX_RESOURCE_CACHE_SIZE * 0.2);
+                for (let i = 0; i < toRemove && i < entries.length; i++) {
+                    this.resourceCache.delete(entries[i][0]);
+                }
+            }
+        }
+        
         const key = `${provider}_${resourceId}`;
         this.resourceCache.set(key, {
             data,

@@ -68,6 +68,19 @@ function createPixService({
 
     const { access_token, expires_in } = response.data;
     const expiresAt = Date.now() + (expires_in * 1000);
+    
+    // Verificar limite antes de adicionar (limite padrão: 100)
+    const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100;
+    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
+        // Remover 20% das entradas mais antigas
+        const entries = Array.from(syncPayTokenCache.entries())
+            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
+        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
+        for (let i = 0; i < toRemove && i < entries.length; i++) {
+            syncPayTokenCache.delete(entries[i][0]);
+        }
+    }
+    
     syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
     return access_token;
   }
