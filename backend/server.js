@@ -1664,55 +1664,6 @@ setInterval(async () => {
     }
 }, 60 * 60 * 1000); // A cada 1 hora
 
-// Job periódico para processar timeouts curtos expirados
-setInterval(async () => {
-    try {
-        const expiredTimeouts = await sqlWithRetry(sqlTx`
-            SELECT chat_id, bot_id, current_node_id, flow_id, variables
-            FROM user_flow_states
-            WHERE waiting_for_input = true
-            AND timeout_at IS NOT NULL
-            AND timeout_at <= NOW()
-            AND scheduled_message_id IS NULL
-            LIMIT 50
-        `);
-        
-        for (const state of expiredTimeouts) {
-            try {
-                const variables = typeof state.variables === 'string' 
-                    ? JSON.parse(state.variables) 
-                    : state.variables;
-                
-                // Buscar noReplyNodeId do fluxo
-                const [flow] = await sqlWithRetry(sqlTx`SELECT nodes FROM flows WHERE id = ${state.flow_id}`);
-                if (!flow) continue;
-                
-                const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
-                const nodes = flowData.nodes || [];
-                const edges = flowData.edges || [];
-                const currentNode = nodes.find(n => n.id === state.current_node_id);
-                if (!currentNode) continue;
-                
-                // Encontrar nó de "sem resposta" (handle 'b')
-                const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
-                
-                // Processar timeout usando função existente
-                const { processTimeoutData } = require('./worker/process-timeout');
-                await processTimeoutData({
-                    chat_id: state.chat_id,
-                    bot_id: state.bot_id,
-                    target_node_id: noReplyNodeId,
-                    variables: variables
-                });
-            } catch (error) {
-                logger.error(`[Timeout Job] Erro ao processar timeout para ${state.chat_id}:`, error.message);
-            }
-        }
-    } catch (error) {
-        logger.error('[Timeout Job] Erro ao buscar timeouts expirados:', error);
-    }
-}, 2 * 60 * 1000); // A cada 2 minutos
-
 const TAG_TITLE_MAX_LENGTH = 12;
 const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -7391,8 +7342,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
                 
-                // Se o delay for maior que 180 segundos, agendar via QStash
-                if (delaySeconds > 180) {
+                // Se o delay for maior que 60 segundos, agendar via QStash
+                if (delaySeconds > 60) {
                     // Removido log de debug
                     
                     // Usar variáveis locais para poder modificar os valores
@@ -7417,7 +7368,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     if (!resolvedCurrentNodeId) {
                         logger.error(`${logPrefix} [Delay] Não foi possível determinar currentNodeId. Processando delay normalmente.`);
-                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 180) * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                         break;
                     }
                     
@@ -7476,7 +7427,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     } catch (error) {
                         logger.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
                         // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
-                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 180) * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                     }
                 } else {
                     // Delay curto: processar normalmente
@@ -7716,9 +7667,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 
                 // Limpa o estado atual antes de iniciar o novo fluxo
                 await sqlTx`UPDATE user_flow_states 
-                          SET waiting_for_input = false, 
-                              scheduled_message_id = NULL,
-                              timeout_at = NULL
+                          SET waiting_for_input = false, scheduled_message_id = NULL
                           WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 // Pula nós do tipo 'trigger' até encontrar um nó válido
@@ -8262,7 +8211,6 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 variables = EXCLUDED.variables, 
                 waiting_for_input = false, 
                 scheduled_message_id = NULL,
-                timeout_at = NULL,
                 flow_id = EXCLUDED.flow_id;
         `;
 
@@ -8368,45 +8316,34 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 
                 const noReplyNodeId = findNextNode(currentNode.id, 'b', edges); // 'b' = Sem Resposta
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
-                const TIMEOUT_THRESHOLD_MINUTES = 15; // Usar QStash apenas para timeouts > 15min
 
                 try {
-                    if (timeoutMinutes <= TIMEOUT_THRESHOLD_MINUTES) {
-                        // Timeout curto: salvar timeout_at no banco, processar via job periódico
-                        const timeoutAt = new Date(Date.now() + timeoutMinutes * 60 * 1000);
-                        await sqlTx`
-                            UPDATE user_flow_states 
-                            SET waiting_for_input = true, 
-                                timeout_at = ${timeoutAt},
-                                scheduled_message_id = NULL
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                        `;
-                    } else {
-                        // Timeout longo: usar QStash (comportamento atual)
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { 
-                                chat_id: chatId, 
-                                bot_id: botId, 
-                                target_node_id: noReplyNodeId,
-                                variables: variables,
-                                timestamp: Date.now()
-                            },
-                            delay: `${timeoutMinutes}m`,
-                            contentBasedDeduplication: false,
-                            method: "POST"
-                        });
-                        
-                        await sqlTx`
-                            UPDATE user_flow_states 
-                            SET waiting_for_input = true, 
-                                scheduled_message_id = ${response.messageId},
-                                timeout_at = NULL
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                        `;
-                    }
+                    // Agenda o worker de timeout com uma única chamada
+                    const response = await qstashClient.publishJSON({
+                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                        body: {
+                            chat_id: chatId,
+                            bot_id: botId,
+                            target_node_id: noReplyNodeId,
+                            variables: variables,
+                            timestamp: Date.now() // 👈 ADICIONE ISSO para evitar deduplicação
+                        },
+                        delay: `${timeoutMinutes}m`,
+                        contentBasedDeduplication: false, // 👈 MUDE DE true PARA false
+                        method: "POST"
+                    });
+
+                    // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                    // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
+                    await sqlTx`
+                        UPDATE user_flow_states
+                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId}
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+
+                    // Removido log de debug
+
                 } catch (error) {
-                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout:`, error);
+                    logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -8501,25 +8438,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
 
             // Processar callback de geração de PIX
             if (callbackData.startsWith('pix_generate_')) {
-                // IMPORTANTE: Responder callback IMEDIATAMENTE para evitar expiração (~30s)
-                // O PIX ainda será gerado quando o botão é clicado, mas respondemos primeiro
-                let callbackResponded = false;
-                try {
-                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                        callback_query_id: callbackId,
-                        text: 'Gerando PIX...'
-                    }, {}, 3, 1500, botId);
-                    callbackResponded = true;
-                } catch (e) {
-                    // Se já expirou, continuar mesmo assim (vai enviar mensagem normal)
-                    if (e.response?.data?.error_code === 400 && 
-                        e.response?.data?.description?.includes('query is too old')) {
-                        logger.warn(`[Webhook] Callback já expirado, continuando processamento...`);
-                    } else {
-                        logger.warn(`[Webhook] Erro ao responder callback (não crítico):`, e.message);
-                    }
-                }
-                
                 try {
                     // PRIORIDADE 1: Buscar dados da tabela temporária pix_pending_callbacks
                     const [pendingData] = await sqlTx`
@@ -8552,29 +8470,11 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         `;
                         
                         if (!userState) {
-                            // Se callback não foi respondido, tentar responder
-                            // Se já expirou, enviar mensagem normal
-                            if (!callbackResponded) {
-                                try {
-                                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                        callback_query_id: callbackId,
-                                        text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.',
-                                        show_alert: true
-                                    }, {}, 3, 1500, botId);
-                                } catch (e) {
-                                    if (e.response?.data?.error_code === 400) {
-                                        await sendTelegramRequest(botToken, 'sendMessage', {
-                                            chat_id: chatId,
-                                            text: '❌ Erro: Dados do PIX não encontrados. O botão pode ter expirado.'
-                                        }, {}, 3, 1500, botId);
-                                    }
-                                }
-                            } else {
-                                await sendTelegramRequest(botToken, 'sendMessage', {
-                                    chat_id: chatId,
-                                    text: '❌ Erro: Dados do PIX não encontrados. O botão pode ter expirado.'
-                                }, {}, 3, 1500, botId);
-                            }
+                            await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                callback_query_id: callbackId,
+                                text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.', 
+                                show_alert: true
+                            }, {}, 3, 1500, botId);
                             return;
                         }
 
@@ -8584,29 +8484,11 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             try {
                                 variables = JSON.parse(variables);
                             } catch (e) {
-                                // Se callback não foi respondido, tentar responder
-                                // Se já expirou, enviar mensagem normal
-                                if (!callbackResponded) {
-                                    try {
-                                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                            callback_query_id: callbackId,
-                                            text: 'Erro ao processar dados.',
-                                            show_alert: true
-                                        }, {}, 3, 1500, botId);
-                                    } catch (err) {
-                                        if (err.response?.data?.error_code === 400) {
-                                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                                chat_id: chatId,
-                                                text: '❌ Erro ao processar dados.'
-                                            }, {}, 3, 1500, botId);
-                                        }
-                                    }
-                                } else {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro ao processar dados.'
-                                    }, {}, 3, 1500, botId);
-                                }
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro ao processar dados.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
                                 return;
                             }
                         }
@@ -8619,58 +8501,22 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     }
 
                     if (!valueInCents || !click_id_from_vars) {
-                        // Se callback não foi respondido, tentar responder
-                        // Se já expirou, enviar mensagem normal
-                        if (!callbackResponded) {
-                            try {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro: Dados do PIX não encontrados.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
-                            } catch (e) {
-                                if (e.response?.data?.error_code === 400) {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro: Dados do PIX não encontrados.'
-                                    }, {}, 3, 1500, botId);
-                                }
-                            }
-                        } else {
-                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                chat_id: chatId,
-                                text: '❌ Erro: Dados do PIX não encontrados.'
-                            }, {}, 3, 1500, botId);
-                        }
+                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                            callback_query_id: callbackId,
+                            text: 'Erro: Dados do PIX não encontrados.',
+                            show_alert: true
+                        }, {}, 3, 1500, botId);
                         return;
                     }
 
                     // Buscar seller
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
                     if (!seller) {
-                        // Se callback não foi respondido, tentar responder
-                        // Se já expirou, enviar mensagem normal
-                        if (!callbackResponded) {
-                            try {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro: Vendedor não encontrado.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
-                            } catch (e) {
-                                if (e.response?.data?.error_code === 400) {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro: Vendedor não encontrado.'
-                                    }, {}, 3, 1500, botId);
-                                }
-                            }
-                        } else {
-                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                chat_id: chatId,
-                                text: '❌ Erro: Vendedor não encontrado.'
-                            }, {}, 3, 1500, botId);
-                        }
+                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                            callback_query_id: callbackId,
+                            text: 'Erro: Vendedor não encontrado.',
+                            show_alert: true
+                        }, {}, 3, 1500, botId);
                         return;
                     }
 
@@ -8678,29 +8524,11 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
                     const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
                     if (!click) {
-                        // Se callback não foi respondido, tentar responder
-                        // Se já expirou, enviar mensagem normal
-                        if (!callbackResponded) {
-                            try {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro: Click ID não encontrado.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
-                            } catch (e) {
-                                if (e.response?.data?.error_code === 400) {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro: Click ID não encontrado.'
-                                    }, {}, 3, 1500, botId);
-                                }
-                            }
-                        } else {
-                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                chat_id: chatId,
-                                text: '❌ Erro: Click ID não encontrado.'
-                            }, {}, 3, 1500, botId);
-                        }
+                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                            callback_query_id: callbackId,
+                            text: 'Erro: Click ID não encontrado.',
+                            show_alert: true
+                        }, {}, 3, 1500, botId);
                         return;
                     }
 
@@ -8778,30 +8606,12 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             SET status = 'canceled' 
                             WHERE provider_transaction_id = ${pixResult.transaction_id}
                         `;
-                        
-                        // Se callback não foi respondido, tentar responder
-                        // Se já expirou ou foi respondido, enviar mensagem normal
-                        if (!callbackResponded) {
-                            try {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro ao enviar PIX. Tente novamente.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
-                            } catch (e) {
-                                if (e.response?.data?.error_code === 400) {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro ao enviar PIX. Tente novamente.'
-                                    }, {}, 3, 1500, botId);
-                                }
-                            }
-                        } else {
-                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                chat_id: chatId,
-                                text: '❌ Erro ao enviar PIX. Tente novamente.'
-                            }, {}, 3, 1500, botId);
-                        }
+
+                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                            callback_query_id: callbackId,
+                            text: 'Erro ao enviar PIX. Tente novamente.',
+                            show_alert: true
+                        }, {}, 3, 1500, botId);
                         return;
                     }
 
@@ -8832,47 +8642,23 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         });
                     }
 
-                    // Callback já foi respondido no início com "Gerando PIX..."
-                    // Não precisa responder novamente
+                    // Responder ao callback com sucesso
+                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                        callback_query_id: callbackId,
+                        text: 'PIX gerado com sucesso!'
+                    }, {}, 3, 1500, botId);
 
                     return; // Finaliza processamento do callback
                 } catch (error) {
                     logger.error(`[Webhook] Erro ao processar callback de PIX:`, error);
-                    
-                    // Se callback não foi respondido ainda, tentar responder
-                    // Se já expirou, enviar mensagem normal
-                    if (!callbackResponded) {
-                        try {
-                            await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                callback_query_id: callbackId,
-                                text: 'Erro ao gerar PIX. Tente novamente.',
-                                show_alert: true
-                            }, {}, 3, 1500, botId);
-                        } catch (e) {
-                            // Se expirou, enviar mensagem normal
-                            if (e.response?.data?.error_code === 400) {
-                                try {
-                                    await sendTelegramRequest(botToken, 'sendMessage', {
-                                        chat_id: chatId,
-                                        text: '❌ Erro ao gerar PIX. Tente novamente mais tarde.'
-                                    }, {}, 3, 1500, botId);
-                                } catch (sendErr) {
-                                    // Ignorar se não conseguir enviar
-                                }
-                            } else {
-                                logger.error(`[Webhook] Erro ao responder callback:`, e);
-                            }
-                        }
-                    } else {
-                        // Callback já foi respondido, enviar mensagem de erro normal
-                        try {
-                            await sendTelegramRequest(botToken, 'sendMessage', {
-                                chat_id: chatId,
-                                text: '❌ Erro ao gerar PIX. Tente novamente mais tarde.'
-                            }, {}, 3, 1500, botId);
-                        } catch (e) {
-                            // Ignorar se não conseguir enviar
-                        }
+                    try {
+                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                            callback_query_id: callbackId,
+                            text: 'Erro ao gerar PIX. Tente novamente.',
+                            show_alert: true
+                        }, {}, 3, 1500, botId);
+                    } catch (e) {
+                        logger.error(`[Webhook] Erro ao responder callback:`, e);
                     }
                     return;
                 }
@@ -8990,9 +8776,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 // Limpa o estado de espera ANTES de continuar o fluxo
                 await sqlTx`
                     UPDATE user_flow_states 
-                    SET waiting_for_input = false, 
-                        scheduled_message_id = NULL,
-                        timeout_at = NULL
+                    SET waiting_for_input = false, scheduled_message_id = NULL
                     WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
