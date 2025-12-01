@@ -7445,6 +7445,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             
             case 'action_pix':
                 try {
+                    logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
@@ -7483,7 +7484,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     try {
                         await sqlTx`
                             INSERT INTO pix_pending_callbacks (
-                                callback_data, chat_id, bot_id, seller_id, 
+                                callback_data, chat_id, bot_id, seller_id,
                                 value_in_cents, pix_message_text, pix_button_text, click_id
                             )
                             VALUES (
@@ -7497,7 +7498,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 click_id = EXCLUDED.click_id,
                                 expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
                         `;
+                        logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
                     } catch (dbError) {
+                        logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
                         // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
                     }
     
@@ -7513,23 +7516,13 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
-                        // Se for erro 403 (bot bloqueado), tratar silenciosamente
-                        if (sentMessage.error_code === 403) {
-                            // Remover dados da tabela se foram salvos (botão não será clicado)
-                            try {
-                                await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
-                            } catch (e) {
-                                // Não crítico
-                            }
-                            return; // Retorna silenciosamente, não é erro crítico
-                        }
-                        
                         logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
                         throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
+                    logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
                 } catch (error) {
                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido

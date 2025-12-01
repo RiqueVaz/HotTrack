@@ -833,17 +833,17 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                         });
                         
                         // Salva o estado como "esperando" e armazena o ID da tarefa agendada
-                        // Armazena informações do disparo nas variables
+                        // IMPORTANTE: flow_id deve ser NULL para disparos (referencia disparo_flows, não flows)
                         await sqlWithRetry(sqlTx`
                             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
-                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, ${disparoFlowId})
+                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, NULL)
                             ON CONFLICT (chat_id, bot_id)
                             DO UPDATE SET
                                 current_node_id = EXCLUDED.current_node_id,
                                 variables = EXCLUDED.variables,
                                 waiting_for_input = true,
                                 scheduled_message_id = EXCLUDED.scheduled_message_id,
-                                flow_id = EXCLUDED.flow_id
+                                flow_id = NULL
                         `);
                         
                         logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
@@ -1579,7 +1579,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     try {
                         await sqlWithRetry(sqlTx`
                             INSERT INTO pix_pending_callbacks (
-                                callback_data, chat_id, bot_id, seller_id, 
+                                callback_data, chat_id, bot_id, seller_id,
                                 value_in_cents, pix_message_text, pix_button_text, click_id
                             )
                             VALUES (
@@ -1593,7 +1593,9 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 click_id = EXCLUDED.click_id,
                                 expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
                     `);
+                    logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
                 } catch (dbError) {
+                    logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
                     // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
                 }
                 
@@ -1610,20 +1612,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 
                 // Verificar se o envio foi bem-sucedido
                 if (!sentMessage || !sentMessage.ok) {
-                    // Se for erro 403 (bot bloqueado), tratar silenciosamente
-                    if (sentMessage?.error_code === 403) {
-                        // Remover dados da tabela se foram salvos (botão não será clicado)
-                        try {
-                            await sqlWithRetry(sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`);
-                        } catch (e) {
-                            // Não crítico
-                        }
-                        return; // Retorna silenciosamente, não é erro crítico
-                    }
-                    
                     logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage?.description || 'Desconhecido'}`);
                     throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage?.description || 'Erro desconhecido'}.`);
                 }
+
+                logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId} (disparo)`);
             } else if (action.type === 'action_check_pix') {
                 // Verificar PIX - sempre busca o último PIX gerado
                 try {
