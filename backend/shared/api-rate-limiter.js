@@ -58,6 +58,13 @@ class ApiRateLimiter {
                 retryDelay: 5000, // Aumentar delay entre retries
                 timeout: 5000
             }],
+            ['utmify', {
+                globalRateLimit: 1000, // 1 requisição por segundo (conservador)
+                cacheTTL: 60_000, // 1 minuto de cache
+                maxRetries: 1, // Sem retry para evitar delays
+                retryDelay: 500,
+                timeout: 20000
+            }],
             ['default', {
                 globalRateLimit: 1000, // 1 req/segundo padrão
                 cacheTTL: 30_000, // 30 segundos padrão
@@ -132,8 +139,8 @@ class ApiRateLimiter {
         
         const limiter = this.globalLimiters.get(key);
         
-        // Para ip-api, usar fila real com concorrência limitada
-        if (provider === 'ip-api') {
+        // Para ip-api, pushinpay e utmify, usar fila real com concorrência limitada
+        if (provider === 'ip-api' || provider === 'pushinpay' || provider === 'utmify') {
             return new Promise((resolve) => {
                 limiter.queue.push(resolve);
                 this._processQueue(provider, sellerId, limiter, config);
@@ -154,7 +161,7 @@ class ApiRateLimiter {
     }
 
     /**
-     * Processa fila de requisições com concorrência limitada (para ip-api)
+     * Processa fila de requisições com concorrência limitada (para ip-api, pushinpay e utmify)
      */
     async _processQueue(provider, sellerId, limiter, config) {
         // Processar enquanto houver espaço na concorrência e itens na fila
