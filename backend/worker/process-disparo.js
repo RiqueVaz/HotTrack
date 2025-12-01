@@ -655,6 +655,8 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                     scheduled_message_id = NULL,
                                     flow_id = NULL
                             `);
+                            
+                            logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min (timeout curto, processado via job periódico).`);
                         } else {
                             // Timeout longo: usar QStash
                             const response = await qstashClient.publishJSON({
@@ -688,9 +690,9 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                     timeout_at = NULL,
                                     flow_id = NULL
                             `);
+                            
+                            logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                         }
-                        
-                        logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                         
                         // Atualizar disparo_log com status WAITING
                         try {
