@@ -132,8 +132,8 @@ class ApiRateLimiter {
         
         const limiter = this.globalLimiters.get(key);
         
-        // Para ip-api, usar fila real com concorrência limitada
-        if (provider === 'ip-api') {
+        // Para ip-api e pushinpay, usar fila real com concorrência limitada
+        if (provider === 'ip-api' || provider === 'pushinpay') {
             return new Promise((resolve) => {
                 limiter.queue.push(resolve);
                 this._processQueue(provider, sellerId, limiter, config);
@@ -154,7 +154,7 @@ class ApiRateLimiter {
     }
 
     /**
-     * Processa fila de requisições com concorrência limitada (para ip-api)
+     * Processa fila de requisições com concorrência limitada (para ip-api e pushinpay)
      */
     async _processQueue(provider, sellerId, limiter, config) {
         // Processar enquanto houver espaço na concorrência e itens na fila
