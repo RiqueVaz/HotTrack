@@ -21,6 +21,12 @@ class ApiRateLimiter {
         // Limite máximo de entradas no resourceCache (evita crescimento indefinido)
         this.MAX_RESOURCE_CACHE_SIZE = 5000;
         
+        // Circuit breakers: `${provider}_${sellerId}` -> { failures: 0, successes: 0, openedAt: null, state: 'closed' }
+        this.circuitBreakers = new Map();
+        
+        // Métricas por provedor: `${provider}_${sellerId}` -> { requests: 0, errors: 0, lastReset: timestamp }
+        this.providerMetrics = new Map();
+        
         // Configurações por provedor
         this.providerConfigs = new Map([
             ['pushinpay', {
@@ -28,77 +34,110 @@ class ApiRateLimiter {
                 cacheTTL: 60_000, // 1 minuto de cache
                 maxRetries: 1, // Reduzido de 3 para 1 (sem retry para evitar delays)
                 retryDelay: 500, // Reduzido de 2000 para 500ms
-                timeout: 20000 // Aumentado para 20 segundos para evitar timeouts em disparos simultâneos
+                timeout: 20000, // Aumentado para 20 segundos para evitar timeouts em disparos simultâneos
+                circuitBreakerThreshold: 5, // Abrir após 5 falhas consecutivas
+                circuitBreakerTimeout: 300_000, // 5 minutos em estado aberto
+                circuitBreakerSuccessThreshold: 2 // Fechar após 2 sucessos consecutivos
             }],
             ['syncpay', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 10000
+                timeout: 10000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['brpix', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 20000
+                timeout: 20000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['cnpay', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 20000
+                timeout: 20000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['oasyfy', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 20000
+                timeout: 20000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['pixup', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 20000
+                timeout: 20000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['wiinpay', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 10000
+                timeout: 10000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['paradise', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 10000
+                timeout: 10000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['ip-api', {
                 globalRateLimit: 2000, // 30 req/min (mais conservador, margem de segurança)
                 cacheTTL: 24 * 3600_000, // 24 horas (IPs não mudam de localização)
                 maxRetries: 1, // Reduzir retries para evitar mais 429s
                 retryDelay: 5000, // Aumentar delay entre retries
-                timeout: 5000
+                timeout: 5000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['utmify', {
                 globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000, // 1 minuto de cache
                 maxRetries: 1, // Sem retry para evitar delays
                 retryDelay: 500,
-                timeout: 20000
+                timeout: 20000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }],
             ['default', {
                 globalRateLimit: 1000, // 1 req/segundo padrão
                 cacheTTL: 30_000, // 30 segundos padrão
                 maxRetries: 3,
                 retryDelay: 2000,
-                timeout: 10000
+                timeout: 10000,
+                circuitBreakerThreshold: 5,
+                circuitBreakerTimeout: 300_000,
+                circuitBreakerSuccessThreshold: 2
             }]
         ]);
         
@@ -113,6 +152,146 @@ class ApiRateLimiter {
      */
     _getConfig(provider) {
         return this.providerConfigs.get(provider) || this.providerConfigs.get('default');
+    }
+
+    /**
+     * Circuit Breaker: Verifica se circuito está aberto
+     */
+    _isCircuitOpen(provider, sellerId) {
+        const key = `${provider}_${sellerId}`;
+        const breaker = this.circuitBreakers.get(key);
+        if (!breaker) return false;
+
+        const config = this._getConfig(provider);
+        const now = Date.now();
+
+        // Se está aberto, verificar se já passou o timeout
+        if (breaker.state === 'open') {
+            if (breaker.openedAt && (now - breaker.openedAt) >= config.circuitBreakerTimeout) {
+                // Transição para half-open
+                breaker.state = 'half-open';
+                breaker.successes = 0;
+            } else {
+                return true; // Ainda está aberto
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Circuit Breaker: Registra falha
+     */
+    _recordFailure(provider, sellerId) {
+        const key = `${provider}_${sellerId}`;
+        const config = this._getConfig(provider);
+        
+        let breaker = this.circuitBreakers.get(key);
+        if (!breaker) {
+            breaker = { failures: 0, successes: 0, openedAt: null, state: 'closed' };
+            this.circuitBreakers.set(key, breaker);
+        }
+
+        if (breaker.state === 'half-open') {
+            // Se estava testando e falhou, abrir novamente
+            breaker.state = 'open';
+            breaker.openedAt = Date.now();
+            breaker.failures = 0;
+            breaker.successes = 0;
+        } else {
+            breaker.failures++;
+            breaker.successes = 0; // Reset sucessos em caso de falha
+
+            // Se atingiu o threshold, abrir circuito
+            if (breaker.failures >= config.circuitBreakerThreshold) {
+                breaker.state = 'open';
+                breaker.openedAt = Date.now();
+            }
+        }
+    }
+
+    /**
+     * Circuit Breaker: Registra sucesso
+     */
+    _recordSuccess(provider, sellerId) {
+        const key = `${provider}_${sellerId}`;
+        const config = this._getConfig(provider);
+        
+        let breaker = this.circuitBreakers.get(key);
+        if (!breaker) {
+            breaker = { failures: 0, successes: 0, openedAt: null, state: 'closed' };
+            this.circuitBreakers.set(key, breaker);
+        }
+
+        breaker.successes++;
+        breaker.failures = 0; // Reset falhas em caso de sucesso
+
+        // Se estava em half-open e atingiu threshold de sucesso, fechar
+        if (breaker.state === 'half-open' && breaker.successes >= config.circuitBreakerSuccessThreshold) {
+            breaker.state = 'closed';
+            breaker.openedAt = null;
+            breaker.successes = 0;
+        } else if (breaker.state === 'open') {
+            // Se estava aberto mas teve sucesso (não deveria acontecer), resetar
+            breaker.state = 'closed';
+            breaker.openedAt = null;
+            breaker.successes = 0;
+        }
+    }
+
+    /**
+     * Métricas: Obtém ou cria métricas para provedor/seller
+     */
+    _getMetrics(provider, sellerId) {
+        const key = `${provider}_${sellerId}`;
+        const now = Date.now();
+        const METRICS_WINDOW = 60_000; // 60 segundos
+
+        let metrics = this.providerMetrics.get(key);
+        if (!metrics) {
+            metrics = { requests: 0, errors: 0, lastReset: now };
+            this.providerMetrics.set(key, metrics);
+        }
+
+        // Resetar métricas se passou a janela
+        if (now - metrics.lastReset > METRICS_WINDOW) {
+            metrics.requests = 0;
+            metrics.errors = 0;
+            metrics.lastReset = now;
+        }
+
+        return metrics;
+    }
+
+    /**
+     * Métricas: Calcula taxa de erro
+     */
+    _calculateErrorRate(provider, sellerId) {
+        const metrics = this._getMetrics(provider, sellerId);
+        if (metrics.requests === 0) return 0;
+        return metrics.errors / metrics.requests;
+    }
+
+    /**
+     * Rate Limiting Adaptativo: Ajusta rate limit baseado em taxa de erro
+     */
+    _getAdaptiveRateLimit(provider, sellerId, baseRateLimit) {
+        const errorRate = this._calculateErrorRate(provider, sellerId);
+        const metrics = this._getMetrics(provider, sellerId);
+        let adjustedRateLimit = baseRateLimit;
+
+        if (errorRate > 0.2) {
+            // Mais de 20% de erros: aumentar em 100% (máx 10000ms)
+            adjustedRateLimit = Math.min(baseRateLimit * 2, 10000);
+        } else if (errorRate > 0.1) {
+            // Mais de 10% de erros: aumentar em 50% (máx 5000ms)
+            adjustedRateLimit = Math.min(baseRateLimit * 1.5, 5000);
+        } else if (errorRate < 0.01 && metrics.requests > 10) {
+            // Menos de 1% de erros e pelo menos 10 requisições: reduzir em 10% (mín 1000ms)
+            adjustedRateLimit = Math.max(baseRateLimit * 0.9, 1000);
+        }
+
+        return adjustedRateLimit;
     }
 
     /**
@@ -309,6 +488,17 @@ class ApiRateLimiter {
 
         const config = this._getConfig(provider);
 
+        // Verificar Circuit Breaker antes de fazer requisição
+        if (this._isCircuitOpen(provider, sellerId)) {
+            const error = new Error(`Circuit breaker aberto para ${provider}. Muitos erros recentes.`);
+            error.circuitBreakerOpen = true;
+            throw error;
+        }
+
+        // Atualizar métricas: incrementar requests
+        const metrics = this._getMetrics(provider, sellerId);
+        metrics.requests++;
+
         // Verificar cache (apenas para GET e se resourceId fornecido)
         if (!skipCache && method.toLowerCase() === 'get' && resourceId) {
             const cached = this._getCached(provider, resourceId);
@@ -317,8 +507,16 @@ class ApiRateLimiter {
             }
         }
 
+        // Aplicar rate limit adaptativo
+        const adaptiveRateLimit = this._getAdaptiveRateLimit(provider, sellerId, config.globalRateLimit);
+        const originalRateLimit = config.globalRateLimit;
+        config.globalRateLimit = adaptiveRateLimit;
+
         // Aguardar rate limit
         await this._waitForRateLimit(provider, sellerId);
+
+        // Restaurar rate limit original
+        config.globalRateLimit = originalRateLimit;
 
         // Fazer requisição com retry
         let lastError = null;
@@ -334,6 +532,9 @@ class ApiRateLimiter {
                 };
 
                 const response = await axios(requestConfig);
+
+                // Registrar sucesso no Circuit Breaker e métricas
+                this._recordSuccess(provider, sellerId);
 
                 // Se sucesso, cachear (apenas GET com resourceId)
                 if (!skipCache && method.toLowerCase() === 'get' && resourceId) {
@@ -365,6 +566,11 @@ class ApiRateLimiter {
                     
                     // Para utmify, quando recebe 429, aguardar mais tempo antes de falhar
                     if (provider === 'utmify') {
+                        // Registrar falha no Circuit Breaker e métricas
+                        this._recordFailure(provider, sellerId);
+                        const metrics = this._getMetrics(provider, sellerId);
+                        metrics.errors++;
+
                         const retryAfter = Math.max(5, parseInt( // Mínimo 5 segundos
                             error.response.headers['retry-after'] || 
                             error.response.headers['Retry-After'] || 
@@ -385,6 +591,11 @@ class ApiRateLimiter {
                     
                     // Para wiinpay, quando recebe 429, extrair tempo de retry da mensagem
                     if (provider === 'wiinpay') {
+                        // Registrar falha no Circuit Breaker e métricas
+                        this._recordFailure(provider, sellerId);
+                        const metrics = this._getMetrics(provider, sellerId);
+                        metrics.errors++;
+
                         let retryAfter = 30; // Padrão: 30 segundos
                         
                         // Tentar extrair do header retry-after primeiro
@@ -418,39 +629,91 @@ class ApiRateLimiter {
                         throw error;
                     }
                     
-                    // Para outros provedores, comportamento normal
-                    // Garantir que retryAfter seja pelo menos 1 segundo para evitar "Aguardando 0s..."
-                    const retryAfter = Math.max(1, parseInt(
-                        error.response.headers['retry-after'] || 
-                        error.response.headers['Retry-After'] || 
-                        String(Math.ceil(config.retryDelay / 1000))
-                    ));
+                    // Registrar falha no Circuit Breaker e métricas
+                    this._recordFailure(provider, sellerId);
+                    const metrics = this._getMetrics(provider, sellerId);
+                    metrics.errors++;
+
+                    // Para outros provedores, usar backoff exponencial com jitter
+                    const MAX_BACKOFF_DELAY = 30_000; // 30 segundos máximo
+                    const baseDelay = config.retryDelay * Math.pow(2, attempt);
+                    const backoffDelay = Math.min(baseDelay, MAX_BACKOFF_DELAY);
+                    const jitter = backoffDelay * 0.2 * (Math.random() * 2 - 1); // ±20%
+                    const finalDelay = Math.max(1000, backoffDelay + jitter); // Mínimo 1 segundo
+
+                    // Tentar usar retry-after do header se disponível
+                    const headerRetryAfter = error.response?.headers['retry-after'] || error.response?.headers['Retry-After'];
+                    const retryAfter = headerRetryAfter 
+                        ? Math.max(1000, parseInt(headerRetryAfter) * 1000)
+                        : finalDelay;
                     
                     // Log apenas na última tentativa ou muito ocasionalmente
                     if (attempt === config.maxRetries - 1 || (attempt === 0 && Math.random() < 0.01)) {
                         console.warn(
                             `[API Rate Limiter] Rate limit 429 para ${provider} (seller ${sellerId}). ` +
-                            `Tentativa ${attempt + 1}/${config.maxRetries}. Aguardando ${retryAfter}s...`
+                            `Tentativa ${attempt + 1}/${config.maxRetries}. Aguardando ${Math.round(retryAfter / 1000)}s...`
                         );
                     }
 
                     if (attempt < config.maxRetries - 1) {
                         await new Promise(resolve => 
-                            setTimeout(resolve, retryAfter * 1000)
+                            setTimeout(resolve, retryAfter)
                         );
                         continue;
                     }
                 }
 
-                // Para outros erros, aguardar delay padrão antes de retry
+                // Para outros erros (5xx), usar backoff exponencial
+                if (error.response?.status >= 500) {
+                    // Registrar falha no Circuit Breaker e métricas
+                    this._recordFailure(provider, sellerId);
+                    const metrics = this._getMetrics(provider, sellerId);
+                    metrics.errors++;
+
+                    const MAX_BACKOFF_DELAY = 30_000; // 30 segundos máximo
+                    const baseDelay = config.retryDelay * Math.pow(2, attempt);
+                    const backoffDelay = Math.min(baseDelay, MAX_BACKOFF_DELAY);
+                    const jitter = backoffDelay * 0.2 * (Math.random() * 2 - 1); // ±20%
+                    const finalDelay = Math.max(1000, backoffDelay + jitter); // Mínimo 1 segundo
+
+                    if (attempt < config.maxRetries - 1) {
+                        await new Promise(resolve => 
+                            setTimeout(resolve, finalDelay)
+                        );
+                        continue;
+                    }
+                }
+
+                // Para outros erros (4xx exceto 429), não fazer retry (erro do cliente)
+                if (error.response?.status >= 400 && error.response?.status < 500 && error.response?.status !== 429) {
+                    // Registrar falha no Circuit Breaker e métricas
+                    this._recordFailure(provider, sellerId);
+                    const metrics = this._getMetrics(provider, sellerId);
+                    metrics.errors++;
+                    throw error; // Não fazer retry para erros do cliente
+                }
+
+                // Para outros erros (timeout, network, etc), usar backoff exponencial
                 if (attempt < config.maxRetries - 1) {
-                    const delay = config.retryDelay * (attempt + 1); // Backoff exponencial
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                    const MAX_BACKOFF_DELAY = 30_000; // 30 segundos máximo
+                    const baseDelay = config.retryDelay * Math.pow(2, attempt);
+                    const backoffDelay = Math.min(baseDelay, MAX_BACKOFF_DELAY);
+                    const jitter = backoffDelay * 0.2 * (Math.random() * 2 - 1); // ±20%
+                    const finalDelay = Math.max(1000, backoffDelay + jitter); // Mínimo 1 segundo
+                    
+                    await new Promise(resolve => setTimeout(resolve, finalDelay));
+                    continue;
                 }
             }
         }
 
         // Se chegou aqui, todas as tentativas falharam
+        // Registrar falha final no Circuit Breaker e métricas
+        if (lastError && !lastError.circuitBreakerOpen) {
+            this._recordFailure(provider, sellerId);
+            const metrics = this._getMetrics(provider, sellerId);
+            metrics.errors++;
+        }
         throw lastError || new Error(`Falha ao fazer requisição para ${provider}`);
     }
 
