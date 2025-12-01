@@ -1333,7 +1333,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 // Processar PIX - enviar botão em vez de gerar diretamente
                 const valueInCents = actionData.valueInCents || 100;
                 const pixPromptMessage = await replaceVariables(actionData.pixPromptMessage || "Clique no botão abaixo para gerar seu PIX", variables);
-                const pixMessageText = actionData.pixMessage || '';
+                const pixMessageText = actionData.pixMessageText || actionData.pixMessage || '';
                 const pixButtonText = actionData.pixButtonText || '📋 Copiar Código';
                 
                 // Buscar click_id para armazenamento
