@@ -1648,6 +1648,22 @@ setInterval(() => {
         // Removido log de memory cleanup
     }
 }, 5 * 60 * 1000); // A cada 5 minutos
+
+// Cleanup automático de registros expirados da tabela pix_pending_callbacks
+setInterval(async () => {
+    try {
+        const result = await sqlWithRetry(`
+            DELETE FROM pix_pending_callbacks 
+            WHERE expires_at < NOW()
+        `);
+        if (result && result.length > 0) {
+            logger.debug(`[Cleanup] Removidos ${result.length} registros expirados de pix_pending_callbacks`);
+        }
+    } catch (error) {
+        logger.error('[Cleanup] Erro ao limpar registros expirados de pix_pending_callbacks:', error.message);
+    }
+}, 60 * 60 * 1000); // A cada 1 hora
+
 const TAG_TITLE_MAX_LENGTH = 12;
 const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -7304,6 +7320,30 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const timestamp = Date.now();
                     const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
     
+                    // Salvar dados na tabela temporária para processamento do callback
+                    try {
+                        await sqlTx`
+                            INSERT INTO pix_pending_callbacks (
+                                callback_data, chat_id, bot_id, seller_id, 
+                                value_in_cents, pix_message_text, pix_button_text, click_id
+                            )
+                            VALUES (
+                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
+                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_from_vars}
+                            )
+                            ON CONFLICT (callback_data) DO UPDATE SET
+                                value_in_cents = EXCLUDED.value_in_cents,
+                                pix_message_text = EXCLUDED.pix_message_text,
+                                pix_button_text = EXCLUDED.pix_button_text,
+                                click_id = EXCLUDED.click_id,
+                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
+                        `;
+                        logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
+                    } catch (dbError) {
+                        logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
+                        // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
+                    }
+    
                     // Enviar mensagem com botão "Gerar Pix"
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId,
@@ -8231,42 +8271,68 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
             // Processar callback de geração de PIX
             if (callbackData.startsWith('pix_generate_')) {
                 try {
-                    // Buscar estado do fluxo para obter variáveis
-                    const [userState] = await sqlTx`
-                        SELECT variables FROM user_flow_states 
-                        WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                    // PRIORIDADE 1: Buscar dados da tabela temporária pix_pending_callbacks
+                    const [pendingData] = await sqlTx`
+                        SELECT value_in_cents, pix_message_text, pix_button_text, click_id, seller_id
+                        FROM pix_pending_callbacks
+                        WHERE callback_data = ${callbackData} AND expires_at > NOW()
                     `;
                     
-                    if (!userState) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Estado do fluxo não encontrado.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                        return;
-                    }
-
-                    // Parse das variáveis
-                    let variables = userState.variables;
-                    if (typeof variables === 'string') {
-                        try {
-                            variables = JSON.parse(variables);
-                        } catch (e) {
-                            logger.error('[Webhook] Erro ao fazer parse das variáveis do callback:', e);
+                    let valueInCents, pixMessageText, pixButtonText, click_id_from_vars;
+                    let variables = {};
+                    
+                    if (pendingData) {
+                        // Usar dados da tabela temporária
+                        valueInCents = pendingData.value_in_cents;
+                        pixMessageText = pendingData.pix_message_text || "";
+                        pixButtonText = pendingData.pix_button_text || "📋 Copiar";
+                        click_id_from_vars = pendingData.click_id;
+                        sellerId = pendingData.seller_id; // Atualizar sellerId se vier da tabela
+                        
+                        logger.debug(`[Webhook] Dados do PIX encontrados na tabela temporária para callback ${callbackData}`);
+                        
+                        // Deletar registro após uso
+                        await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
+                    } else {
+                        // PRIORIDADE 2: Buscar do estado do fluxo (compatibilidade com fluxos existentes)
+                        const [userState] = await sqlTx`
+                            SELECT variables FROM user_flow_states 
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `;
+                        
+                        if (!userState) {
                             await sendTelegramRequest(botToken, 'answerCallbackQuery', {
                                 callback_query_id: callbackId,
-                                text: 'Erro ao processar dados.',
+                                text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.',
                                 show_alert: true
                             }, {}, 3, 1500, botId);
                             return;
                         }
-                    }
 
-                    // Extrair dados pendentes
-                    const valueInCents = variables._pix_pending_valueInCents;
-                    const pixMessageText = variables._pix_pending_messageText || "";
-                    const pixButtonText = variables._pix_pending_buttonText || "📋 Copiar";
-                    const click_id_from_vars = variables._pix_pending_click_id || variables.click_id;
+                        // Parse das variáveis
+                        variables = userState.variables;
+                        if (typeof variables === 'string') {
+                            try {
+                                variables = JSON.parse(variables);
+                            } catch (e) {
+                                logger.error('[Webhook] Erro ao fazer parse das variáveis do callback:', e);
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro ao processar dados.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
+                                return;
+                            }
+                        }
+
+                        // Extrair dados pendentes das variáveis
+                        valueInCents = variables._pix_pending_valueInCents;
+                        pixMessageText = variables._pix_pending_messageText || "";
+                        pixButtonText = variables._pix_pending_buttonText || "📋 Copiar";
+                        click_id_from_vars = variables._pix_pending_click_id || variables.click_id;
+                        
+                        logger.debug(`[Webhook] Dados do PIX encontrados nas variáveis do fluxo para callback ${callbackData}`);
+                    }
 
                     if (!valueInCents || !click_id_from_vars) {
                         await sendTelegramRequest(botToken, 'answerCallbackQuery', {
@@ -8307,20 +8373,45 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
                     logger.debug(`[Webhook] PIX gerado via callback. Transaction ID: ${pixResult.transaction_id}`);
                     
-                    // Atualizar variáveis do fluxo
-                    variables.last_transaction_id = pixResult.transaction_id;
-                    // Limpar variáveis temporárias
-                    delete variables._pix_pending_valueInCents;
-                    delete variables._pix_pending_messageText;
-                    delete variables._pix_pending_buttonText;
-                    delete variables._pix_pending_click_id;
-                    
-                    // Atualizar variáveis no banco
-                    await sqlTx`
-                        UPDATE user_flow_states 
-                        SET variables = ${JSON.stringify(variables)}
-                        WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                    `;
+                    // Atualizar variáveis do fluxo apenas se os dados vieram das variáveis (não da tabela temporária)
+                    if (!pendingData) {
+                        variables.last_transaction_id = pixResult.transaction_id;
+                        // Limpar variáveis temporárias
+                        delete variables._pix_pending_valueInCents;
+                        delete variables._pix_pending_messageText;
+                        delete variables._pix_pending_buttonText;
+                        delete variables._pix_pending_click_id;
+                        
+                        // Atualizar variáveis no banco
+                        await sqlTx`
+                            UPDATE user_flow_states 
+                            SET variables = ${JSON.stringify(variables)}
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `;
+                    } else {
+                        // Se veio da tabela temporária, tentar atualizar last_transaction_id se houver estado
+                        try {
+                            const [existingState] = await sqlTx`
+                                SELECT variables FROM user_flow_states 
+                                WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                            `;
+                            if (existingState) {
+                                let stateVars = existingState.variables;
+                                if (typeof stateVars === 'string') {
+                                    stateVars = JSON.parse(stateVars);
+                                }
+                                stateVars.last_transaction_id = pixResult.transaction_id;
+                                await sqlTx`
+                                    UPDATE user_flow_states 
+                                    SET variables = ${JSON.stringify(stateVars)}
+                                    WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                                `;
+                            }
+                        } catch (e) {
+                            // Não crítico se não conseguir atualizar
+                            logger.debug(`[Webhook] Não foi possível atualizar last_transaction_id no estado do fluxo:`, e.message);
+                        }
+                    }
 
                     // Preparar mensagem do PIX
                     let messageText = await replaceVariables(pixMessageText, variables);

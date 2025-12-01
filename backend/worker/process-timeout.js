@@ -1564,6 +1564,30 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const timestamp = Date.now();
                     const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
     
+                    // Salvar dados na tabela temporária para processamento do callback
+                    try {
+                        await sqlTx`
+                            INSERT INTO pix_pending_callbacks (
+                                callback_data, chat_id, bot_id, seller_id, 
+                                value_in_cents, pix_message_text, pix_button_text, click_id
+                            )
+                            VALUES (
+                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
+                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_from_vars}
+                            )
+                            ON CONFLICT (callback_data) DO UPDATE SET
+                                value_in_cents = EXCLUDED.value_in_cents,
+                                pix_message_text = EXCLUDED.pix_message_text,
+                                pix_button_text = EXCLUDED.pix_button_text,
+                                click_id = EXCLUDED.click_id,
+                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
+                        `;
+                        console.log(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
+                    } catch (dbError) {
+                        console.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
+                        // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
+                    }
+    
                     // Enviar mensagem com botão "Gerar Pix"
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
                         chat_id: chatId,
