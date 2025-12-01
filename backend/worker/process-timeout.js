@@ -1183,8 +1183,8 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
                 
-                // Se o delay for maior que 60 segundos, agendar via QStash
-                if (delaySeconds > 60) {
+                // Se o delay for maior que 180 segundos, agendar via QStash
+                if (delaySeconds > 180) {
                     console.log(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via QStash...`);
                     
                     // Usar variáveis locais para poder modificar os valores
@@ -1209,7 +1209,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     if (!resolvedCurrentNodeId) {
                         console.error(`${logPrefix} [Delay] Não foi possível determinar currentNodeId. Processando delay normalmente.`);
-                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 180) * 1000));
                         break;
                     }
                     
@@ -1268,7 +1268,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     } catch (error) {
                         console.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
                         // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
-                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                        await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 180) * 1000));
                     }
                 } else {
                     // Delay curto: processar normalmente
@@ -2056,33 +2056,44 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (currentNode.data.waitForReply) {
                 const noReplyNodeId = findNextNode(currentNode.id, 'b', edges);
                 const timeoutMinutes = currentNode.data.replyTimeout || 5;
+                const TIMEOUT_THRESHOLD_MINUTES = 15;
 
                 try {
-                    // Agenda o worker de timeout com uma única chamada
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: { 
-                            chat_id: chatId, 
-                            bot_id: botId, 
-                            target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
-                            variables: variables
-                        },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
-                        method: "POST"
-                    });
-                    
-                    // Salva o estado como "esperando" e armazena o ID da tarefa agendada
-                    // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
-                    await sqlWithRetry(sqlTx`
-                        UPDATE user_flow_states 
-                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
-                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
-                    
-                    // Removido log de debug
-                
+                    if (timeoutMinutes <= TIMEOUT_THRESHOLD_MINUTES) {
+                        // Timeout curto: salvar timeout_at no banco, processar via job periódico
+                        const timeoutAt = new Date(Date.now() + timeoutMinutes * 60 * 1000);
+                        await sqlWithRetry(sqlTx`
+                            UPDATE user_flow_states 
+                            SET waiting_for_input = true, 
+                                timeout_at = ${timeoutAt},
+                                scheduled_message_id = NULL
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `);
+                    } else {
+                        // Timeout longo: usar QStash (comportamento atual)
+                        const response = await qstashClient.publishJSON({
+                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                            body: { 
+                                chat_id: chatId, 
+                                bot_id: botId, 
+                                target_node_id: noReplyNodeId,
+                                variables: variables
+                            },
+                            delay: `${timeoutMinutes}m`,
+                            contentBasedDeduplication: false,
+                            method: "POST"
+                        });
+                        
+                        await sqlWithRetry(sqlTx`
+                            UPDATE user_flow_states 
+                            SET waiting_for_input = true, 
+                                scheduled_message_id = ${response.messageId},
+                                timeout_at = NULL
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                        `);
+                    }
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -2205,7 +2216,9 @@ async function processTimeoutData(data) {
             // Limpa o estado de 'espera' ANTES de processar o próximo nó
             await sqlWithRetry(sqlTx`
                 UPDATE user_flow_states 
-                SET waiting_for_input = false, scheduled_message_id = NULL 
+                SET waiting_for_input = false, 
+                    scheduled_message_id = NULL,
+                    timeout_at = NULL
                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
         } else {
             // Removido log de debug

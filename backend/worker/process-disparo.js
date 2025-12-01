@@ -628,6 +628,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     
                     const noReplyNodeId = findNextNode(currentNode.id, 'b', flowEdges); // 'b' = Sem Resposta
                     const timeoutMinutes = currentNode.data?.replyTimeout || 5;
+                    const TIMEOUT_THRESHOLD_MINUTES = 15;
                     
                     // Armazenar informações do disparo nas variables para recuperar depois
                     const variablesWithDisparoInfo = {
@@ -638,37 +639,55 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     };
                     
                     try {
-                        // Agenda o worker de timeout
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: { 
-                                chat_id: chatId, 
-                                bot_id: botId, 
-                                target_node_id: noReplyNodeId,
-                                variables: variablesWithDisparoInfo,
-                                is_disparo: true,
-                                history_id: historyId,
-                                disparo_flow_id: disparoFlowId,
-                                timestamp: Date.now()
-                            },
-                            delay: `${timeoutMinutes}m`,
-                            contentBasedDeduplication: false,
-                            method: "POST"
-                        });
-                        
-                        // Salva o estado como "esperando" e armazena o ID da tarefa agendada
-                        // Armazena informações do disparo nas variables
-                        await sqlWithRetry(sqlTx`
-                            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
-                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, ${disparoFlowId})
-                            ON CONFLICT (chat_id, bot_id)
-                            DO UPDATE SET 
-                                current_node_id = EXCLUDED.current_node_id,
-                                variables = EXCLUDED.variables,
-                                waiting_for_input = true,
-                                scheduled_message_id = EXCLUDED.scheduled_message_id,
-                                flow_id = EXCLUDED.flow_id
-                        `);
+                        if (timeoutMinutes <= TIMEOUT_THRESHOLD_MINUTES) {
+                            // Timeout curto: salvar timeout_at
+                            const timeoutAt = new Date(Date.now() + timeoutMinutes * 60 * 1000);
+                            await sqlWithRetry(sqlTx`
+                                INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, timeout_at, flow_id)
+                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${timeoutAt}, ${disparoFlowId})
+                                ON CONFLICT (chat_id, bot_id)
+                                DO UPDATE SET 
+                                    current_node_id = EXCLUDED.current_node_id,
+                                    variables = EXCLUDED.variables,
+                                    waiting_for_input = true,
+                                    timeout_at = EXCLUDED.timeout_at,
+                                    scheduled_message_id = NULL,
+                                    flow_id = EXCLUDED.flow_id
+                            `);
+                        } else {
+                            // Timeout longo: usar QStash
+                            const response = await qstashClient.publishJSON({
+                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
+                                body: { 
+                                    chat_id: chatId, 
+                                    bot_id: botId, 
+                                    target_node_id: noReplyNodeId,
+                                    variables: variablesWithDisparoInfo,
+                                    is_disparo: true,
+                                    history_id: historyId,
+                                    disparo_flow_id: disparoFlowId,
+                                    timestamp: Date.now()
+                                },
+                                delay: `${timeoutMinutes}m`,
+                                contentBasedDeduplication: false,
+                                method: "POST"
+                            });
+                            
+                            // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                            // Armazena informações do disparo nas variables
+                            await sqlWithRetry(sqlTx`
+                                INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
+                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, ${disparoFlowId})
+                                ON CONFLICT (chat_id, bot_id)
+                                DO UPDATE SET 
+                                    current_node_id = EXCLUDED.current_node_id,
+                                    variables = EXCLUDED.variables,
+                                    waiting_for_input = true,
+                                    scheduled_message_id = EXCLUDED.scheduled_message_id,
+                                    timeout_at = NULL,
+                                    flow_id = EXCLUDED.flow_id
+                            `);
+                        }
                         
                         logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
                         
@@ -1255,8 +1274,8 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
             } else if (action.type === 'delay') {
                 const delaySeconds = actionData.delayInSeconds || 1;
                 
-                // Se delay > 60s, agendar via QStash para evitar timeout
-                if (delaySeconds > 60) {
+                // Se delay > 180s, agendar via QStash para evitar timeout
+                if (delaySeconds > 180) {
                     logger.debug(`${logPrefix} [Delay] Delay longo (${delaySeconds}s) detectado. Agendando via QStash...`);
                     
                     // Buscar history_id se não foi passado como parâmetro
@@ -1316,7 +1335,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         } catch (error) {
                             logger.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
                             // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
-                            await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
+                            await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 180) * 1000));
                         }
                     } else {
                         // Se não encontrou histórico, processar delay inline (limitado)
