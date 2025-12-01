@@ -296,6 +296,13 @@ function normalizeTelegramPayload(payload) {
             }
         }
     }
+    
+    // Remover parse_mode se caption estiver vazio ou ausente
+    // Telegram não aceita parse_mode sem caption
+    if ((!normalized.caption || normalized.caption === '') && normalized.parse_mode) {
+        delete normalized.parse_mode;
+    }
+    
     return normalized;
 }
 
