@@ -588,17 +588,22 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
             fileId = response.result.voice.file_id;
         }
         
-        if (fileId) {
+        if (fileId && fileId !== null && fileId !== undefined) {
             // Salvar no banco
             try {
                 const botIdStr = String(botId);
+                const fileIdStr = String(fileId);
                 if (!botIdStr || botIdStr === 'null' || botIdStr === 'undefined') {
                     console.warn(`[Timeout Media] botId inválido ao salvar file_id: ${botId}`);
                     return response;
                 }
+                if (!fileIdStr || fileIdStr === 'null' || fileIdStr === 'undefined') {
+                    console.warn(`[Timeout Media] fileId inválido ao salvar: ${fileId}`);
+                    return response;
+                }
                 await sqlWithRetry(
-                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1::text, $2) WHERE id = $3',
-                    [botIdStr, fileId, mediaId]
+                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1::text, $2::text) WHERE id = $3',
+                    [botIdStr, fileIdStr, mediaId]
                 );
                 
                 // Adicionar ao cache em memória
