@@ -89,8 +89,9 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                     [mediaId]
                 );
                 
-                if (media?.telegram_file_ids?.[botId]) {
-                    const fileId = media.telegram_file_ids[botId];
+                const botIdStr = String(botId);
+                if (botIdStr && botIdStr !== 'null' && botIdStr !== 'undefined' && media?.telegram_file_ids?.[botIdStr]) {
+                    const fileId = media.telegram_file_ids[botIdStr];
                     // Adicionar ao cache em memória
                     if (global.mediaFileIdCache) {
                         global.mediaFileIdCache.set(cacheKey, fileId);
@@ -171,7 +172,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
         });
         
         // Extrair file_id da resposta e salvar no banco
-        if (response.ok && response.result && mediaId && botId) {
+        if (response.ok && response.result && mediaId && botId && botId !== null && botId !== undefined) {
             let fileId = null;
             if (fileType === 'image' && response.result.photo) {
                 fileId = Array.isArray(response.result.photo) 
@@ -186,9 +187,14 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
             if (fileId) {
                 // Salvar no banco
                 try {
+                    const botIdStr = String(botId);
+                    if (!botIdStr || botIdStr === 'null' || botIdStr === 'undefined') {
+                        logger.warn(`[Media] botId inválido ao salvar file_id: ${botId}`);
+                        return response;
+                    }
                     await sqlWithRetry(
-                        'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
-                        [String(botId), fileId, mediaId]
+                        'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1::text, $2) WHERE id = $3',
+                        [botIdStr, fileId, mediaId]
                     );
                     
                     // Adicionar ao cache em memória

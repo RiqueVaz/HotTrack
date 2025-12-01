@@ -493,8 +493,9 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
                 [mediaId]
             );
             
-            if (media?.telegram_file_ids?.[botId]) {
-                const fileId = media.telegram_file_ids[botId];
+            const botIdStr = String(botId);
+            if (botIdStr && botIdStr !== 'null' && botIdStr !== 'undefined' && media?.telegram_file_ids?.[botIdStr]) {
+                const fileId = media.telegram_file_ids[botIdStr];
                 // Adicionar ao cache em memória
                 if (global.mediaFileIdCache) {
                     global.mediaFileIdCache.set(cacheKey, fileId);
@@ -517,7 +518,7 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
                     if (error.response?.data?.description?.includes('wrong remote file identifier')) {
                         await sqlWithRetry(
                             'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
-                            [String(botId), mediaId]
+                            [botIdStr, mediaId]
                         );
                         if (global.mediaFileIdCache) {
                             global.mediaFileIdCache.delete(cacheKey);
@@ -575,7 +576,7 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
     }, 3, 1500, null);
     
     // Extrair file_id da resposta e salvar no banco
-    if (response.ok && response.result && mediaId && botId) {
+    if (response.ok && response.result && mediaId && botId && botId !== null && botId !== undefined) {
         let fileId = null;
         if (fileType === 'image' && response.result.photo) {
             fileId = Array.isArray(response.result.photo) 
@@ -590,9 +591,14 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
         if (fileId) {
             // Salvar no banco
             try {
+                const botIdStr = String(botId);
+                if (!botIdStr || botIdStr === 'null' || botIdStr === 'undefined') {
+                    console.warn(`[Timeout Media] botId inválido ao salvar file_id: ${botId}`);
+                    return response;
+                }
                 await sqlWithRetry(
-                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
-                    [String(botId), fileId, mediaId]
+                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1::text, $2) WHERE id = $3',
+                    [botIdStr, fileId, mediaId]
                 );
                 
                 // Adicionar ao cache em memória
