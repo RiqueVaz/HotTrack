@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const logger = require('../logger');
+const { shouldLogDebug } = require('./logger-helper');
 
 /**
  * Envia evento para Utmify
@@ -138,7 +139,7 @@ async function sendEventToUtmify({
         logger.debug(`[Utmify] TrackingParameters no payload:`, JSON.stringify(payload.trackingParameters, null, 2));
 
         await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
-        logger.info(`[Utmify] SUCESSO: Evento '${status}' do pedido ${payload.orderId} enviado para a conta Utmify (Integração ID: ${integrationId}).`);
+        // Removido log de sucesso - não é necessário em produção
 
     } catch (error) {
         logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
@@ -155,26 +156,24 @@ async function sendMetaEvent({
     customerData,
     sqlTx
 }) {
-    logger.info(`[Meta Pixel] ===== INÍCIO ENVIO EVENTO ${eventName} =====`);
-    logger.info(`[Meta Pixel] Transaction ID: ${transactionData?.id}, Click ID: ${clickData?.id}`);
+    // Removido logs de início - não são necessários em produção
     
     try {
         // Para Purchase, verificar status da transação (sem abortar se já foi enviado)
         if (eventName === 'Purchase' && transactionData.id) {
-            logger.info(`[Meta Pixel] [Purchase] Verificando transação ${transactionData.id}...`);
+            // Removido logs de debug
             const [check] = await sqlTx`SELECT meta_event_id, status FROM pix_transactions WHERE id = ${transactionData.id}`;
-            logger.info(`[Meta Pixel] [Purchase] Status da transação: ${check?.status}, meta_event_id atual: ${check?.meta_event_id}`);
+            // Removido logs de debug
             
             // Não abortar se meta_event_id já existe - permitir reenvio se necessário
             // O código antigo não verificava isso e sempre tentava enviar
         }
         
-        logger.info(`[Meta Pixel] Buscando pixels configurados...`);
-        logger.info(`[Meta Pixel] Click data - pressel_id: ${clickData.pressel_id}, checkout_id: ${clickData.checkout_id}`);
+        // Removido logs intermediários
         
         let presselPixels = [];
         if (clickData.pressel_id) {
-            logger.info(`[Meta Pixel] Buscando pixels do pressel ${clickData.pressel_id}...`);
+            // Removido logs intermediários
             presselPixels = await sqlTx`
                 SELECT pc.id as pixel_config_id, pc.pixel_id, pc.meta_api_token
                 FROM pixel_configurations pc
@@ -182,22 +181,22 @@ async function sendMetaEvent({
                 WHERE pp.pressel_id = ${clickData.pressel_id} 
                     AND pc.seller_id = ${clickData.seller_id}
             `;
-            logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no pressel.`);
+            // Removido logs intermediários
         } else if (clickData.checkout_id) {
             // Verificar se é um checkout antigo (integer) ou hosted_checkout (UUID)
             const checkoutId = clickData.checkout_id;
-            logger.info(`[Meta Pixel] Buscando pixels do checkout ${checkoutId}...`);
+            // Removido logs intermediários
             
             // Se começa com 'cko_', é um hosted_checkout (UUID)
             if (typeof checkoutId === 'string' && checkoutId.startsWith('cko_')) {
-                logger.info(`[Meta Pixel] É um hosted_checkout (UUID)`);
+                // Removido logs intermediários
                 // Buscar pixel_id do config do hosted_checkout
                 const [hostedCheckout] = await sqlTx`
                     SELECT config->'tracking'->>'pixel_id' as pixel_id 
                     FROM hosted_checkouts 
                     WHERE id = ${checkoutId}
                 `;
-                logger.info(`[Meta Pixel] Pixel ID do hosted_checkout: ${hostedCheckout?.pixel_id}`);
+                // Removido logs intermediários
                 
                 if (hostedCheckout?.pixel_id) {
                     // Buscar configuração completa com JOIN direto (como código antigo)
@@ -210,11 +209,11 @@ async function sendMetaEvent({
                     `;
                     if (pixelConfig) {
                         presselPixels = [pixelConfig];
-                        logger.info(`[Meta Pixel] Pixel encontrado para hosted_checkout - pixel_id: ${pixelConfig.pixel_id}`);
+                        // Removido logs intermediários
                     }
                 }
             } else {
-                logger.info(`[Meta Pixel] É um checkout antigo (integer)`);
+                // Removido logs intermediários
                 // É um checkout antigo (integer), usar JOIN direto como código antigo
                 presselPixels = await sqlTx`
                     SELECT pc.id as pixel_config_id, pc.pixel_id, pc.meta_api_token
@@ -223,10 +222,10 @@ async function sendMetaEvent({
                     WHERE cp.checkout_id = ${checkoutId}
                         AND pc.seller_id = ${clickData.seller_id}
                 `;
-                logger.info(`[Meta Pixel] Encontrados ${presselPixels.length} pixel(s) no checkout antigo.`);
+                // Removido logs intermediários
             }
         } else {
-            logger.info(`[Meta Pixel] Clique não tem pressel_id nem checkout_id.`);
+            // Removido logs intermediários
         }
 
         if (presselPixels.length === 0) {
@@ -238,7 +237,7 @@ async function sendMetaEvent({
             return;
         }
 
-        logger.info(`[Meta Pixel] Preparando userData...`);
+        // Removido log intermediário
         const userData = {
             fbp: clickData.fbp || undefined,
             fbc: clickData.fbc || undefined,
@@ -281,11 +280,11 @@ async function sendMetaEvent({
         let pixelsSuccess = 0;
         let pixelsFailed = 0;
         
-        logger.info(`[Meta Pixel] Processando ${presselPixels.length} pixel(s)...`);
+        // Removido log intermediário
         for (const pixelConfig of presselPixels) {
             pixelsProcessed++;
             const { pixel_id, meta_api_token, pixel_config_id } = pixelConfig;
-            logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Processando pixel_config_id: ${pixel_config_id}`);
+            // Removido log intermediário
             
             try {
                 if (!pixel_id || !meta_api_token) {
@@ -294,10 +293,10 @@ async function sendMetaEvent({
                     continue;
                 }
                 
-                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Pixel encontrado - pixel_id: ${pixel_id}, token presente: ${!!meta_api_token}`);
+                // Removido log intermediário
                 
                 const event_id = `${eventName}.${transactionData.id || clickData.id}.${pixel_id}`;
-                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Event ID gerado: ${event_id}`);
+                // Removido log intermediário
                 
                 const payload = {
                     data: [{
@@ -317,18 +316,20 @@ async function sendMetaEvent({
                     delete payload.data[0].custom_data.value;
                 }
 
-                logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Enviando para Meta API...`);
-                logger.debug(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Payload:`, JSON.stringify(payload, null, 2));
+                // Removido log intermediário
+                if (shouldLogDebug()) {
+                    logger.debug(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] Payload:`, JSON.stringify(payload, null, 2));
+                }
                 
                 try {
                     const response = await axios.post(`https://graph.facebook.com/v19.0/${pixel_id}/events`, payload, { params: { access_token: meta_api_token } });
-                    logger.info(`[Meta Pixel] [${pixelsProcessed}/${presselPixels.length}] ✓ SUCESSO! Resposta da Meta:`, JSON.stringify(response.data, null, 2));
+                    // Removido log de sucesso - não é necessário em produção
                     pixelsSuccess++;
                     
                     // Store the Meta event ID in the transaction record for reference (como código antigo)
                     if (eventName === 'Purchase') {
                         await sqlTx`UPDATE pix_transactions SET meta_event_id = ${event_id} WHERE id = ${transactionData.id}`;
-                        logger.info(`[Meta Pixel] [Purchase] meta_event_id atualizado: ${event_id}`);
+                        // Removido log intermediário
                     }
                 } catch (apiError) {
                     pixelsFailed++;
@@ -344,9 +345,12 @@ async function sendMetaEvent({
             }
         }
         
-        logger.info(`[Meta Pixel] Resumo: ${pixelsSuccess} sucesso, ${pixelsFailed} falhas de ${presselPixels.length} pixel(s) processados.`);
+        // Logar resumo apenas se houver falhas ou em desenvolvimento
+        if (pixelsFailed > 0 || shouldLogDebug()) {
+            logger.info(`[Meta Pixel] Resumo: ${pixelsSuccess} sucesso, ${pixelsFailed} falhas de ${presselPixels.length} pixel(s) processados.`);
+        }
         
-        logger.info(`[Meta Pixel] ===== FIM ENVIO EVENTO ${eventName} =====`);
+        // Removido log de fim - não é necessário em produção
     } catch (error) {
         logger.error(`[Meta Pixel] ===== ERRO CRÍTICO NO ENVIO DE ${eventName} =====`);
         logger.error(`[Meta Pixel] Erro:`, error.response?.data || error.message);

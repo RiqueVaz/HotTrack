@@ -546,7 +546,7 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
         // Tentar migrar sob demanda se não está migrado
         else if (media && media.storage_type === 'telegram' && media.migration_status !== 'migrated' && sellerId) {
             try {
-                console.log(`[Timeout Media] Migrando mídia ${media.id} sob demanda...`);
+                // Removido log de debug
                 await migrateMediaOnDemand(media.id);
                 
                 const [migratedMedia] = await sqlWithRetry(
@@ -1684,7 +1684,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     break; 
                 }
                 
-                console.log(`${logPrefix} Encaminhando para o fluxo ${targetFlowId} para o chat ${chatId}`);
+                // Removido log de debug
                 
                 // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
                 try {
@@ -1744,7 +1744,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     if (currentNode.type !== 'trigger') {
                         // Encontrou um nó válido (não é trigger)
-                        console.log(`${logPrefix} Encontrado nó válido para iniciar: ${nextNodeId} (tipo: ${currentNode.type})`);
+                        // Removido log de debug
                         // Passa os dados do fluxo de destino para o processFlow recursivo
                         await processFlow(chatId, botId, botToken, sellerId, nextNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
                         break;
@@ -1815,7 +1815,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
         // Mescla variáveis do banco com as iniciais (variáveis iniciais têm prioridade)
         variables = { ...parsedDbVariables, ...variables };
-        console.log(`${logPrefix} [Flow Engine] Variáveis do banco carregadas e mescladas. last_transaction_id: ${variables.last_transaction_id || 'não definido'}`);
+        // Removido log de debug - não é necessário em produção
     }
     // ==========================================================
     // FIM DO PASSO 1
@@ -1829,12 +1829,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         edges = flowEdges;
         if (flowId) {
             currentFlowId = flowId; // Usa o flowId fornecido para rastreamento
-            console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (ID: ${flowId}, ${nodes.length} nós, ${edges.length} arestas).`);
+            // Removido log de debug
         } else {
             // Tenta buscar o flowId do banco usando bot_id e nodes fornecidos
             // Como não temos uma forma direta de identificar o fluxo pelos nodes, deixa null
             // O contador não funcionará neste caso, mas o fluxo continuará funcionando
-            console.log(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido sem flowId (${nodes.length} nós, ${edges.length} arestas). Contador de execução não será atualizado.`);
+            // Removido log de debug
         }
     } else {
         // Busca o fluxo do banco
@@ -1847,7 +1847,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [flowResult] = await sqlWithRetry(sqlTx`SELECT * FROM flows WHERE id = ${userStateForFlow.flow_id}`);
             if (flowResult && flowResult.nodes) {
                 flow = flowResult;
-                console.log(`${logPrefix} [Flow Engine] Usando fluxo do estado (ID: ${userStateForFlow.flow_id}).`);
+                // Removido log de debug
             }
         }
         
@@ -1860,7 +1860,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
         
         if (!flow || !flow.nodes) {
-            console.log(`${logPrefix} [Flow Engine] Nenhum fluxo encontrado para o bot ID ${botId}.`);
+            // Removido log de debug
             return;
         }
         currentFlowId = flow.id; // Armazena o ID do fluxo para rastreamento
@@ -1876,13 +1876,15 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         const isStartCommand = initialVariables.click_id && initialVariables.click_id.startsWith('/start');
         
         if (isStartCommand) {
-            console.log(`${logPrefix} [Flow Engine] Comando /start detectado. Reiniciando fluxo.`);
+            // Removido log de debug
             const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
                     await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
-                    console.log(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
-                } catch (e) { console.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message); }
+                    // Removido log de debug
+                } catch (e) { 
+                    // Removido log de warn - não é crítico
+                }
             }
             await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             const startNode = nodes.find(node => node.type === 'trigger');
@@ -1891,7 +1893,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         } else {
             const [userState] = await sqlWithRetry(sqlTx`SELECT * FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (userState && userState.waiting_for_input) {
-                console.log(`${logPrefix} [Flow Engine] Usuário respondeu. Continuando do nó ${userState.current_node_id} (handle 'a').`);
+                // Removido log de debug
                 currentNodeId = findNextNode(userState.current_node_id, 'a', edges);
                 let parsedVariables = {};
                 try { parsedVariables = JSON.parse(userState.variables); } catch (e) { parsedVariables = userState.variables; }
@@ -1908,7 +1910,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 
     if (!currentNodeId) {
-        console.log(`${logPrefix} [Flow Engine] Nenhum nó para processar. Fim do fluxo.`);
+        // Removido log de debug
         await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
         return;
     }
@@ -1928,7 +1930,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             break;
         }
 
-        console.log(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+        // Removido log de debug
 
         // Incrementa contador de execução do node (apenas se tiver flow_id)
         if (currentFlowId && currentNode.id !== 'start') {
@@ -1994,7 +1996,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                  
                  // Se delay foi agendado, parar processamento
                  if (actionResult === 'delay_scheduled') {
-                     console.log(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                     // Removido log de debug
                      currentNodeId = null;
                      break;
                  }
@@ -2012,14 +2014,14 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             await sqlWithRetry(sqlTx`UPDATE user_flow_states SET variables = ${JSON.stringify(variables)} WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
 
             if (actionResult === 'flow_forwarded') {
-                console.log(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual (worker).`);
+                // Removido log de debug
                 currentNodeId = null; // Para o loop atual
                 break; // Sai do 'while'
             }
             
             // Se delay foi agendado, parar processamento
             if (actionResult === 'delay_scheduled') {
-                console.log(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                // Removido log de debug
                 currentNodeId = null;
                 break;
             }
@@ -2050,7 +2052,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
                     
-                    console.log(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    // Removido log de debug
                 
                 } catch (error) {
                     console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
@@ -2061,12 +2063,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
             
             if (actionResult === 'paid') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
+                // Removido log de debug
                 currentNodeId = findNextNode(currentNode.id, 'a', edges);
                 continue;
             }
             if (actionResult === 'pending') {
-                console.log(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
+                // Removido log de debug
                 currentNodeId = findNextNode(currentNode.id, 'b', edges);
                 continue;
             }
@@ -2093,16 +2095,16 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         
         if (!state) {
             // Estado não existe, nada a fazer
-            console.log(`${logPrefix} [Flow Engine] Nenhum estado encontrado para ${chatId}.`);
+            // Removido log de debug
         } else if (state.waiting_for_input) {
             // Fluxo pausado aguardando resposta do usuário
-            console.log(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+            // Removido log de debug
         } else if (state.scheduled_message_id) {
             // Delay agendado via QStash - estado deve ser preservado
-            console.log(`${logPrefix} [Flow Engine] Delay agendado detectado (scheduled_message_id: ${state.scheduled_message_id}). Estado preservado para ${chatId}.`);
+            // Removido log de debug
         } else {
             // Fluxo realmente terminou - pode limpar o estado
-            console.log(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
+            // Removido log de debug
             await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
         }
     }
@@ -2121,7 +2123,7 @@ async function processTimeoutData(data) {
             throw new Error('chat_id e bot_id são obrigatórios.');
         }
 
-        console.log(`${logPrefix} [Timeout] Recebido para chat ${chat_id}, bot ${bot_id}. Nó de destino: ${target_node_id || 'NONE'}. Continue from delay: ${continue_from_delay || false}. Is disparo: ${is_disparo || false}`);
+        // Removido log de debug - não é necessário em produção
 
         // Buscar bot para obter o token e sellerId
         const [bot] = await sqlWithRetry(sqlTx`SELECT seller_id, bot_token FROM telegram_bots WHERE id = ${bot_id}`);
@@ -2139,7 +2141,7 @@ async function processTimeoutData(data) {
 
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
-            console.log(`${logPrefix} [Timeout] Ignorado: Nenhum estado encontrado para o usuário ${chat_id}.`);
+            // Removido log de debug
             return { ignored: true, reason: 'no_user_state' };
         }
         
@@ -2166,12 +2168,12 @@ async function processTimeoutData(data) {
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
             if (!currentState.waiting_for_input) {
-                console.log(`${logPrefix} [Timeout] Ignorado: Usuário ${chat_id} já respondeu ou o fluxo foi reiniciado.`);
+                // Removido log de debug
                 return { ignored: true, reason: 'user_already_proceeded' };
             }
 
             // O usuário NÃO respondeu a tempo
-            console.log(`${logPrefix} [Timeout] Usuário ${chat_id} não respondeu. Processando caminho de timeout. ${isDisparoTimeout ? '(DISPARO)' : ''}`);
+            // Removido log de debug - não é necessário em produção
             
             // Limpa o estado de 'espera' ANTES de processar o próximo nó
             await sqlWithRetry(sqlTx`
@@ -2179,7 +2181,7 @@ async function processTimeoutData(data) {
                 SET waiting_for_input = false, scheduled_message_id = NULL 
                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
         } else {
-            console.log(`${logPrefix} [Timeout] Continuando após delay agendado para ${chat_id}. ${isDisparoTimeout ? '(DISPARO)' : ''}`);
+            // Removido log de debug
         }
         
         // Se é disparo, processar usando processDisparoFlow
@@ -2211,7 +2213,7 @@ async function processTimeoutData(data) {
                 const { processDisparoFlow } = require('./process-disparo');
                 await processDisparoFlow(chat_id, bot_id, botToken, sellerId, target_node_id, cleanVariables, flowNodes, flowEdges, disparoHistoryId);
                 
-                console.log(`${logPrefix} [Timeout] Fluxo de disparo continuado após timeout para ${chat_id}`);
+                // Removido log de debug
                 return { processed: true, is_disparo: true };
             } catch (error) {
                 console.error(`${logPrefix} [Timeout] Erro ao processar timeout de disparo:`, error);
@@ -2249,7 +2251,7 @@ async function processTimeoutData(data) {
                 if (continueFromDelay && remainingActionsJson) {
                     try {
                         const remainingActions = JSON.parse(remainingActionsJson);
-                        console.log(`${logPrefix} [Timeout] Continuando após delay. Processando ${remainingActions.length} ação(ões) restante(s).`);
+                        // Removido log de debug
                         
                         // Buscar o nó atual para obter contexto
                         const currentNode = flowNodes.find(n => n.id === target_node_id);
@@ -2282,20 +2284,20 @@ async function processTimeoutData(data) {
                             
                             // 1. Verifica se uma ação 'forward_flow' foi executada
                             if (actionResult === 'flow_forwarded') {
-                                console.log(`${logPrefix} [Timeout] Fluxo encaminhado após delay. Encerrando o fluxo atual.`);
+                                // Removido log de debug
                                 // Fluxo foi encaminhado, não precisa continuar
                                 return;
                             }
                             
                             // 2. Se delay foi agendado novamente, não continuar (já agendado)
                             if (actionResult === 'delay_scheduled') {
-                                console.log(`${logPrefix} [Timeout] Outro delay agendado após delay. Parando processamento.`);
+                                // Removido log de debug
                                 return;
                             }
                             
                             // 3. Verifica se o resultado foi de um 'action_check_pix'
                             if (actionResult === 'paid') {
-                                console.log(`${logPrefix} [Timeout] Resultado após delay: PIX Pago. Seguindo handle 'a'.`);
+                                // Removido log de debug
                                 const nextNodeId = findNextNode(target_node_id, 'a', flowEdges);
                                 if (nextNodeId) {
                                     await processFlow(
@@ -2310,13 +2312,13 @@ async function processTimeoutData(data) {
                                         flowIdForProcess
                                     );
                                 } else {
-                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay (paid). Fluxo concluído.`);
+                                    // Removido log de debug
                                 }
                                 return;
                             }
                             
                             if (actionResult === 'pending') {
-                                console.log(`${logPrefix} [Timeout] Resultado após delay: PIX Pendente. Seguindo handle 'b'.`);
+                                // Removido log de debug
                                 const nextNodeId = findNextNode(target_node_id, 'b', flowEdges);
                                 if (nextNodeId) {
                                     await processFlow(
@@ -2331,7 +2333,7 @@ async function processTimeoutData(data) {
                                         flowIdForProcess
                                     );
                                 } else {
-                                    console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay (pending). Fluxo concluído.`);
+                                    // Removido log de debug
                                 }
                                 return;
                             }
@@ -2353,7 +2355,7 @@ async function processTimeoutData(data) {
                                 );
                             } else {
                                 // Não há próximo nó, fluxo terminou
-                                console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
+                                // Removido log de debug
                             }
                         } else {
                             // Se não é um nó de ação, continuar normalmente
@@ -2386,7 +2388,7 @@ async function processTimeoutData(data) {
                     }
                 } else if (continueFromDelay && !remainingActionsJson) {
                     // Delay foi a última ação do nó - continuar para o próximo nó
-                    console.log(`${logPrefix} [Timeout] Continuando após delay. Delay foi a última ação do nó. Continuando para o próximo nó.`);
+                    // Removido log de debug
                     
                     // Atualizar scheduled_message_id para NULL já que o delay foi processado
                     await sqlWithRetry(sqlTx`
@@ -2410,7 +2412,7 @@ async function processTimeoutData(data) {
                             flowIdForProcess
                         );
                     } else {
-                        console.log(`${logPrefix} [Timeout] Nenhum próximo nó após delay. Fluxo concluído.`);
+                        // Removido log de debug
                     }
                 } else {
                     // Processamento normal (timeout ou continuação sem ações restantes)
@@ -2435,7 +2437,7 @@ async function processTimeoutData(data) {
             }
             } else {
                 // Nenhum nó de destino definido - encerrar fluxo
-                console.log(`${logPrefix} [Timeout] Nenhum nó de destino definido. Encerrando fluxo para ${chat_id}.`);
+                // Removido log de debug
                 await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
                 return { success: true, flowEnded: true, reason: 'no_target_node' };
             }

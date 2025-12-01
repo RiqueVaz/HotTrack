@@ -7058,7 +7058,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                 
                 // Se o delay for maior que 60 segundos, agendar via QStash
                 if (delaySeconds > 60) {
-                    logger.debug(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via QStash...`);
+                    // Removido log de debug
                     
                     // Usar variáveis locais para poder modificar os valores
                     let resolvedCurrentNodeId = currentNodeId;
@@ -7134,7 +7134,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `;
                         
-                        logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                        // Removido log de debug
                         
                         // Retornar código especial para processFlow saber que parou
                         return 'delay_scheduled';
@@ -7145,9 +7145,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     }
                 } else {
                     // Delay curto: processar normalmente
-                    logger.debug(`${logPrefix} [Delay] Aguardando ${delaySeconds} segundos...`);
+                    // Removido logs de debug
                     await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-                    logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
+                    // Removido logs de debug
                 }
                 break;
             
@@ -7194,12 +7194,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     // Atualiza as variáveis do fluxo (IMPORTANTE)
                     variables.last_transaction_id = pixResult.transaction_id;
-                    console.log(
-                        '[PIX][action_pix] seller=%s click=%s transaction_id=%s',
-                        sellerId,
-                        click.id,
-                        variables.last_transaction_id
-                    );
+                    // Removido log de debug - não é necessário em produção
     
                     let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
                     
@@ -7359,7 +7354,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     break;
                 }
 
-                logger.debug(`${logPrefix} Encaminhando para o fluxo ${targetFlowIdNum} para o chat ${chatId}`);
+                // Removido log de debug
 
                 // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
                 try {
@@ -7411,7 +7406,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     
                     if (currentNode.type !== 'trigger') {
                         // Encontrou um nó válido (não é trigger)
-                        logger.debug(`${logPrefix} Encontrado nó válido para iniciar: ${nextNodeId} (tipo: ${currentNode.type})`);
+                        // Removido log de debug
                         // Passa os dados do fluxo de destino para o processFlow recursivo
                         await processFlow(chatId, botId, botToken, sellerId, nextNodeId, variables, targetNodes, targetEdges, targetFlowIdNum);
                         break;
@@ -7776,7 +7771,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         edges = flowEdges;
         if (flowId) {
             currentFlowId = flowId; // Usa o flowId fornecido para rastreamento
-            logger.debug(`${logPrefix} [Flow Engine] Usando dados do fluxo fornecido (ID: ${flowId}, ${nodes.length} nós, ${edges.length} arestas).`);
+            // Removido log de debug
         } else {
             // Tenta buscar o flowId do banco comparando os nodes fornecidos
             try {
@@ -7907,7 +7902,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             break;
         }
 
-        logger.debug(`${logPrefix} [Flow Engine] Processando Nó: ${currentNode.id} (Tipo: ${currentNode.type})`);
+        // Removido log de debug
 
         // Incrementa contador de execução do node (apenas se tiver flow_id)
         if (currentFlowId && currentNode.id !== 'start') {
@@ -7952,7 +7947,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                  
                  // Se delay foi agendado, parar processamento
                  if (actionResult === 'delay_scheduled') {
-                     logger.debug(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                     // Removido log de debug
                      currentNodeId = null;
                      break;
                  }
@@ -7979,11 +7974,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 actionsToExecuteNow = allActions.filter(a => !mediaTypes.includes(a.type));
                 
                 if (scheduledMediaActions.length > 0) {
-                    logger.debug(`${logPrefix} [Flow Engine] Nó será agendado. Identificadas ${scheduledMediaActions.length} ação(ões) de mídia.`);
+                    // Removido log de debug
                 }
             }
             
-            logger.debug(`${logPrefix} [Flow Engine] Processando nó 'action' com ${actionsToExecuteNow.length} ação(ões): ${actionsToExecuteNow.map(a => a.type).join(', ')}`);
+            // Removido log de debug
             
             let actionResult;
             try {
@@ -7997,7 +7992,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                 
                 // Limpa o estado do usuário para evitar fluxo preso
                 await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
-                logger.debug(`${logPrefix} [Flow Engine] Estado do usuário limpo devido a erro crítico.`);
+                // Removido log de debug
                 
                 // Re-lança o erro para ser capturado pelo try-catch do webhook
                 throw actionError;
@@ -8005,14 +8000,14 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
             // 3. Verifica se uma ação 'forward_flow' foi executada
             if (actionResult === 'flow_forwarded') {
-                logger.debug(`${logPrefix} [Flow Engine] Fluxo encaminhado. Encerrando o fluxo atual.`);
+                // Removido log de debug
                 currentNodeId = null; // Para o loop atual
                 break;
             }
             
             // Se delay foi agendado, parar processamento
             if (actionResult === 'delay_scheduled') {
-                logger.debug(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
+                // Removido log de debug
                 currentNodeId = null;
                 break;
             }
@@ -8021,7 +8016,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             if (currentNode.data.waitForReply) {
                 // 4.1. Se houver mídias agendadas, envia ANTES de pausar
                 if (scheduledMediaActions.length > 0) {
-                    logger.debug(`${logPrefix} [Flow Engine] Enviando ${scheduledMediaActions.length} mídia(s) antes de aguardar resposta.`);
+                    // Removido log de debug
                     
                     try {
                         await processActions(
@@ -8038,7 +8033,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             edges
                         );
                         
-                        logger.debug(`${logPrefix} [Flow Engine] Mídias enviadas antes de aguardar resposta.`);
+                        // Removido log de debug
                     } catch (mediaError) {
                         logger.error(`${logPrefix} [Flow Engine] Erro ao enviar mídias agendadas:`, mediaError);
                         // Continua mesmo se falhar
@@ -8071,7 +8066,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                         SET waiting_for_input = true, scheduled_message_id = ${response.messageId} 
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     
-                    logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                    // Removido log de debug
                 
                 } catch (error) {
                     logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
@@ -8128,10 +8123,10 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             logger.debug(`${logPrefix} [Flow Engine] Nenhum estado encontrado para ${chatId}.`);
         } else if (state.waiting_for_input) {
             // Fluxo pausado aguardando resposta do usuário
-            logger.debug(`${logPrefix} [Flow Engine] Fluxo pausado (waiting for input). Estado preservado para ${chatId}.`);
+            // Removido log de debug
         } else if (state.scheduled_message_id) {
             // Delay agendado via QStash - estado deve ser preservado
-            logger.debug(`${logPrefix} [Flow Engine] Delay agendado detectado (scheduled_message_id: ${state.scheduled_message_id}). Estado preservado para ${chatId}.`);
+            // Removido log de debug
         } else {
             // Fluxo realmente terminou - pode limpar o estado
             logger.debug(`${logPrefix} [Flow Engine] Fim do fluxo para ${chatId}. Limpando estado.`);
