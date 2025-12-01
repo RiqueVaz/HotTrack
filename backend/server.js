@@ -2530,6 +2530,44 @@ async function replaceVariables(text, variables) {
     }
     return processedText;
 }
+
+/**
+ * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
+ */
+function normalizeTelegramPayload(payload) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined) {
+            // Converter null para string vazia em campos opcionais de texto
+            if (value === null && (key === 'caption' || key === 'text')) {
+                normalized[key] = '';
+            } else {
+                normalized[key] = value;
+            }
+        }
+    }
+    return normalized;
+}
+
+// Cache de mídias para evitar queries repetidas
+const mediaCache = new Map();
+const MEDIA_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+/**
+ * Limpa cache de mídias expirado
+ */
+function cleanupMediaCache() {
+    const now = Date.now();
+    for (const [key, cached] of mediaCache.entries()) {
+        if (now - cached.timestamp > MEDIA_CACHE_TTL) {
+            mediaCache.delete(key);
+        }
+    }
+}
+
+// Limpar cache periodicamente
+setInterval(cleanupMediaCache, 60 * 1000); // A cada 1 minuto
+
 // Nova função para enviar mídia da biblioteca com suporte a R2
 async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
     // Normalizar caption
@@ -2998,12 +3036,10 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const fallbackPayload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            // Normalizar payload
-            Object.keys(fallbackPayload).forEach(key => {
-                if (fallbackPayload[key] === undefined) {
-                    delete fallbackPayload[key];
-                }
+            const fallbackPayload = normalizeTelegramPayload({ 
+                chat_id: chatId, 
+                [field]: fileIdentifier, 
+                caption: caption || "" 
             });
             
             try {
@@ -3034,12 +3070,10 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
                 return null;
             }
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            // Remover campos undefined do payload
-            Object.keys(payload).forEach(key => {
-                if (payload[key] === undefined) {
-                    delete payload[key];
-                }
+            const payload = normalizeTelegramPayload({ 
+                chat_id: chatId, 
+                [field]: fileIdentifier, 
+                caption: caption || "" 
             });
             try {
             response = await sendTelegramRequest(botToken, method, payload, { timeout });
@@ -3061,12 +3095,10 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            // Remover campos undefined do payload
-            Object.keys(payload).forEach(key => {
-                if (payload[key] === undefined) {
-                    delete payload[key];
-                }
+            const payload = normalizeTelegramPayload({ 
+                chat_id: chatId, 
+                [field]: fileIdentifier, 
+                caption: caption || "" 
             });
             try {
             response = await sendTelegramRequest(botToken, method, payload, { timeout });

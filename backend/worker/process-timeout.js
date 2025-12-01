@@ -625,15 +625,13 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                 return null;
             }
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            // Remover campos undefined do payload
-            Object.keys(payload).forEach(key => {
-                if (payload[key] === undefined) {
-                    delete payload[key];
-                }
+            const payload = normalizeTelegramPayload({ 
+                chat_id: chatId, 
+                [field]: fileIdentifier, 
+                caption: caption || "" 
             });
             try {
-                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+            response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
             } catch (urlError) {
                 const urlErrorMessage = urlError.message || urlError.description || '';
                 const urlErrorResponseDesc = urlError.response?.data?.description || '';
@@ -651,15 +649,13 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
             const method = methodMap[type];
             const field = fieldMap[type];
             
-            const payload = { chat_id: chatId, [field]: fileIdentifier, caption: caption || "" };
-            // Remover campos undefined do payload
-            Object.keys(payload).forEach(key => {
-                if (payload[key] === undefined) {
-                    delete payload[key];
-                }
+            const payload = normalizeTelegramPayload({ 
+                chat_id: chatId, 
+                [field]: fileIdentifier, 
+                caption: caption || "" 
             });
             try {
-                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+            response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
             } catch (fileIdError) {
                 const fileIdErrorMessage = fileIdError.message || fileIdError.description || '';
                 const fileIdErrorResponseDesc = fileIdError.response?.data?.description || '';
