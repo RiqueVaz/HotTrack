@@ -27,6 +27,17 @@ const qstashClient = new Client({
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
+// Cache global de file_ids do Telegram (evita queries repetidas durante batches)
+if (!global.mediaFileIdCache) {
+    global.mediaFileIdCache = new Map();
+    // Limpar cache a cada 10 minutos
+    setInterval(() => {
+        if (global.mediaFileIdCache.size > 1000) {
+            global.mediaFileIdCache.clear();
+        }
+    }, 10 * 60 * 1000);
+}
+
 // ==========================================================
 //                   INICIALIZAÇÃO
 // ==========================================================
@@ -387,11 +398,90 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
-async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) {
+async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, mediaId = null, botId = null) {
+    // Se temos mediaId e botId, verificar se já existe file_id cacheado
+    if (mediaId && botId) {
+        // Verificar cache em memória primeiro (se disponível)
+        const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
+        if (global.mediaFileIdCache && global.mediaFileIdCache.has(cacheKey)) {
+            const cachedFileId = global.mediaFileIdCache.get(cacheKey);
+            if (cachedFileId) {
+                // Usar file_id cacheado diretamente
+                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+                const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+                const timeout = fileType === 'video' ? 120000 : 60000;
+                const payload = normalizeTelegramPayload({
+                    chat_id: chatId,
+                    [field]: cachedFileId,
+                    caption: caption || "",
+                    parse_mode: 'HTML'
+                });
+                try {
+                    return await sendTelegramRequest(botToken, method, payload, { timeout });
+                } catch (error) {
+                    // Se file_id expirou, remover do cache e continuar para download
+                    if (error.response?.data?.description?.includes('wrong remote file identifier')) {
+                        global.mediaFileIdCache.delete(cacheKey);
+                        // Continuar para baixar do R2
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+        }
+        
+        // Verificar no banco
+        try {
+            const [media] = await sqlWithRetry(
+                'SELECT telegram_file_ids FROM media_library WHERE id = $1',
+                [mediaId]
+            );
+            
+            if (media?.telegram_file_ids?.[botId]) {
+                const fileId = media.telegram_file_ids[botId];
+                // Adicionar ao cache em memória
+                if (global.mediaFileIdCache) {
+                    global.mediaFileIdCache.set(cacheKey, fileId);
+                }
+                
+                // Usar file_id do banco
+                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+                const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+                const timeout = fileType === 'video' ? 120000 : 60000;
+                const payload = normalizeTelegramPayload({
+                    chat_id: chatId,
+                    [field]: fileId,
+                    caption: caption || "",
+                    parse_mode: 'HTML'
+                });
+                try {
+                    return await sendTelegramRequest(botToken, method, payload, { timeout });
+                } catch (error) {
+                    // Se file_id expirou, remover do banco e continuar para download
+                    if (error.response?.data?.description?.includes('wrong remote file identifier')) {
+                        await sqlWithRetry(
+                            'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
+                            [botId, mediaId]
+                        );
+                        if (global.mediaFileIdCache) {
+                            global.mediaFileIdCache.delete(cacheKey);
+                        }
+                        // Continuar para baixar do R2
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+        } catch (dbError) {
+            // Se erro ao buscar do banco, continuar para download
+            logger.warn(`[Disparo Media] Erro ao buscar file_id do banco:`, dbError.message);
+        }
+    }
+    
+    // Se não tem cache ou file_id expirou, baixar do R2 e fazer upload
     const axios = require('axios');
     const FormData = require('form-data');
     
-    // Baixar arquivo do R2
     const fileResponse = await axios.get(storageUrl, {
         responseType: 'arraybuffer',
         timeout: 120000
@@ -403,7 +493,6 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) 
          fileType === 'video' ? 'video/mp4' : 
          'audio/ogg');
     
-    // Criar FormData para upload
     const formData = new FormData();
     formData.append('chat_id', chatId);
     
@@ -422,10 +511,45 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) 
     }
     
     const timeout = fileType === 'video' ? 120000 : 60000;
-    return await sendTelegramRequest(botToken, method, formData, {
+    const response = await sendTelegramRequest(botToken, method, formData, {
         headers: formData.getHeaders(),
         timeout
     });
+    
+    // Extrair file_id da resposta e salvar no banco
+    if (response.ok && response.result && mediaId && botId) {
+        let fileId = null;
+        if (fileType === 'image' && response.result.photo) {
+            fileId = Array.isArray(response.result.photo) 
+                ? response.result.photo[response.result.photo.length - 1].file_id 
+                : response.result.photo.file_id;
+        } else if (fileType === 'video' && response.result.video) {
+            fileId = response.result.video.file_id;
+        } else if (fileType === 'audio' && response.result.voice) {
+            fileId = response.result.voice.file_id;
+        }
+        
+        if (fileId) {
+            // Salvar no banco
+            try {
+                await sqlWithRetry(
+                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
+                    [botId, fileId, mediaId]
+                );
+                
+                // Adicionar ao cache em memória
+                if (global.mediaFileIdCache) {
+                    const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
+                    global.mediaFileIdCache.set(cacheKey, fileId);
+                }
+            } catch (saveError) {
+                // Não crítico se não conseguir salvar
+                logger.warn(`[Disparo Media] Erro ao salvar file_id no banco:`, saveError.message);
+            }
+        }
+    }
+    
+    return response;
 }
 
 // Funções de PIX (necessárias para o passo 'pix')
@@ -1233,7 +1357,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         // 1. Tentar usar storage_url se já está migrado
                         if (media.storage_url && media.storage_type === 'r2') {
                             try {
-                                await sendMediaFromR2(botToken, chatId, media.storage_url, action.type, caption);
+                                await sendMediaFromR2(botToken, chatId, media.storage_url, action.type, caption, media.id, botId);
                                 sent = true;
                             } catch (urlError) {
                                 console.warn(`[Disparo Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
