@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const logger = require('../logger');
 const { shouldLogDebug } = require('./logger-helper');
+const apiRateLimiter = require('./api-rate-limiter');
 
 /**
  * Envia evento para Utmify
@@ -138,7 +139,15 @@ async function sendEventToUtmify({
         logger.debug(`[Utmify] Payload completo que será enviado:`, JSON.stringify(payload, null, 2));
         logger.debug(`[Utmify] TrackingParameters no payload:`, JSON.stringify(payload.trackingParameters, null, 2));
 
-        await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, { headers: { 'x-api-token': utmifyApiToken } });
+        // Usar api-rate-limiter para respeitar rate limit da Utmify
+        await apiRateLimiter.createTransaction({
+            provider: 'utmify',
+            sellerId: integrationId, // Usar integrationId como identificador para rate limiting
+            method: 'post',
+            url: 'https://api.utmify.com.br/api-credentials/orders',
+            headers: { 'x-api-token': utmifyApiToken },
+            data: payload
+        });
         // Removido log de sucesso - não é necessário em produção
 
     } catch (error) {
