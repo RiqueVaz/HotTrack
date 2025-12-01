@@ -59,7 +59,7 @@ class ApiRateLimiter {
                 timeout: 5000
             }],
             ['utmify', {
-                globalRateLimit: 1000, // 1 requisição por segundo (conservador)
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000, // 1 minuto de cache
                 maxRetries: 1, // Sem retry para evitar delays
                 retryDelay: 500,
@@ -320,7 +320,7 @@ class ApiRateLimiter {
             } catch (error) {
                 lastError = error;
 
-                // Se for 429, tratamento especial para ip-api (não retry)
+                // Se for 429, tratamento especial
                 if (error.response?.status === 429) {
                     // Para ip-api, não fazer retry em caso de 429 - cache já deve ter o valor
                     if (provider === 'ip-api') {
@@ -335,12 +335,53 @@ class ApiRateLimiter {
                         throw error;
                     }
                     
+                    // Para utmify, quando recebe 429, aguardar mais tempo antes de falhar
+                    if (provider === 'utmify') {
+                        const retryAfter = Math.max(5, parseInt( // Mínimo 5 segundos
+                            error.response.headers['retry-after'] || 
+                            error.response.headers['Retry-After'] || 
+                            '5'
+                        ));
+                        
+                        if (attempt === 0 && Math.random() < 0.1) { // Log 10% das vezes
+                            console.warn(
+                                `[API Rate Limiter] Rate limit 429 para utmify (seller ${sellerId}). ` +
+                                `Aguardando ${retryAfter}s antes de falhar...`
+                            );
+                        }
+                        
+                        // Aguardar antes de lançar erro (não fazer retry, apenas aguardar e falhar)
+                        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                        throw error;
+                    }
+                    
+                    // Para utmify, quando recebe 429, aguardar mais tempo antes de falhar
+                    if (provider === 'utmify') {
+                        const retryAfter = Math.max(5, parseInt( // Mínimo 5 segundos
+                            error.response.headers['retry-after'] || 
+                            error.response.headers['Retry-After'] || 
+                            '5'
+                        ));
+                        
+                        if (attempt === 0 && Math.random() < 0.1) { // Log 10% das vezes
+                            console.warn(
+                                `[API Rate Limiter] Rate limit 429 para utmify (seller ${sellerId}). ` +
+                                `Aguardando ${retryAfter}s antes de falhar...`
+                            );
+                        }
+                        
+                        // Aguardar antes de lançar erro (não fazer retry, apenas aguardar e falhar)
+                        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                        throw error;
+                    }
+                    
                     // Para outros provedores, comportamento normal
-                    const retryAfter = parseInt(
+                    // Garantir que retryAfter seja pelo menos 1 segundo para evitar "Aguardando 0s..."
+                    const retryAfter = Math.max(1, parseInt(
                         error.response.headers['retry-after'] || 
                         error.response.headers['Retry-After'] || 
-                        String(config.retryDelay / 1000)
-                    );
+                        String(Math.ceil(config.retryDelay / 1000))
+                    ));
                     
                     // Log apenas na última tentativa ou muito ocasionalmente
                     if (attempt === config.maxRetries - 1 || (attempt === 0 && Math.random() < 0.01)) {
