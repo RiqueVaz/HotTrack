@@ -8435,7 +8435,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     flow = flowResult;
                 } else {
                     logger.debug(`[Webhook] Buscando fluxo ativo do bot (fallback)`);
-                    const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE`;
+                    const [flowResult] = await sqlTx`SELECT nodes FROM flows WHERE bot_id = ${botId} AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`;
                     flow = flowResult;
                 }
                 logger.debug(`[Webhook] Flow encontrado:`, flow ? 'SIM' : 'NÃO');
