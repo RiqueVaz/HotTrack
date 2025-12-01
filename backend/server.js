@@ -8341,6 +8341,25 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
 
             // Processar callback de geração de PIX
             if (callbackData.startsWith('pix_generate_')) {
+                // IMPORTANTE: Responder callback IMEDIATAMENTE para evitar expiração (~30s)
+                // O PIX ainda será gerado quando o botão é clicado, mas respondemos primeiro
+                let callbackResponded = false;
+                try {
+                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                        callback_query_id: callbackId,
+                        text: 'Gerando PIX...'
+                    }, {}, 3, 1500, botId);
+                    callbackResponded = true;
+                } catch (e) {
+                    // Se já expirou, continuar mesmo assim (vai enviar mensagem normal)
+                    if (e.response?.data?.error_code === 400 && 
+                        e.response?.data?.description?.includes('query is too old')) {
+                        logger.warn(`[Webhook] Callback já expirado, continuando processamento...`);
+                    } else {
+                        logger.warn(`[Webhook] Erro ao responder callback (não crítico):`, e.message);
+                    }
+                }
+                
                 try {
                     // PRIORIDADE 1: Buscar dados da tabela temporária pix_pending_callbacks
                     const [pendingData] = await sqlTx`
@@ -8373,11 +8392,29 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         `;
                         
                         if (!userState) {
-                            await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                callback_query_id: callbackId,
-                                text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.',
-                                show_alert: true
-                            }, {}, 3, 1500, botId);
+                            // Se callback não foi respondido, tentar responder
+                            // Se já expirou, enviar mensagem normal
+                            if (!callbackResponded) {
+                                try {
+                                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                        callback_query_id: callbackId,
+                                        text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.',
+                                        show_alert: true
+                                    }, {}, 3, 1500, botId);
+                                } catch (e) {
+                                    if (e.response?.data?.error_code === 400) {
+                                        await sendTelegramRequest(botToken, 'sendMessage', {
+                                            chat_id: chatId,
+                                            text: '❌ Erro: Dados do PIX não encontrados. O botão pode ter expirado.'
+                                        }, {}, 3, 1500, botId);
+                                    }
+                                }
+                            } else {
+                                await sendTelegramRequest(botToken, 'sendMessage', {
+                                    chat_id: chatId,
+                                    text: '❌ Erro: Dados do PIX não encontrados. O botão pode ter expirado.'
+                                }, {}, 3, 1500, botId);
+                            }
                             return;
                         }
 
@@ -8387,11 +8424,29 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             try {
                                 variables = JSON.parse(variables);
                             } catch (e) {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro ao processar dados.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
+                                // Se callback não foi respondido, tentar responder
+                                // Se já expirou, enviar mensagem normal
+                                if (!callbackResponded) {
+                                    try {
+                                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                            callback_query_id: callbackId,
+                                            text: 'Erro ao processar dados.',
+                                            show_alert: true
+                                        }, {}, 3, 1500, botId);
+                                    } catch (err) {
+                                        if (err.response?.data?.error_code === 400) {
+                                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                                chat_id: chatId,
+                                                text: '❌ Erro ao processar dados.'
+                                            }, {}, 3, 1500, botId);
+                                        }
+                                    }
+                                } else {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro ao processar dados.'
+                                    }, {}, 3, 1500, botId);
+                                }
                                 return;
                             }
                         }
@@ -8404,22 +8459,58 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     }
 
                     if (!valueInCents || !click_id_from_vars) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Dados do PIX não encontrados.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
+                        // Se callback não foi respondido, tentar responder
+                        // Se já expirou, enviar mensagem normal
+                        if (!callbackResponded) {
+                            try {
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro: Dados do PIX não encontrados.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
+                            } catch (e) {
+                                if (e.response?.data?.error_code === 400) {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro: Dados do PIX não encontrados.'
+                                    }, {}, 3, 1500, botId);
+                                }
+                            }
+                        } else {
+                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                chat_id: chatId,
+                                text: '❌ Erro: Dados do PIX não encontrados.'
+                            }, {}, 3, 1500, botId);
+                        }
                         return;
                     }
 
                     // Buscar seller
                     const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
                     if (!seller) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Vendedor não encontrado.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
+                        // Se callback não foi respondido, tentar responder
+                        // Se já expirou, enviar mensagem normal
+                        if (!callbackResponded) {
+                            try {
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro: Vendedor não encontrado.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
+                            } catch (e) {
+                                if (e.response?.data?.error_code === 400) {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro: Vendedor não encontrado.'
+                                    }, {}, 3, 1500, botId);
+                                }
+                            }
+                        } else {
+                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                chat_id: chatId,
+                                text: '❌ Erro: Vendedor não encontrado.'
+                            }, {}, 3, 1500, botId);
+                        }
                         return;
                     }
 
@@ -8427,11 +8518,29 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
                     const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
                     if (!click) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Click ID não encontrado.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
+                        // Se callback não foi respondido, tentar responder
+                        // Se já expirou, enviar mensagem normal
+                        if (!callbackResponded) {
+                            try {
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro: Click ID não encontrado.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
+                            } catch (e) {
+                                if (e.response?.data?.error_code === 400) {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro: Click ID não encontrado.'
+                                    }, {}, 3, 1500, botId);
+                                }
+                            }
+                        } else {
+                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                chat_id: chatId,
+                                text: '❌ Erro: Click ID não encontrado.'
+                            }, {}, 3, 1500, botId);
+                        }
                         return;
                     }
 
@@ -8510,11 +8619,29 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             WHERE provider_transaction_id = ${pixResult.transaction_id}
                         `;
                         
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro ao enviar PIX. Tente novamente.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
+                        // Se callback não foi respondido, tentar responder
+                        // Se já expirou ou foi respondido, enviar mensagem normal
+                        if (!callbackResponded) {
+                            try {
+                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                    callback_query_id: callbackId,
+                                    text: 'Erro ao enviar PIX. Tente novamente.',
+                                    show_alert: true
+                                }, {}, 3, 1500, botId);
+                            } catch (e) {
+                                if (e.response?.data?.error_code === 400) {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro ao enviar PIX. Tente novamente.'
+                                    }, {}, 3, 1500, botId);
+                                }
+                            }
+                        } else {
+                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                chat_id: chatId,
+                                text: '❌ Erro ao enviar PIX. Tente novamente.'
+                            }, {}, 3, 1500, botId);
+                        }
                         return;
                     }
 
@@ -8545,23 +8672,47 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         });
                     }
 
-                    // Responder ao callback com sucesso
-                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                        callback_query_id: callbackId,
-                        text: 'PIX gerado com sucesso!'
-                    }, {}, 3, 1500, botId);
+                    // Callback já foi respondido no início com "Gerando PIX..."
+                    // Não precisa responder novamente
 
                     return; // Finaliza processamento do callback
                 } catch (error) {
                     logger.error(`[Webhook] Erro ao processar callback de PIX:`, error);
-                    try {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro ao gerar PIX. Tente novamente.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                    } catch (e) {
-                        logger.error(`[Webhook] Erro ao responder callback:`, e);
+                    
+                    // Se callback não foi respondido ainda, tentar responder
+                    // Se já expirou, enviar mensagem normal
+                    if (!callbackResponded) {
+                        try {
+                            await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+                                callback_query_id: callbackId,
+                                text: 'Erro ao gerar PIX. Tente novamente.',
+                                show_alert: true
+                            }, {}, 3, 1500, botId);
+                        } catch (e) {
+                            // Se expirou, enviar mensagem normal
+                            if (e.response?.data?.error_code === 400) {
+                                try {
+                                    await sendTelegramRequest(botToken, 'sendMessage', {
+                                        chat_id: chatId,
+                                        text: '❌ Erro ao gerar PIX. Tente novamente mais tarde.'
+                                    }, {}, 3, 1500, botId);
+                                } catch (sendErr) {
+                                    // Ignorar se não conseguir enviar
+                                }
+                            } else {
+                                logger.error(`[Webhook] Erro ao responder callback:`, e);
+                            }
+                        }
+                    } else {
+                        // Callback já foi respondido, enviar mensagem de erro normal
+                        try {
+                            await sendTelegramRequest(botToken, 'sendMessage', {
+                                chat_id: chatId,
+                                text: '❌ Erro ao gerar PIX. Tente novamente mais tarde.'
+                            }, {}, 3, 1500, botId);
+                        } catch (e) {
+                            // Ignorar se não conseguir enviar
+                        }
                     }
                     return;
                 }
