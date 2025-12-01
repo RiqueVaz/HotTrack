@@ -202,11 +202,15 @@ function createPixService({
         payload.split = [{ recipientId: brpixSplitRecipientId, amount: commission_cents }];
       }
 
-      const response = await axios.post('https://api.brpixdigital.com/functions/v1/transactions', payload, {
+      const response = await apiRateLimiter.createTransaction({
+        provider: 'brpix',
+        sellerId: seller.id,
+        method: 'post',
+        url: 'https://api.brpixdigital.com/functions/v1/transactions',
         headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/json' },
-        timeout: 20000 // 20 segundos para geração de PIX
+        data: payload
       });
-      pixData = response.data;
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = 'BRPix';
 
       const brpixTransactionId = pixData?.transaction_id || pixData?.id;
@@ -246,11 +250,15 @@ function createPixService({
       if (apiKey !== adminApiKey && process.env.SYNCPAY_SPLIT_ACCOUNT_ID) {
         payload.split = [{ percentage: Math.round(commission_percentage), user_id: process.env.SYNCPAY_SPLIT_ACCOUNT_ID }];
       }
-      const response = await axios.post(`${synPayBaseUrl}/api/partner/v1/cash-in`, payload, {
+      const response = await apiRateLimiter.createTransaction({
+        provider: 'syncpay',
+        sellerId: seller.id,
+        method: 'post',
+        url: `${synPayBaseUrl}/api/partner/v1/cash-in`,
         headers: { Authorization: `Bearer ${token}` },
-        timeout: 20000 // 20 segundos para geração de PIX
+        data: payload
       });
-      pixData = response.data;
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = 'SyncPay';
       return {
         qr_code_text: pixData.pix_code,
@@ -293,76 +301,16 @@ function createPixService({
         };
       }
 
-      let response;
-      try {
-        response = await axios.post('https://api-v2.wiinpay.com.br/payment/create', payload, {
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          timeout: 20000 // 20 segundos para geração de PIX
-        });
-      } catch (axiosError) {
-        // Extrai a mensagem de erro corretamente, lidando com objetos aninhados
-        let errorMessage = axiosError.message;
-        const errorData = axiosError.response?.data;
-        
-        if (errorData) {
-          // Tenta diferentes formatos de resposta de erro
-          if (typeof errorData === 'string') {
-            try {
-              const parsed = JSON.parse(errorData);
-              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
-            } catch {
-              errorMessage = errorData;
-            }
-          } else if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          } else if (errorData.message) {
-            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
-          } else if (errorData.error) {
-            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-          }
-        }
-        
-        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
-        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Erro HTTP:`, {
-          status: axiosError.response?.status,
-          statusText: axiosError.response?.statusText,
-          message: errorMessage,
-          data: errorDetails,
-        });
-        throw new Error(`Erro ao comunicar com WiinPay: ${errorMessage || 'Erro desconhecido'}`);
-      }
+      const response = await apiRateLimiter.createTransaction({
+        provider: 'wiinpay',
+        sellerId: seller.id,
+        method: 'post',
+        url: 'https://api-v2.wiinpay.com.br/payment/create',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        data: payload
+      });
 
-      if (response.status < 200 || response.status >= 300) {
-        // Extrai a mensagem de erro corretamente
-        let errorMessage = `Status HTTP ${response.status}`;
-        const errorData = response.data;
-        
-        if (errorData) {
-          if (typeof errorData === 'string') {
-            try {
-              const parsed = JSON.parse(errorData);
-              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
-            } catch {
-              errorMessage = errorData;
-            }
-          } else if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          } else if (errorData.message) {
-            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
-          } else if (errorData.error) {
-            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-          }
-        }
-        
-        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Status HTTP inválido:`, {
-          status: response.status,
-          data: JSON.stringify(response.data),
-          message: errorMessage,
-        });
-        throw new Error(`WiinPay retornou status inválido: ${errorMessage}`);
-      }
-
-      pixData = response.data;
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = 'WiinPay';
 
       // Verifica diferentes formatos de resposta (similar ao parseWiinpayPayment)
@@ -417,7 +365,6 @@ function createPixService({
 
       if (!transactionId || !qrCodeText) {
         console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: wiinpay - Resposta inesperada:`, {
-          status: response.status,
           responseData: JSON.stringify(pixData),
           transactionIdFound: !!transactionId,
           qrCodeTextFound: !!qrCodeText,
@@ -465,11 +412,15 @@ function createPixService({
         payload.splits = [{ producerId: splitId, amount: commission }];
       }
 
-      const response = await axios.post(apiUrl, payload, {
+      const response = await apiRateLimiter.createTransaction({
+        provider: isCnpay ? 'cnpay' : 'oasyfy',
+        sellerId: seller.id,
+        method: 'post',
+        url: apiUrl,
         headers: { 'x-public-key': publicKey, 'x-secret-key': secretKey },
-        timeout: 20000 // 20 segundos para geração de PIX
+        data: payload
       });
-      pixData = response.data;
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = isCnpay ? 'CNPay' : 'Oasy.fy';
 
       const transactionId =
@@ -580,47 +531,18 @@ function createPixService({
         }
       }
 
-      let response;
-      try {
-        response = await axios.post('https://api.pixupbr.com/v2/pix/qrcode', payload, {
-          headers: {
-            Authorization: `Bearer ${pixupToken}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 20000 // 20 segundos para geração de PIX
-        });
-      } catch (axiosError) {
-        // Extrai a mensagem de erro corretamente
-        let errorMessage = axiosError.message;
-        const errorData = axiosError.response?.data;
-        
-        if (errorData) {
-          if (typeof errorData === 'string') {
-            try {
-              const parsed = JSON.parse(errorData);
-              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
-            } catch {
-              errorMessage = errorData;
-            }
-          } else if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          } else if (errorData.message) {
-            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
-          } else if (errorData.error) {
-            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-          }
-        }
-        
-        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
-        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: pixup - Erro HTTP:`, {
-          status: axiosError.response?.status,
-          statusText: axiosError.response?.statusText,
-          message: errorMessage,
-          data: errorDetails,
-        });
-        throw new Error(`Erro ao comunicar com Pixup: ${errorMessage || 'Erro desconhecido'}`);
-      }
-      pixData = response.data;
+      const response = await apiRateLimiter.createTransaction({
+        provider: 'pixup',
+        sellerId: seller.id,
+        method: 'post',
+        url: 'https://api.pixupbr.com/v2/pix/qrcode',
+        headers: {
+          Authorization: `Bearer ${pixupToken}`,
+          'Content-Type': 'application/json',
+        },
+        data: payload
+      });
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = 'Pixup';
 
       const transactionId = pixData?.transactionId || pixData?.transaction_id || externalId;
@@ -710,48 +632,18 @@ function createPixService({
         }
       }
 
-      let response;
-      try {
-        response = await axios.post('https://multi.paradisepags.com/api/v1/transaction.php', payload, {
-          headers: {
-            'X-API-Key': paradiseSecretKey,
-            'Content-Type': 'application/json',
-          },
-          timeout: 20000 // 20 segundos para geração de PIX
-        });
-      } catch (axiosError) {
-        // Extrai a mensagem de erro corretamente
-        let errorMessage = axiosError.message;
-        const errorData = axiosError.response?.data;
-        
-        if (errorData) {
-          if (typeof errorData === 'string') {
-            try {
-              const parsed = JSON.parse(errorData);
-              errorMessage = parsed?.error?.message || parsed?.message || errorMessage;
-            } catch {
-              errorMessage = errorData;
-            }
-          } else if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          } else if (errorData.message) {
-            errorMessage = typeof errorData.message === 'string' ? errorData.message : errorData.message.message || JSON.stringify(errorData.message);
-          } else if (errorData.error) {
-            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-          }
-        }
-        
-        const errorDetails = errorData ? JSON.stringify(errorData) : 'Sem detalhes';
-        console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: paradise - Erro HTTP:`, {
-          status: axiosError.response?.status,
-          statusText: axiosError.response?.statusText,
-          message: errorMessage,
-          data: errorDetails,
-        });
-        throw new Error(`Erro ao comunicar com Paradise: ${errorMessage || 'Erro desconhecido'}`);
-      }
-
-      pixData = response.data;
+      const response = await apiRateLimiter.createTransaction({
+        provider: 'paradise',
+        sellerId: seller.id,
+        method: 'post',
+        url: 'https://multi.paradisepags.com/api/v1/transaction.php',
+        headers: {
+          'X-API-Key': paradiseSecretKey,
+          'Content-Type': 'application/json',
+        },
+        data: payload
+      });
+      pixData = response; // apiRateLimiter retorna response.data diretamente
       acquirer = pixData?.acquirer || 'ParadiseBank';
 
       // Paradise retorna transaction_id (numérico) e id (que é o reference)
@@ -761,7 +653,6 @@ function createPixService({
 
       if (!transactionId || !qrCodeText) {
         console.error(`[PIX TEST ERROR] Seller ID: ${seller.id}, Provider: paradise - Resposta inesperada:`, {
-          status: response.status,
           responseData: JSON.stringify(pixData),
           transactionIdFound: !!transactionId,
           qrCodeTextFound: !!qrCodeText,

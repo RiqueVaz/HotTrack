@@ -37,15 +37,43 @@ class ApiRateLimiter {
                 retryDelay: 2000,
                 timeout: 10000
             }],
+            ['brpix', {
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos
+                cacheTTL: 60_000,
+                maxRetries: 3,
+                retryDelay: 2000,
+                timeout: 20000
+            }],
+            ['cnpay', {
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos
+                cacheTTL: 60_000,
+                maxRetries: 3,
+                retryDelay: 2000,
+                timeout: 20000
+            }],
+            ['oasyfy', {
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos
+                cacheTTL: 60_000,
+                maxRetries: 3,
+                retryDelay: 2000,
+                timeout: 20000
+            }],
+            ['pixup', {
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos
+                cacheTTL: 60_000,
+                maxRetries: 3,
+                retryDelay: 2000,
+                timeout: 20000
+            }],
             ['wiinpay', {
-                globalRateLimit: 1000,
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
                 timeout: 10000
             }],
             ['paradise', {
-                globalRateLimit: 1000,
+                globalRateLimit: 2000, // 1 requisição a cada 2 segundos (mais conservador para evitar 429)
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 retryDelay: 2000,
@@ -139,8 +167,8 @@ class ApiRateLimiter {
         
         const limiter = this.globalLimiters.get(key);
         
-        // Para ip-api, pushinpay e utmify, usar fila real com concorrência limitada
-        if (provider === 'ip-api' || provider === 'pushinpay' || provider === 'utmify') {
+        // Para ip-api, pushinpay, utmify e todos os provedores de PIX, usar fila real com concorrência limitada
+        if (provider === 'ip-api' || provider === 'pushinpay' || provider === 'utmify' || provider === 'wiinpay' || provider === 'brpix' || provider === 'syncpay' || provider === 'cnpay' || provider === 'oasyfy' || provider === 'pixup' || provider === 'paradise') {
             return new Promise((resolve) => {
                 limiter.queue.push(resolve);
                 this._processQueue(provider, sellerId, limiter, config);
@@ -355,22 +383,37 @@ class ApiRateLimiter {
                         throw error;
                     }
                     
-                    // Para utmify, quando recebe 429, aguardar mais tempo antes de falhar
-                    if (provider === 'utmify') {
-                        const retryAfter = Math.max(5, parseInt( // Mínimo 5 segundos
-                            error.response.headers['retry-after'] || 
-                            error.response.headers['Retry-After'] || 
-                            '5'
-                        ));
+                    // Para wiinpay, quando recebe 429, extrair tempo de retry da mensagem
+                    if (provider === 'wiinpay') {
+                        let retryAfter = 30; // Padrão: 30 segundos
+                        
+                        // Tentar extrair do header retry-after primeiro
+                        const headerRetryAfter = error.response?.headers['retry-after'] || error.response?.headers['Retry-After'];
+                        if (headerRetryAfter) {
+                            retryAfter = Math.max(5, parseInt(headerRetryAfter));
+                        } else {
+                            // Tentar extrair da mensagem de erro
+                            const errorMessage = error.response?.data?.message || error.message || '';
+                            const match = errorMessage.match(/retry in (\d+) seconds?/i);
+                            if (match) {
+                                retryAfter = Math.max(5, parseInt(match[1]));
+                            }
+                        }
                         
                         if (attempt === 0 && Math.random() < 0.1) { // Log 10% das vezes
                             console.warn(
-                                `[API Rate Limiter] Rate limit 429 para utmify (seller ${sellerId}). ` +
-                                `Aguardando ${retryAfter}s antes de falhar...`
+                                `[API Rate Limiter] Rate limit 429 para wiinpay (seller ${sellerId}). ` +
+                                `Aguardando ${retryAfter}s antes de retry...`
                             );
                         }
                         
-                        // Aguardar antes de lançar erro (não fazer retry, apenas aguardar e falhar)
+                        // Aguardar antes de retry
+                        if (attempt < config.maxRetries - 1) {
+                            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                            continue;
+                        }
+                        
+                        // Se última tentativa, aguardar e lançar erro
                         await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
                         throw error;
                     }
