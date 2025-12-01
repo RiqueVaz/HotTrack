@@ -461,7 +461,7 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
                     if (error.response?.data?.description?.includes('wrong remote file identifier')) {
                         await sqlWithRetry(
                             'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
-                            [botId, mediaId]
+                            [String(botId), mediaId]
                         );
                         if (global.mediaFileIdCache) {
                             global.mediaFileIdCache.delete(cacheKey);
@@ -534,7 +534,7 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
             try {
                 await sqlWithRetry(
                     'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
-                    [botId, fileId, mediaId]
+                    [String(botId), fileId, mediaId]
                 );
                 
                 // Adicionar ao cache em memória
@@ -1309,6 +1309,28 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 let fileId = actionData.fileId || actionData.file_id || actionData.imageUrl || actionData.videoUrl || actionData.audioUrl;
                 const caption = await replaceVariables(actionData.caption || '', variables);
                 
+                // Verificar se fileId é uma URL R2 (não pode ser usado como file_id)
+                if (fileId && (fileId.startsWith('http://') || fileId.startsWith('https://'))) {
+                    // É uma URL, não um file_id - tentar buscar da biblioteca
+                    const urlToSearch = fileId;
+                    fileId = null; // Limpar para forçar busca da biblioteca
+                    
+                    // Se não tem mediaLibraryId, tentar buscar pela URL
+                    if (!actionData.mediaLibraryId && sellerId) {
+                        try {
+                            const [mediaResult] = await sqlWithRetry(
+                                'SELECT id, storage_url, storage_type FROM media_library WHERE storage_url = $1 AND seller_id = $2 LIMIT 1',
+                                [urlToSearch, sellerId]
+                            );
+                            if (mediaResult) {
+                                actionData.mediaLibraryId = mediaResult.id;
+                            }
+                        } catch (urlSearchError) {
+                            logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao buscar mídia pela URL:`, urlSearchError.message);
+                        }
+                    }
+                }
+                
                 // Se tem mediaLibraryId, buscar da biblioteca (ou usar dados do cache se disponíveis)
                 let media = null;
                 if (actionData.mediaLibraryId && !fileId) {
@@ -1376,7 +1398,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 );
                                 
                                 if (migratedMedia?.storage_url) {
-                                    await sendMediaFromR2(botToken, chatId, migratedMedia.storage_url, action.type, caption);
+                                    await sendMediaFromR2(botToken, chatId, migratedMedia.storage_url, action.type, caption, media.id, botId);
                                     sent = true;
                                 }
                             } catch (migrationError) {
@@ -1388,20 +1410,43 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     // 3. Fallback: método antigo
                     if (!sent) {
                         if (fileId) {
-                            const isLibraryFileFallback = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
-                            if (isLibraryFileFallback) {
-                                await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                            // Verificar se fileId não é uma URL R2
+                            if (fileId.startsWith('http://') || fileId.startsWith('https://')) {
+                                logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] fileId é uma URL R2. Tentando buscar da biblioteca.`);
+                                // Tentar buscar da biblioteca se possível
+                                if (sellerId) {
+                                    try {
+                                        const [mediaResult] = await sqlWithRetry(
+                                            'SELECT id, storage_url, storage_type FROM media_library WHERE storage_url = $1 AND seller_id = $2 LIMIT 1',
+                                            [fileId, sellerId]
+                                        );
+                                        if (mediaResult && mediaResult.storage_url && mediaResult.storage_type === 'r2') {
+                                            await sendMediaFromR2(botToken, chatId, mediaResult.storage_url, action.type, caption, mediaResult.id, botId);
+                                            sent = true;
+                                        } else {
+                                            logger.error(`${logPrefix} [${actionIndex}/${actions.length}] URL R2 não encontrada na biblioteca: ${fileId}`);
+                                        }
+                                    } catch (urlError) {
+                                        logger.error(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao buscar URL R2 na biblioteca:`, urlError.message);
+                                    }
+                                }
                             } else {
-                                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                                const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                                const timeout = action.type === 'video' ? 120000 : 60000;
-                                const payload = normalizeTelegramPayload({ 
-                                    chat_id: chatId, 
-                                    [field]: fileId, 
-                                    caption: caption || "", 
-                                    parse_mode: 'HTML' 
-                                });
-                                await sendTelegramRequest(botToken, method, payload, { timeout });
+                                // fileId válido (não é URL)
+                                const isLibraryFileFallback = fileId && (fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || fileId.startsWith('AwAC'));
+                                if (isLibraryFileFallback) {
+                                    await sendMediaAsProxy(botToken, chatId, fileId, action.type, caption);
+                                } else {
+                                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
+                                    const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
+                                    const timeout = action.type === 'video' ? 120000 : 60000;
+                                    const payload = normalizeTelegramPayload({ 
+                                        chat_id: chatId, 
+                                        [field]: fileId, 
+                                        caption: caption || "", 
+                                        parse_mode: 'HTML' 
+                                    });
+                                    await sendTelegramRequest(botToken, method, payload, { timeout });
+                                }
                             }
                         } else if (media && media.file_id) {
                             // Se tem media mas não fileId, usar file_id da mídia

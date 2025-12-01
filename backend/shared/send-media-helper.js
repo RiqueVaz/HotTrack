@@ -113,7 +113,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                         if (error.response?.data?.description?.includes('wrong remote file identifier')) {
                             await sqlWithRetry(
                                 'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
-                                [botId, mediaId]
+                                [String(botId), mediaId]
                             );
                             if (global.mediaFileIdCache) {
                                 global.mediaFileIdCache.delete(cacheKey);
@@ -188,7 +188,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                 try {
                     await sqlWithRetry(
                         'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
-                        [botId, fileId, mediaId]
+                        [String(botId), fileId, mediaId]
                     );
                     
                     // Adicionar ao cache em memória
