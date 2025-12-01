@@ -7285,7 +7285,6 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             
             case 'action_pix':
                 try {
-                    logger.debug(`${logPrefix} Executando action_pix para chat ${chatId}`);
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
@@ -7338,9 +7337,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 click_id = EXCLUDED.click_id,
                                 expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
                         `;
-                        logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
                     } catch (dbError) {
-                        logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
                         // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
                     }
     
@@ -7356,13 +7353,23 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
+                        // Se for erro 403 (bot bloqueado), tratar silenciosamente
+                        if (sentMessage.error_code === 403) {
+                            // Remover dados da tabela se foram salvos (botão não será clicado)
+                            try {
+                                await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
+                            } catch (e) {
+                                // Não crítico
+                            }
+                            return; // Retorna silenciosamente, não é erro crítico
+                        }
+                        
                         logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
                         throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
                 } catch (error) {
                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido
@@ -8293,8 +8300,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             sellerId = pendingData.seller_id;
                         }
                         
-                        logger.debug(`[Webhook] Dados do PIX encontrados na tabela temporária para callback ${callbackData}`);
-                        
                         // Deletar registro após uso
                         await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
                     } else {
@@ -8319,7 +8324,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             try {
                                 variables = JSON.parse(variables);
                             } catch (e) {
-                                logger.error('[Webhook] Erro ao fazer parse das variáveis do callback:', e);
                                 await sendTelegramRequest(botToken, 'answerCallbackQuery', {
                                     callback_query_id: callbackId,
                                     text: 'Erro ao processar dados.',
@@ -8334,8 +8338,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         pixMessageText = variables._pix_pending_messageText || "";
                         pixButtonText = variables._pix_pending_buttonText || "📋 Copiar";
                         click_id_from_vars = variables._pix_pending_click_id || variables.click_id;
-                        
-                        logger.debug(`[Webhook] Dados do PIX encontrados nas variáveis do fluxo para callback ${callbackData}`);
                     }
 
                     if (!valueInCents || !click_id_from_vars) {
@@ -8375,7 +8377,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     
                     // Gerar PIX
                     const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    logger.debug(`[Webhook] PIX gerado via callback. Transaction ID: ${pixResult.transaction_id}`);
                     
                     // Atualizar variáveis do fluxo apenas se os dados vieram das variáveis (não da tabela temporária)
                     if (!pendingData) {
@@ -8413,7 +8414,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             }
                         } catch (e) {
                             // Não crítico se não conseguir atualizar
-                            logger.debug(`[Webhook] Não foi possível atualizar last_transaction_id no estado do fluxo:`, e.message);
                         }
                     }
 
@@ -8457,7 +8457,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
 
                     // Salvar mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    logger.debug(`[Webhook] PIX enviado com sucesso via callback ao usuário ${chatId}`);
 
                     // Enviar eventos para Utmify e Meta
                     const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
@@ -8471,7 +8470,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         productData: productDataForUtmify,
                         sqlTx: sqlTx
                     });
-                    logger.debug(`[Webhook] Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
 
                     // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
                     if (click.pressel_id || click.checkout_id) {
@@ -8482,7 +8480,6 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                             customerData: null,
                             sqlTx: sqlTx
                         });
-                        logger.debug(`[Webhook] Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
                     }
 
                     // Responder ao callback com sucesso

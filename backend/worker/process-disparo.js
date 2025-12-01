@@ -1370,27 +1370,25 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 const timestamp = Date.now();
                 const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
                 
-                // Salvar dados na tabela temporária para processamento do callback
-                try {
-                    await sqlWithRetry(sqlTx`
-                        INSERT INTO pix_pending_callbacks (
-                            callback_data, chat_id, bot_id, seller_id, 
-                            value_in_cents, pix_message_text, pix_button_text, click_id
-                        )
-                        VALUES (
-                            ${callbackData}, ${chatId}, ${botId}, ${sellerId},
-                            ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_for_storage}
-                        )
-                        ON CONFLICT (callback_data) DO UPDATE SET
-                            value_in_cents = EXCLUDED.value_in_cents,
-                            pix_message_text = EXCLUDED.pix_message_text,
-                            pix_button_text = EXCLUDED.pix_button_text,
-                            click_id = EXCLUDED.click_id,
-                            expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
+                    // Salvar dados na tabela temporária para processamento do callback
+                    try {
+                        await sqlWithRetry(sqlTx`
+                            INSERT INTO pix_pending_callbacks (
+                                callback_data, chat_id, bot_id, seller_id, 
+                                value_in_cents, pix_message_text, pix_button_text, click_id
+                            )
+                            VALUES (
+                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
+                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_for_storage}
+                            )
+                            ON CONFLICT (callback_data) DO UPDATE SET
+                                value_in_cents = EXCLUDED.value_in_cents,
+                                pix_message_text = EXCLUDED.pix_message_text,
+                                pix_button_text = EXCLUDED.pix_button_text,
+                                click_id = EXCLUDED.click_id,
+                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
                     `);
-                    logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
                 } catch (dbError) {
-                    logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
                     // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
                 }
                 
@@ -1407,11 +1405,20 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                 
                 // Verificar se o envio foi bem-sucedido
                 if (!sentMessage || !sentMessage.ok) {
+                    // Se for erro 403 (bot bloqueado), tratar silenciosamente
+                    if (sentMessage?.error_code === 403) {
+                        // Remover dados da tabela se foram salvos (botão não será clicado)
+                        try {
+                            await sqlWithRetry(sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`);
+                        } catch (e) {
+                            // Não crítico
+                        }
+                        return; // Retorna silenciosamente, não é erro crítico
+                    }
+                    
                     logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage?.description || 'Desconhecido'}`);
                     throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage?.description || 'Erro desconhecido'}.`);
                 }
-                
-                logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId} (disparo)`);
             } else if (action.type === 'action_check_pix') {
                 // Verificar PIX - sempre busca o último PIX gerado
                 try {
