@@ -445,23 +445,43 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
+/**
+ * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
+ */
+function normalizeTelegramPayload(payload) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined) {
+            // Converter null para string vazia em campos opcionais de texto
+            if (value === null && (key === 'caption' || key === 'text')) {
+                normalized[key] = '';
+            } else {
+                normalized[key] = value;
+            }
+        }
+    }
+    return normalized;
+}
+
 async function handleMediaNode(node, botToken, chatId, caption, botId = null, sellerId = null) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
     caption = caption || "";
     
+    // Aceitar tanto node quanto action (action pode não ter id)
+    const nodeId = node.id || node.nodeId || 'unknown';
     const type = node.type;
     const nodeData = node.data || {};
     const urlMap = { image: 'imageUrl', video: 'videoUrl', audio: 'audioUrl' };
     const fileIdentifier = nodeData[urlMap[type]];
 
     if (!fileIdentifier) {
-        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${node.id}`);
+        console.warn(`[Flow Media] Nenhum file_id ou URL fornecido para o nó de ${type} ${nodeId}`);
         return null;
     }
 
     // Validar file_id antes de usar
     if (typeof fileIdentifier !== 'string' || fileIdentifier.trim() === '') {
-        console.warn(`[Timeout Media] File ID inválido ou vazio para o nó de ${type} ${node.id}`);
+        console.warn(`[Timeout Media] File ID inválido ou vazio para o nó de ${type} ${nodeId}`);
         return null;
     }
 
@@ -476,7 +496,9 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
         }
     }
 
-    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC');
+    // Validar formato de file_id (prefixos conhecidos ou R2)
+    const isLibraryFile = fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || 
+                         fileIdentifier.startsWith('AwAC') || fileIdentifier.startsWith('R2_');
     let response;
     const timeout = type === 'video' ? 120000 : 30000; // Timeout maior para vídeos
 
@@ -523,12 +545,13 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                 const method = methodMap[type];
                 const field = fieldMap[type];
                 
-                response = await sendTelegramRequest(botToken, method, {
+                const payload = normalizeTelegramPayload({
                     chat_id: chatId,
                     [field]: media.storage_url,
                     caption: caption,
                     parse_mode: 'HTML'
-                }, { timeout }, 3, 1500, botId);
+                });
+                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
             } catch (urlError) {
                 // Verificar se é erro de file_id inválido
                 const urlErrorMessage = urlError.message || urlError.description || '';
@@ -560,12 +583,13 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
                     const method = methodMap[type];
                     const field = fieldMap[type];
                     
-                    response = await sendTelegramRequest(botToken, method, {
+                    const payload = normalizeTelegramPayload({
                         chat_id: chatId,
                         [field]: migratedMedia.storage_url,
                         caption: caption,
                         parse_mode: 'HTML'
-                    }, { timeout }, 3, 1500, botId);
+                    });
+                    response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
                 } else {
                     throw new Error('Migração não retornou storage_url');
                 }

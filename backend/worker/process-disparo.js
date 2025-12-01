@@ -281,7 +281,33 @@ async function saveMessageToDb(sellerId, botId, message, senderType, variables =
 }
 
 
+/**
+ * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
+ */
+function normalizeTelegramPayload(payload) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined) {
+            // Converter null para string vazia em campos opcionais de texto
+            if (value === null && (key === 'caption' || key === 'text')) {
+                normalized[key] = '';
+            } else {
+                normalized[key] = value;
+            }
+        }
+    }
+    return normalized;
+}
+
 async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
+    // Normalizar caption
+    caption = caption || "";
+    
+    // Validar file_id antes de usar
+    if (!fileId || typeof fileId !== 'string' || fileId.trim() === '') {
+        throw new Error('File ID inválido ou vazio');
+    }
+    
     const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
     if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
     
@@ -298,12 +324,13 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
                 const field = fieldMap[fileType];
                 const timeout = fileType === 'video' ? 120000 : 60000;
                 try {
-                    return await sendTelegramRequest(destinationBotToken, method, { 
+                    const payload = normalizeTelegramPayload({
                         chat_id: chatId, 
                         [field]: fileId, 
-                        caption, 
+                        caption: caption || "", 
                         parse_mode: 'HTML' 
-                    }, { timeout });
+                    });
+                    return await sendTelegramRequest(destinationBotToken, method, payload, { timeout });
                 } catch (bigFileError) {
                     const bigFileErrorMessage = bigFileError.message || bigFileError.description || '';
                     const bigFileErrorResponseDesc = bigFileError.response?.data?.description || '';
@@ -1190,7 +1217,13 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
                                 const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
                                 const timeout = action.type === 'video' ? 120000 : 60000;
-                                await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: fileId, caption, parse_mode: 'HTML' }, { timeout });
+                                const payload = normalizeTelegramPayload({ 
+                                    chat_id: chatId, 
+                                    [field]: fileId, 
+                                    caption: caption || "", 
+                                    parse_mode: 'HTML' 
+                                });
+                                await sendTelegramRequest(botToken, method, payload, { timeout });
                             }
                         } else if (media && media.file_id) {
                             // Se tem media mas não fileId, usar file_id da mídia
@@ -1201,7 +1234,13 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
                                 const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
                                 const timeout = action.type === 'video' ? 120000 : 60000;
-                                await sendTelegramRequest(botToken, method, { chat_id: chatId, [field]: media.file_id, caption, parse_mode: 'HTML' }, { timeout });
+                                const payload = normalizeTelegramPayload({ 
+                                    chat_id: chatId, 
+                                    [field]: media.file_id, 
+                                    caption: caption || "", 
+                                    parse_mode: 'HTML' 
+                                });
+                                await sendTelegramRequest(botToken, method, payload, { timeout });
                             }
                         }
                     }

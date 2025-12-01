@@ -3,6 +3,24 @@ const { sqlWithRetry } = require('../db');
 const { migrateMediaOnDemand } = require('./migrate-media-on-demand');
 
 /**
+ * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
+ */
+function normalizeTelegramPayload(payload) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(payload)) {
+        if (value !== undefined) {
+            // Converter null para string vazia em campos opcionais de texto
+            if (value === null && (key === 'caption' || key === 'text')) {
+                normalized[key] = '';
+            } else {
+                normalized[key] = value;
+            }
+        }
+    }
+    return normalized;
+}
+
+/**
  * Cria uma função sendMediaFromLibrary configurada com as dependências
  * @param {Function} sendTelegramRequest - Função para enviar requisições ao Telegram
  * @param {Function} sendMediaAsProxy - Função de fallback (método antigo)
@@ -10,75 +28,109 @@ const { migrateMediaOnDemand } = require('./migrate-media-on-demand');
  * @returns {Function} Função sendMediaFromLibrary configurada
  */
 function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logger = console) {
-    return async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
-    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || "";
+    // Cache de mídias para evitar queries repetidas
+    const mediaCache = new Map();
+    const MEDIA_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
     
-    // 1. Tentar buscar mídia no banco pelo file_id
-    if (sellerId) {
-        const [media] = await sqlWithRetry(`
-            SELECT id, file_id, storage_url, storage_type, migration_status
-            FROM media_library 
-            WHERE file_id = $1 AND seller_id = $2
-            LIMIT 1
-        `, [fileId, sellerId]);
+    return async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
+        // Normalizar caption
+        caption = caption || "";
+        
+        // Validar file_id antes de usar
+        if (!fileId || typeof fileId !== 'string' || fileId.trim() === '') {
+            throw new Error('File ID inválido ou vazio');
+        }
+        
+        // Verificar se file_id tem formato válido (prefixos conhecidos ou R2)
+        const isValidFileId = fileId.startsWith('BAAC') || fileId.startsWith('AgAC') || 
+                             fileId.startsWith('AwAC') || fileId.startsWith('R2_') ||
+                             fileId.startsWith('http://') || fileId.startsWith('https://');
+        
+        // 1. Tentar buscar mídia no banco pelo file_id (com cache)
+        let media = null;
+        if (sellerId) {
+            const cacheKey = `media_${sellerId}_${fileId}`;
+            const cached = mediaCache.get(cacheKey);
+            
+            if (cached && (Date.now() - cached.timestamp) < MEDIA_CACHE_TTL) {
+                media = cached.media;
+            } else {
+                const [mediaResult] = await sqlWithRetry(`
+                    SELECT id, file_id, storage_url, storage_type, migration_status
+                    FROM media_library 
+                    WHERE file_id = $1 AND seller_id = $2
+                    LIMIT 1
+                `, [fileId, sellerId]);
 
-        if (media) {
-            // 2. Se já está no R2, usar URL direta
-            if (media.storage_type === 'r2' && media.storage_url) {
-                try {
-                    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                    const method = methodMap[fileType];
-                    const field = fieldMap[fileType];
-                    
-                    if (!method) throw new Error('Tipo de arquivo não suportado.');
-                    
-                    return await sendTelegramRequest(destinationBotToken, method, {
-                        chat_id: chatId,
-                        [field]: media.storage_url, // Telegram aceita URL direta!
-                        caption: caption || "",
-                        parse_mode: 'HTML'
-                    }, { timeout: fileType === 'video' ? 120000 : 60000 });
-                } catch (urlError) {
-                    logger.warn(`[Media] Erro ao enviar via R2 URL, tentando fallback:`, urlError.message);
-                    // Continuar para fallback
+                if (mediaResult) {
+                    media = mediaResult;
+                    mediaCache.set(cacheKey, { media, timestamp: Date.now() });
                 }
             }
 
-            // 3. Se não está migrado, tentar migrar sob demanda
-            if (media.storage_type === 'telegram' && media.migration_status !== 'migrated') {
-                try {
-                    logger.info(`[Media] Migrando mídia ${media.id} sob demanda...`);
-                    await migrateMediaOnDemand(media.id);
-                    
-                    // Buscar novamente após migração
-                    const [migratedMedia] = await sqlWithRetry(`
-                        SELECT storage_url FROM media_library WHERE id = $1
-                    `, [media.id]);
-
-                    if (migratedMedia?.storage_url) {
+            if (media) {
+                // 2. PRIORIDADE 1: Se já está no R2, usar URL direta (não tentar file_id)
+                if (media.storage_type === 'r2' && media.storage_url) {
+                    try {
                         const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
                         const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
                         const method = methodMap[fileType];
                         const field = fieldMap[fileType];
                         
-                        return await sendTelegramRequest(destinationBotToken, method, {
+                        if (!method) throw new Error('Tipo de arquivo não suportado.');
+                        
+                        const payload = normalizeTelegramPayload({
                             chat_id: chatId,
-                            [field]: migratedMedia.storage_url,
+                            [field]: media.storage_url,
                             caption: caption || "",
                             parse_mode: 'HTML'
-                        }, { timeout: fileType === 'video' ? 120000 : 60000 });
+                        });
+                        
+                        return await sendTelegramRequest(destinationBotToken, method, payload, { 
+                            timeout: fileType === 'video' ? 120000 : 60000 
+                        });
+                    } catch (urlError) {
+                        logger.warn(`[Media] Erro ao enviar via R2 URL:`, urlError.message);
+                        // Não tentar fallback com file_id se R2 falhou
+                        throw urlError;
                     }
-                } catch (migrationError) {
-                    logger.error(`[Media] Erro na migração sob demanda:`, migrationError.message);
-                    // Continuar com método antigo
+                }
+
+                // 3. PRIORIDADE 2: Se não está migrado, tentar migrar sob demanda
+                if (media.storage_type === 'telegram' && media.migration_status !== 'migrated') {
+                    try {
+                        logger.info(`[Media] Migrando mídia ${media.id} sob demanda...`);
+                        const migrationResult = await migrateMediaOnDemand(media.id);
+                        
+                        if (migrationResult?.success && migrationResult?.storageUrl) {
+                            // Invalidar cache
+                            mediaCache.delete(cacheKey);
+                            
+                            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+                            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+                            const method = methodMap[fileType];
+                            const field = fieldMap[fileType];
+                            
+                            const payload = normalizeTelegramPayload({
+                                chat_id: chatId,
+                                [field]: migrationResult.storageUrl,
+                                caption: caption || "",
+                                parse_mode: 'HTML'
+                            });
+                            
+                            return await sendTelegramRequest(destinationBotToken, method, payload, { 
+                                timeout: fileType === 'video' ? 120000 : 60000 
+                            });
+                        }
+                    } catch (migrationError) {
+                        logger.error(`[Media] Erro na migração sob demanda:`, migrationError.message);
+                        // Continuar com método antigo apenas se migração falhou
+                    }
                 }
             }
         }
-    }
 
-        // 4. Fallback: método antigo (download/re-upload)
+        // 4. Fallback: método antigo (download/re-upload) - apenas se não encontrou no banco ou migração falhou
         return await sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption);
     };
 }
