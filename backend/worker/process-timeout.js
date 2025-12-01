@@ -1533,9 +1533,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
-                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
-    
+                    // Buscar click_id para validação e armazenamento
                     let click_id_from_vars = variables.click_id;
                     if (!click_id_from_vars) {
                         const [recentClick] = await sqlTx`
@@ -1551,70 +1549,40 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
                     }
     
-                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
+                    // Preparar dados da mensagem
+                    let pixPromptMessage = await replaceVariables(actionData.pixPromptMessage || "Clique no botão abaixo para gerar seu PIX", variables);
+                    const pixMessageText = actionData.pixMessageText || "";
+                    const pixButtonText = actionData.pixButtonText || "📋 Copiar";
     
-                    const ip_address = click.ip_address;
-                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                    
-                    // Gera PIX e salva no banco
-                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    // Removido log de debug - não é necessário em produção
-                    
-                    // Atualiza as variáveis do fluxo (IMPORTANTE)
-                    variables.last_transaction_id = pixResult.transaction_id;
+                    // Armazenar dados temporários nas variáveis do fluxo para uso no callback
+                    variables._pix_pending_valueInCents = valueInCents;
+                    variables._pix_pending_messageText = pixMessageText;
+                    variables._pix_pending_buttonText = pixButtonText;
+                    variables._pix_pending_click_id = click_id_from_vars;
     
-                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
-                    
-                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
-                    if (messageText && messageText.length > 1024) {
-                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
-                        messageText = messageText.substring(0, 1021) + '...';
-                    }
-                    
-                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
-                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
+                    // Criar callback_data único
+                    const timestamp = Date.now();
+                    const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
     
-                    // CRÍTICO: Tenta enviar o PIX para o usuário
+                    // Enviar mensagem com botão "Gerar Pix"
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
+                        chat_id: chatId,
+                        text: pixPromptMessage,
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: "💳 Gerar Pix", callback_data: callbackData }]]
+                        }
                     });
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
-                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
-                        console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        
-                        await sqlTx`
-                            UPDATE pix_transactions 
-                            SET status = 'canceled' 
-                            WHERE provider_transaction_id = ${pixResult.transaction_id}
-                        `;
-                        
-                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
+                        console.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    // Removido log de debug - não é necessário em produção
-                    
-                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
-                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmifyShared({
-                        status: 'waiting_payment',
-                        clickData: click,
-                        pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
-                        sellerData: seller,
-                        customerData: customerDataForUtmify,
-                        productData: productDataForUtmify,
-                        sqlTx: sqlTx
-                    });
-                    // Removido log de debug - não é necessário em produção
-
-                    console.log(`${logPrefix} Eventos adicionais (Meta) serão gerenciados pelo serviço central de geração de PIX.`);
+                    console.log(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     if (error.response) {
