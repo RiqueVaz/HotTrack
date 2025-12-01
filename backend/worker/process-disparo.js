@@ -641,10 +641,11 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     try {
                         if (timeoutMinutes <= TIMEOUT_THRESHOLD_MINUTES) {
                             // Timeout curto: salvar timeout_at
+                            // IMPORTANTE: flow_id deve ser NULL para disparos (referencia disparo_flows, não flows)
                             const timeoutAt = new Date(Date.now() + timeoutMinutes * 60 * 1000);
                             await sqlWithRetry(sqlTx`
                                 INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, timeout_at, flow_id)
-                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${timeoutAt}, ${disparoFlowId})
+                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${timeoutAt}, NULL)
                                 ON CONFLICT (chat_id, bot_id)
                                 DO UPDATE SET 
                                     current_node_id = EXCLUDED.current_node_id,
@@ -652,7 +653,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                     waiting_for_input = true,
                                     timeout_at = EXCLUDED.timeout_at,
                                     scheduled_message_id = NULL,
-                                    flow_id = EXCLUDED.flow_id
+                                    flow_id = NULL
                             `);
                         } else {
                             // Timeout longo: usar QStash
@@ -674,10 +675,10 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                             });
                             
                             // Salva o estado como "esperando" e armazena o ID da tarefa agendada
-                            // Armazena informações do disparo nas variables
+                            // IMPORTANTE: flow_id deve ser NULL para disparos (referencia disparo_flows, não flows)
                             await sqlWithRetry(sqlTx`
                                 INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
-                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, ${disparoFlowId})
+                                VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, NULL)
                                 ON CONFLICT (chat_id, bot_id)
                                 DO UPDATE SET 
                                     current_node_id = EXCLUDED.current_node_id,
@@ -685,7 +686,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                     waiting_for_input = true,
                                     scheduled_message_id = EXCLUDED.scheduled_message_id,
                                     timeout_at = NULL,
-                                    flow_id = EXCLUDED.flow_id
+                                    flow_id = NULL
                             `);
                         }
                         
