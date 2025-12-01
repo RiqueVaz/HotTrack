@@ -8266,7 +8266,8 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 logger.warn(`[Webhook] Bot ID ${botId} não encontrado para callback.`);
                 return;
             }
-            const { seller_id: sellerId, bot_token: botToken } = bot;
+            const { seller_id: botSellerId, bot_token: botToken } = bot;
+            let sellerId = botSellerId;
 
             // Processar callback de geração de PIX
             if (callbackData.startsWith('pix_generate_')) {
@@ -8287,7 +8288,10 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                         pixMessageText = pendingData.pix_message_text || "";
                         pixButtonText = pendingData.pix_button_text || "📋 Copiar";
                         click_id_from_vars = pendingData.click_id;
-                        sellerId = pendingData.seller_id; // Atualizar sellerId se vier da tabela
+                        // Usar seller_id da tabela se disponível (pode ser diferente em casos raros)
+                        if (pendingData.seller_id) {
+                            sellerId = pendingData.seller_id;
+                        }
                         
                         logger.debug(`[Webhook] Dados do PIX encontrados na tabela temporária para callback ${callbackData}`);
                         
