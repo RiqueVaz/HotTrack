@@ -2640,8 +2640,19 @@ function cleanupMediaCache() {
 // Limpar cache periodicamente
 setInterval(cleanupMediaCache, 60 * 1000); // A cada 1 minuto
 
+// Cache global de file_ids do Telegram (evita queries repetidas durante batches)
+if (!global.mediaFileIdCache) {
+    global.mediaFileIdCache = new Map();
+    // Limpar cache a cada 10 minutos
+    setInterval(() => {
+        if (global.mediaFileIdCache.size > 1000) {
+            global.mediaFileIdCache.clear();
+        }
+    }, 10 * 60 * 1000);
+}
+
 // Nova função para enviar mídia da biblioteca com suporte a R2
-async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
+async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null, botId = null) {
     // Normalizar caption
     caption = caption || "";
     
@@ -2705,28 +2716,12 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
         }
 
         if (media) {
-            // 2. PRIORIDADE 1: Se já está no R2, usar URL direta (não tentar file_id)
+            // 2. PRIORIDADE 1: Se já está no R2, baixar e fazer upload
             if (media.storage_type === 'r2' && media.storage_url) {
                 try {
-                    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                    const method = methodMap[fileType];
-                    const field = fieldMap[fileType];
-                    
-                    if (!method) throw new Error('Tipo de arquivo não suportado.');
-                    
-                    const payload = normalizeTelegramPayload({
-                        chat_id: chatId,
-                        [field]: media.storage_url,
-                        caption: caption,
-                        parse_mode: 'HTML'
-                    });
-                    
-                    return await sendTelegramRequest(destinationBotToken, method, payload, { 
-                        timeout: fileType === 'video' ? 120000 : 60000 
-                    });
+                    return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption, media.id, botId);
                 } catch (urlError) {
-                    logger.warn(`[Media] Erro ao enviar via R2 URL:`, urlError.message);
+                    logger.warn(`[Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
                     // Não tentar fallback com file_id se R2 falhou - file_id provavelmente também é inválido
                     throw urlError;
                 }
@@ -2768,6 +2763,160 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
 
     // 4. Fallback: método antigo (download/re-upload) - apenas se não encontrou no banco ou migração falhou
     return await sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption);
+}
+
+async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, mediaId = null, botId = null) {
+    // Se temos mediaId e botId, verificar se já existe file_id cacheado
+    if (mediaId && botId) {
+        // Verificar cache em memória primeiro (se disponível)
+        const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
+        if (global.mediaFileIdCache && global.mediaFileIdCache.has(cacheKey)) {
+            const cachedFileId = global.mediaFileIdCache.get(cacheKey);
+            if (cachedFileId) {
+                // Usar file_id cacheado diretamente
+                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+                const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+                const timeout = fileType === 'video' ? 120000 : 60000;
+                const payload = normalizeTelegramPayload({
+                    chat_id: chatId,
+                    [field]: cachedFileId,
+                    caption: caption || "",
+                    parse_mode: 'HTML'
+                });
+                try {
+                    return await sendTelegramRequest(botToken, method, payload, { timeout });
+                } catch (error) {
+                    // Se file_id expirou, remover do cache e continuar para download
+                    if (error.response?.data?.description?.includes('wrong remote file identifier')) {
+                        global.mediaFileIdCache.delete(cacheKey);
+                        // Continuar para baixar do R2
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+        }
+        
+        // Verificar no banco
+        try {
+            const [media] = await sqlWithRetry(
+                'SELECT telegram_file_ids FROM media_library WHERE id = $1',
+                [mediaId]
+            );
+            
+            if (media?.telegram_file_ids?.[botId]) {
+                const fileId = media.telegram_file_ids[botId];
+                // Adicionar ao cache em memória
+                if (global.mediaFileIdCache) {
+                    global.mediaFileIdCache.set(cacheKey, fileId);
+                }
+                
+                // Usar file_id do banco
+                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+                const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+                const timeout = fileType === 'video' ? 120000 : 60000;
+                const payload = normalizeTelegramPayload({
+                    chat_id: chatId,
+                    [field]: fileId,
+                    caption: caption || "",
+                    parse_mode: 'HTML'
+                });
+                try {
+                    return await sendTelegramRequest(botToken, method, payload, { timeout });
+                } catch (error) {
+                    // Se file_id expirou, remover do banco e continuar para download
+                    if (error.response?.data?.description?.includes('wrong remote file identifier')) {
+                        await sqlWithRetry(
+                            'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
+                            [botId, mediaId]
+                        );
+                        if (global.mediaFileIdCache) {
+                            global.mediaFileIdCache.delete(cacheKey);
+                        }
+                        // Continuar para baixar do R2
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+        } catch (dbError) {
+            // Se erro ao buscar do banco, continuar para download
+            logger.warn(`[Media] Erro ao buscar file_id do banco:`, dbError.message);
+        }
+    }
+    
+    // Se não tem cache ou file_id expirou, baixar do R2 e fazer upload
+    const axios = require('axios');
+    const FormData = require('form-data');
+    
+    const fileResponse = await axios.get(storageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 120000
+    });
+    
+    const fileBuffer = Buffer.from(fileResponse.data);
+    const contentType = fileResponse.headers['content-type'] || 
+        (fileType === 'image' ? 'image/jpeg' : 
+         fileType === 'video' ? 'video/mp4' : 
+         'audio/ogg');
+    
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    
+    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+    const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+    const fileName = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' }[fileType];
+    
+    formData.append(field, fileBuffer, {
+        filename: fileName,
+        contentType: contentType
+    });
+    
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML');
+    }
+    
+    const timeout = fileType === 'video' ? 120000 : 60000;
+    const response = await sendTelegramRequest(botToken, method, formData, {
+        headers: formData.getHeaders(),
+        timeout
+    });
+    
+    // Extrair file_id da resposta e salvar no banco
+    if (response.ok && response.result && mediaId && botId) {
+        let fileId = null;
+        if (fileType === 'image' && response.result.photo) {
+            fileId = Array.isArray(response.result.photo) 
+                ? response.result.photo[response.result.photo.length - 1].file_id 
+                : response.result.photo.file_id;
+        } else if (fileType === 'video' && response.result.video) {
+            fileId = response.result.video.file_id;
+        } else if (fileType === 'audio' && response.result.voice) {
+            fileId = response.result.voice.file_id;
+        }
+        
+        if (fileId) {
+            // Salvar no banco
+            try {
+                await sqlWithRetry(
+                    'UPDATE media_library SET telegram_file_ids = COALESCE(telegram_file_ids, \'{}\'::jsonb) || jsonb_build_object($1, $2) WHERE id = $3',
+                    [botId, fileId, mediaId]
+                );
+                
+                // Adicionar ao cache em memória
+                if (global.mediaFileIdCache) {
+                    const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
+                    global.mediaFileIdCache.set(cacheKey, fileId);
+                }
+            } catch (saveError) {
+                // Não crítico se não conseguir salvar
+                logger.warn(`[Media] Erro ao salvar file_id no banco:`, saveError.message);
+            }
+        }
+    }
+    
+    return response;
 }
 
 // Função original mantida para compatibilidade
@@ -3052,7 +3201,7 @@ async function processStepForQStash(step, sellerId) {
     }
 }
 
-async function handleMediaNode(node, botToken, chatId, caption, sellerId = null) {
+async function handleMediaNode(node, botToken, chatId, caption, sellerId = null, botId = null) {
     // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
     caption = caption || "";
     
@@ -3090,7 +3239,7 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null)
         }
         try {
             // Usar nova função que suporta R2
-            response = await sendMediaFromLibrary(botToken, chatId, fileIdentifier, type, caption, sellerId);
+            response = await sendMediaFromLibrary(botToken, chatId, fileIdentifier, type, caption, sellerId, botId);
         } catch (error) {
             // Verificar se é erro de file_id inválido
             const errorMessage = error.message || error.description || '';
@@ -4260,7 +4409,7 @@ app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, re
         const botToken = await getBotToken(botId, req.user.id);
         if (!botToken) return res.status(404).json({ message: 'Bot não encontrado.' });
 
-        const response = await sendMediaFromLibrary(botToken, chatId, fileId, fileType, null, req.user.id);
+        const response = await sendMediaFromLibrary(botToken, chatId, fileId, fileType, null, req.user.id, botId);
 
         if (response.ok) {
             await saveMessageToDb(req.user.id, botId, response.result, 'operator');
@@ -7216,7 +7365,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         caption = caption.substring(0, 1021) + '...';
                     }
                     
-                    const response = await handleMediaNode(action, botToken, chatId, caption, sellerId); // Passa a ação inteira com sellerId
+                    const response = await handleMediaNode(action, botToken, chatId, caption, sellerId, botId); // Passa a ação inteira com sellerId
 
                     if (response && response.ok) {
                         await saveMessageToDb(sellerId, botId, response.result, 'bot');
