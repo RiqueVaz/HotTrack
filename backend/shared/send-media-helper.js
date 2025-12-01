@@ -39,6 +39,47 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
     const mediaCache = new Map();
     const MEDIA_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
     
+    async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) {
+        const axios = require('axios');
+        const FormData = require('form-data');
+        
+        // Baixar arquivo do R2
+        const fileResponse = await axios.get(storageUrl, {
+            responseType: 'arraybuffer',
+            timeout: 120000
+        });
+        
+        const fileBuffer = Buffer.from(fileResponse.data);
+        const contentType = fileResponse.headers['content-type'] || 
+            (fileType === 'image' ? 'image/jpeg' : 
+             fileType === 'video' ? 'video/mp4' : 
+             'audio/ogg');
+        
+        // Criar FormData para upload
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        
+        const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+        const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+        const fileName = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' }[fileType];
+        
+        formData.append(field, fileBuffer, {
+            filename: fileName,
+            contentType: contentType
+        });
+        
+        if (caption) {
+            formData.append('caption', caption);
+            formData.append('parse_mode', 'HTML');
+        }
+        
+        const timeout = fileType === 'video' ? 120000 : 60000;
+        return await sendTelegramRequest(botToken, method, formData, {
+            headers: formData.getHeaders(),
+            timeout
+        });
+    }
+    
     return async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileType, caption, sellerId = null) {
         // Normalizar caption
         caption = caption || "";
@@ -76,28 +117,12 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
             }
 
             if (media) {
-                // 2. PRIORIDADE 1: Se já está no R2, usar URL direta (não tentar file_id)
+                // 2. PRIORIDADE 1: Se já está no R2, baixar e fazer upload
                 if (media.storage_type === 'r2' && media.storage_url) {
                     try {
-                        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                        const method = methodMap[fileType];
-                        const field = fieldMap[fileType];
-                        
-                        if (!method) throw new Error('Tipo de arquivo não suportado.');
-                        
-                        const payload = normalizeTelegramPayload({
-                            chat_id: chatId,
-                            [field]: media.storage_url,
-                            caption: caption || "",
-                            parse_mode: 'HTML'
-                        });
-                        
-                        return await sendTelegramRequest(destinationBotToken, method, payload, { 
-                            timeout: fileType === 'video' ? 120000 : 60000 
-                        });
+                        return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption);
                     } catch (urlError) {
-                        logger.warn(`[Media] Erro ao enviar via R2 URL:`, urlError.message);
+                        logger.warn(`[Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
                         // Não tentar fallback com file_id se R2 falhou
                         throw urlError;
                     }
@@ -113,21 +138,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                             // Invalidar cache
                             mediaCache.delete(cacheKey);
                             
-                            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                            const method = methodMap[fileType];
-                            const field = fieldMap[fileType];
-                            
-                            const payload = normalizeTelegramPayload({
-                                chat_id: chatId,
-                                [field]: migrationResult.storageUrl,
-                                caption: caption || "",
-                                parse_mode: 'HTML'
-                            });
-                            
-                            return await sendTelegramRequest(destinationBotToken, method, payload, { 
-                                timeout: fileType === 'video' ? 120000 : 60000 
-                            });
+                            return await sendMediaFromR2(destinationBotToken, chatId, migrationResult.storageUrl, fileType, caption);
                         }
                     } catch (migrationError) {
                         logger.error(`[Media] Erro na migração sob demanda:`, migrationError.message);

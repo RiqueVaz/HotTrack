@@ -387,6 +387,47 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
+async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) {
+    const axios = require('axios');
+    const FormData = require('form-data');
+    
+    // Baixar arquivo do R2
+    const fileResponse = await axios.get(storageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 120000
+    });
+    
+    const fileBuffer = Buffer.from(fileResponse.data);
+    const contentType = fileResponse.headers['content-type'] || 
+        (fileType === 'image' ? 'image/jpeg' : 
+         fileType === 'video' ? 'video/mp4' : 
+         'audio/ogg');
+    
+    // Criar FormData para upload
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    
+    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+    const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+    const fileName = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' }[fileType];
+    
+    formData.append(field, fileBuffer, {
+        filename: fileName,
+        contentType: contentType
+    });
+    
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML');
+    }
+    
+    const timeout = fileType === 'video' ? 120000 : 60000;
+    return await sendTelegramRequest(botToken, method, formData, {
+        headers: formData.getHeaders(),
+        timeout
+    });
+}
+
 // Funções de PIX (necessárias para o passo 'pix')
 
 // ==========================================================
@@ -1192,18 +1233,10 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         // 1. Tentar usar storage_url se já está migrado
                         if (media.storage_url && media.storage_type === 'r2') {
                             try {
-                                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                                const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                                const timeout = action.type === 'video' ? 120000 : 60000;
-                                await sendTelegramRequest(botToken, method, { 
-                                    chat_id: chatId, 
-                                    [field]: media.storage_url, 
-                                    caption, 
-                                    parse_mode: 'HTML' 
-                                }, { timeout });
+                                await sendMediaFromR2(botToken, chatId, media.storage_url, action.type, caption);
                                 sent = true;
                             } catch (urlError) {
-                                console.warn(`[Disparo Media] Erro ao enviar via R2 URL:`, urlError.message);
+                                console.warn(`[Disparo Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
                             }
                         }
                         
@@ -1219,15 +1252,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 );
                                 
                                 if (migratedMedia?.storage_url) {
-                                    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[action.type];
-                                    const field = { image: 'photo', video: 'video', audio: 'voice' }[action.type];
-                                    const timeout = action.type === 'video' ? 120000 : 60000;
-                                    await sendTelegramRequest(botToken, method, { 
-                                        chat_id: chatId, 
-                                        [field]: migratedMedia.storage_url, 
-                                        caption, 
-                                        parse_mode: 'HTML' 
-                                    }, { timeout });
+                                    await sendMediaFromR2(botToken, chatId, migratedMedia.storage_url, action.type, caption);
                                     sent = true;
                                 }
                             } catch (migrationError) {

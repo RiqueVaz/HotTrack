@@ -445,6 +445,47 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
+async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption) {
+    const axios = require('axios');
+    const FormData = require('form-data');
+    
+    // Baixar arquivo do R2
+    const fileResponse = await axios.get(storageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 120000
+    });
+    
+    const fileBuffer = Buffer.from(fileResponse.data);
+    const contentType = fileResponse.headers['content-type'] || 
+        (fileType === 'image' ? 'image/jpeg' : 
+         fileType === 'video' ? 'video/mp4' : 
+         'audio/ogg');
+    
+    // Criar FormData para upload
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    
+    const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+    const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+    const fileName = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' }[fileType];
+    
+    formData.append(field, fileBuffer, {
+        filename: fileName,
+        contentType: contentType
+    });
+    
+    if (caption) {
+        formData.append('caption', caption);
+        formData.append('parse_mode', 'HTML');
+    }
+    
+    const timeout = fileType === 'video' ? 120000 : 60000;
+    return await sendTelegramRequest(botToken, method, formData, {
+        headers: formData.getHeaders(),
+        timeout
+    }, 3, 1500, null);
+}
+
 /**
  * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
  */
@@ -547,28 +588,17 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
         // Tentar usar storage_url se disponível
         if (media && media.storage_url && media.storage_type === 'r2') {
             try {
-                const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                const method = methodMap[type];
-                const field = fieldMap[type];
-                
-                const payload = normalizeTelegramPayload({
-                    chat_id: chatId,
-                    [field]: media.storage_url,
-                    caption: caption,
-                    parse_mode: 'HTML'
-                });
-                response = await sendTelegramRequest(botToken, method, payload, { timeout }, 3, 1500, botId);
+                response = await sendMediaFromR2(botToken, chatId, media.storage_url, type, caption);
             } catch (urlError) {
                 // Verificar se é erro de file_id inválido
                 const urlErrorMessage = urlError.message || urlError.description || '';
                 const urlErrorResponseDesc = urlError.response?.data?.description || '';
                 if (urlErrorMessage.includes('wrong remote file identifier') || 
                     urlErrorResponseDesc.includes('wrong remote file identifier')) {
-                    console.warn(`[Timeout Media] File ID inválido para ${type} (nó ${node.id}). Pulando envio.`);
+                    console.warn(`[Timeout Media] Erro ao enviar R2 para ${type} (nó ${node.id}). Pulando envio.`);
                     return null;
                 }
-                console.warn(`[Timeout Media] Erro ao enviar via R2 URL, tentando fallback:`, urlError.message);
+                console.warn(`[Timeout Media] Erro ao enviar via R2, tentando fallback:`, urlError.message);
                 // Continuar para fallback
                 response = await sendMediaAsProxy(botToken, chatId, fileIdentifier, type, caption, botId);
             }
