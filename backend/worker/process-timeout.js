@@ -1582,9 +1582,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 click_id = EXCLUDED.click_id,
                                 expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
                         `;
-                        console.log(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
                     } catch (dbError) {
-                        console.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
                         // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
                     }
     
@@ -1600,13 +1598,23 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
+                        // Se for erro 403 (bot bloqueado), tratar silenciosamente
+                        if (sentMessage.error_code === 403) {
+                            // Remover dados da tabela se foram salvos (botão não será clicado)
+                            try {
+                                await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
+                            } catch (e) {
+                                // Não crítico
+                            }
+                            return; // Retorna silenciosamente, não é erro crítico
+                        }
+                        
                         console.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
                         throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    console.log(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     if (error.response) {
