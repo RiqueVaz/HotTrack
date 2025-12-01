@@ -7076,8 +7076,8 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             }
         }
         
-        // Buscar cidade e estado se não estiverem disponíveis e tivermos click_id
-        if ((!variables.cidade || !variables.estado) && clickIdToUse) {
+        // Buscar cidade e estado se não estiverem disponíveis ou forem strings vazias, e tivermos click_id
+        if (clickIdToUse && (!variables.cidade || variables.cidade === '' || !variables.estado || variables.estado === '')) {
             const db_click_id = clickIdToUse.startsWith('/start ') ? clickIdToUse : `/start ${clickIdToUse}`;
             const [click] = await sqlTx`
                 SELECT city, state 
@@ -7087,16 +7087,15 @@ async function ensureVariablesFromDatabase(chatId, botId, sellerId, variables, s
             `;
             
             if (click) {
-                if (!variables.cidade) {
+                // Sempre atualizar se encontrou no banco, mesmo se já existir como string vazia
+                if (!variables.cidade || variables.cidade === '') {
                     variables.cidade = click.city || '';
-                    // Removido log de debug
                 }
-                if (!variables.estado) {
+                if (!variables.estado || variables.estado === '') {
                     variables.estado = click.state || '';
-                    // Removido log de debug
                 }
             } else {
-                // Se não encontrou click, definir valores vazios como fallback
+                // Se não encontrou click, definir valores vazios como fallback apenas se não existir
                 if (!variables.cidade) variables.cidade = '';
                 if (!variables.estado) variables.estado = '';
             }
@@ -8026,6 +8025,11 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         variables = { ...parsedDbVariables, ...variables };
         // Removido log de debug
     }
+    
+    // IMPORTANTE: Buscar variáveis novamente após mesclar, especialmente cidade/estado
+    // Isso garante que mesmo se cidade/estado vieram como string vazia do banco,
+    // eles serão buscados corretamente do click_id
+    await ensureVariablesFromDatabase(chatId, botId, sellerId, variables, sqlTx, logPrefix);
     // ==========================================================
     // FIM DO PASSO 1
     // ==========================================================
