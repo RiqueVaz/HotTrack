@@ -1535,88 +1535,130 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s concluído.`);
                 }
             } else if (action.type === 'action_pix') {
-                // Processar PIX - enviar botão em vez de gerar diretamente
+                // Processar PIX - usar a mesma lógica do process-disparo original
                 const valueInCents = actionData.valueInCents || 100;
-                const pixPromptMessage = await replaceVariables(actionData.pixPromptMessage || "Clique no botão abaixo para gerar seu PIX", variables);
-                const pixMessageText = actionData.pixMessageText || actionData.pixMessage || '';
+                const pixMessage = await replaceVariables(actionData.pixMessage || '', variables);
                 const pixButtonText = actionData.pixButtonText || '📋 Copiar Código';
                 
-                // Buscar click_id para armazenamento
-                let click_id_for_storage = null;
+                const [seller] = await sqlWithRetry(sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`);
+                if (!seller) {
+                    throw new Error('Vendedor não encontrado para gerar PIX.');
+                }
                 
-                // Prioridade 1: Usar click do chat que foi buscado no início do fluxo
+                // Buscar click do chat (pressel de origem) ou criar novo
+                let click = null;
+                let clickIdInternal = null;
+                
+                // Prioridade 1: Usar click do chat que foi buscado no início do fluxo (tem pressel_id de origem)
                 if (variables._chatClick) {
-                    click_id_for_storage = variables._chatClick.click_id || variables.click_id;
+                    click = variables._chatClick;
+                    clickIdInternal = click.id;
+                    logger.debug(`${logPrefix} Usando click do chat com pressel_id=${click.pressel_id || 'null'}`);
                 } 
                 // Prioridade 2: Buscar click através do click_id das variáveis
                 else if (variables.click_id) {
-                    click_id_for_storage = variables.click_id;
+                    const db_click_id = variables.click_id.startsWith('/start ') ? variables.click_id : `/start ${variables.click_id}`;
+                    const [existingClick] = await sqlWithRetry(sqlTx`
+                        SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}
+                    `);
+                    
+                    if (existingClick) {
+                        click = existingClick;
+                        clickIdInternal = existingClick.id;
+                        logger.debug(`${logPrefix} Click encontrado via variables.click_id com pressel_id=${existingClick.pressel_id || 'null'}`);
+                    }
                 }
                 
-                // Se não encontrou click_id, criar um novo para tracking
-                if (!click_id_for_storage) {
+                // Se não encontrou click, criar um novo para tracking (sem pressel_id)
+                if (!click) {
                     const [newClick] = await sqlWithRetry(sqlTx`
                         INSERT INTO clicks (seller_id, bot_id, ip_address, user_agent)
                         VALUES (${sellerId}, ${botId}, NULL, 'Disparo Massivo')
-                        RETURNING click_id
+                        RETURNING *
                     `);
-                    if (newClick && newClick.click_id) {
-                        click_id_for_storage = newClick.click_id;
+                    click = newClick;
+                    clickIdInternal = newClick.id;
+                    logger.debug(`${logPrefix} Click criado para disparo (sem pressel_id): ${clickIdInternal}`);
+                }
+                
+                // Gerar PIX usando a função existente com click_id_internal
+                const pixResult = await generatePixWithFallback(
+                    seller,
+                    valueInCents,
+                    process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost',
+                    seller.api_key,
+                    null, // ip_address não disponível em disparos
+                    clickIdInternal // Passar click_id_internal para tracking no dashboard
+                );
+                
+                if (pixResult && pixResult.qr_code_text) {
+                    // Salvar transaction_id para retornar E atualizar variáveis
+                    lastPixTransactionId = pixResult.transaction_id;
+                    variables.last_transaction_id = pixResult.transaction_id;
+                    
+                    const pixText = `${pixMessage}\n\n\`\`\`\n${pixResult.qr_code_text}\n\`\`\``;
+                    const payload = {
+                        chat_id: chatId,
+                        text: pixText,
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: pixButtonText, copy_text: { text: pixResult.qr_code_text } }]]
+                        }
+                    };
+                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    
+                    // Enviar eventos apenas se a mensagem foi enviada com sucesso
+                    if (sentMessage && sentMessage.ok) {
+                        // Buscar a transação completa para os eventos
+                        const [transaction] = await sqlWithRetry(sqlTx`
+                            SELECT * FROM pix_transactions WHERE id = ${pixResult.internal_transaction_id}
+                        `);
+                        
+                        if (transaction && click) {
+                            // Sempre enviar waiting_payment para Utmify (prioridade)
+                            const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                            const productDataForUtmify = { id: "prod_disparo", name: "Produto (Disparo Massivo)" };
+                            try {
+                                // Buscar click completo do banco para garantir que todos os campos UTM estejam presentes
+                                const [fullClick] = await sqlWithRetry(sqlTx`
+                                    SELECT * FROM clicks WHERE id = ${click.id}
+                                `);
+                                
+                                // Usar o click completo do banco se encontrado, senão usar o original
+                                const clickToUse = fullClick || click;
+                                
+                                await sendEventToUtmifyShared({
+                                    status: 'waiting_payment',
+                                    clickData: clickToUse,
+                                    pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: transaction.id },
+                                    sellerData: seller,
+                                    customerData: customerDataForUtmify,
+                                    productData: productDataForUtmify,
+                                    sqlTx: sqlTx
+                                });
+                                logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+                            } catch (utmifyError) {
+                                logger.error(`${logPrefix} Erro ao enviar evento para Utmify:`, utmifyError.message);
+                            }
+                            
+                            // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
+                            if (click.pressel_id || click.checkout_id) {
+                                try {
+                                    await sendMetaEventShared({
+                                        eventName: 'InitiateCheckout',
+                                        clickData: click,
+                                        transactionData: { id: transaction.id, pix_value: valueInCents / 100 },
+                                        customerData: null,
+                                        sqlTx: sqlTx
+                                    });
+                                    logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
+                                } catch (metaError) {
+                                    logger.error(`${logPrefix} Erro ao enviar evento para Meta:`, metaError.message);
+                                }
+                            }
+                        }
                     }
                 }
-                
-                // Armazenar dados temporários nas variáveis do fluxo para uso no callback
-                variables._pix_pending_valueInCents = valueInCents;
-                variables._pix_pending_messageText = pixMessageText;
-                variables._pix_pending_buttonText = pixButtonText;
-                variables._pix_pending_click_id = click_id_for_storage;
-                
-                // Criar callback_data único
-                const timestamp = Date.now();
-                const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
-                
-                    // Salvar dados na tabela temporária para processamento do callback
-                    try {
-                        await sqlWithRetry(sqlTx`
-                            INSERT INTO pix_pending_callbacks (
-                                callback_data, chat_id, bot_id, seller_id,
-                                value_in_cents, pix_message_text, pix_button_text, click_id
-                            )
-                            VALUES (
-                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
-                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_for_storage}
-                            )
-                            ON CONFLICT (callback_data) DO UPDATE SET
-                                value_in_cents = EXCLUDED.value_in_cents,
-                                pix_message_text = EXCLUDED.pix_message_text,
-                                pix_button_text = EXCLUDED.pix_button_text,
-                                click_id = EXCLUDED.click_id,
-                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
-                    `);
-                    logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
-                } catch (dbError) {
-                    logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
-                    // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
-                }
-                
-                // Enviar mensagem com botão "Gerar Pix"
-                const payload = {
-                    chat_id: chatId,
-                    text: pixPromptMessage,
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: "💳 Gerar Pix", callback_data: callbackData }]]
-                    }
-                };
-                const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
-                
-                // Verificar se o envio foi bem-sucedido
-                if (!sentMessage || !sentMessage.ok) {
-                    logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage?.description || 'Desconhecido'}`);
-                    throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage?.description || 'Erro desconhecido'}.`);
-                }
-
-                logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId} (disparo)`);
             } else if (action.type === 'action_check_pix') {
                 // Verificar PIX - sempre busca o último PIX gerado
                 try {
