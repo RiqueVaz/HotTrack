@@ -1649,21 +1649,6 @@ setInterval(() => {
     }
 }, 5 * 60 * 1000); // A cada 5 minutos
 
-// Cleanup automático de registros expirados da tabela pix_pending_callbacks
-setInterval(async () => {
-    try {
-        const result = await sqlWithRetry(`
-            DELETE FROM pix_pending_callbacks 
-            WHERE expires_at < NOW()
-        `);
-        if (result && result.length > 0) {
-            logger.debug(`[Cleanup] Removidos ${result.length} registros expirados de pix_pending_callbacks`);
-        }
-    } catch (error) {
-        logger.error('[Cleanup] Erro ao limpar registros expirados de pix_pending_callbacks:', error.message);
-    }
-}, 60 * 60 * 1000); // A cada 1 hora
-
 const TAG_TITLE_MAX_LENGTH = 12;
 const TAG_COLOR_REGEX = /^#[0-9A-F]{6}$/i;
 // Rate limiting agora é gerenciado pelo módulo api-rate-limiter
@@ -7448,7 +7433,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
-                    // Buscar click_id para validação e armazenamento
+                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
+    
                     let click_id_from_vars = variables.click_id;
                     if (!click_id_from_vars) {
                         const [recentClick] = await sqlTx`
@@ -7464,64 +7451,81 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
                     }
     
-                    // Preparar dados da mensagem
-                    let pixPromptMessage = await replaceVariables(actionData.pixPromptMessage || "Clique no botão abaixo para gerar seu PIX", variables);
-                    const pixMessageText = actionData.pixMessageText || "";
-                    const pixButtonText = actionData.pixButtonText || "📋 Copiar";
+                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
     
-                    // Armazenar dados temporários nas variáveis do fluxo para uso no callback
-                    variables._pix_pending_valueInCents = valueInCents;
-                    variables._pix_pending_messageText = pixMessageText;
-                    variables._pix_pending_buttonText = pixButtonText;
-                    variables._pix_pending_click_id = click_id_from_vars;
+                    const ip_address = click.ip_address;
+                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                    
+                    // Gera PIX e salva no banco
+                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                    logger.debug(`${logPrefix} PIX gerado com sucesso. Transaction ID: ${pixResult.transaction_id}`);
+                    
+                    // Atualiza as variáveis do fluxo (IMPORTANTE)
+                    variables.last_transaction_id = pixResult.transaction_id;
+                    // Removido log de debug - não é necessário em produção
     
-                    // Criar callback_data único
-                    const timestamp = Date.now();
-                    const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
-    
-                    // Salvar dados na tabela temporária para processamento do callback
-                    try {
-                        await sqlTx`
-                            INSERT INTO pix_pending_callbacks (
-                                callback_data, chat_id, bot_id, seller_id,
-                                value_in_cents, pix_message_text, pix_button_text, click_id
-                            )
-                            VALUES (
-                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
-                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_from_vars}
-                            )
-                            ON CONFLICT (callback_data) DO UPDATE SET
-                                value_in_cents = EXCLUDED.value_in_cents,
-                                pix_message_text = EXCLUDED.pix_message_text,
-                                pix_button_text = EXCLUDED.pix_button_text,
-                                click_id = EXCLUDED.click_id,
-                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
-                        `;
-                        logger.debug(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
-                    } catch (dbError) {
-                        logger.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
-                        // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
+                    
+                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                    if (messageText && messageText.length > 1024) {
+                        logger.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        messageText = messageText.substring(0, 1021) + '...';
                     }
+                    
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
-                    // Enviar mensagem com botão "Gerar Pix"
+                    // CRÍTICO: Tenta enviar o PIX para o usuário
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId,
-                        text: pixPromptMessage,
-                        parse_mode: 'HTML',
-                        reply_markup: {
-                            inline_keyboard: [[{ text: "💳 Gerar Pix", callback_data: callbackData }]]
-                        }
+                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
                     }, {}, 3, 1500, botId);
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
-                        logger.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
+                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                        logger.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        
+                        await sqlTx`
+                            UPDATE pix_transactions 
+                            SET status = 'canceled' 
+                            WHERE provider_transaction_id = ${pixResult.transaction_id}
+                        `;
+                        
+                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    logger.debug(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
+                    logger.debug(`${logPrefix} PIX enviado com sucesso ao usuário ${chatId}`);
+    
+                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                    await sendEventToUtmifyShared({
+                        status: 'waiting_payment',
+                        clickData: click,
+                        pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
+                        sellerData: seller,
+                        customerData: customerDataForUtmify,
+                        productData: productDataForUtmify,
+                        sqlTx: sqlTx
+                    });
+                    logger.debug(`${logPrefix} Evento 'waiting_payment' enviado para Utmify para o clique ${click.id}.`);
+    
+                    // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
+                    if (click.pressel_id || click.checkout_id) {
+                        await sendMetaEventShared({
+                            eventName: 'InitiateCheckout',
+                            clickData: click,
+                            transactionData: { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 },
+                            customerData: null,
+                            sqlTx: sqlTx
+                        });
+                        logger.debug(`${logPrefix} Evento 'InitiateCheckout' enviado para Meta para o clique ${click.id}.`);
+                    }
                 } catch (error) {
                     logger.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
                     // Re-lança o erro para que o fluxo seja interrompido
@@ -8408,263 +8412,13 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req, res) => {
     const { botId } = req.params;
-    const { message, callback_query } = req.body; 
+    // CORREÇÃO 1: Extrai o objeto 'message' do corpo da requisição logo no início.
+    const { message } = req.body;
     
     // Responde imediatamente ao Telegram para evitar timeouts.
     res.sendStatus(200);
 
     try {
-        // PRIORIDADE 0: Processar callback_query (botões inline)
-        if (callback_query) {
-            const callbackData = callback_query.data;
-            const chatId = callback_query.message?.chat?.id || callback_query.from?.id;
-            const callbackId = callback_query.id;
-            
-            if (!chatId || !callbackData) {
-                logger.warn(`[Webhook] Callback query inválido para bot ${botId}`);
-                return;
-            }
-
-            const bot = await getBot(botId, null);
-            if (!bot) {
-                logger.warn(`[Webhook] Bot ID ${botId} não encontrado para callback.`);
-                return;
-            }
-            const { seller_id: botSellerId, bot_token: botToken } = bot;
-            let sellerId = botSellerId;
-
-            // Processar callback de geração de PIX
-            if (callbackData.startsWith('pix_generate_')) {
-                try {
-                    // PRIORIDADE 1: Buscar dados da tabela temporária pix_pending_callbacks
-                    const [pendingData] = await sqlTx`
-                        SELECT value_in_cents, pix_message_text, pix_button_text, click_id, seller_id
-                        FROM pix_pending_callbacks
-                        WHERE callback_data = ${callbackData} AND expires_at > NOW()
-                    `;
-                    
-                    let valueInCents, pixMessageText, pixButtonText, click_id_from_vars;
-                    let variables = {};
-                    
-                    if (pendingData) {
-                        // Usar dados da tabela temporária
-                        valueInCents = pendingData.value_in_cents;
-                        pixMessageText = pendingData.pix_message_text || "";
-                        pixButtonText = pendingData.pix_button_text || "📋 Copiar";
-                        click_id_from_vars = pendingData.click_id;
-                        // Usar seller_id da tabela se disponível (pode ser diferente em casos raros)
-                        if (pendingData.seller_id) {
-                            sellerId = pendingData.seller_id;
-                        }
-                        
-                        // Deletar registro após uso
-                        await sqlTx`DELETE FROM pix_pending_callbacks WHERE callback_data = ${callbackData}`;
-                    } else {
-                        // PRIORIDADE 2: Buscar do estado do fluxo (compatibilidade com fluxos existentes)
-                        const [userState] = await sqlTx`
-                            SELECT variables FROM user_flow_states 
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                        `;
-                        
-                        if (!userState) {
-                            await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                callback_query_id: callbackId,
-                                text: 'Erro: Dados do PIX não encontrados. O botão pode ter expirado.', 
-                                show_alert: true
-                            }, {}, 3, 1500, botId);
-                            return;
-                        }
-
-                        // Parse das variáveis
-                        variables = userState.variables;
-                        if (typeof variables === 'string') {
-                            try {
-                                variables = JSON.parse(variables);
-                            } catch (e) {
-                                await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                                    callback_query_id: callbackId,
-                                    text: 'Erro ao processar dados.',
-                                    show_alert: true
-                                }, {}, 3, 1500, botId);
-                                return;
-                            }
-                        }
-
-                        // Extrair dados pendentes das variáveis
-                        valueInCents = variables._pix_pending_valueInCents;
-                        pixMessageText = variables._pix_pending_messageText || "";
-                        pixButtonText = variables._pix_pending_buttonText || "📋 Copiar";
-                        click_id_from_vars = variables._pix_pending_click_id || variables.click_id;
-                    }
-
-                    if (!valueInCents || !click_id_from_vars) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Dados do PIX não encontrados.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                        return;
-                    }
-
-                    // Buscar seller
-                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
-                    if (!seller) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Vendedor não encontrado.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                        return;
-                    }
-
-                    // Buscar click
-                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
-                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
-                    if (!click) {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro: Click ID não encontrado.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                        return;
-                    }
-
-                    const ip_address = click.ip_address;
-                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
-                    
-                    // Gerar PIX
-                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
-                    
-                    // Atualizar variáveis do fluxo apenas se os dados vieram das variáveis (não da tabela temporária)
-                    if (!pendingData) {
-                        variables.last_transaction_id = pixResult.transaction_id;
-                        // Limpar variáveis temporárias
-                        delete variables._pix_pending_valueInCents;
-                        delete variables._pix_pending_messageText;
-                        delete variables._pix_pending_buttonText;
-                        delete variables._pix_pending_click_id;
-                        
-                        // Atualizar variáveis no banco
-                        await sqlTx`
-                            UPDATE user_flow_states 
-                            SET variables = ${JSON.stringify(variables)}
-                            WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                        `;
-                    } else {
-                        // Se veio da tabela temporária, tentar atualizar last_transaction_id se houver estado
-                        try {
-                            const [existingState] = await sqlTx`
-                                SELECT variables FROM user_flow_states 
-                                WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                            `;
-                            if (existingState) {
-                                let stateVars = existingState.variables;
-                                if (typeof stateVars === 'string') {
-                                    stateVars = JSON.parse(stateVars);
-                                }
-                                stateVars.last_transaction_id = pixResult.transaction_id;
-                                await sqlTx`
-                                    UPDATE user_flow_states 
-                                    SET variables = ${JSON.stringify(stateVars)}
-                                    WHERE chat_id = ${chatId} AND bot_id = ${botId}
-                                `;
-                            }
-                        } catch (e) {
-                            // Não crítico se não conseguir atualizar
-                        }
-                    }
-
-                    // Preparar mensagem do PIX
-                    let messageText = await replaceVariables(pixMessageText, variables);
-                    if (messageText && messageText.length > 1024) {
-                        logger.warn(`[Webhook] [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
-                        messageText = messageText.substring(0, 1021) + '...';
-                    }
-                    
-                    const buttonText = await replaceVariables(pixButtonText, variables);
-                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
-
-                    // Enviar PIX para o usuário
-                    const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId,
-                        text: pixToSend,
-                        parse_mode: 'HTML',
-                        reply_markup: {
-                            inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]]
-                        }
-                    }, {}, 3, 1500, botId);
-
-                    // Verificar se o envio foi bem-sucedido
-                    if (!sentMessage.ok) {
-                        logger.error(`[Webhook] FALHA ao enviar PIX via callback. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        
-                        await sqlTx`
-                            UPDATE pix_transactions 
-                            SET status = 'canceled' 
-                            WHERE provider_transaction_id = ${pixResult.transaction_id}
-                        `;
-
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro ao enviar PIX. Tente novamente.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                        return;
-                    }
-
-                    // Salvar mensagem no banco
-                    await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-
-                    // Enviar eventos para Utmify e Meta
-                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
-                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
-                    await sendEventToUtmifyShared({
-                        status: 'waiting_payment',
-                        clickData: click,
-                        pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
-                        sellerData: seller,
-                        customerData: customerDataForUtmify,
-                        productData: productDataForUtmify,
-                        sqlTx: sqlTx
-                    });
-
-                    // Enviar InitiateCheckout para Meta se o click veio de pressel ou checkout
-                    if (click.pressel_id || click.checkout_id) {
-                        await sendMetaEventShared({
-                            eventName: 'InitiateCheckout',
-                            clickData: click,
-                            transactionData: { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 },
-                            customerData: null,
-                            sqlTx: sqlTx
-                        });
-                    }
-
-                    // Responder ao callback com sucesso
-                    await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                        callback_query_id: callbackId,
-                        text: 'PIX gerado com sucesso!'
-                    }, {}, 3, 1500, botId);
-
-                    return; // Finaliza processamento do callback
-                } catch (error) {
-                    logger.error(`[Webhook] Erro ao processar callback de PIX:`, error);
-                    try {
-                        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
-                            callback_query_id: callbackId,
-                            text: 'Erro ao gerar PIX. Tente novamente.',
-                            show_alert: true
-                        }, {}, 3, 1500, botId);
-                    } catch (e) {
-                        logger.error(`[Webhook] Erro ao responder callback:`, e);
-                    }
-                    return;
-                }
-            }
-
-            // Se for outro tipo de callback, ignorar por enquanto
-            return;
-        }
-
         // Validação mais robusta da estrutura da mensagem
         if (!message) {
             // Removido log de debug - não é necessário em produção

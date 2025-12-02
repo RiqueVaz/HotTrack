@@ -1698,7 +1698,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const valueInCents = actionData.valueInCents;
                     if (!valueInCents) throw new Error("Valor do PIX não definido na ação do fluxo.");
     
-                    // Buscar click_id para validação e armazenamento
+                    const [seller] = await sqlTx`SELECT * FROM sellers WHERE id = ${sellerId}`;
+                    if (!seller) throw new Error(`${logPrefix} Vendedor ${sellerId} não encontrado.`);
+    
                     let click_id_from_vars = variables.click_id;
                     if (!click_id_from_vars) {
                         const [recentClick] = await sqlTx`
@@ -1714,70 +1716,82 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                         throw new Error(`${logPrefix} Click ID não encontrado para gerar PIX.`);
                     }
     
-                    // Preparar dados da mensagem
-                    let pixPromptMessage = await replaceVariables(actionData.pixPromptMessage || "Clique no botão abaixo para gerar seu PIX", variables);
-                    const pixMessageText = actionData.pixMessageText || "";
-                    const pixButtonText = actionData.pixButtonText || "📋 Copiar";
+                    const db_click_id = click_id_from_vars.startsWith('/start ') ? click_id_from_vars : `/start ${click_id_from_vars}`;
+                    const [click] = await sqlTx`SELECT * FROM clicks WHERE click_id = ${db_click_id} AND seller_id = ${sellerId}`;
+                    if (!click) throw new Error(`${logPrefix} Click ID não encontrado para este vendedor.`);
     
-                    // Armazenar dados temporários nas variáveis do fluxo para uso no callback
-                    variables._pix_pending_valueInCents = valueInCents;
-                    variables._pix_pending_messageText = pixMessageText;
-                    variables._pix_pending_buttonText = pixButtonText;
-                    variables._pix_pending_click_id = click_id_from_vars;
+                    const ip_address = click.ip_address;
+                    const hostPlaceholder = process.env.HOTTRACK_API_URL ? new URL(process.env.HOTTRACK_API_URL).host : 'localhost';
+                    
+                    // Gera PIX e salva no banco
+                    const pixResult = await generatePixWithFallback(seller, valueInCents, hostPlaceholder, seller.api_key, ip_address, click.id);
+                    // Removido log de debug - não é necessário em produção
+                    
+                    // Atualiza as variáveis do fluxo (IMPORTANTE)
+                    variables.last_transaction_id = pixResult.transaction_id;
     
-                    // Criar callback_data único
-                    const timestamp = Date.now();
-                    const callbackData = `pix_generate_${chatId}_${timestamp}_${botId}`;
-    
-                    // Salvar dados na tabela temporária para processamento do callback
-                    try {
-                        await sqlTx`
-                            INSERT INTO pix_pending_callbacks (
-                                callback_data, chat_id, bot_id, seller_id,
-                                value_in_cents, pix_message_text, pix_button_text, click_id
-                            )
-                            VALUES (
-                                ${callbackData}, ${chatId}, ${botId}, ${sellerId},
-                                ${valueInCents}, ${pixMessageText}, ${pixButtonText}, ${click_id_from_vars}
-                            )
-                            ON CONFLICT (callback_data) DO UPDATE SET
-                                value_in_cents = EXCLUDED.value_in_cents,
-                                pix_message_text = EXCLUDED.pix_message_text,
-                                pix_button_text = EXCLUDED.pix_button_text,
-                                click_id = EXCLUDED.click_id,
-                                expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour'
-                        `;
-                        console.log(`${logPrefix} Dados do PIX pendente salvos na tabela temporária. Callback: ${callbackData}`);
-                    } catch (dbError) {
-                        console.error(`${logPrefix} Erro ao salvar dados do PIX pendente na tabela:`, dbError.message);
-                        // Não falhar o fluxo se não conseguir salvar na tabela, ainda tem as variáveis
+                    let messageText = await replaceVariables(actionData.pixMessageText || "", variables);
+                    
+                    // Validação do tamanho do texto da mensagem do PIX (limite de 1024 caracteres)
+                    if (messageText && messageText.length > 1024) {
+                        console.warn(`${logPrefix} [PIX] Texto da mensagem excede limite de 1024 caracteres. Truncando...`);
+                        messageText = messageText.substring(0, 1021) + '...';
                     }
+                    
+                    const buttonText = await replaceVariables(actionData.pixButtonText || "📋 Copiar", variables);
+                    const pixToSend = `<pre>${pixResult.qr_code_text}</pre>\n\n${messageText}`;
     
-                    // Enviar mensagem com botão "Gerar Pix"
+                    // CRÍTICO: Tenta enviar o PIX para o usuário
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', {
-                        chat_id: chatId,
-                        text: pixPromptMessage,
-                        parse_mode: 'HTML',
-                        reply_markup: {
-                            inline_keyboard: [[{ text: "💳 Gerar Pix", callback_data: callbackData }]]
-                        }
+                        chat_id: chatId, text: pixToSend, parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: [[{ text: buttonText, copy_text: { text: pixResult.qr_code_text } }]] }
                     });
     
                     // Verifica se o envio foi bem-sucedido
                     if (!sentMessage.ok) {
-                        console.error(`${logPrefix} FALHA ao enviar mensagem com botão Gerar Pix. Motivo: ${sentMessage.description || 'Desconhecido'}`);
-                        throw new Error(`Não foi possível enviar mensagem. Motivo: ${sentMessage.description || 'Erro desconhecido'}.`);
+                        // Cancela a transação PIX no banco se não conseguiu enviar ao usuário
+                        console.error(`${logPrefix} FALHA ao enviar PIX. Cancelando transação ${pixResult.transaction_id}. Motivo: ${sentMessage.description || 'Desconhecido'}`);
+                        
+                        await sqlTx`
+                            UPDATE pix_transactions 
+                            SET status = 'canceled' 
+                            WHERE provider_transaction_id = ${pixResult.transaction_id}
+                        `;
+                        
+                        throw new Error(`Não foi possível enviar PIX ao usuário. Motivo: ${sentMessage.description || 'Erro desconhecido'}. Transação cancelada.`);
                     }
                     
                     // Salva a mensagem no banco
                     await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot');
-                    console.log(`${logPrefix} Mensagem com botão "Gerar Pix" enviada com sucesso ao usuário ${chatId}`);
+                    // Removido log de debug - não é necessário em produção
+                    
+                    // Envia eventos para Utmify e Meta SOMENTE APÓS confirmação de entrega ao usuário
+                    const customerDataForUtmify = { name: variables.nome_completo || "Cliente Bot", email: "bot@email.com" };
+                    const productDataForUtmify = { id: "prod_bot", name: "Produto (Fluxo Bot)" };
+                    await sendEventToUtmifyShared({
+                        status: 'waiting_payment',
+                        clickData: click,
+                        pixData: { provider_transaction_id: pixResult.transaction_id, pix_value: valueInCents / 100, created_at: new Date(), id: pixResult.internal_transaction_id },
+                        sellerData: seller,
+                        customerData: customerDataForUtmify,
+                        productData: productDataForUtmify,
+                        sqlTx: sqlTx
+                    });
+                    // Removido log de debug - não é necessário em produção
+    
+                    // Envia InitiateCheckout para Meta se o click veio de pressel ou checkout
+                    if (click.pressel_id || click.checkout_id) {
+                        await sendMetaEventShared({
+                            eventName: 'InitiateCheckout',
+                            clickData: click,
+                            transactionData: { id: pixResult.internal_transaction_id, pix_value: valueInCents / 100 },
+                            customerData: null,
+                            sqlTx: sqlTx
+                        });
+                        // Removido log de debug - não é necessário em produção
+                    }
                 } catch (error) {
                     console.error(`${logPrefix} Erro no nó action_pix para chat ${chatId}:`, error.message);
-                    if (error.response) {
-                        console.error(`${logPrefix} Status HTTP:`, error.response.status);
-                        console.error(`${logPrefix} Resposta da API:`, JSON.stringify(error.response.data, null, 2));
-                    }
                     // Re-lança o erro para que o fluxo seja interrompido
                     throw error;
                 }
