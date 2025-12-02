@@ -1031,12 +1031,6 @@
     
 }
 
-.hotbot-scope .node-header.react-flow__node-required {
-    background-color: rgba(59, 130, 246, 0.15);
-    border: 2px solid rgba(59, 130, 246, 0.5);
-    border-left: 4px solid rgba(59, 130, 246, 0.8);
-}
-
 .hotbot-scope .node-header.react-flow__node-forward_flow {
     background-color: rgba(214, 76, 242, 0.1);
     
@@ -11347,24 +11341,7 @@ function FlowEditorPage({
             return (
                 <>
                 <Handle type="target" position={Position.Top} isConnectable={isConnectable}  />
-                    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''} ${id === 'initial-message' ? 'react-flow__node-required' : ''}`} style={{ position: 'relative' }}>
-                        {/* Badge de obrigatório para nó inicial de disparo */}
-                        {id === 'initial-message' && (
-                            <div style={{
-                                position: 'absolute',
-                                top: '-8px',
-                                right: '8px',
-                                background: 'rgba(59, 130, 246, 0.9)',
-                                color: 'white',
-                                fontSize: '0.7rem',
-                                padding: '2px 6px',
-                                borderRadius: '4px',
-                                fontWeight: 'bold',
-                                zIndex: 10
-                            }}>
-                                🔒 OBRIGATÓRIO
-                            </div>
-                        )}
+                    <div className={`node-header ${actions.length > 0 ? `react-flow__node-${actions[0].type}` : ''}`} style={{ position: 'relative' }}>
                         {/* Badge de contagem de execuções - apenas para fluxos normais */}
                         {!isDisparoFlow && (
                             <div className="node-execution-badge" title={`Este node foi executado ${executionCount} vez${executionCount !== 1 ? 'es' : ''}`}>
@@ -11381,34 +11358,32 @@ function FlowEditorPage({
                                 </>
                             ) : 'Nó vazio'}
                         </div>
-                        <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
-                            {id !== 'initial-message' && (
-                                <>
-                                    <button 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
-                                            window.dispatchEvent(event);
-                                        }}
-                                        className="node-action-btn"
-                                        title="Copiar nó"
-                                    >
-                                        📋
-                                    </button>
-                                    <button 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
-                                            window.dispatchEvent(event);
-                                        }}
-                                        className="node-action-btn delete"
-                                        title="Excluir nó"
-                                    >
-                                        ❌
-                                    </button>
-                                </>
-                            )}
-                        </div>
+                        {id !== 'initial-message' && (
+                            <div className="node-actions" style={{display: 'flex', gap: '4px'}}>
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        const event = new CustomEvent('node-copy', { detail: { nodeId: id } });
+                                        window.dispatchEvent(event);
+                                    }}
+                                    className="node-action-btn"
+                                    title="Copiar nó"
+                                >
+                                    📋
+                                </button>
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        const event = new CustomEvent('node-delete', { detail: { nodeId: id } });
+                                        window.dispatchEvent(event);
+                                    }}
+                                    className="node-action-btn delete"
+                                    title="Excluir nó"
+                                >
+                                    ❌
+                                </button>
+                            </div>
+                        )}
                     </div>
                     <div className="node-content" style={{ position: 'relative' }}>
                         {actions.length === 0 ? (
