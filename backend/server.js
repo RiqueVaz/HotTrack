@@ -11101,15 +11101,15 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
       try {
         const { bot_id, file_id } = req.params;
         
-        // Se bot_id é 'storage', tentar buscar mídia no banco pelo file_id
-        if (bot_id === 'storage') {
-          const [media] = await sqlWithRetry(
-            'SELECT storage_url, thumbnail_storage_url, file_type, storage_type FROM media_library WHERE file_id = $1 OR thumbnail_file_id = $1 LIMIT 1',
-            [file_id]
-          );
-          
-          // Se tem storage_url e é o arquivo principal, redirecionar para URL do R2
-          if (media && media.storage_url && media.storage_type === 'r2') {
+        // PRIORIDADE 1: Verificar se file_id existe na media_library (todas as mídias devem estar lá)
+        const [media] = await sqlWithRetry(
+          'SELECT storage_url, thumbnail_storage_url, file_type, storage_type FROM media_library WHERE file_id = $1 OR thumbnail_file_id = $1 LIMIT 1',
+          [file_id]
+        );
+        
+        if (media) {
+          // Se tem storage_url e é R2 (mídia nova), redirecionar para URL do R2
+          if (media.storage_url && media.storage_type === 'r2') {
             // Verificar se é thumbnail ou arquivo principal
             const [thumbCheck] = await sqlWithRetry(
               'SELECT id FROM media_library WHERE thumbnail_file_id = $1 LIMIT 1',
@@ -11122,9 +11122,35 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
             }
           }
           
-          // Fallback: usar método antigo do Telegram
+          // Se storage_type = 'telegram' (mídia antiga ainda não migrada), usar storage bot token
+          if (media.storage_type === 'telegram') {
+            const token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
+            if (!token) return res.status(404).send('Bot de armazenamento não configurado.');
+            
+            const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
+            if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
+              return res.status(404).send('Arquivo não encontrado no Telegram.');
+            }
+            
+            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
+            const response = await axios.get(fileUrl, { 
+              responseType: 'stream',
+              httpsAgent: httpsAgent
+            });
+            
+            res.setHeader('Content-Type', response.headers['content-type']);
+            response.data.pipe(res);
+            return;
+          }
+        }
+        
+        // PRIORIDADE 2: Se não encontrou na biblioteca, verificar formato do file_id
+        // Se começa com BAAC, AgAC, AwAC (formatos do storage bot), usar storage bot token
+        const isStorageBotFileId = file_id.startsWith('BAAC') || file_id.startsWith('AgAC') || file_id.startsWith('AwAC');
+        
+        if (isStorageBotFileId) {
           const token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-          if (!token) return res.status(404).send('Bot não encontrado.');
+          if (!token) return res.status(404).send('Bot de armazenamento não configurado.');
           
           const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
           if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
@@ -11142,7 +11168,7 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
           return;
         }
         
-        // Para outros bots, usar método antigo
+        // PRIORIDADE 3: Fallback - usar token do bot informado (para mídias muito antigas que não estão na biblioteca)
         const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
         const token = bot?.bot_token;
     
