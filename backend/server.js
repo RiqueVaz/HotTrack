@@ -4099,8 +4099,27 @@ app.post('/api/disparo-flows', authenticateJwt, async (req, res) => {
     const { name, botId } = req.body;
     if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
     try {
-        // Criar fluxo inicial com trigger (disparo manual)
-        const initialFlow = { nodes: [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }], edges: [] };
+        // Criar fluxo inicial com trigger (disparo manual) e nó obrigatório de mensagem
+        const initialFlow = { 
+            nodes: [
+                { id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false },
+                { 
+                    id: 'initial-message', 
+                    type: 'action', 
+                    position: { x: 250, y: 150 }, 
+                    data: { 
+                        actions: [{ type: 'message', data: { text: '' } }],
+                        waitForReply: true,
+                        replyTimeout: 5
+                    }, 
+                    deletable: false,
+                    isRequired: true
+                }
+            ], 
+            edges: [
+                { id: 'start-initial-message', source: 'start', target: 'initial-message', sourceHandle: 'a', deletable: false }
+            ] 
+        };
         const [newFlow] = await sqlWithRetry(`
             INSERT INTO disparo_flows (seller_id, bot_id, name, nodes) VALUES ($1, $2, $3, $4) RETURNING *;`, 
             [req.user.id, botId, name, JSON.stringify(initialFlow)]);

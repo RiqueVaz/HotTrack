@@ -10326,12 +10326,26 @@ function generatePreviewHTML(data) {
             }
         }, [selectedNode, setNodes]);
         
+        // Garantir que waitForReply sempre seja true para o nó obrigatório
+        useEffect(() => {
+            if (selectedNode?.id === 'initial-message' && !nodeData.waitForReply) {
+                const newData = { ...nodeData, waitForReply: true };
+                setNodeData(newData);
+                setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
+            }
+        }, [selectedNode?.id, nodeData.waitForReply]);
+        
         // Nodes agora só têm ações (sem ação principal)
         const actions = nodeData.actions || [];
 
         
         // Funções para gerenciar ações
         const addAction = (actionType) => {
+            // Prevenir adicionar ações ao nó obrigatório
+            if (selectedNode.id === 'initial-message') {
+                alert('O nó obrigatório de mensagem não pode ter outras ações.');
+                return;
+            }
             const actions = nodeData.actions || [];
             if (actions.length >= 5) {
                 alert('Você pode adicionar no máximo 5 ações.');
@@ -10344,6 +10358,11 @@ function generatePreviewHTML(data) {
         };
         
         const removeAction = (index) => {
+            // Prevenir remover ação do nó obrigatório
+            if (selectedNode.id === 'initial-message') {
+                alert('A ação de mensagem do nó obrigatório não pode ser removida.');
+                return;
+            }
             const actions = (nodeData.actions || []).filter((_, i) => i !== index);
             const newData = { ...nodeData, actions };
             setNodeData(newData);
@@ -10376,6 +10395,10 @@ function generatePreviewHTML(data) {
 
         const updateNode = (field, value) => {
             const newData = { ...nodeData, [field]: value };
+            // Garantir que waitForReply sempre seja true para o nó obrigatório
+            if (selectedNode.id === 'initial-message') {
+                newData.waitForReply = true;
+            }
             setNodeData(newData);
             setNodes(nds => nds.map(n => n.id === selectedNode.id ? { ...n, data: newData } : n));
         };
@@ -10569,14 +10592,16 @@ function generatePreviewHTML(data) {
                         <strong style={{color: 'var(--text-primary)'}}>
                             {actionTypeNames[action.type] || action.type}
                         </strong>
-                        <button 
-                            type="button"
-                            className="btn btn-red btn-sm" 
-                            onClick={() => removeAction(index)}
-                            style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
-                        >
-                            ✕
-                        </button>
+                        {selectedNode.id !== 'initial-message' && (
+                            <button 
+                                type="button"
+                                className="btn btn-red btn-sm" 
+                                onClick={() => removeAction(index)}
+                                style={{padding: '0.25rem 0.5rem', fontSize: '0.8rem'}}
+                            >
+                                ✕
+                            </button>
+                        )}
                     </div>
                     
                     {action.type === 'message' && (
@@ -10618,58 +10643,62 @@ function generatePreviewHTML(data) {
                                     </div>
                                 )}
                             </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
-                                <input 
-                                    type="text" 
-                                    className="form-input" 
-                                    value={actionData.buttonText || ''} 
-                                    onChange={e => updateAction(index, 'buttonText', e.target.value)} 
-                                    placeholder="Texto do Botão"
-                                    style={{fontSize: '0.85rem'}}
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label style={{fontSize: '0.85rem'}}>URL do Botão</label>
-                                <select
-                                    className="form-input"
-                                    value={actionData.buttonUrl || ''}
-                                    onChange={e => updateAction(index, 'buttonUrl', e.target.value)}
-                                    style={{fontSize: '0.85rem'}}
-                                >
-                                    <option value="">Selecione uma opção...</option>
-                                    
-                                    {presselDomains && presselDomains.length > 0 && (
-                                        <optgroup label="🔗 Pressels">
-                                            {presselDomains.map((domain, i) => (
-                                                <option key={`pressel-${i}`} value={domain.value}>
-                                                    {domain.label}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                    
-                                    {thankYouPages && thankYouPages.length > 0 && (
-                                        <optgroup label="✅ Páginas de Obrigado">
-                                            {thankYouPages.map(ty => (
-                                                <option key={ty.id} value={`${window.location.origin}/obrigado/${ty.id}`}>
-                                                    {ty.name || ty.id}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                    
-                                    {hostedCheckouts && hostedCheckouts.length > 0 && (
-                                        <optgroup label="💳 Checkouts">
-                                            {hostedCheckouts.map(checkout => (
-                                                <option key={checkout.id} value={`${window.location.origin}/oferta/${checkout.id}`}>
-                                                    {checkout.name || checkout.id}
-                                                </option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                </select>
-                            </div>
+                            {selectedNode.id !== 'initial-message' && (
+                                <>
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>Texto do Botão</label>
+                                        <input 
+                                            type="text" 
+                                            className="form-input" 
+                                            value={actionData.buttonText || ''} 
+                                            onChange={e => updateAction(index, 'buttonText', e.target.value)} 
+                                            placeholder="Texto do Botão"
+                                            style={{fontSize: '0.85rem'}}
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label style={{fontSize: '0.85rem'}}>URL do Botão</label>
+                                        <select
+                                            className="form-input"
+                                            value={actionData.buttonUrl || ''}
+                                            onChange={e => updateAction(index, 'buttonUrl', e.target.value)}
+                                            style={{fontSize: '0.85rem'}}
+                                        >
+                                            <option value="">Selecione uma opção...</option>
+                                            
+                                            {presselDomains && presselDomains.length > 0 && (
+                                                <optgroup label="🔗 Pressels">
+                                                    {presselDomains.map((domain, i) => (
+                                                        <option key={`pressel-${i}`} value={domain.value}>
+                                                            {domain.label}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            
+                                            {thankYouPages && thankYouPages.length > 0 && (
+                                                <optgroup label="✅ Páginas de Obrigado">
+                                                    {thankYouPages.map(ty => (
+                                                        <option key={ty.id} value={`${window.location.origin}/obrigado/${ty.id}`}>
+                                                            {ty.name || ty.id}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                            
+                                            {hostedCheckouts && hostedCheckouts.length > 0 && (
+                                                <optgroup label="💳 Checkouts">
+                                                    {hostedCheckouts.map(checkout => (
+                                                        <option key={checkout.id} value={`${window.location.origin}/oferta/${checkout.id}`}>
+                                                            {checkout.name || checkout.id}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                        </select>
+                                    </div>
+                                </>
+                            )}
                             
                             <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
                                 <label style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', display: 'block'}}>
@@ -11076,8 +11105,8 @@ function generatePreviewHTML(data) {
                             </div>
                         )}
                         
-                        {/* Botões para adicionar ações */}
-                        {actions.length < 5 && !actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
+                        {/* Botões para adicionar ações - ocultar para nó obrigatório */}
+                        {selectedNode.id !== 'initial-message' && actions.length < 5 && !actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
                             <div style={{marginTop: actions.length > 0 ? '1rem' : '0'}}>
                                 <label style={{display: 'block', fontWeight: '600', color: 'var(--text-primary)', fontSize: '0.9rem', marginBottom: '0.5rem'}}>
                                     Adicionar Ação ({actions.length}/5)
@@ -11106,7 +11135,7 @@ function generatePreviewHTML(data) {
                     </div>
                     <div className="node-editor-modal-footer">
                         <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && (
+                            {!actions.some(a => ['action_check_pix', 'forward_flow'].includes(a.type)) && selectedNode.id !== 'initial-message' && (
                                 <label style={{fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <input 
                                         type="checkbox"
@@ -11116,7 +11145,7 @@ function generatePreviewHTML(data) {
                                     Aguardar Resposta
                                 </label>
                             )}
-                            {nodeData.waitForReply && (
+                            {(nodeData.waitForReply || selectedNode.id === 'initial-message') && (
                                 <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
                                     <label style={{fontSize: '0.85rem'}}>Tempo (min)</label>
                                     <input 
@@ -11130,7 +11159,9 @@ function generatePreviewHTML(data) {
                             )}
                         </div>
                         <div style={{display: 'flex', gap: '0.75rem'}}>
-                            <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
+                            {selectedNode.id !== 'initial-message' && (
+                                <button className="btn btn-danger" onClick={onDelete}>Excluir Nó</button>
+                            )}
                             <button className="btn btn-secondary" onClick={() => setSelectedNode(null)}>Fechar</button>
                         </div>
                     </div>
@@ -11534,6 +11565,42 @@ function FlowEditorPage({
             }
         }, [reactFlowInstance, nodes]);
         // Initialize flow and center view
+        // Função para garantir que o nó obrigatório de mensagem existe em fluxos de disparo
+        const ensureRequiredMessageNode = useCallback((nodes, edges) => {
+            if (!isDisparoFlow) return { nodes, edges };
+            
+            const hasRequiredNode = nodes.some(n => n.id === 'initial-message');
+            if (!hasRequiredNode) {
+                const triggerNode = nodes.find(n => n.type === 'trigger');
+                if (triggerNode) {
+                    const newRequiredNode = {
+                        id: 'initial-message',
+                        type: 'action',
+                        position: { x: 250, y: 150 },
+                        data: {
+                            actions: [{ type: 'message', data: { text: '' } }],
+                            waitForReply: true,
+                            replyTimeout: 5
+                        },
+                        deletable: false,
+                        isRequired: true
+                    };
+                    const newEdge = {
+                        id: 'start-initial-message',
+                        source: 'start',
+                        target: 'initial-message',
+                        sourceHandle: 'a',
+                        deletable: false
+                    };
+                    return {
+                        nodes: [...nodes, newRequiredNode],
+                        edges: [...edges, newEdge]
+                    };
+                }
+            }
+            return { nodes, edges };
+        }, [isDisparoFlow]);
+
         useEffect(() => {
             if (flow?.nodes) {
                 const flowContent = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
@@ -11541,7 +11608,7 @@ function FlowEditorPage({
                 const defaultNodes = isDisparoFlow 
                     ? [{ id: 'start', type: 'trigger', position: { x: 250, y: 50 }, data: {}, deletable: false }]
                     : initialNodes;
-                const nodesToSet = (flowContent.nodes || defaultNodes).map(node => {
+                let nodesToSet = (flowContent.nodes || defaultNodes).map(node => {
                     const nodeData = node.data || {};
                     if (node.type === 'trigger') {
                         return {
@@ -11554,6 +11621,21 @@ function FlowEditorPage({
                     const actionsSource = Array.isArray(nodeData.actions) ? nodeData.actions : [];
                     const normalizedActions = actionsSource.map(action => normalizeInviteAction(action).action);
 
+                    // Garantir que o nó obrigatório tenha as propriedades corretas
+                    if (node.id === 'initial-message') {
+                        return {
+                            ...node,
+                            deletable: false,
+                            isRequired: true,
+                            data: {
+                                ...nodeData,
+                                actions: normalizedActions,
+                                waitForReply: true, // Sempre true para nó obrigatório
+                                replyTimeout: nodeData.replyTimeout ?? 5
+                            }
+                        };
+                    }
+
                     return {
                         ...node,
                         data: {
@@ -11564,8 +11646,16 @@ function FlowEditorPage({
                         }
                     };
                 });
+                
+                let edgesToSet = flowContent.edges || [];
+                
+                // Garantir que o nó obrigatório existe (migração para fluxos antigos)
+                const { nodes: migratedNodes, edges: migratedEdges } = ensureRequiredMessageNode(nodesToSet, edgesToSet);
+                nodesToSet = migratedNodes;
+                edgesToSet = migratedEdges;
+                
                 setNodes(nodesToSet, { skipDirty: true });
-                setEdges(flowContent.edges || [], { skipDirty: true });
+                setEdges(edgesToSet, { skipDirty: true });
                 updateDirtyState(false);
                 
                 // Find the initial node (trigger node for both normal and disparo flows)
@@ -11661,10 +11751,27 @@ function FlowEditorPage({
         }, [isInitialized, nodes, reactFlowInstance, centerViewOnNodes]);
 
         const onNodesDelete = useCallback((deleted) => {
+            // Impedir deleção do nó obrigatório em fluxos de disparo
+            const requiredNodes = deleted.filter(n => n.id === 'initial-message');
+            if (requiredNodes.length > 0) {
+                alert('Este nó é obrigatório e não pode ser removido.');
+                return;
+            }
+            
             setEdges((prevEdges) => {
                 const connectedEdges = getConnectedEdges(deleted, prevEdges);
                 return prevEdges.filter((edge) => !connectedEdges.includes(edge));
             });
+        }, [setEdges]);
+        
+        const onEdgesDelete = useCallback((deleted) => {
+            // Impedir deleção da conexão obrigatória em fluxos de disparo
+            const requiredEdge = deleted.find(e => e.id === 'start-initial-message');
+            if (requiredEdge) {
+                alert('Esta conexão é obrigatória e não pode ser removida.');
+                return;
+            }
+            setEdges((eds) => eds.filter((edge) => !deleted.includes(edge)));
         }, [setEdges]);
         const onConnect = useCallback((params) => {
             // Garante que cada handle só pode conectar a 1 nó
@@ -11711,9 +11818,24 @@ function FlowEditorPage({
 
             // Validação específica para fluxos de disparo
             if (isDisparoFlow) {
-                const hasAction = nodes.some(node => node.type === 'action');
-                if (!hasAction) {
-                    alert('❌ Fluxos de disparo devem ter pelo menos um nó de ação.');
+                const requiredNode = nodes.find(n => n.id === 'initial-message');
+                if (!requiredNode) {
+                    alert('❌ Fluxo de disparo deve ter o nó obrigatório de mensagem inicial.');
+                    return false;
+                }
+                const requiredEdge = edges.find(e => e.id === 'start-initial-message');
+                if (!requiredEdge) {
+                    alert('❌ O nó obrigatório de mensagem deve estar conectado ao trigger inicial.');
+                    return false;
+                }
+                // Validar que waitForReply está ativo
+                if (!requiredNode.data.waitForReply) {
+                    requiredNode.data.waitForReply = true;
+                }
+                // Validar que o nó tem apenas uma ação de mensagem
+                const requiredActions = requiredNode.data?.actions || [];
+                if (requiredActions.length !== 1 || requiredActions[0].type !== 'message') {
+                    alert('❌ O nó obrigatório de mensagem deve conter apenas uma ação de mensagem.');
                     return false;
                 }
             }
@@ -11866,7 +11988,7 @@ function FlowEditorPage({
                 <div className="flow-editor-container">
                     <div className="reactflow-wrapper" ref={reactFlowWrapper}>
                         <ReactFlowProvider>
-                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} connectionMode="loose" connectionRadius={60} fitView minZoom={0.1} maxZoom={2.0}>
+                            <ReactFlow nodes={nodes} edges={edges} onNodesChange={handleNodesChange} onEdgesChange={handleEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} onPaneClick={onPaneClick} onInit={setReactFlowInstance} onDrop={onDrop} onDragOver={onDragOver} onNodesDelete={onNodesDelete} onEdgesDelete={onEdgesDelete} nodeTypes={nodeTypes} onEdgeClick={(event, edge) => { setSelectedEdge({ edge, x: event.clientX, y: event.clientY }); setIsFading(false); }} connectionMode="loose" connectionRadius={60} fitView minZoom={0.1} maxZoom={2.0}>
                                 <Background />
                                 <Controls />
                 </ReactFlow>
