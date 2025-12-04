@@ -762,6 +762,8 @@ app.post(
                     }
                     
                     // Atualizar total_sent e total_jobs com contatos válidos após higienização
+                    // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados) e higienização
+                    // uniqueContactsAfterHygiene já está filtrado e higienizado (sem inativos)
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
                               SET total_sent = ${uniqueContactsAfterHygiene.length}, total_jobs = ${uniqueContactsAfterHygiene.length}
@@ -1026,6 +1028,8 @@ app.post(
                     console.log(`[WORKER-SCHEDULED-DISPARO ${history_id}] Iniciando disparo para ${uniqueContacts.length} contatos válidos...`);
                     
                     // Atualizar status para RUNNING e current_step para 'sending'
+                    // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados, etc.)
+                    // uniqueContacts já está filtrado pelos filtros aplicados antes desta etapa
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
                               SET status = 'RUNNING', current_step = 'sending', 
@@ -3923,8 +3927,24 @@ app.get('/api/admin/transactions', authenticateAdmin, async (req, res) => {
             FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
             JOIN sellers s ON c.seller_id = s.id ORDER BY pt.created_at DESC
             LIMIT ${limit} OFFSET ${offset};`;
-         const totalTransactionsResult = await sqlTx`SELECT COUNT(*) FROM pix_transactions;`;
-         const total = parseInt(totalTransactionsResult[0].count);
+        
+        // Usar estimativa rápida do PostgreSQL (instantânea mesmo com milhões de registros)
+        const [estimateResult] = await sqlTx`
+            SELECT reltuples::bigint AS estimate 
+            FROM pg_class 
+            WHERE relname = 'pix_transactions'
+        `;
+        let estimatedTotal = parseInt(estimateResult?.estimate || 0);
+        
+        // Calcular valor exato apenas se necessário (últimas páginas ou se estimativa muito imprecisa)
+        const needsExactCount = page > Math.ceil(estimatedTotal / limit * 0.9) || estimatedTotal === 0;
+        let total = estimatedTotal;
+        
+        if (needsExactCount) {
+            const totalTransactionsResult = await sqlTx`SELECT COUNT(*) FROM pix_transactions;`;
+            total = parseInt(totalTransactionsResult[0].count);
+        }
+        
         res.json({ transactions, total, page, pages: Math.ceil(total / limit), limit });
     } catch (error) {
         console.error("Erro ao buscar transações admin:", error);
@@ -6548,7 +6568,17 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
         let { startDate, endDate } = req.query;
-        const hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+        let hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+        
+        // Se não tem filtro, usar últimos 30 dias como padrão (reduz consumo de memória)
+        if (!hasDateFilter) {
+            const endDateObj = new Date();
+            const startDateObj = new Date();
+            startDateObj.setDate(endDateObj.getDate() - 30);
+            startDate = startDateObj.toISOString();
+            endDate = endDateObj.toISOString();
+            hasDateFilter = true; // Agora tem filtro aplicado
+        }
 
         const totalClicksQuery = hasDateFilter
             ? sqlTx`SELECT COUNT(*) FROM clicks WHERE seller_id = ${sellerId} AND created_at BETWEEN ${startDate} AND ${endDate}`
@@ -8975,14 +9005,18 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             if (validAutomaticTags.includes('Pagante')) {
                 tagQuery += `,
                 paid_contacts AS (
-                    SELECT DISTINCT tc.chat_id
-                    FROM telegram_chats tc
-                    JOIN clicks c ON c.click_id = tc.click_id
-                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                    WHERE tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-                        AND pt.status = 'paid'
+                    SELECT DISTINCT bc.chat_id
+                    FROM base_contacts bc
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM telegram_chats tc2
+                        JOIN clicks c ON c.click_id = tc2.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc2.chat_id = bc.chat_id
+                          AND tc2.bot_id = ANY($1::int[])
+                          AND tc2.seller_id = $2
+                          AND pt.status = 'paid'
+                    )
                 )`;
             }
             
@@ -9199,6 +9233,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 // Atualizar total_sent e total_jobs
+                // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados, etc.)
+                // uniqueContacts já está filtrado pelos filtros aplicados antes desta etapa
                 await sqlWithRetry(
                     sqlTx`UPDATE disparo_history 
                           SET total_sent = ${uniqueContacts.length}, total_jobs = ${uniqueContacts.length},
@@ -9935,14 +9971,18 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
             if (validAutomaticTags.includes('Pagante')) {
                 query += `,
                 paid_contacts AS (
-                    SELECT DISTINCT tc.chat_id
-                    FROM telegram_chats tc
-                    JOIN clicks c ON c.click_id = tc.click_id
-                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                    WHERE tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-                        AND pt.status = 'paid'
+                    SELECT DISTINCT bc.chat_id
+                    FROM base_contacts bc
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM telegram_chats tc2
+                        JOIN clicks c ON c.click_id = tc2.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc2.chat_id = bc.chat_id
+                          AND tc2.bot_id = ANY($1::int[])
+                          AND tc2.seller_id = $2
+                          AND pt.status = 'paid'
+                    )
                 )`;
             }
             
@@ -10155,14 +10195,18 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
     if (validAutomaticTags.includes('Pagante')) {
         tagQuery += `,
         paid_contacts AS (
-            SELECT DISTINCT tc.chat_id
-            FROM telegram_chats tc
-            JOIN clicks c ON c.click_id = tc.click_id
-            JOIN pix_transactions pt ON pt.click_id_internal = c.id
-            WHERE tc.bot_id = ANY($1::int[])
-                AND tc.seller_id = $2
-                AND tc.chat_id > 0
-                AND pt.status = 'paid'
+            SELECT DISTINCT bc.chat_id
+            FROM base_contacts bc
+            WHERE EXISTS (
+                SELECT 1
+                FROM telegram_chats tc2
+                JOIN clicks c ON c.click_id = tc2.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc2.chat_id = bc.chat_id
+                  AND tc2.bot_id = ANY($1::int[])
+                  AND tc2.seller_id = $2
+                  AND pt.status = 'paid'
+            )
         )`;
     }
     
