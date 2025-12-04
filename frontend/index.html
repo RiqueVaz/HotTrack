@@ -2948,7 +2948,7 @@
                     { value: 'pushinpay', text: 'PushinPay' },
                     { value: 'cnpay', text: 'CN Pay' },
                     { value: 'oasyfy', text: 'Oasy.fy' },
-                    // { value: 'syncpay', text: 'SyncPay' }, // SyncPay desabilitado
+                    { value: 'syncpay', text: 'SyncPay' },
                     { value: 'brpix', text: 'BR PIX' },
                     { value: 'wiinpay', text: 'WiinPay' },
                     { value: 'pixup', text: 'Pixup' },
@@ -2989,7 +2989,6 @@
                                 <label class="block mb-2 text-sm text-gray-400">Secret Key</label><input name="brpix_secret_key" type="password" value="${settings.brpix_secret_key || ''}" class="form-input w-full p-2">
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Company ID</label><input name="brpix_company_id" type="password" value="${settings.brpix_company_id || ''}" class="form-input w-full p-2">
                             </div>
-                            <!-- SyncPay desabilitado
                             <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
                                     <div><h3 class="text-lg font-medium text-sky-400 inline-block">SyncPay</h3><span id="status-indicator-syncpay"></span></div>
@@ -2998,7 +2997,6 @@
                                 <label class="block mb-2 text-sm text-gray-400">Client ID</label><input name="syncpay_client_id" type="password" value="${settings.syncpay_client_id || ''}" class="form-input w-full p-2">
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Client Secret</label><input name="syncpay_client_secret" type="password" value="${settings.syncpay_client_secret || ''}" class="form-input w-full p-2">
                             </div>
-                            -->
                             <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
                                     <div><h3 class="text-lg font-medium text-sky-400 inline-block">PushinPay</h3><span id="status-indicator-pushinpay"></span></div>
@@ -3998,7 +3996,7 @@
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
 
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', /* 'syncpay', */ 'brpix', 'wiinpay']; // SyncPay desabilitado
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
@@ -5748,7 +5746,7 @@ function generatePreviewHTML(data) {
         },
 
         updateAllPixStatusIndicators() {
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', /* 'syncpay', */ 'brpix', 'wiinpay']; // SyncPay desabilitado
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
             providers.forEach(provider => this.updatePixStatusIndicator(provider));
         },
 
