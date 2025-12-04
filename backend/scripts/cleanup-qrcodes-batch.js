@@ -8,6 +8,9 @@
  * - Geração excessiva de WAL
  * - Checkpoints frequentes
  * 
+ * Após a limpeza, executa VACUUM ANALYZE para atualizar estatísticas e limpar dead tuples.
+ * Este comando é rápido e não bloqueia a tabela, ideal para execução diária.
+ * 
  * Executar via:
  * node backend/scripts/cleanup-qrcodes-batch.js
  */
@@ -118,7 +121,7 @@ async function cleanupQRCodesInBatches() {
         // Executar VACUUM ANALYZE se houver registros processados
         let sizeAfterVacuum = null;
         if (totalAffected > 0) {
-            console.log(`[Cleanup QR] Executando VACUUM ANALYZE para recuperar espaço...`);
+            console.log(`[Cleanup QR] Executando VACUUM ANALYZE para atualizar estatísticas...`);
             const vacuumStartTime = Date.now();
             try {
                 await sqlTx`VACUUM ANALYZE pix_transactions;`;
