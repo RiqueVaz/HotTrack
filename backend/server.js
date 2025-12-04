@@ -762,6 +762,8 @@ app.post(
                     }
                     
                     // Atualizar total_sent e total_jobs com contatos válidos após higienização
+                    // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados) e higienização
+                    // uniqueContactsAfterHygiene já está filtrado e higienizado (sem inativos)
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
                               SET total_sent = ${uniqueContactsAfterHygiene.length}, total_jobs = ${uniqueContactsAfterHygiene.length}
@@ -1026,6 +1028,8 @@ app.post(
                     console.log(`[WORKER-SCHEDULED-DISPARO ${history_id}] Iniciando disparo para ${uniqueContacts.length} contatos válidos...`);
                     
                     // Atualizar status para RUNNING e current_step para 'sending'
+                    // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados, etc.)
+                    // uniqueContacts já está filtrado pelos filtros aplicados antes desta etapa
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
                               SET status = 'RUNNING', current_step = 'sending', 
@@ -9203,6 +9207,8 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 // Atualizar total_sent e total_jobs
+                // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados, etc.)
+                // uniqueContacts já está filtrado pelos filtros aplicados antes desta etapa
                 await sqlWithRetry(
                     sqlTx`UPDATE disparo_history 
                           SET total_sent = ${uniqueContacts.length}, total_jobs = ${uniqueContacts.length},
