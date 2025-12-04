@@ -1,0 +1,24 @@
+name: Cleanup QR Codes
+
+on:
+  schedule:
+    # Executar diariamente às 6h de São Paulo (9h UTC)
+    # SP está em UTC-3, então 6h SP = 9h UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch: # Permite executar manualmente
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Executar limpeza de QR codes
+        run: |
+          curl -X POST ${{ secrets.RAILWAY_APP_URL }}/api/admin/cleanup-qrcodes \
+            -H "x-admin-api-key: ${{ secrets.ADMIN_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --max-time 3600 \
+            --fail-with-body
+        env:
+          RAILWAY_APP_URL: ${{ secrets.RAILWAY_APP_URL }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+
