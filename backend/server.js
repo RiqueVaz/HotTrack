@@ -6585,12 +6585,126 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
             : sqlTx`SELECT COUNT(*) FROM clicks WHERE seller_id = ${sellerId}`;
 
         const pixGeneratedQuery = hasDateFilter
-            ? sqlTx`SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId} AND pt.created_at BETWEEN ${startDate} AND ${endDate}`
-            : sqlTx`SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId}`;
+            ? sqlTx`
+                WITH recent_data AS (
+                    SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE c.seller_id = ${sellerId} 
+                      AND pt.created_at BETWEEN ${startDate} AND ${endDate}
+                      AND pt.created_at >= NOW() - INTERVAL '12 months'
+                ),
+                archived_data AS (
+                    SELECT 
+                        SUM(total_transactions) AS total,
+                        SUM(total_revenue) AS revenue
+                    FROM pix_transactions_monthly_summary
+                    WHERE seller_id = ${sellerId}
+                      AND (
+                          -- Dados arquivados que estão dentro do período filtrado mas são antigos (> 12 meses)
+                          (year < EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER 
+                              AND month <= EXTRACT(MONTH FROM NOW() - INTERVAL '12 months')::INTEGER)
+                      )
+                      AND (
+                          -- Mas apenas se estão dentro do período filtrado
+                          (year > EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER 
+                              AND month >= EXTRACT(MONTH FROM ${startDate}::timestamp)::INTEGER)
+                      )
+                      AND (
+                          (year < EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER 
+                              AND month <= EXTRACT(MONTH FROM ${endDate}::timestamp)::INTEGER)
+                      )
+                )
+                SELECT 
+                    COALESCE(rd.total, 0) + COALESCE(ad.total, 0) AS total,
+                    COALESCE(rd.revenue, 0) + COALESCE(ad.revenue, 0) AS revenue
+                FROM recent_data rd
+                FULL OUTER JOIN archived_data ad ON true
+            `
+            : sqlTx`
+                WITH recent_data AS (
+                    SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE c.seller_id = ${sellerId}
+                      AND pt.created_at >= NOW() - INTERVAL '12 months'
+                ),
+                archived_data AS (
+                    SELECT SUM(total_transactions) AS total, SUM(total_revenue) AS revenue
+                    FROM pix_transactions_monthly_summary
+                    WHERE seller_id = ${sellerId}
+                )
+                SELECT 
+                    COALESCE(rd.total, 0) + COALESCE(ad.total, 0) AS total,
+                    COALESCE(rd.revenue, 0) + COALESCE(ad.revenue, 0) AS revenue
+                FROM recent_data rd
+                FULL OUTER JOIN archived_data ad ON true
+            `;
 
         const pixPaidQuery = hasDateFilter
-            ? sqlTx`SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId} AND pt.status = 'paid' AND pt.paid_at BETWEEN ${startDate} AND ${endDate}`
-            : sqlTx`SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId} AND pt.status = 'paid'`;
+            ? sqlTx`
+                WITH recent_data AS (
+                    SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE c.seller_id = ${sellerId} 
+                      AND pt.status = 'paid'
+                      AND pt.paid_at BETWEEN ${startDate} AND ${endDate}
+                      AND pt.paid_at >= NOW() - INTERVAL '12 months'
+                ),
+                archived_data AS (
+                    SELECT 
+                        SUM(total_paid) AS total,
+                        SUM(total_revenue) AS revenue
+                    FROM pix_transactions_monthly_summary
+                    WHERE seller_id = ${sellerId}
+                      AND (
+                          -- Dados arquivados que estão dentro do período filtrado mas são antigos (> 12 meses)
+                          (year < EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER 
+                              AND month <= EXTRACT(MONTH FROM NOW() - INTERVAL '12 months')::INTEGER)
+                      )
+                      AND (
+                          -- Mas apenas se estão dentro do período filtrado
+                          (year > EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER 
+                              AND month >= EXTRACT(MONTH FROM ${startDate}::timestamp)::INTEGER)
+                      )
+                      AND (
+                          (year < EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER)
+                          OR (year = EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER 
+                              AND month <= EXTRACT(MONTH FROM ${endDate}::timestamp)::INTEGER)
+                      )
+                )
+                SELECT 
+                    COALESCE(rd.total, 0) + COALESCE(ad.total, 0) AS total,
+                    COALESCE(rd.revenue, 0) + COALESCE(ad.revenue, 0) AS revenue
+                FROM recent_data rd
+                FULL OUTER JOIN archived_data ad ON true
+            `
+            : sqlTx`
+                WITH recent_data AS (
+                    SELECT COUNT(pt.id) AS total, COALESCE(SUM(pt.pix_value), 0) AS revenue
+                    FROM pix_transactions pt 
+                    JOIN clicks c ON pt.click_id_internal = c.id 
+                    WHERE c.seller_id = ${sellerId}
+                      AND pt.status = 'paid'
+                      AND pt.paid_at >= NOW() - INTERVAL '12 months'
+                ),
+                archived_data AS (
+                    SELECT SUM(total_paid) AS total, SUM(total_revenue) AS revenue
+                    FROM pix_transactions_monthly_summary
+                    WHERE seller_id = ${sellerId}
+                )
+                SELECT 
+                    COALESCE(rd.total, 0) + COALESCE(ad.total, 0) AS total,
+                    COALESCE(rd.revenue, 0) + COALESCE(ad.revenue, 0) AS revenue
+                FROM recent_data rd
+                FULL OUTER JOIN archived_data ad ON true
+            `;
 
         const botsPerformanceQuery = hasDateFilter
             ? sqlTx`SELECT tb.bot_name, COUNT(c.id) AS total_clicks, COUNT(pt.id) FILTER (WHERE pt.status = 'paid') AS total_pix_paid, COALESCE(SUM(pt.pix_value) FILTER (WHERE pt.status = 'paid'), 0) AS paid_revenue FROM telegram_bots tb LEFT JOIN pressels p ON p.bot_id = tb.id LEFT JOIN clicks c ON (c.pressel_id = p.id OR c.bot_id = tb.id) AND c.seller_id = ${sellerId} AND c.created_at BETWEEN ${startDate} AND ${endDate} LEFT JOIN pix_transactions pt ON pt.click_id_internal = c.id WHERE tb.seller_id = ${sellerId} GROUP BY tb.bot_name ORDER BY paid_revenue DESC, total_clicks DESC`
@@ -6602,8 +6716,82 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
 
         const userTimezone = 'America/Sao_Paulo'; 
         const dailyRevenueQuery = hasDateFilter
-             ? sqlTx`SELECT DATE(pt.paid_at AT TIME ZONE ${userTimezone}) as date, COALESCE(SUM(pt.pix_value), 0) as revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId} AND pt.status = 'paid' AND pt.paid_at BETWEEN ${startDate} AND ${endDate} GROUP BY 1 ORDER BY 1 ASC`
-             : sqlTx`SELECT DATE(pt.paid_at AT TIME ZONE ${userTimezone}) as date, COALESCE(SUM(pt.pix_value), 0) as revenue FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id WHERE c.seller_id = ${sellerId} AND pt.status = 'paid' GROUP BY 1 ORDER BY 1 ASC`;
+             ? sqlTx`
+                 WITH recent_data AS (
+                     SELECT 
+                         DATE(pt.paid_at AT TIME ZONE ${userTimezone}) as date, 
+                         COALESCE(SUM(pt.pix_value), 0) as revenue
+                     FROM pix_transactions pt 
+                     JOIN clicks c ON pt.click_id_internal = c.id 
+                     WHERE c.seller_id = ${sellerId} 
+                       AND pt.status = 'paid' 
+                       AND pt.paid_at BETWEEN ${startDate} AND ${endDate}
+                       AND pt.paid_at >= NOW() - INTERVAL '12 months'
+                     GROUP BY 1
+                 ),
+                 archived_data AS (
+                     SELECT 
+                         DATE(TO_TIMESTAMP(year::text || '-' || LPAD(month::text, 2, '0') || '-01', 'YYYY-MM-DD')) as date,
+                         SUM(total_revenue) as revenue
+                     FROM pix_transactions_monthly_summary
+                     WHERE seller_id = ${sellerId}
+                       AND (
+                           -- Dados arquivados que estão dentro do período filtrado mas são antigos (> 12 meses)
+                           (year < EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER)
+                           OR (year = EXTRACT(YEAR FROM NOW() - INTERVAL '12 months')::INTEGER 
+                               AND month <= EXTRACT(MONTH FROM NOW() - INTERVAL '12 months')::INTEGER)
+                       )
+                       AND (
+                           -- Mas apenas se estão dentro do período filtrado
+                           (year > EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER)
+                           OR (year = EXTRACT(YEAR FROM ${startDate}::timestamp)::INTEGER 
+                               AND month >= EXTRACT(MONTH FROM ${startDate}::timestamp)::INTEGER)
+                       )
+                       AND (
+                           (year < EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER)
+                           OR (year = EXTRACT(YEAR FROM ${endDate}::timestamp)::INTEGER 
+                               AND month <= EXTRACT(MONTH FROM ${endDate}::timestamp)::INTEGER)
+                       )
+                     GROUP BY 1
+                 )
+                 SELECT date, COALESCE(SUM(revenue), 0) as revenue
+                 FROM (
+                     SELECT date, revenue FROM recent_data
+                     UNION ALL
+                     SELECT date, revenue FROM archived_data
+                 ) combined
+                 GROUP BY date
+                 ORDER BY date ASC
+             `
+             : sqlTx`
+                 WITH recent_data AS (
+                     SELECT 
+                         DATE(pt.paid_at AT TIME ZONE ${userTimezone}) as date, 
+                         COALESCE(SUM(pt.pix_value), 0) as revenue
+                     FROM pix_transactions pt 
+                     JOIN clicks c ON pt.click_id_internal = c.id 
+                     WHERE c.seller_id = ${sellerId} 
+                       AND pt.status = 'paid'
+                       AND pt.paid_at >= NOW() - INTERVAL '12 months'
+                     GROUP BY 1
+                 ),
+                 archived_data AS (
+                     SELECT 
+                         DATE(TO_TIMESTAMP(year::text || '-' || LPAD(month::text, 2, '0') || '-01', 'YYYY-MM-DD')) as date,
+                         SUM(total_revenue) as revenue
+                     FROM pix_transactions_monthly_summary
+                     WHERE seller_id = ${sellerId}
+                     GROUP BY 1
+                 )
+                 SELECT date, COALESCE(SUM(revenue), 0) as revenue
+                 FROM (
+                     SELECT date, revenue FROM recent_data
+                     UNION ALL
+                     SELECT date, revenue FROM archived_data
+                 ) combined
+                 GROUP BY date
+                 ORDER BY date ASC
+             `;
         
         const [
                totalClicksResult, pixGeneratedResult, pixPaidResult, botsPerformance,
