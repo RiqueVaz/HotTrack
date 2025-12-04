@@ -2083,16 +2083,29 @@
                         payButton.disabled = true;
                         const urlParams = new URLSearchParams(window.location.search);
                         const clickIdFromUrl = urlParams.get('click_id') || urlParams.get('cid') || clickIdFromServer; // Usa o ID do servidor como fallback
+                        
+                        // Criar AbortController para timeout
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 segundos de timeout
+                        
                         try {
                             const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
                                 checkoutId: checkoutId,
                                 value_cents: totalValueCents,
                                 click_id: clickIdFromUrl
-                            });
+                            }, {}, { signal: controller.signal }); // Passar signal para permitir cancelamento
+                            
+                            clearTimeout(timeoutId);
                             this.showPixModal(pixData, config.redirects?.success_url); // Mostra o modal e inicia polling
                         } catch (error) {
-                            alert('Erro ao gerar PIX. Tente novamente.');
+                            clearTimeout(timeoutId);
+                            if (error.name === 'AbortError' || error.message?.includes('timeout') || error.message?.includes('cancelada')) {
+                                alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                            } else {
+                                alert('Erro ao gerar PIX. Tente novamente.');
+                            }
                         } finally {
+                            clearTimeout(timeoutId); // Garantir que timeout é sempre limpo
                             updatePayButtonText();
                             payButton.disabled = !selectedPackage;
                         }
@@ -3692,26 +3705,27 @@
 
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
-            const { skipAuthRetry = false } = options;
-            try {
-                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
-                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
+            const { skipAuthRetry = false, signal } = options;
+            try {
+                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
+                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
 
-                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
-                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
-                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
-                                       endpoint.includes('/api/thank-you-pages/create') ||
-                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                                      (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                                      endpoint.includes('/api/thank-you-pages/create') ||
+                                      (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
 
-                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
-                    headers['x-api-key'] = this.state.data.settings.api_key;
-                }
+                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+                    headers['x-api-key'] = this.state.data.settings.api_key;
+                }
 
-                const requestOptions = { method, headers };
-                if (body) { requestOptions.body = JSON.stringify(body); }
+                const requestOptions = { method, headers };
+                if (body) { requestOptions.body = JSON.stringify(body); }
+                if (signal) { requestOptions.signal = signal; } // Adicionar signal para permitir cancelamento
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
 
                 if (response.status === 204) return null; // No Content
 
@@ -3746,6 +3760,13 @@
                 }
                 return data;
             } catch (error) {
+                // Tratar AbortError (timeout ou cancelamento)
+                if (error.name === 'AbortError') {
+                    const abortError = new Error('Requisição cancelada por timeout');
+                    abortError.name = 'AbortError';
+                    throw abortError;
+                }
+                
                  if (error instanceof Error) {
                     const statusCode = error.status;
                     const errorCode = error.code;
@@ -5872,7 +5893,10 @@ function generatePreviewHTML(data) {
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
-        const api = axios.create({ baseURL: API_BASE_URL });
+        const api = axios.create({ 
+            baseURL: API_BASE_URL,
+            timeout: 60000 // 60 segundos de timeout para requisições
+        });
         
         api.interceptors.request.use(
             config => {
@@ -6544,7 +6568,11 @@ function generatePreviewHTML(data) {
                 // Iniciar polling para verificar pagamento
                 startPaymentPolling(response.data.purchase_transaction_id);
             } catch (err) {
-                alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+                    alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                } else {
+                    alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                }
                 setIsWaitingPayment(false);
             }
         };
@@ -9690,7 +9718,11 @@ function generatePreviewHTML(data) {
                 alert(res.data.message);
                 onAction();
             } catch (e) {
-                alert('Erro: ' + (e.response?.data?.message || e.message));
+                if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+                    alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                } else {
+                    alert('Erro: ' + (e.response?.data?.message || e.message));
+                }
             }
         };
 
