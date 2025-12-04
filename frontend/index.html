@@ -2102,7 +2102,7 @@
                             if (error.name === 'AbortError' || error.message?.includes('timeout') || error.message?.includes('cancelada')) {
                                 alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
                             } else {
-                                alert('Erro ao gerar PIX. Tente novamente.');
+                            alert('Erro ao gerar PIX. Tente novamente.');
                             }
                         } finally {
                             clearTimeout(timeoutId); // Garantir que timeout é sempre limpo
@@ -3705,27 +3705,27 @@
 
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
-        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
+        async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
             const { skipAuthRetry = false, signal } = options;
-            try {
-                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
-                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
+            try {
+                const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
+                if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
 
-                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
-                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
-                                      (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
-                                      endpoint.includes('/api/thank-you-pages/create') ||
-                                      (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
+                // Mantém a lógica de adicionar x-api-key se necessário E não foi fornecido um customizado
+                const apiKeyRequired = endpoint.includes('/api/checkouts/create-hosted') ||
+                                       (endpoint.includes('/api/checkouts/') && method === 'PUT') ||
+                                       endpoint.includes('/api/thank-you-pages/create') ||
+                                       (endpoint.includes('/api/thank-you-pages/') && method === 'PUT');
 
-                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
-                    headers['x-api-key'] = this.state.data.settings.api_key;
-                }
+                if (this.state.data.settings?.api_key && apiKeyRequired && !headers['x-api-key']) {
+                    headers['x-api-key'] = this.state.data.settings.api_key;
+                }
 
-                const requestOptions = { method, headers };
-                if (body) { requestOptions.body = JSON.stringify(body); }
+                const requestOptions = { method, headers };
+                if (body) { requestOptions.body = JSON.stringify(body); }
                 if (signal) { requestOptions.signal = signal; } // Adicionar signal para permitir cancelamento
 
-                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
+                const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
 
                 if (response.status === 204) return null; // No Content
 
@@ -4017,7 +4017,7 @@
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
 
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay', 'pixup', 'paradise'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
@@ -5767,7 +5767,7 @@ function generatePreviewHTML(data) {
         },
 
         updateAllPixStatusIndicators() {
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay'];
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay', 'pixup', 'paradise'];
             providers.forEach(provider => this.updatePixStatusIndicator(provider));
         },
 
@@ -6571,7 +6571,7 @@ function generatePreviewHTML(data) {
                 if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
                     alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
                 } else {
-                    alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
                 }
                 setIsWaitingPayment(false);
             }
@@ -9721,7 +9721,7 @@ function generatePreviewHTML(data) {
                 if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
                     alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
                 } else {
-                    alert('Erro: ' + (e.response?.data?.message || e.message));
+                alert('Erro: ' + (e.response?.data?.message || e.message));
                 }
             }
         };
