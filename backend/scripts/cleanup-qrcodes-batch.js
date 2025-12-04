@@ -8,8 +8,8 @@
  * - Geração excessiva de WAL
  * - Checkpoints frequentes
  * 
- * Após a limpeza, executa VACUUM FULL ANALYZE para recuperar espaço físico.
- * ATENÇÃO: VACUUM FULL pode demorar várias horas e bloquear a tabela.
+ * Após a limpeza, executa VACUUM ANALYZE para atualizar estatísticas e limpar dead tuples.
+ * Este comando é rápido e não bloqueia a tabela, ideal para execução diária.
  * 
  * Executar via:
  * node backend/scripts/cleanup-qrcodes-batch.js
@@ -112,24 +112,21 @@ async function cleanupQRCodesInBatches() {
                                pg_indexes_size('pix_transactions')) AS toast_and_bloat
         `;
         
-        console.log(`[Cleanup QR] Tamanho atual da tabela (antes do VACUUM FULL):`);
+        console.log(`[Cleanup QR] Tamanho atual da tabela (antes do VACUUM):`);
         console.log(`[Cleanup QR] - Total: ${sizeResult[0].total_size}`);
         console.log(`[Cleanup QR] - Tabela: ${sizeResult[0].table_size}`);
         console.log(`[Cleanup QR] - Índices: ${sizeResult[0].indexes_size}`);
         console.log(`[Cleanup QR] - TOAST/Bloat: ${sizeResult[0].toast_and_bloat}`);
         
-        // Executar VACUUM FULL ANALYZE se houver registros processados
+        // Executar VACUUM ANALYZE se houver registros processados
         let sizeAfterVacuum = null;
         if (totalAffected > 0) {
-            console.log(`[Cleanup QR] ⚠️  ATENÇÃO: Executando VACUUM FULL ANALYZE...`);
-            console.log(`[Cleanup QR] ⚠️  Isso pode demorar várias horas e bloquear a tabela temporariamente.`);
-            console.log(`[Cleanup QR] ⚠️  A tabela ficará indisponível durante a execução.`);
+            console.log(`[Cleanup QR] Executando VACUUM ANALYZE para atualizar estatísticas...`);
             const vacuumStartTime = Date.now();
             try {
-                await sqlTx`VACUUM FULL ANALYZE pix_transactions;`;
+                await sqlTx`VACUUM ANALYZE pix_transactions;`;
                 const vacuumTime = ((Date.now() - vacuumStartTime) / 1000).toFixed(1);
-                const vacuumMinutes = (vacuumTime / 60).toFixed(1);
-                console.log(`[Cleanup QR] ✓ VACUUM FULL ANALYZE concluído em ${vacuumMinutes} minutos (${vacuumTime}s)`);
+                console.log(`[Cleanup QR] ✓ VACUUM ANALYZE concluído em ${vacuumTime}s`);
                 
                 // Verificar tamanho após VACUUM
                 const sizeResultAfter = await sqlTx`
@@ -144,17 +141,17 @@ async function cleanupQRCodesInBatches() {
                 
                 sizeAfterVacuum = sizeResultAfter[0];
                 
-                console.log(`[Cleanup QR] Tamanho após VACUUM FULL:`);
+                console.log(`[Cleanup QR] Tamanho após VACUUM:`);
                 console.log(`[Cleanup QR] - Total: ${sizeAfterVacuum.total_size}`);
                 console.log(`[Cleanup QR] - Tabela: ${sizeAfterVacuum.table_size}`);
                 console.log(`[Cleanup QR] - Índices: ${sizeAfterVacuum.indexes_size}`);
                 console.log(`[Cleanup QR] - TOAST/Bloat: ${sizeAfterVacuum.toast_and_bloat}`);
             } catch (vacuumError) {
-                console.error('[Cleanup QR] ⚠️  Erro ao executar VACUUM FULL ANALYZE:', vacuumError.message);
-                console.error('[Cleanup QR] ⚠️  Você pode executar manualmente: VACUUM FULL ANALYZE pix_transactions;');
+                console.error('[Cleanup QR] ⚠️  Erro ao executar VACUUM ANALYZE:', vacuumError.message);
+                console.error('[Cleanup QR] ⚠️  Você pode executar manualmente: VACUUM ANALYZE pix_transactions;');
             }
         } else {
-            console.log(`[Cleanup QR] Nenhum registro processado, pulando VACUUM FULL`);
+            console.log(`[Cleanup QR] Nenhum registro processado, pulando VACUUM`);
         }
         
         return { 
