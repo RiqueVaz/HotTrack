@@ -8975,14 +8975,18 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             if (validAutomaticTags.includes('Pagante')) {
                 tagQuery += `,
                 paid_contacts AS (
-                    SELECT DISTINCT tc.chat_id
-                    FROM telegram_chats tc
-                    JOIN clicks c ON c.click_id = tc.click_id
-                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                    WHERE tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-                        AND pt.status = 'paid'
+                    SELECT DISTINCT bc.chat_id
+                    FROM base_contacts bc
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM telegram_chats tc2
+                        JOIN clicks c ON c.click_id = tc2.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc2.chat_id = bc.chat_id
+                          AND tc2.bot_id = ANY($1::int[])
+                          AND tc2.seller_id = $2
+                          AND pt.status = 'paid'
+                    )
                 )`;
             }
             
@@ -9935,14 +9939,18 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
             if (validAutomaticTags.includes('Pagante')) {
                 query += `,
                 paid_contacts AS (
-                    SELECT DISTINCT tc.chat_id
-                    FROM telegram_chats tc
-                    JOIN clicks c ON c.click_id = tc.click_id
-                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                    WHERE tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                        AND tc.chat_id > 0
-                        AND pt.status = 'paid'
+                    SELECT DISTINCT bc.chat_id
+                    FROM base_contacts bc
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM telegram_chats tc2
+                        JOIN clicks c ON c.click_id = tc2.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc2.chat_id = bc.chat_id
+                          AND tc2.bot_id = ANY($1::int[])
+                          AND tc2.seller_id = $2
+                          AND pt.status = 'paid'
+                    )
                 )`;
             }
             
@@ -10155,14 +10163,18 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
     if (validAutomaticTags.includes('Pagante')) {
         tagQuery += `,
         paid_contacts AS (
-            SELECT DISTINCT tc.chat_id
-            FROM telegram_chats tc
-            JOIN clicks c ON c.click_id = tc.click_id
-            JOIN pix_transactions pt ON pt.click_id_internal = c.id
-            WHERE tc.bot_id = ANY($1::int[])
-                AND tc.seller_id = $2
-                AND tc.chat_id > 0
-                AND pt.status = 'paid'
+            SELECT DISTINCT bc.chat_id
+            FROM base_contacts bc
+            WHERE EXISTS (
+                SELECT 1
+                FROM telegram_chats tc2
+                JOIN clicks c ON c.click_id = tc2.click_id
+                JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                WHERE tc2.chat_id = bc.chat_id
+                  AND tc2.bot_id = ANY($1::int[])
+                  AND tc2.seller_id = $2
+                  AND pt.status = 'paid'
+            )
         )`;
     }
     
