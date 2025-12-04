@@ -3927,8 +3927,24 @@ app.get('/api/admin/transactions', authenticateAdmin, async (req, res) => {
             FROM pix_transactions pt JOIN clicks c ON pt.click_id_internal = c.id
             JOIN sellers s ON c.seller_id = s.id ORDER BY pt.created_at DESC
             LIMIT ${limit} OFFSET ${offset};`;
-         const totalTransactionsResult = await sqlTx`SELECT COUNT(*) FROM pix_transactions;`;
-         const total = parseInt(totalTransactionsResult[0].count);
+        
+        // Usar estimativa rápida do PostgreSQL (instantânea mesmo com milhões de registros)
+        const [estimateResult] = await sqlTx`
+            SELECT reltuples::bigint AS estimate 
+            FROM pg_class 
+            WHERE relname = 'pix_transactions'
+        `;
+        let estimatedTotal = parseInt(estimateResult?.estimate || 0);
+        
+        // Calcular valor exato apenas se necessário (últimas páginas ou se estimativa muito imprecisa)
+        const needsExactCount = page > Math.ceil(estimatedTotal / limit * 0.9) || estimatedTotal === 0;
+        let total = estimatedTotal;
+        
+        if (needsExactCount) {
+            const totalTransactionsResult = await sqlTx`SELECT COUNT(*) FROM pix_transactions;`;
+            total = parseInt(totalTransactionsResult[0].count);
+        }
+        
         res.json({ transactions, total, page, pages: Math.ceil(total / limit), limit });
     } catch (error) {
         console.error("Erro ao buscar transações admin:", error);
@@ -6552,7 +6568,17 @@ app.get('/api/dashboard/metrics', authenticateJwt, async (req, res) => {
     try {
         const sellerId = req.user.id;
         let { startDate, endDate } = req.query;
-        const hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+        let hasDateFilter = startDate && endDate && startDate !== '' && endDate !== '';
+        
+        // Se não tem filtro, usar últimos 30 dias como padrão (reduz consumo de memória)
+        if (!hasDateFilter) {
+            const endDateObj = new Date();
+            const startDateObj = new Date();
+            startDateObj.setDate(endDateObj.getDate() - 30);
+            startDate = startDateObj.toISOString();
+            endDate = endDateObj.toISOString();
+            hasDateFilter = true; // Agora tem filtro aplicado
+        }
 
         const totalClicksQuery = hasDateFilter
             ? sqlTx`SELECT COUNT(*) FROM clicks WHERE seller_id = ${sellerId} AND created_at BETWEEN ${startDate} AND ${endDate}`
