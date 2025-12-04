@@ -2083,16 +2083,29 @@
                         payButton.disabled = true;
                         const urlParams = new URLSearchParams(window.location.search);
                         const clickIdFromUrl = urlParams.get('click_id') || urlParams.get('cid') || clickIdFromServer; // Usa o ID do servidor como fallback
+                        
+                        // Criar AbortController para timeout
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 segundos de timeout
+                        
                         try {
                             const pixData = await this.apiRequest('/api/oferta/generate-pix', 'POST', {
                                 checkoutId: checkoutId,
                                 value_cents: totalValueCents,
                                 click_id: clickIdFromUrl
-                            });
+                            }, {}, { signal: controller.signal }); // Passar signal para permitir cancelamento
+                            
+                            clearTimeout(timeoutId);
                             this.showPixModal(pixData, config.redirects?.success_url); // Mostra o modal e inicia polling
                         } catch (error) {
+                            clearTimeout(timeoutId);
+                            if (error.name === 'AbortError' || error.message?.includes('timeout') || error.message?.includes('cancelada')) {
+                                alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                            } else {
                             alert('Erro ao gerar PIX. Tente novamente.');
+                            }
                         } finally {
+                            clearTimeout(timeoutId); // Garantir que timeout é sempre limpo
                             updatePayButtonText();
                             payButton.disabled = !selectedPackage;
                         }
@@ -2948,7 +2961,7 @@
                     { value: 'pushinpay', text: 'PushinPay' },
                     { value: 'cnpay', text: 'CN Pay' },
                     { value: 'oasyfy', text: 'Oasy.fy' },
-                    // { value: 'syncpay', text: 'SyncPay' }, // SyncPay desabilitado
+                    { value: 'syncpay', text: 'SyncPay' },
                     { value: 'brpix', text: 'BR PIX' },
                     { value: 'wiinpay', text: 'WiinPay' },
                     { value: 'pixup', text: 'Pixup' },
@@ -2989,7 +3002,6 @@
                                 <label class="block mb-2 text-sm text-gray-400">Secret Key</label><input name="brpix_secret_key" type="password" value="${settings.brpix_secret_key || ''}" class="form-input w-full p-2">
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Company ID</label><input name="brpix_company_id" type="password" value="${settings.brpix_company_id || ''}" class="form-input w-full p-2">
                             </div>
-                            <!-- SyncPay desabilitado
                             <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
                                     <div><h3 class="text-lg font-medium text-sky-400 inline-block">SyncPay</h3><span id="status-indicator-syncpay"></span></div>
@@ -2998,7 +3010,6 @@
                                 <label class="block mb-2 text-sm text-gray-400">Client ID</label><input name="syncpay_client_id" type="password" value="${settings.syncpay_client_id || ''}" class="form-input w-full p-2">
                                 <label class="block mt-4 mb-2 text-sm text-gray-400">Client Secret</label><input name="syncpay_client_secret" type="password" value="${settings.syncpay_client_secret || ''}" class="form-input w-full p-2">
                             </div>
-                            -->
                             <div class="card p-6 rounded-lg">
                                 <div class="flex justify-between items-start mb-4">
                                     <div><h3 class="text-lg font-medium text-sky-400 inline-block">PushinPay</h3><span id="status-indicator-pushinpay"></span></div>
@@ -3695,7 +3706,7 @@
         // Adicionada sobrecarga para aceitar headers customizados
 // Adicionada sobrecarga para aceitar headers customizados
         async apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}, options = {}) {
-            const { skipAuthRetry = false } = options;
+            const { skipAuthRetry = false, signal } = options;
             try {
                 const headers = { 'Content-Type': 'application/json', ...customHeaders }; // Mescla headers customizados
                 if (this.state.token) { headers['Authorization'] = `Bearer ${this.state.token}`; }
@@ -3712,6 +3723,7 @@
 
                 const requestOptions = { method, headers };
                 if (body) { requestOptions.body = JSON.stringify(body); }
+                if (signal) { requestOptions.signal = signal; } // Adicionar signal para permitir cancelamento
 
                 const response = await fetch(`${this.state.API_BASE_URL}${endpoint}`, requestOptions);
 
@@ -3748,6 +3760,13 @@
                 }
                 return data;
             } catch (error) {
+                // Tratar AbortError (timeout ou cancelamento)
+                if (error.name === 'AbortError') {
+                    const abortError = new Error('Requisição cancelada por timeout');
+                    abortError.name = 'AbortError';
+                    throw abortError;
+                }
+                
                  if (error instanceof Error) {
                     const statusCode = error.status;
                     const errorCode = error.code;
@@ -3998,7 +4017,7 @@
             this.state.editingThankYouPageId = null;
             this.state.pixPollingIntervalId = null; // Limpa o ID do polling
 
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', /* 'syncpay', */ 'brpix', 'wiinpay']; // SyncPay desabilitado
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay', 'pixup', 'paradise'];
             providers.forEach(p => {
                 localStorage.removeItem(`pix_status_${p}`);
                 localStorage.removeItem(`pix_timestamp_${p}`);
@@ -5748,7 +5767,7 @@ function generatePreviewHTML(data) {
         },
 
         updateAllPixStatusIndicators() {
-            const providers = ['pushinpay', 'cnpay', 'oasyfy', /* 'syncpay', */ 'brpix', 'wiinpay']; // SyncPay desabilitado
+            const providers = ['pushinpay', 'cnpay', 'oasyfy', 'syncpay', 'brpix', 'wiinpay', 'pixup', 'paradise'];
             providers.forEach(provider => this.updatePixStatusIndicator(provider));
         },
 
@@ -5874,7 +5893,10 @@ function generatePreviewHTML(data) {
         const { ReactFlowProvider, ReactFlow, useNodesState, useEdgesState, addEdge, Background, Controls, Handle, Position } = window.ReactFlow;
 
     const API_BASE_URL = App.state.API_BASE_URL;
-        const api = axios.create({ baseURL: API_BASE_URL });
+        const api = axios.create({ 
+            baseURL: API_BASE_URL,
+            timeout: 60000 // 60 segundos de timeout para requisições
+        });
         
         api.interceptors.request.use(
             config => {
@@ -6546,7 +6568,11 @@ function generatePreviewHTML(data) {
                 // Iniciar polling para verificar pagamento
                 startPaymentPolling(response.data.purchase_transaction_id);
             } catch (err) {
+                if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+                    alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                } else {
                 alert('Erro ao gerar PIX: ' + (err.response?.data?.message || 'Tente novamente.'));
+                }
                 setIsWaitingPayment(false);
             }
         };
@@ -9692,7 +9718,11 @@ function generatePreviewHTML(data) {
                 alert(res.data.message);
                 onAction();
             } catch (e) {
+                if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+                    alert('Tempo de espera esgotado. O PIX pode estar sendo gerado. Verifique em alguns instantes.');
+                } else {
                 alert('Erro: ' + (e.response?.data?.message || e.message));
+                }
             }
         };
 
