@@ -100,8 +100,87 @@ const validateTextForUrls = (text) => {
     };
 };
 
+// Função para validar se uma URL de botão é permitida (pressel, obrigado ou checkout)
+const validateButtonUrl = async (sellerId, buttonUrl) => {
+    if (!buttonUrl || typeof buttonUrl !== 'string' || !buttonUrl.trim()) {
+        return { valid: true }; // URL vazia é válida (botão sem URL)
+    }
+
+    try {
+        // Normalizar URL: remover protocolo, query params e fragmentos
+        let normalizedUrl = buttonUrl.trim();
+        
+        // Remover protocolo (http://, https://)
+        normalizedUrl = normalizedUrl.replace(/^https?:\/\//i, '');
+        
+        // Remover query parameters e fragmentos
+        normalizedUrl = normalizedUrl.split('?')[0].split('#')[0];
+        
+        // Remover trailing slash
+        normalizedUrl = normalizedUrl.replace(/\/$/, '');
+
+        // Buscar domínios de pressel do seller
+        const presselDomains = await sqlTx`
+            SELECT DISTINCT pad.domain
+            FROM pressel_allowed_domains pad
+            JOIN pressels p ON pad.pressel_id = p.id
+            WHERE p.seller_id = ${sellerId}
+        `;
+
+        // Verificar se é um domínio de pressel
+        for (const row of presselDomains) {
+            const domain = row.domain.toLowerCase().replace(/^https?:\/\//i, '').replace(/\/$/, '');
+            if (normalizedUrl.toLowerCase() === domain || normalizedUrl.toLowerCase().startsWith(domain + '/')) {
+                return { valid: true };
+            }
+        }
+
+        // Buscar IDs de páginas de obrigado do seller
+        const thankYouPages = await sqlTx`
+            SELECT id::text as id
+            FROM thank_you_pages
+            WHERE seller_id = ${sellerId}
+        `;
+
+        // Verificar se é uma página de obrigado (/obrigado/{id})
+        for (const page of thankYouPages) {
+            const obrigadoPath = `/obrigado/${page.id}`;
+            if (normalizedUrl === obrigadoPath || normalizedUrl.endsWith(obrigadoPath)) {
+                return { valid: true };
+            }
+        }
+
+        // Buscar IDs de checkouts hospedados do seller
+        const hostedCheckouts = await sqlTx`
+            SELECT id::text as id
+            FROM hosted_checkouts
+            WHERE seller_id = ${sellerId}
+        `;
+
+        // Verificar se é um checkout (/oferta/{id})
+        for (const checkout of hostedCheckouts) {
+            const ofertaPath = `/oferta/${checkout.id}`;
+            if (normalizedUrl === ofertaPath || normalizedUrl.endsWith(ofertaPath)) {
+                return { valid: true };
+            }
+        }
+
+        // Se não corresponde a nenhuma opção permitida
+        return {
+            valid: false,
+            message: `URL de botão inválida: "${buttonUrl}". Apenas links de pressel, páginas de obrigado (/obrigado/{id}) ou checkouts (/oferta/{id}) são permitidos.`
+        };
+    } catch (error) {
+        console.error('[validateButtonUrl] Erro ao validar URL:', error);
+        return {
+            valid: false,
+            message: 'Erro ao validar URL de botão. Tente novamente.'
+        };
+    }
+};
+
 // Função de validação das ações do fluxo
-const validateFlowActions = (nodes) => {
+const validateFlowActions = async (nodes, sellerId = null) => {
     if (!nodes || !Array.isArray(nodes)) return { valid: true };
     
     for (const node of nodes) {
@@ -115,6 +194,17 @@ const validateFlowActions = (nodes) => {
                     return { 
                         valid: false, 
                         message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
+            
+            // Validar URL de botão (se sellerId fornecido)
+            if (action.type === 'message' && action.data?.buttonUrl && sellerId) {
+                const buttonValidation = await validateButtonUrl(sellerId, action.data.buttonUrl);
+                if (!buttonValidation.valid) {
+                    return {
+                        valid: false,
+                        message: buttonValidation.message
                     };
                 }
             }
@@ -4050,8 +4140,8 @@ app.put('/api/flows/:id', authenticateJwt, async (req, res) => {
         const parsedNodes = JSON.parse(nodes);
         const nodesArray = parsedNodes.nodes || [];
         
-        // Validar se há links em campos de texto
-        const validation = validateFlowActions(nodesArray);
+        // Validar se há links em campos de texto e URLs de botão
+        const validation = await validateFlowActions(nodesArray, req.user.id);
         if (!validation.valid) {
             logger.info(`[Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
             return res.status(400).json({ message: validation.message });
@@ -4188,8 +4278,8 @@ app.put('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: disparoValidation.message });
         }
         
-        // Validar se há links em campos de texto (mesma validação dos fluxos normais)
-        const validation = validateFlowActions(nodesArray);
+        // Validar se há links em campos de texto e URLs de botão (mesma validação dos fluxos normais)
+        const validation = await validateFlowActions(nodesArray, req.user.id);
         if (!validation.valid) {
             logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
             return res.status(400).json({ message: validation.message });
