@@ -10958,6 +10958,9 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
 
         // Encontra o ponto de partida do fluxo
         const startNode = flowData.nodes?.find(node => node.type === 'trigger');
+        if (!startNode) {
+            return res.status(400).json({ message: 'O fluxo selecionado não tem um nó de gatilho (trigger) configurado.' });
+        }
         const firstNodeId = findNextNode(startNode.id, null, flowData.edges);
 
         if (!firstNodeId) {
