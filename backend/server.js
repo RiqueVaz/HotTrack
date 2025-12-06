@@ -104,11 +104,21 @@ const validateTextForUrls = (text) => {
 // Função de validação das ações do fluxo
 const validateFlowActions = (nodes) => {
     if (!nodes || !Array.isArray(nodes)) return { valid: true };
-    
+
     for (const node of nodes) {
+        const actions = node.data?.actions || [];
 
-        
-
+        for (const action of actions) {
+            // Validar texto de mensagem
+            if (action.type === 'message' && action.data?.text) {
+                const validation = validateTextForUrls(action.data.text);
+                if (!validation.valid) {
+                    return { 
+                        valid: false, 
+                        message: `Links não são permitidos no texto das mensagens. Links detectados: ${validation.urls.join(', ')}` 
+                    };
+                }
+            }
             
             // Validar legendas
             if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
@@ -120,7 +130,7 @@ const validateFlowActions = (nodes) => {
                     };
                 }
             }
-        
+        }
     }
     
     return { valid: true };
