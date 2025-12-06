@@ -198,17 +198,6 @@ const validateFlowActions = async (nodes, sellerId = null) => {
                 }
             }
             
-            // Validar URL de botão (se sellerId fornecido)
-            if (action.type === 'message' && action.data?.buttonUrl && sellerId) {
-                const buttonValidation = await validateButtonUrl(sellerId, action.data.buttonUrl);
-                if (!buttonValidation.valid) {
-                    return {
-                        valid: false,
-                        message: buttonValidation.message
-                    };
-                }
-            }
-            
             // Validar legendas
             if (['image', 'video', 'document'].includes(action.type) && action.data?.caption) {
                 const validation = validateTextForUrls(action.data.caption);
@@ -4278,8 +4267,8 @@ app.put('/api/disparo-flows/:id', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: disparoValidation.message });
         }
         
-        // Validar se há links em campos de texto e URLs de botão (mesma validação dos fluxos normais)
-        const validation = await validateFlowActions(nodesArray, req.user.id);
+        // Validar se há links em campos de texto (mesma validação dos fluxos normais)
+        const validation = validateFlowActions(nodesArray);
         if (!validation.valid) {
             logger.info(`[Disparo Flow Validation] Flow save rejected for seller_id: ${req.user.id} - ${validation.message}`);
             return res.status(400).json({ message: validation.message });
