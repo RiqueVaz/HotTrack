@@ -1,30 +1,55 @@
 // Workers BullMQ para processar jobs das filas
-const { Worker } = require('bullmq');
-const { RateLimiter } = require('bullmq');
+const { Worker, RateLimitError } = require('bullmq');
 const { QUEUE_NAMES, BULLMQ_CONCURRENCY, BULLMQ_RATE_LIMIT_MAX, BULLMQ_RATE_LIMIT_WINDOW, redisConnection } = require('./queue');
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
 const logger = require('../logger');
 
-// Cache de rate limiters por bot token
-const rateLimiters = new Map();
-
 /**
- * Obtém ou cria um rate limiter para um bot token
+ * Implementa rate limiting por bot token usando Redis
+ * Usa sliding window log algorithm para rate limiting
  */
-function getRateLimiter(botToken) {
-    if (!botToken) return null;
+async function checkRateLimit(botToken) {
+    if (!botToken) return true; // Sem bot token, permite processamento
     
-    if (!rateLimiters.has(botToken)) {
-        const limiter = new RateLimiter({
-            max: BULLMQ_RATE_LIMIT_MAX,
-            duration: BULLMQ_RATE_LIMIT_WINDOW,
-            keyPrefix: `rate-limit:${botToken}`,
-        });
-        rateLimiters.set(botToken, limiter);
+    const key = `rate-limit:${botToken}`;
+    const now = Date.now();
+    const windowStart = now - BULLMQ_RATE_LIMIT_WINDOW;
+    const requestId = `${now}-${Math.random()}`;
+    
+    try {
+        // Usar pipeline do Redis para operações atômicas
+        const pipeline = redisConnection.pipeline();
+        
+        // Remover entradas antigas (fora da janela)
+        pipeline.zremrangebyscore(key, 0, windowStart);
+        
+        // Adicionar timestamp atual
+        pipeline.zadd(key, now, requestId);
+        
+        // Contar requisições na janela atual (depois de adicionar)
+        pipeline.zcard(key);
+        
+        // Definir expiração da chave
+        pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
+        
+        const results = await pipeline.exec();
+        
+        // results[2][1] é o resultado do zcard (contagem depois de adicionar)
+        const currentCount = results[2][1];
+        
+        // Se já atingiu o limite, remover a entrada que acabamos de adicionar
+        if (currentCount > BULLMQ_RATE_LIMIT_MAX) {
+            await redisConnection.zrem(key, requestId);
+            return false; // Rate limit excedido
+        }
+        
+        return true; // Dentro do limite
+    } catch (error) {
+        logger.error(`[RateLimit] Erro ao verificar rate limit para bot token:`, error);
+        // Em caso de erro, permitir processamento (fail open)
+        return true;
     }
-    
-    return rateLimiters.get(botToken);
 }
 
 /**
@@ -41,14 +66,11 @@ function createWorker(queueName, processor, options = {}) {
             
             // Aplicar rate limiting se botToken fornecido
             if (botToken) {
-                const limiter = getRateLimiter(botToken);
-                if (limiter) {
-                    try {
-                        await limiter.consume(botToken);
-                    } catch (error) {
-                        // Rate limit excedido, rejeitar job para retry
-                        throw new Error(`Rate limit exceeded for bot token. Retrying...`);
-                    }
+                const allowed = await checkRateLimit(botToken);
+                if (!allowed) {
+                    // Rate limit excedido, rejeitar job para retry
+                    // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
+                    throw new RateLimitError(`Rate limit exceeded for bot token. Retrying...`);
                 }
             }
             
@@ -135,7 +157,6 @@ async function closeAllWorkers() {
         await worker.close();
     }
     workers.clear();
-    rateLimiters.clear();
 }
 
 module.exports = {

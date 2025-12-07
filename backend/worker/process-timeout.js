@@ -1894,7 +1894,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
-                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                             console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
                             console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
@@ -2083,7 +2083,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                     // Removido log de debug
                 } catch (e) { 
                     // Removido log de warn - não é crítico

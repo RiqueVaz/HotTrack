@@ -18,8 +18,9 @@ const path = require('path');
 const crypto = require('crypto');
 const webpush = require('web-push');
 const { OAuth2Client } = require('google-auth-library');
-const { Client } = require("@upstash/qstash");
-const { Receiver } = require("@upstash/qstash");
+// QStash removido - usando BullMQ agora
+// const { Client } = require("@upstash/qstash");
+// const { Receiver } = require("@upstash/qstash");
 const { MailerSend, EmailParams, Sender, Recipient } = require("mailersend");
 const { createPixService } = require('./shared/pix');
 const logger = require('./logger');
@@ -8604,7 +8605,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 // Cancela o timeout, pois o usuário respondeu.
                 if (userState.scheduled_message_id) {
                     try {
-                        await qstashClient.messages.delete(userState.scheduled_message_id);
+                        await removeJob(QUEUE_NAMES.TIMEOUT, userState.scheduled_message_id);
                         logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
                     } catch (e) { 
                         logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
@@ -8670,7 +8671,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 // Cancela o timeout, pois o usuário respondeu.
                 if (userState.scheduled_message_id) {
                      try {
-                        await qstashClient.messages.delete(userState.scheduled_message_id);
+                        await removeJob(QUEUE_NAMES.TIMEOUT, userState.scheduled_message_id);
                         logger.debug(`[Webhook] Tarefa de timeout cancelada pela resposta do usuário.`);
                     } catch (e) { 
                         logger.warn(`[Webhook] Erro ao cancelar timeout (pode já ter sido executado):`, e.message);
