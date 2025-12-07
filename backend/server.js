@@ -63,9 +63,10 @@ const mailerSend = new MailerSend({
     apiKey: process.env.MAILERSEND_API_KEY,
 });
 
-const qstashClient = new Client({
-  token: process.env.QSTASH_TOKEN,
-});
+// QStash removido - usando BullMQ agora
+// const qstashClient = new Client({
+//   token: process.env.QSTASH_TOKEN,
+// });
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -73,10 +74,11 @@ const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 const { processDisparoData, processDisparoBatchData } = require('./worker/process-disparo');
 const { processTimeoutData } = require('./worker/process-timeout');
 
-const receiver = new Receiver({
-    currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
-    nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
-  });
+// Receiver removido - BullMQ não precisa de verificação de assinatura HTTP
+// const receiver = new Receiver({
+//     currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY,
+//     nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY,
+//   });
 
 // Função de validação de URLs em texto (anti-links externos)
 const validateTextForUrls = (text) => {
@@ -313,149 +315,19 @@ const parseContentLength = (value) => {
 const PORT = process.env.PORT || 3001;
 
 
-app.post(
-  '/api/worker/process-timeout',
-  express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-  async (req, res) => {
-    try {
-      // 1. Verificar a assinatura do QStash
-      const signature = req.headers["upstash-signature"];
-      const bodyString = req.body.toString();
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-timeout', ...) - REMOVIDO
 
-      const isValid = await receiver.verify({
-        signature,
-        body: bodyString,
-      });
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-disparo', ...) - REMOVIDO
 
-      // 2. Se a assinatura for inválida, rejeitar a requisição
-      if (!isValid) {
-        console.error("[WORKER-TIMEOUT] Verificação de assinatura do QStash falhou.");
-        return res.status(401).send("Invalid signature");
-      }
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-disparo-batch', ...) - REMOVIDO
 
-      // 3. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-      if (shouldLogDebug()) logger.debug("[WORKER-TIMEOUT] Assinatura válida. Aceitando timeout para processamento em background.");
-      res.status(200).json({ message: 'Worker de timeout aceito para processamento.' });
-
-      // 4. Processar timeout em background (não bloqueia resposta HTTP)
-      const bodyData = JSON.parse(bodyString);
-      (async () => {
-        try {
-          // Chamar função pura de processamento (não depende de req/res)
-          await processTimeoutData(bodyData);
-          if (shouldLogDebug()) logger.debug("[WORKER-TIMEOUT] Timeout processado com sucesso em background.");
-        } catch (bgError) {
-          console.error("[WORKER-TIMEOUT] Erro ao processar timeout em background:", bgError);
-          console.error("[WORKER-TIMEOUT] Stack trace:", bgError.stack);
-          // Erros críticos já são logados pela função pura, não precisamos fazer mais nada aqui
-        }
-      })();
-
-    } catch (error) {
-      console.error("Erro crítico no handler do worker de timeout:", error);
-      // Verificar se resposta já foi enviada antes de tentar enviar
-      if (!res.headersSent) {
-        res.status(500).send("Internal Server Error");
-      }
-    }
-  }
-);
-
-app.post(
-     '/api/worker/process-disparo',
-     express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-     async (req, res) => {
-      try {
-       // 1. Verificar a assinatura do QStash
-       const signature = req.headers["upstash-signature"];
-       const bodyString = req.body.toString();
-    
-       const isValid = await receiver.verify({
-        signature,
-        body: bodyString,
-       });
-    
-       if (!isValid) {
-        console.error("[WORKER-DISPARO] Verificação de assinatura do QStash falhou.");
-        return res.status(401).send("Invalid signature");
-       }
-    
-       // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-       if (shouldLogDebug()) logger.debug("[WORKER-DISPARO] Assinatura válida. Aceitando disparo para processamento em background.");
-       res.status(200).json({ message: 'Worker de disparo aceito para processamento.' });
-    
-       // 3. Processar disparo em background (não bloqueia resposta HTTP)
-       const bodyData = JSON.parse(bodyString);
-       (async () => {
-         try {
-           // Chamar função pura de processamento (não depende de req/res)
-           await processDisparoData(bodyData);
-           if (shouldLogDebug()) logger.debug("[WORKER-DISPARO] Disparo processado com sucesso em background.");
-         } catch (bgError) {
-           console.error("[WORKER-DISPARO] Erro ao processar disparo em background:", bgError);
-           console.error("[WORKER-DISPARO] Stack trace:", bgError.stack);
-           // Erros críticos já são logados pelo worker, não precisamos fazer mais nada aqui
-         }
-       })();
-    
-      } catch (error) {
-       console.error("Erro crítico no handler do worker de disparo:", error);
-       // Verificar se resposta já foi enviada antes de tentar enviar
-       if (!res.headersSent) {
-         res.status(500).send("Internal Server Error");
-       }
-      }
-     }
-    );
-
-// Endpoint para processar disparos em batch (chamado pelo QStash)
-app.post(
-    '/api/worker/process-disparo-batch',
-    express.raw({ type: 'application/json' }), // Obrigatório para verificação do QStash
-    async (req, res) => {
-        try {
-            // 1. Verificar a assinatura do QStash
-            const signature = req.headers["upstash-signature"];
-            const bodyString = req.body.toString();
-            
-            const isValid = await receiver.verify({
-                signature,
-                body: bodyString,
-            });
-            
-            if (!isValid) {
-                console.error("[WORKER-DISPARO-BATCH] Verificação de assinatura do QStash falhou.");
-                return res.status(401).send("Invalid signature");
-            }
-            
-            // 2. Responder IMEDIATAMENTE ao QStash (não esperar processar)
-            if (shouldLogDebug()) logger.debug("[WORKER-DISPARO-BATCH] Assinatura válida. Aceitando batch de disparo para processamento em background.");
-            res.status(200).json({ message: 'Worker de disparo batch aceito para processamento.' });
-            
-            // 3. Processar batch em background (não bloqueia resposta HTTP)
-            const bodyData = JSON.parse(bodyString);
-            (async () => {
-                try {
-                    // Chamar função pura de processamento em batch
-                    await processDisparoBatchData(bodyData);
-                    if (shouldLogDebug()) logger.debug(`[WORKER-DISPARO-BATCH] Batch ${bodyData.batch_index + 1}/${bodyData.total_batches} processado com sucesso em background.`);
-                } catch (bgError) {
-                    console.error("[WORKER-DISPARO-BATCH] Erro ao processar batch de disparo em background:", bgError);
-                    console.error("[WORKER-DISPARO-BATCH] Stack trace:", bgError.stack);
-                }
-            })();
-            
-        } catch (error) {
-            console.error("Erro crítico no handler do worker de disparo batch:", error);
-            // Verificar se resposta já foi enviada antes de tentar enviar
-            if (!res.headersSent) {
-                res.status(500).send("Internal Server Error");
-            }
-        }
-    }
-);
-
-// Endpoint para continuar disparos após delays agendados (chamado pelo QStash)
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-disparo-delay', ...) - REMOVIDO
+// A lógica deste endpoint foi movida para o worker BullMQ
+/*
 app.post(
     '/api/worker/process-disparo-delay',
     express.raw({ type: 'application/json' }),
@@ -576,8 +448,12 @@ app.post(
         }
     }
 );
+*/
 
-// Endpoint para processar validação de contatos e continuar com disparo (chamado pelo QStash)
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-validation-and-disparo', ...) - REMOVIDO
+// A lógica deste endpoint foi movida para o worker BullMQ
+/*
 app.post(
     '/api/worker/process-validation-and-disparo',
     express.raw({ type: 'application/json' }),
@@ -916,24 +792,21 @@ app.post(
                         };
                         
                         qstashPromises.push(
-                            qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
-                                body: batchPayload,
-                                delay: `${batchDelaySeconds}s`, 
-                                retries: 2,
-                                headers: {
-                                    'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
-                                    'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
-                                    'Upstash-RateLimit-Window': '1s',
-                                    'Upstash-RateLimit-Key': botToken
+                            addJobWithDelay(
+                                QUEUE_NAMES.DISPARO_BATCH,
+                                'process-disparo-batch',
+                                batchPayload,
+                                {
+                                    delay: `${batchDelaySeconds}s`,
+                                    botToken: botToken
                                 }
-                            })
+                            )
                         );
                     }
                     
                     if (qstashPromises.length > 0) {
-                        console.log(`[WORKER-VALIDATION-DISPARO] Publicando ${qstashPromises.length} batches no QStash...`);
-                        await publishQStashInBatches(qstashPromises);
+                        console.log(`[WORKER-VALIDATION-DISPARO] Publicando ${qstashPromises.length} batches no BullMQ...`);
+                        await Promise.all(qstashPromises);
                     }
                     
                     console.log(`[WORKER-VALIDATION-DISPARO] Disparo ${history_id} processado com sucesso em background.`);
@@ -966,8 +839,12 @@ app.post(
         }
     }
 );
+*/
 
-// Endpoint para processar disparos agendados (chamado pelo QStash)
+// Endpoint removido - BullMQ processa jobs diretamente, não precisa de endpoint HTTP
+// app.post('/api/worker/process-scheduled-disparo', ...) - REMOVIDO
+// A lógica deste endpoint foi movida para o worker BullMQ
+/*
 app.post(
     '/api/worker/process-scheduled-disparo',
     express.raw({ type: 'application/json' }),
@@ -1181,24 +1058,21 @@ app.post(
                         };
                         
                         qstashPromises.push(
-                            qstashClient.publishJSON({
-                                url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
-                                body: batchPayload,
-                                delay: `${batchDelaySeconds}s`, 
-                                retries: 2,
-                                headers: {
-                                    'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
-                                    'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
-                                    'Upstash-RateLimit-Window': '1s',
-                                    'Upstash-RateLimit-Key': botToken
+                            addJobWithDelay(
+                                QUEUE_NAMES.DISPARO_BATCH,
+                                'process-disparo-batch',
+                                batchPayload,
+                                {
+                                    delay: `${batchDelaySeconds}s`,
+                                    botToken: botToken
                                 }
-                            })
+                            )
                         );
                     }
                     
                     if (qstashPromises.length > 0) {
-                        console.log(`[DISPARO-AGENDADO] Publicando ${qstashPromises.length} batches no QStash...`);
-                        await publishQStashInBatches(qstashPromises);
+                        console.log(`[DISPARO-AGENDADO] Publicando ${qstashPromises.length} batches no BullMQ...`);
+                        await Promise.all(qstashPromises);
                     }
                     
                     console.log(`[WORKER-SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso em background.`);
@@ -1230,9 +1104,10 @@ app.post(
         }
     }
 );
+*/
 
 // ==========================================================
-// FIM DA ROTA DO QSTASH
+// FIM DA ROTA DO QSTASH - REMOVIDO (agora usando BullMQ)
 // ==========================================================
 
 
@@ -3064,7 +2939,8 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
     }
 }
 
-// Função para processar promises do QStash em batches para evitar sobrecarga
+// Função removida - não é mais necessária com BullMQ (usamos Promise.all diretamente)
+/*
 async function publishQStashInBatches(promises, batchSize = QSTASH_PUBLISH_BATCH_SIZE, delayMs = QSTASH_PUBLISH_DELAY) {
     const batches = [];
     for (let i = 0; i < promises.length; i += batchSize) {
@@ -3089,6 +2965,7 @@ async function publishQStashInBatches(promises, batchSize = QSTASH_PUBLISH_BATCH
         }
     }
 }
+*/
 
 // Função para processar múltiplos steps em batch (otimização)
 async function processStepsForQStashBatch(steps, sellerId) {
@@ -7588,9 +7465,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Agendar continuação após o delay
                     try {
                         const remainingActions = actions.slice(i + 1); // Ações restantes após o delay
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: {
+                        const response = await addJobWithDelay(
+                            QUEUE_NAMES.TIMEOUT,
+                            'process-timeout',
+                            {
                                 chat_id: chatId,
                                 bot_id: botId,
                                 target_node_id: resolvedCurrentNodeId, // Continuar do mesmo nó
@@ -7598,15 +7476,16 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
                             },
-                            delay: `${delaySeconds}s`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
+                            {
+                                delay: `${delaySeconds}s`,
+                                jobId: `timeout-delay-${chatId}-${botId}-${Date.now()}`
+                            }
+                        );
                         
                         // Salvar scheduled_message_id no estado
                         await sqlTx`
                             UPDATE user_flow_states 
-                            SET scheduled_message_id = ${response.messageId}
+                            SET scheduled_message_id = ${response.jobId}
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `;
                         
@@ -7837,7 +7716,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
-                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                             logger.debug(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
                             logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
@@ -8329,7 +8208,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                     logger.debug(`[Flow Engine] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                 } catch (e) {
                     logger.warn(`[Flow Engine] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
@@ -8526,26 +8405,28 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                 try {
                     // Agenda o worker de timeout com uma única chamada
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: {
-                            chat_id: chatId,
-                            bot_id: botId,
-                            target_node_id: noReplyNodeId,
-                            variables: variables,
-                            timestamp: Date.now() // 👈 ADICIONE ISSO para evitar deduplicação
-                        },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: false, // 👈 MUDE DE true PARA false
-                        method: "POST"
-                    });
+                        const response = await addJobWithDelay(
+                            QUEUE_NAMES.TIMEOUT,
+                            'process-timeout',
+                            {
+                                chat_id: chatId,
+                                bot_id: botId,
+                                target_node_id: noReplyNodeId,
+                                variables: variables,
+                                timestamp: Date.now()
+                            },
+                            {
+                                delay: `${timeoutMinutes}m`,
+                                jobId: `timeout-${chatId}-${botId}-${Date.now()}`
+                            }
+                        );
 
-                    // Salva o estado como "esperando" e armazena o ID da tarefa agendada
-                    // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
-                    await sqlTx`
-                        UPDATE user_flow_states
-                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId}
-                        WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                        // Salva o estado como "esperando" e armazena o ID da tarefa agendada
+                        // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
+                        await sqlTx`
+                            UPDATE user_flow_states
+                            SET waiting_for_input = true, scheduled_message_id = ${response.jobId}
+                            WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
 
                     // Removido log de debug
 
@@ -8674,7 +8555,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     const [existingState] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (existingState && existingState.scheduled_message_id) {
                       try {
-                        await qstashClient.messages.delete(existingState.scheduled_message_id);
+                        await removeJob(QUEUE_NAMES.TIMEOUT, existingState.scheduled_message_id);
                         logger.debug(`[Webhook] Tarefa de timeout antiga cancelada devido ao /start.`);
                       } catch (e) { /* Ignora erros se a tarefa já foi executada */ }
                     }
@@ -9301,17 +9182,19 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     return res.status(400).json({ message: 'A data/hora de agendamento deve ser no futuro.' });
                 }
                 
-                const qstashResponse = await qstashClient.publishJSON({
-                    url: `${process.env.HOTTRACK_API_URL}/api/worker/process-scheduled-disparo`,
-                    body: { history_id: historyId },
-                    delay: `${delaySeconds}s`, // Delay relativo em segundos
-                    retries: 2,
-                    method: "POST"
-                });
+                const bullmqResponse = await addJobWithDelay(
+                    QUEUE_NAMES.SCHEDULED_DISPARO,
+                    'process-scheduled-disparo',
+                    { history_id: historyId },
+                    {
+                        delay: `${delaySeconds}s`,
+                        jobId: `scheduled-disparo-${historyId}-${Date.now()}`
+                    }
+                );
                 
                 // Salvar o scheduled_message_id
                 await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${qstashResponse.messageId} WHERE id = ${historyId}`
+                    sqlTx`UPDATE disparo_history SET scheduled_message_id = ${bullmqResponse.jobId} WHERE id = ${historyId}`
                 );
                 
                 // scheduledDate está em UTC (vem do frontend como ISO string)
@@ -9458,24 +9341,21 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     };
                     
                     qstashPromises.push(
-                        qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-batch`, 
-                            body: batchPayload,
-                            delay: `${batchDelaySeconds}s`, 
-                    retries: 2,
-                            headers: {
-                                'Upstash-Concurrency': String(QSTASH_CONCURRENCY),
-                                'Upstash-RateLimit-Max': String(QSTASH_RATE_LIMIT_MAX),
-                                'Upstash-RateLimit-Window': '1s',
-                                'Upstash-RateLimit-Key': botToken
+                        addJobWithDelay(
+                            QUEUE_NAMES.DISPARO_BATCH,
+                            'process-disparo-batch',
+                            batchPayload,
+                            {
+                                delay: `${batchDelaySeconds}s`,
+                                botToken: botToken
                             }
-                        })
+                        )
                     );
                 }
                 
                 if (qstashPromises.length > 0) {
-                    console.log(`[DISPARO ${historyId}] Publicando ${qstashPromises.length} batches no QStash...`);
-                    await publishQStashInBatches(qstashPromises);
+                    console.log(`[DISPARO ${historyId}] Publicando ${qstashPromises.length} batches no BullMQ...`);
+                    await Promise.all(qstashPromises);
                 }
                 
                 console.log(`[DISPARO ${historyId}] Disparo processado com sucesso em background.`);
@@ -11038,7 +10918,7 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
         const [existingState] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
         if (existingState && existingState.scheduled_message_id) {
             try {
-                await qstashClient.messages.delete(existingState.scheduled_message_id);
+                await removeJob(QUEUE_NAMES.TIMEOUT, existingState.scheduled_message_id);
                 console.log(`[Manual Flow Start] Tarefa de timeout antiga cancelada.`);
             } catch (e) { /* Ignora erro se a tarefa já foi executada */ }
         }
@@ -12371,7 +12251,7 @@ app.post('/api/disparos/cancel/:historyId', authenticateJwt, async (req, res) =>
         // Cancelar tarefa no QStash apenas se for SCHEDULED (ainda não iniciado)
         if (disparo.status === 'SCHEDULED' && disparo.scheduled_message_id) {
             try {
-                await qstashClient.messages.delete(disparo.scheduled_message_id);
+                await removeJob(QUEUE_NAMES.SCHEDULED_DISPARO, disparo.scheduled_message_id);
                 console.log(`[CANCEL DISPARO] Tarefa QStash ${disparo.scheduled_message_id} cancelada com sucesso.`);
             } catch (qstashError) {
                 // Se a tarefa já foi processada ou não existe, apenas logar o erro mas continuar
@@ -13291,6 +13171,27 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
     console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Inicializar workers BullMQ
+    try {
+        initializeWorkers();
+        console.log(`✅ Workers BullMQ inicializados com sucesso`);
+    } catch (error) {
+        console.error(`❌ Erro ao inicializar workers BullMQ:`, error);
+    }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+    console.log('SIGTERM recebido, fechando workers...');
+    await closeAllWorkers();
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('SIGINT recebido, fechando workers...');
+    await closeAllWorkers();
+    process.exit(0);
 });
 
 module.exports = app;
