@@ -7,7 +7,8 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
-const { Client } = require("@upstash/qstash");
+// QStash removido - usando BullMQ agora
+// const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const { sqlTx, sqlWithRetry } = require('../db');
@@ -18,6 +19,7 @@ const apiRateLimiter = require('../shared/api-rate-limiter');
 const dbCache = require('../shared/db-cache');
 const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
+const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('../shared/queue');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -74,9 +76,10 @@ const BRPIX_SPLIT_RECIPIENT_ID = process.env.BRPIX_SPLIT_RECIPIENT_ID;
 const WIINPAY_SPLIT_USER_ID = process.env.WIINPAY_SPLIT_USER_ID;
 
 
-const qstashClient = new Client({ // <-- ADICIONE ESTE BLOCO
-     token: process.env.QSTASH_TOKEN,
-    });
+// QStash removido - usando BullMQ agora
+// const qstashClient = new Client({
+//     token: process.env.QSTASH_TOKEN,
+// });
 
 const {
     getSyncPayAuthToken,
@@ -1348,9 +1351,9 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
             case 'delay':
                 const delaySeconds = actionData.delayInSeconds || 1;
                 
-                // Se o delay for maior que 60 segundos, agendar via QStash
+                // Se o delay for maior que 60 segundos, agendar via BullMQ
                 if (delaySeconds > 60) {
-                    console.log(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via QStash...`);
+                    console.log(`${logPrefix} [Delay] Delay longo detectado (${delaySeconds}s). Agendando via BullMQ...`);
                     
                     // Usar variáveis locais para poder modificar os valores
                     let resolvedCurrentNodeId = currentNodeId;
@@ -1404,9 +1407,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     // Agendar continuação após o delay
                     try {
                         const remainingActions = actions.slice(i + 1); // Ações restantes após o delay
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: {
+                        const response = await addJobWithDelay(
+                            QUEUE_NAMES.TIMEOUT,
+                            'process-timeout',
+                            {
                                 chat_id: chatId,
                                 bot_id: botId,
                                 target_node_id: resolvedCurrentNodeId, // Continuar do mesmo nó
@@ -1414,24 +1418,25 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null
                             },
-                            delay: `${delaySeconds}s`,
-                            contentBasedDeduplication: true,
-                            method: "POST"
-                        });
+                            {
+                                delay: `${delaySeconds}s`,
+                                jobId: `timeout-delay-${chatId}-${botId}-${Date.now()}`
+                            }
+                        );
                         
                         // Salvar scheduled_message_id no estado
                         await sqlWithRetry(sqlTx`
                             UPDATE user_flow_states 
-                            SET scheduled_message_id = ${response.messageId}
+                            SET scheduled_message_id = ${response.jobId}
                             WHERE chat_id = ${chatId} AND bot_id = ${botId}
                         `);
                         
-                        console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                        console.log(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via BullMQ. Tarefa: ${response.jobId}`);
                         
                         // Retornar código especial para processFlow saber que parou
                         return 'delay_scheduled';
                     } catch (error) {
-                        console.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                        console.error(`${logPrefix} [Delay] Erro ao agendar delay via BullMQ:`, error.message);
                         // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
                         await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                     }
@@ -1889,10 +1894,10 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                     const [stateToCancel] = await sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                     if (stateToCancel && stateToCancel.scheduled_message_id) {
                         try {
-                            await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                            await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                             console.log(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
                         } catch (e) {
-                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar QStash msg ${stateToCancel.scheduled_message_id}:`, e.message);
+                            console.warn(`${logPrefix} [Forward Flow] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
                         }
                     }
                 } catch (e) {
@@ -2078,7 +2083,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
             if (stateToCancel && stateToCancel.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(stateToCancel.scheduled_message_id);
+                    await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
                     // Removido log de debug
                 } catch (e) { 
                     // Removido log de warn - não é crítico
@@ -2230,30 +2235,32 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
                 try {
                     // Agenda o worker de timeout com uma única chamada
-                    const response = await qstashClient.publishJSON({
-                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                        body: {
+                    const response = await addJobWithDelay(
+                        QUEUE_NAMES.TIMEOUT,
+                        'process-timeout',
+                        {
                             chat_id: chatId,
                             bot_id: botId,
                             target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
                             variables: variables
                         },
-                        delay: `${timeoutMinutes}m`,
-                        contentBasedDeduplication: true,
-                        method: "POST"
-                    });
+                        {
+                            delay: `${timeoutMinutes}m`,
+                            jobId: `timeout-${chatId}-${botId}-${Date.now()}`
+                        }
+                    );
 
                     // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                     // Mantém o flow_id existente (não atualiza para não perder a referência ao fluxo correto)
                     await sqlWithRetry(sqlTx`
                         UPDATE user_flow_states
-                        SET waiting_for_input = true, scheduled_message_id = ${response.messageId}
+                        SET waiting_for_input = true, scheduled_message_id = ${response.jobId}
                         WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
 
                     // Removido log de debug
 
                 } catch (error) {
-                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                    console.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no BullMQ:`, error);
                 }
 
                 currentNodeId = null; // PARA o loop
@@ -2298,7 +2305,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             // Fluxo pausado aguardando resposta do usuário
             // Removido log de debug
         } else if (state.scheduled_message_id) {
-            // Delay agendado via QStash - estado deve ser preservado
+            // Delay agendado via BullMQ - estado deve ser preservado
             // Removido log de debug
         } else {
             // Fluxo realmente terminou - pode limpar o estado
@@ -2718,14 +2725,14 @@ async function handler(req, res) {
         
         // Tratar especificamente CONNECT_TIMEOUT
         if (error.isConnectTimeout) {
-            // Retornar 500 para que o QStash tente novamente mais tarde
+            // Retornar erro para que o BullMQ tente novamente mais tarde
             return res.status(500).json({ 
                 error: `Database connection timeout: ${error.message}`,
                 retry: true 
             });
         }
         
-        // Erros genéricos - retornar 200 para que o QStash NÃO tente re-executar
+        // Erros genéricos - não re-executar automaticamente
         console.error('[WORKER] Erro fatal ao processar timeout:', error.message, error.stack);
         return res.status(200).json({ error: `Failed to process timeout: ${error.message}` });
     }
