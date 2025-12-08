@@ -4160,16 +4160,24 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         const offset = usePagination ? (page - 1) * limit : 0;
         const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
         
-        // Query OTIMIZADA - Usa DISTINCT ON ao invés de array_agg para reduzir work_mem
-        // Estratégia: primeiro pegar chat_ids ordenados, depois buscar dados de cada um
+        // Query OTIMIZADA - Usa DISTINCT ON para aproveitar índice diretamente
+        // Estratégia: DISTINCT ON pega último registro de cada chat_id usando índice, depois ordena e limita
         const users = await sqlWithRetry(`
-            WITH chat_ids_ordered AS (
-                -- Passo 1: Pegar apenas os chat_ids ordenados por última mensagem (muito mais rápido)
-                SELECT DISTINCT chat_id, MAX(created_at) as last_message_at
+            WITH last_messages_per_chat AS (
+                -- Passo 1: Usar DISTINCT ON para pegar o último registro de cada chat_id (usa índice diretamente)
+                -- Muito mais eficiente que GROUP BY + MAX porque não precisa agrupar tudo
+                SELECT DISTINCT ON (chat_id)
+                    chat_id,
+                    created_at as last_message_at
                 FROM telegram_chats
                 WHERE bot_id = $1 AND seller_id = $2
-                GROUP BY chat_id
-                ORDER BY MAX(created_at) DESC NULLS LAST
+                ORDER BY chat_id, created_at DESC NULLS LAST
+            ),
+            chat_ids_ordered AS (
+                -- Passo 2: Ordenar e limitar apenas os chat_ids já processados (muito mais rápido)
+                SELECT chat_id, last_message_at
+                FROM last_messages_per_chat
+                ORDER BY last_message_at DESC NULLS LAST
                 LIMIT $3 OFFSET $4
             ),
             user_data AS (
