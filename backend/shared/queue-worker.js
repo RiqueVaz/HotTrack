@@ -4,6 +4,7 @@ const { QUEUE_NAMES, BULLMQ_CONCURRENCY, BULLMQ_RATE_LIMIT_MAX, BULLMQ_RATE_LIMI
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
 const logger = require('../logger');
+const { sqlTx, sqlWithRetry } = require('../db');
 
 /**
  * Implementa rate limiting por bot token usando Redis
@@ -118,8 +119,83 @@ const processors = {
     },
     
     [QUEUE_NAMES.DISPARO_DELAY]: async (data) => {
-        // Processar disparo após delay (chama processDisparoData)
-        await processDisparoData(data);
+        // Processar disparo após delay
+        // Buscar dados do fluxo do banco, pois o payload não inclui flow_nodes, flow_edges e start_node_id
+        const { history_id, chat_id, bot_id, current_node_id, variables, remaining_actions } = data;
+        
+        if (!history_id) {
+            throw new Error('history_id é obrigatório para processar delay de disparo');
+        }
+        
+        try {
+            // Buscar disparo_flow_id do histórico
+            const [history] = await sqlWithRetry(sqlTx`
+                SELECT disparo_flow_id
+                FROM disparo_history
+                WHERE id = ${history_id}
+            `);
+            
+            if (!history || !history.disparo_flow_id) {
+                throw new Error(`Histórico de disparo ${history_id} não encontrado ou sem disparo_flow_id`);
+            }
+            
+            // Buscar o fluxo de disparo
+            const [disparoFlow] = await sqlWithRetry(sqlTx`
+                SELECT nodes
+                FROM disparo_flows
+                WHERE id = ${history.disparo_flow_id}
+            `);
+            
+            if (!disparoFlow || !disparoFlow.nodes) {
+                throw new Error(`Fluxo de disparo ${history.disparo_flow_id} não encontrado ou sem nodes`);
+            }
+            
+            // Parsear nodes do fluxo
+            const flowData = typeof disparoFlow.nodes === 'string' ? JSON.parse(disparoFlow.nodes) : disparoFlow.nodes;
+            const flowNodes = flowData.nodes || [];
+            const flowEdges = flowData.edges || [];
+            
+            // Encontrar o start_node_id (trigger node ou primeiro action node)
+            let startNodeId = null;
+            const triggerNode = flowNodes.find(node => node.type === 'trigger');
+            
+            if (triggerNode) {
+                startNodeId = triggerNode.id;
+            } else {
+                const actionNode = flowNodes.find(node => node.type === 'action');
+                if (actionNode) {
+                    startNodeId = actionNode.id;
+                }
+            }
+            
+            if (!startNodeId) {
+                throw new Error(`Nenhum nó inicial (trigger ou action) encontrado no fluxo ${history.disparo_flow_id}`);
+            }
+            
+            // Se current_node_id foi fornecido, usar ele como start_node_id para continuar de onde parou
+            // Caso contrário, usar o trigger/action node encontrado
+            const finalStartNodeId = current_node_id || startNodeId;
+            
+            // Parsear variables se for objeto, senão usar como está
+            const variablesJson = typeof variables === 'string' ? variables : JSON.stringify(variables || {});
+            
+            // Construir payload completo para processDisparoData
+            const completeData = {
+                history_id,
+                chat_id,
+                bot_id,
+                flow_nodes: JSON.stringify(flowNodes),
+                flow_edges: JSON.stringify(flowEdges),
+                start_node_id: finalStartNodeId,
+                variables_json: variablesJson
+            };
+            
+            // Processar disparo com dados completos
+            await processDisparoData(completeData);
+        } catch (error) {
+            logger.error(`[BullMQ] Erro ao processar delay de disparo para history_id ${history_id}:`, error);
+            throw error; // Re-throw para que o BullMQ trate como falha e faça retry
+        }
     },
     
     [QUEUE_NAMES.VALIDATION_DISPARO]: async (data) => {
@@ -130,6 +206,12 @@ const processors = {
     [QUEUE_NAMES.SCHEDULED_DISPARO]: async (data) => {
         // Processar disparo agendado (chama processDisparoBatchData)
         await processDisparoBatchData(data);
+    },
+    
+    [QUEUE_NAMES.CLEANUP_QRCODES]: async (data) => {
+        // Processar limpeza de QR codes
+        const { cleanupQRCodesInBatches } = require('../scripts/cleanup-qrcodes-batch');
+        return await cleanupQRCodesInBatches();
     },
 };
 

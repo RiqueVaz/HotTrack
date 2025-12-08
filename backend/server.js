@@ -32,7 +32,7 @@ const apiRateLimiter = require('./shared/api-rate-limiter');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
 const { migrateMediaOnDemand } = require('./shared/migrate-media-on-demand');
-const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('./shared/queue');
+const { addJobWithDelay, removeJob, QUEUE_NAMES, scheduleRecurringCleanupQRCodes } = require('./shared/queue');
 const { initializeWorkers, closeAllWorkers } = require('./shared/queue-worker');
 
 function parseJsonField(value, context) {
@@ -13080,7 +13080,7 @@ app.use((err, req, res, next) => {
 });
 
 // Inicialização do servidor
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
     console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
@@ -13092,6 +13092,14 @@ app.listen(PORT, '0.0.0.0', () => {
         console.log(`✅ Workers BullMQ inicializados com sucesso`);
     } catch (error) {
         console.error(`❌ Erro ao inicializar workers BullMQ:`, error);
+    }
+    
+    // Agendar limpeza de QR codes recorrente
+    try {
+        await scheduleRecurringCleanupQRCodes();
+        console.log(`✅ Limpeza de QR codes agendada com sucesso`);
+    } catch (error) {
+        console.error(`❌ Erro ao agendar limpeza de QR codes:`, error);
     }
 });
 
