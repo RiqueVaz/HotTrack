@@ -21,6 +21,7 @@ const QUEUE_NAMES = {
     DISPARO_DELAY: 'disparo-delay-queue',
     VALIDATION_DISPARO: 'validation-disparo-queue',
     SCHEDULED_DISPARO: 'scheduled-disparo-queue',
+    CLEANUP_QRCODES: 'cleanup-qrcodes-queue',
 };
 
 // Cache de queues (singleton)
@@ -150,11 +151,45 @@ async function closeAll() {
     await redisConnection.quit();
 }
 
+/**
+ * Agenda limpeza de QR codes diariamente às 6h SP (9h UTC)
+ */
+async function scheduleRecurringCleanupQRCodes() {
+    const queue = getQueue(QUEUE_NAMES.CLEANUP_QRCODES);
+    
+    try {
+        // Verificar se já existe job recorrente
+        const repeatableJobs = await queue.getRepeatableJobs();
+        const existingJob = repeatableJobs.find(job => job.name === 'cleanup-qrcodes-daily');
+        
+        if (!existingJob) {
+            // Criar job recorrente: diariamente às 9h UTC (6h SP)
+            await queue.add(
+                'cleanup-qrcodes-daily',
+                {},
+                {
+                    repeat: {
+                        pattern: '0 9 * * *', // Cron: 9h UTC diariamente
+                    },
+                    jobId: 'cleanup-qrcodes-recurring', // ID único para evitar duplicatas
+                }
+            );
+            console.log('[BullMQ] Job recorrente de limpeza de QR codes agendado (diário às 6h SP)');
+        } else {
+            console.log('[BullMQ] Job recorrente de limpeza de QR codes já existe');
+        }
+    } catch (error) {
+        console.error('[BullMQ] Erro ao agendar limpeza de QR codes:', error);
+        throw error;
+    }
+}
+
 module.exports = {
     getQueue,
     addJobWithDelay,
     removeJob,
     closeAll,
+    scheduleRecurringCleanupQRCodes,
     QUEUE_NAMES,
     BULLMQ_CONCURRENCY,
     BULLMQ_RATE_LIMIT_MAX,

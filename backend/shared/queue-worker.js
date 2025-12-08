@@ -131,6 +131,12 @@ const processors = {
         // Processar disparo agendado (chama processDisparoBatchData)
         await processDisparoBatchData(data);
     },
+    
+    [QUEUE_NAMES.CLEANUP_QRCODES]: async (data) => {
+        // Processar limpeza de QR codes
+        const { cleanupQRCodesInBatches } = require('../scripts/cleanup-qrcodes-batch');
+        return await cleanupQRCodesInBatches();
+    },
 };
 
 // Cache de workers (singleton)
