@@ -13080,7 +13080,7 @@ app.use((err, req, res, next) => {
 });
 
 // Inicialização do servidor
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
     console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
