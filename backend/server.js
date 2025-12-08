@@ -32,6 +32,8 @@ const apiRateLimiter = require('./shared/api-rate-limiter');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
 const { migrateMediaOnDemand } = require('./shared/migrate-media-on-demand');
+const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('./shared/queue');
+const { initializeWorkers, closeAllWorkers } = require('./shared/queue-worker');
 
 function parseJsonField(value, context) {
     if (value === null || value === undefined) {
