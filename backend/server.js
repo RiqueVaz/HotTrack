@@ -4160,21 +4160,69 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         const offset = usePagination ? (page - 1) * limit : 0;
         const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
         
-        // Query OTIMIZADA - LIMIT dentro do CTE para processar menos dados
+        // Query OTIMIZADA - Usa DISTINCT ON ao invés de array_agg para reduzir work_mem
+        // Estratégia: primeiro pegar chat_ids ordenados, depois buscar dados de cada um
         const users = await sqlWithRetry(`
-            WITH base_chats AS (
+            WITH chat_ids_ordered AS (
+                -- Passo 1: Pegar apenas os chat_ids ordenados por última mensagem (muito mais rápido)
+                SELECT DISTINCT chat_id, MAX(created_at) as last_message_at
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+                GROUP BY chat_id
+                ORDER BY MAX(created_at) DESC NULLS LAST
+                LIMIT $3 OFFSET $4
+            ),
+            user_data AS (
+                -- Passo 2: Para cada chat_id, pegar dados do registro mais recente com sender_type='user'
+                -- Usa LEFT JOIN LATERAL para garantir que todos os chat_ids sejam incluídos
                 SELECT 
-                    t.chat_id,
-                    (array_agg(t.first_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as first_name,
-                    (array_agg(t.last_name ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as last_name,
-                    (array_agg(t.username ORDER BY t.created_at DESC) FILTER (WHERE t.sender_type = 'user'))[1] as username,
-                    (array_agg(t.click_id ORDER BY t.created_at DESC) FILTER (WHERE t.click_id IS NOT NULL))[1] as click_id,
-                    MAX(t.created_at) as last_message_at
-                FROM telegram_chats t
-                WHERE t.bot_id = $1 AND t.seller_id = $2
-                GROUP BY t.chat_id
-                ORDER BY MAX(t.created_at) DESC NULLS LAST
-                LIMIT $3 OFFSET $4  -- LIMIT dentro do CTE (otimiza memória)
+                    cio.chat_id,
+                    t.first_name,
+                    t.last_name,
+                    t.username
+                FROM chat_ids_ordered cio
+                LEFT JOIN LATERAL (
+                    SELECT first_name, last_name, username
+                    FROM telegram_chats
+                    WHERE chat_id = cio.chat_id 
+                      AND bot_id = $1 
+                      AND seller_id = $2
+                      AND sender_type = 'user'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) t ON true
+            ),
+            click_ids AS (
+                -- Passo 3: Para cada chat_id, pegar click_id do registro mais recente não-nulo
+                -- Usa LEFT JOIN LATERAL para garantir que todos os chat_ids sejam incluídos
+                SELECT 
+                    cio.chat_id,
+                    t.click_id
+                FROM chat_ids_ordered cio
+                LEFT JOIN LATERAL (
+                    SELECT click_id
+                    FROM telegram_chats
+                    WHERE chat_id = cio.chat_id 
+                      AND bot_id = $1 
+                      AND seller_id = $2
+                      AND click_id IS NOT NULL
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) t ON true
+            ),
+            base_chats AS (
+                -- Passo 4: Combinar tudo
+                SELECT 
+                    cio.chat_id,
+                    ud.first_name,
+                    ud.last_name,
+                    ud.username,
+                    ci.click_id,
+                    cio.last_message_at
+                FROM chat_ids_ordered cio
+                LEFT JOIN user_data ud ON ud.chat_id = cio.chat_id
+                LEFT JOIN click_ids ci ON ci.chat_id = cio.chat_id
+                ORDER BY cio.last_message_at DESC NULLS LAST
             ),
             latest_messages AS (
                 SELECT DISTINCT ON (chat_id)
