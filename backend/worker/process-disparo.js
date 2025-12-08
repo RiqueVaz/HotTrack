@@ -8,7 +8,8 @@ if (process.env.NODE_ENV !== 'production') {
 const axios = require('axios');
 const FormData = require('form-data');
 const { v4: uuidv4 } = require('uuid');
-const { Client } = require("@upstash/qstash");
+// QStash removido - usando BullMQ agora
+// const { Client } = require("@upstash/qstash");
 const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
@@ -18,11 +19,7 @@ const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-help
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
-
-// Inicializar QStash client para delays longos
-const qstashClient = new Client({
-    token: process.env.QSTASH_TOKEN
-});
+const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('../shared/queue');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -594,10 +591,10 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
         `);
         
         if (existingState) {
-            // Cancelar tarefa QStash pendente se existir
+            // Cancelar tarefa BullMQ pendente se existir
             if (existingState.scheduled_message_id) {
                 try {
-                    await qstashClient.messages.delete(existingState.scheduled_message_id);
+                    await removeJob(QUEUE_NAMES.TIMEOUT, existingState.scheduled_message_id);
                     logger.debug(`${logPrefix} Tarefa QStash cancelada: ${existingState.scheduled_message_id}`);
                 } catch (e) {
                     logger.warn(`${logPrefix} Erro ao cancelar QStash (não crítico):`, e.message);
@@ -815,9 +812,10 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     
                     try {
                         // Agenda o worker de timeout
-                        const response = await qstashClient.publishJSON({
-                            url: `${process.env.HOTTRACK_API_URL}/api/worker/process-timeout`,
-                            body: {
+                        const response = await addJobWithDelay(
+                            QUEUE_NAMES.TIMEOUT,
+                            'process-timeout',
+                            {
                                 chat_id: chatId,
                                 bot_id: botId,
                                 target_node_id: noReplyNodeId,
@@ -827,16 +825,17 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                 disparo_flow_id: disparoFlowId,
                                 timestamp: Date.now()
                             },
-                            delay: `${timeoutMinutes}m`,
-                            contentBasedDeduplication: false,
-                            method: "POST"
-                        });
+                            {
+                                delay: `${timeoutMinutes}m`,
+                                jobId: `timeout-disparo-${chatId}-${botId}-${Date.now()}`
+                            }
+                        );
                         
                         // Salva o estado como "esperando" e armazena o ID da tarefa agendada
                         // IMPORTANTE: flow_id deve ser NULL para disparos (referencia disparo_flows, não flows)
                         await sqlWithRetry(sqlTx`
                             INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, scheduled_message_id, flow_id)
-                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.messageId}, NULL)
+                            VALUES (${chatId}, ${botId}, ${currentNodeId}, ${JSON.stringify(variablesWithDisparoInfo)}, true, ${response.jobId}, NULL)
                             ON CONFLICT (chat_id, bot_id)
                             DO UPDATE SET
                                 current_node_id = EXCLUDED.current_node_id,
@@ -846,7 +845,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                 flow_id = NULL
                         `);
                         
-                        logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa QStash: ${response.messageId}`);
+                        logger.debug(`${logPrefix} [Flow Engine] Fluxo de disparo pausado no nó ${currentNode.id}. Esperando ${timeoutMinutes} min. Tarefa BullMQ: ${response.jobId}`);
                         
                         // Atualizar disparo_log com status WAITING
                         try {
@@ -875,7 +874,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                         }
                         
                     } catch (error) {
-                        logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no QStash:`, error);
+                        logger.error(`${logPrefix} [Flow Engine] Erro CRÍTICO ao agendar timeout no BullMQ:`, error);
                         // Em caso de erro, continua o fluxo normalmente
                     }
                     
@@ -1460,7 +1459,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
             } else if (action.type === 'delay') {
                 const delaySeconds = actionData.delayInSeconds || 1;
                 
-                // Se delay > 60s, agendar via QStash para evitar timeout
+                // Se delay > 60s, agendar via BullMQ para evitar timeout
                 if (delaySeconds > 60) {
                     logger.debug(`${logPrefix} [Delay] Delay longo (${delaySeconds}s) detectado. Agendando via QStash...`);
                     
@@ -1497,9 +1496,10 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 if (disparoFlow && disparoFlow.nodes) {
                                     // Agendar continuação do disparo após delay
                                     // Passar currentNodeId para continuar do mesmo nó
-                                    const response = await qstashClient.publishJSON({
-                                        url: `${process.env.HOTTRACK_API_URL}/api/worker/process-disparo-delay`,
-                                        body: {
+                                    const response = await addJobWithDelay(
+                                        QUEUE_NAMES.DISPARO_DELAY,
+                                        'process-disparo-delay',
+                                        {
                                             history_id: historyIdToUse,
                                             chat_id: chatId,
                                             bot_id: botId,
@@ -1507,19 +1507,20 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                             variables: variables,
                                             remaining_actions: actions.slice(i + 1).length > 0 ? JSON.stringify(actions.slice(i + 1)) : null
                                         },
-                                        delay: `${delaySeconds}s`,
-                                        contentBasedDeduplication: true,
-                                        method: "POST"
-                                    });
+                                        {
+                                            delay: `${delaySeconds}s`,
+                                            jobId: `disparo-delay-${chatId}-${botId}-${historyIdToUse}-${Date.now()}`
+                                        }
+                                    );
                                     
-                                    logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via QStash. Tarefa: ${response.messageId}`);
+                                    logger.debug(`${logPrefix} [Delay] Delay de ${delaySeconds}s agendado via BullMQ. Tarefa: ${response.jobId}`);
                                     
                                     // Retornar código especial para processDisparoFlow saber que parou
                                     return 'delay_scheduled';
                                 }
                             }
                         } catch (error) {
-                            logger.error(`${logPrefix} [Delay] Erro ao agendar delay via QStash:`, error.message);
+                            logger.error(`${logPrefix} [Delay] Erro ao agendar delay via BullMQ:`, error.message);
                             // Fallback: processar delay normalmente (limitado a 60s para evitar timeout)
                             await new Promise(resolve => setTimeout(resolve, Math.min(delaySeconds, 60) * 1000));
                         }
