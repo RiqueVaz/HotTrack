@@ -1,57 +1,10 @@
 // Workers BullMQ para processar jobs das filas
 const { Worker, RateLimitError } = require('bullmq');
-const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, BULLMQ_RATE_LIMIT_MAX, BULLMQ_RATE_LIMIT_WINDOW, redisConnection } = require('./queue');
+const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, redisConnection, checkRateLimit } = require('./queue');
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
-
-/**
- * Implementa rate limiting por bot token usando Redis
- * Usa sliding window log algorithm para rate limiting
- */
-async function checkRateLimit(botToken) {
-    if (!botToken) return true; // Sem bot token, permite processamento
-    
-    const key = `rate-limit:${botToken}`;
-    const now = Date.now();
-    const windowStart = now - BULLMQ_RATE_LIMIT_WINDOW;
-    const requestId = `${now}-${Math.random()}`;
-    
-    try {
-        // Usar pipeline do Redis para operações atômicas
-        const pipeline = redisConnection.pipeline();
-        
-        // Remover entradas antigas (fora da janela)
-        pipeline.zremrangebyscore(key, 0, windowStart);
-        
-        // Adicionar timestamp atual
-        pipeline.zadd(key, now, requestId);
-        
-        // Contar requisições na janela atual (depois de adicionar)
-        pipeline.zcard(key);
-        
-        // Definir expiração da chave
-        pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
-        
-        const results = await pipeline.exec();
-        
-        // results[2][1] é o resultado do zcard (contagem depois de adicionar)
-        const currentCount = results[2][1];
-        
-        // Se já atingiu o limite, remover a entrada que acabamos de adicionar
-        if (currentCount > BULLMQ_RATE_LIMIT_MAX) {
-            await redisConnection.zrem(key, requestId);
-            return false; // Rate limit excedido
-        }
-        
-        return true; // Dentro do limite
-    } catch (error) {
-        logger.error(`[RateLimit] Erro ao verificar rate limit para bot token:`, error);
-        // Em caso de erro, permitir processamento (fail open)
-        return true;
-    }
-}
 
 /**
  * Cria um worker para uma fila com configurações otimizadas
@@ -90,43 +43,23 @@ function createWorker(queueName, processor, options = {}) {
                 });
             }
             
-            // Aplicar rate limiting se botToken fornecido (apenas para disparos)
+            // Rate limiting pré-emptive já foi feito antes de adicionar o job
+            // Manter apenas verificação básica como fallback de segurança (opcional)
+            // Se rate limit foi excedido mesmo assim, usar RateLimitError para retry com backoff
             if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
-                let allowed = await checkRateLimit(botToken);
+                // Verificação rápida como fallback (não deve ser necessário na maioria dos casos)
+                const allowed = await checkRateLimit(botToken);
                 if (!allowed) {
-                    // Delay mais curto e agressivo para não bloquear jobs por muito tempo
-                    const attemptsMade = job.attemptsMade || 0;
-                    const baseDelay = Math.min(500 * Math.pow(1.5, attemptsMade), 3000); // Max 3s (reduzido de 10s)
-                    const jitter = Math.random() * 200; // 0-200ms de jitter (reduzido de 500ms)
-                    const delay = baseDelay + jitter;
-                    
-                    // Aguardar antes de retentar (delay progressivo com jitter)
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    
-                    // Retentar após o delay
-                    allowed = await checkRateLimit(botToken);
-                    if (!allowed) {
-                        // Se ainda não permitido após delay, aguardar mais um pouco antes de rejeitar
-                        // Delay reduzido para não bloquear jobs por muito tempo
-                        const finalDelay = Math.min(1000 + (attemptsMade * 200), 2000); // 1-2s (reduzido de 2-5s)
-                        await new Promise(resolve => setTimeout(resolve, finalDelay));
-                        
-                        // Verificar uma última vez
-                        allowed = await checkRateLimit(botToken);
-                        if (!allowed) {
-                            logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id} after ${attemptsMade + 1} attempts`, {
-                                jobId: job.id,
-                                queueName,
-                                historyId: data.history_id,
-                                attemptsMade: attemptsMade + 1
-                            });
-                            // Rate limit excedido, rejeitar job para retry com delay maior
-                            // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
-                            throw new RateLimitError(`Rate limit exceeded for bot token. Retrying with backoff...`);
-                        }
-                    }
+                    // Se rate limit ainda excedido (raro, mas possível), usar RateLimitError para retry
+                    logger.warn(`[BullMQ-Worker] Rate limit ainda excedido no worker para job ${job.id} (fallback)`, {
+                        jobId: job.id,
+                        queueName,
+                        historyId: data.history_id,
+                        attemptsMade: job.attemptsMade || 0
+                    });
+                    throw new RateLimitError(`Rate limit exceeded for bot token. Retrying with backoff...`);
                 }
-            } else if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
+            } else if (queueName === QUEUE_NAMES.DISPARO_BATCH && !botToken) {
                 // Log warning se não houver botToken para disparo batch
                 logger.warn(`[BullMQ-Worker] Job ${job.id} sem botToken (pode causar problemas)`, {
                     jobId: job.id,
