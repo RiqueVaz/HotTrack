@@ -13265,13 +13265,30 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
                 }
             }));
             
+            // Buscar alguns jobs failed para ver os erros
+            const failedJobs = await queue.getJobs(['failed'], 0, 20);
+            const failedJobsInfo = failedJobs.map(job => ({
+                id: job.id,
+                name: job.name,
+                failedReason: job.failedReason,
+                attemptsMade: job.attemptsMade,
+                timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+                data: {
+                    history_id: job.data.history_id,
+                    batch_index: job.data.batch_index,
+                    total_batches: job.data.total_batches,
+                    contactsCount: job.data.contacts?.length || 0
+                }
+            }));
+            
             queueStats = {
                 waiting,
                 delayed,
                 active,
                 completed,
                 failed,
-                delayedJobs: delayedJobsInfo
+                delayedJobs: delayedJobsInfo,
+                failedJobs: failedJobsInfo
             };
         } catch (queueError) {
             logger.error('[DIAGNOSTIC] Erro ao obter estatísticas da fila:', queueError);
@@ -13289,6 +13306,111 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
         logger.error('[DIAGNOSTIC] Erro ao verificar status dos workers:', error);
         res.status(500).json({ 
             error: 'Erro ao verificar status dos workers',
+            message: error.message 
+        });
+    }
+});
+
+// Endpoint para visualizar detalhes dos jobs failed
+app.get('/api/diagnostic/failed-jobs', authenticateJwt, async (req, res) => {
+    try {
+        const { QUEUE_NAMES, getQueue } = require('./shared/queue');
+        const limit = parseInt(req.query.limit || '50', 10);
+        const start = parseInt(req.query.start || '0', 10);
+        
+        const queue = getQueue(QUEUE_NAMES.DISPARO_BATCH);
+        const failedJobs = await queue.getJobs(['failed'], start, start + limit - 1);
+        
+        const failedJobsInfo = failedJobs.map(job => ({
+            id: job.id,
+            name: job.name,
+            failedReason: job.failedReason,
+            attemptsMade: job.attemptsMade,
+            timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+            processedOn: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+            finishedOn: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+            data: {
+                history_id: job.data.history_id,
+                batch_index: job.data.batch_index,
+                total_batches: job.data.total_batches,
+                contactsCount: job.data.contacts?.length || 0,
+                start_node_id: job.data.start_node_id
+            },
+            stacktrace: job.stacktrace || null
+        }));
+        
+        const totalFailed = await queue.getFailedCount();
+        
+        res.status(200).json({
+            totalFailed,
+            failedJobs: failedJobsInfo,
+            pagination: {
+                start,
+                limit,
+                hasMore: start + limit < totalFailed
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('[DIAGNOSTIC] Erro ao obter jobs failed:', error);
+        res.status(500).json({ 
+            error: 'Erro ao obter jobs failed',
+            message: error.message 
+        });
+    }
+});
+
+// Endpoint para limpar jobs failed (opcional, requer autenticação admin)
+app.post('/api/diagnostic/clean-failed-jobs', authenticateJwt, async (req, res) => {
+    try {
+        const { QUEUE_NAMES, getQueue } = require('./shared/queue');
+        const { action } = req.body; // 'clean' ou 'retry'
+        
+        const queue = getQueue(QUEUE_NAMES.DISPARO_BATCH);
+        
+        if (action === 'clean') {
+            // Limpar jobs failed antigos (mais de 7 dias)
+            const failedJobs = await queue.getJobs(['failed'], 0, 1000);
+            const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+            let cleaned = 0;
+            
+            for (const job of failedJobs) {
+                if (job.timestamp && job.timestamp < sevenDaysAgo) {
+                    await job.remove();
+                    cleaned++;
+                }
+            }
+            
+            res.status(200).json({
+                message: `Limpeza concluída. ${cleaned} jobs removidos.`,
+                cleaned
+            });
+        } else if (action === 'retry') {
+            // Retentar jobs failed recentes (últimas 24 horas)
+            const failedJobs = await queue.getJobs(['failed'], 0, 100);
+            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+            let retried = 0;
+            
+            for (const job of failedJobs) {
+                if (job.timestamp && job.timestamp >= oneDayAgo) {
+                    await job.retry();
+                    retried++;
+                }
+            }
+            
+            res.status(200).json({
+                message: `Retentativa iniciada para ${retried} jobs.`,
+                retried
+            });
+        } else {
+            res.status(400).json({
+                error: 'Ação inválida. Use "clean" ou "retry".'
+            });
+        }
+    } catch (error) {
+        logger.error('[DIAGNOSTIC] Erro ao limpar/retentar jobs failed:', error);
+        res.status(500).json({ 
+            error: 'Erro ao processar ação',
             message: error.message 
         });
     }

@@ -9,7 +9,7 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:63
 });
 
 // Configurações equivalentes ao QStash
-const BULLMQ_CONCURRENCY = parseInt(process.env.BULLMQ_CONCURRENCY || process.env.QSTASH_CONCURRENCY || '30', 10);
+const BULLMQ_CONCURRENCY = parseInt(process.env.BULLMQ_CONCURRENCY || process.env.QSTASH_CONCURRENCY || '100', 10);
 const BULLMQ_RATE_LIMIT_MAX = parseInt(process.env.BULLMQ_RATE_LIMIT_MAX || process.env.QSTASH_RATE_LIMIT_MAX || '100', 10);
 const BULLMQ_RATE_LIMIT_WINDOW = 1000; // 1 segundo (equivalente ao QStash)
 
