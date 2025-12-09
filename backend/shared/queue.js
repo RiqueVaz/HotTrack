@@ -94,7 +94,7 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
-        stalledInterval: 30000, // 30 segundos
+        stalledInterval: 120000, // 2 minutos - jobs podem levar até 60s para processar
         attempts: 3,
         backoff: {
             type: 'exponential',
