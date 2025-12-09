@@ -317,7 +317,7 @@ async function checkRateLimit(botToken) {
         });
     } catch (error) {
         // Em caso de erro (incluindo circuit breaker aberto), permitir processamento (fail open)
-        const logger = require('./logger');
+        const logger = require('../logger');
         logger.warn(`[RateLimit] Erro ao verificar rate limit (fail open):`, error.message);
         return true;
     }
@@ -417,7 +417,7 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     // Rate limiting pré-emptive para DISPARO_BATCH
     let rateLimitDelay = 0;
     if (queueName === QUEUE_NAMES.DISPARO_BATCH && botToken) {
-        const logger = require('./logger');
+        const logger = require('../logger');
         try {
             const rateLimitResult = await waitForRateLimit(botToken, 5000); // Max 5s de espera
             
