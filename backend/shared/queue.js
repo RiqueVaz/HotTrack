@@ -4,14 +4,26 @@ const Redis = require('ioredis');
 
 // Configuração Redis otimizada
 const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: 3, // Limitar tentativas por comando
     enableReadyCheck: false,
-    enableOfflineQueue: false, // Não enfileirar comandos quando offline
+    enableOfflineQueue: true, // Permitir enfileirar comandos quando offline
     connectTimeout: 10000,
     lazyConnect: false,
     retryStrategy: (times) => {
         const delay = Math.min(times * 50, 2000);
         return delay;
+    },
+    // Reconectar automaticamente quando conexão cair
+    reconnectOnError: (err) => {
+        const targetError = 'READONLY';
+        if (err.message.includes(targetError)) {
+            return true; // Reconectar quando Redis está em modo readonly
+        }
+        // Reconectar em outros erros de conexão também
+        if (err.message.includes('ECONNREFUSED') || err.message.includes('ETIMEDOUT')) {
+            return true;
+        }
+        return false;
     },
 });
 
