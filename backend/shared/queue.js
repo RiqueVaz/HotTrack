@@ -48,10 +48,10 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_BATCH]: {
         concurrency: 200, // Reduzido de 400 para evitar contenção no Redis/DB
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
-        stalledInterval: 600000, // 10 minutos (tempo para detectar jobs realmente travados)
-        maxStalledCount: 2,
-        lockDuration: 900000, // 15 minutos - tempo máximo esperado para processar um batch (100 contatos * ~9s cada)
-        attempts: 3,
+        stalledInterval: 1800000, // 30 minutos (aumentado de 10min para dar margem em batches longos com rate limiting)
+        maxStalledCount: 5, // Aumentado de 2 para 5 (dar mais chances antes de falhar)
+        lockDuration: 3600000, // 1 hora (aumentado de 15min para dar margem suficiente para batches grandes)
+        attempts: 5, // Aumentado de 3 para 5 (mais tentativas antes de falhar definitivamente)
         backoff: {
             type: 'exponential',
             delay: 2000,
