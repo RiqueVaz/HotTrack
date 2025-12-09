@@ -2,10 +2,17 @@
 const { Queue, QueueEvents } = require('bullmq');
 const Redis = require('ioredis');
 
-// Configuração Redis
+// Configuração Redis otimizada
 const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    enableOfflineQueue: false, // Não enfileirar comandos quando offline
+    connectTimeout: 10000,
+    lazyConnect: false,
+    retryStrategy: (times) => {
+        const delay = Math.min(times * 50, 2000);
+        return delay;
+    },
 });
 
 // Configurações equivalentes ao QStash
@@ -24,29 +31,126 @@ const QUEUE_NAMES = {
     CLEANUP_QRCODES: 'cleanup-qrcodes-queue',
 };
 
+// Configurações específicas por fila para otimização
+const QUEUE_CONFIGS = {
+    [QUEUE_NAMES.DISPARO_BATCH]: {
+        concurrency: 200, // Alta concorrência para disparos
+        limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
+        stalledInterval: 300000, // 5 minutos
+        maxStalledCount: 2,
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+        removeOnComplete: {
+            age: 24 * 3600,
+            count: 1000,
+        },
+        removeOnFail: {
+            age: 7 * 24 * 3600,
+        },
+    },
+    [QUEUE_NAMES.DISPARO]: {
+        concurrency: 50,
+        limiter: undefined,
+        stalledInterval: 60000, // 1 minuto
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+    },
+    [QUEUE_NAMES.DISPARO_DELAY]: {
+        concurrency: 30,
+        limiter: { max: 30, duration: 1000 },
+        stalledInterval: 120000, // 2 minutos
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+    },
+    [QUEUE_NAMES.VALIDATION_DISPARO]: {
+        concurrency: 10,
+        limiter: { max: 10, duration: 1000 },
+        stalledInterval: 300000, // 5 minutos
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+    },
+    [QUEUE_NAMES.SCHEDULED_DISPARO]: {
+        concurrency: 5,
+        limiter: { max: 5, duration: 1000 },
+        stalledInterval: 60000,
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+    },
+    [QUEUE_NAMES.TIMEOUT]: {
+        concurrency: 100,
+        limiter: { max: 100, duration: 1000 },
+        stalledInterval: 30000, // 30 segundos
+        attempts: 3,
+        backoff: {
+            type: 'exponential',
+            delay: 2000,
+        },
+    },
+    [QUEUE_NAMES.CLEANUP_QRCODES]: {
+        concurrency: 1, // Baixa concorrência - tarefa de manutenção
+        limiter: { max: 1, duration: 1000 },
+        stalledInterval: 600000, // 10 minutos
+        attempts: 2,
+        backoff: {
+            type: 'fixed',
+            delay: 5000,
+        },
+    },
+};
+
 // Cache de queues (singleton)
 const queues = new Map();
 const queueEvents = new Map();
 
 /**
- * Obtém ou cria uma queue BullMQ
+ * Obtém ou cria uma queue BullMQ com configurações otimizadas por fila
  */
 function getQueue(queueName) {
     if (!queues.has(queueName)) {
+        const config = QUEUE_CONFIGS[queueName] || {
+            attempts: 3,
+            backoff: {
+                type: 'exponential',
+                delay: 2000,
+            },
+            removeOnComplete: {
+                age: 24 * 3600,
+                count: 1000,
+            },
+            removeOnFail: {
+                age: 7 * 24 * 3600,
+            },
+        };
+        
         const queue = new Queue(queueName, {
             connection: redisConnection,
             defaultJobOptions: {
-                attempts: 3, // 2 retries + 1 tentativa inicial = 3 total (equivalente ao QStash)
-                backoff: {
+                attempts: config.attempts || 3,
+                backoff: config.backoff || {
                     type: 'exponential',
                     delay: 2000,
                 },
-                removeOnComplete: {
-                    age: 24 * 3600, // Manter jobs completos por 24 horas
+                removeOnComplete: config.removeOnComplete || {
+                    age: 24 * 3600,
                     count: 1000,
                 },
-                removeOnFail: {
-                    age: 7 * 24 * 3600, // Manter jobs falhados por 7 dias
+                removeOnFail: config.removeOnFail || {
+                    age: 7 * 24 * 3600,
                 },
             },
         });
@@ -97,6 +201,7 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     const jobOptions = {
         delay: delayMs,
         jobId: jobId || undefined, // Para deduplicação baseada em conteúdo
+        priority: queueName === QUEUE_NAMES.DISPARO_BATCH ? 1 : 0, // Prioridade para disparos (maior número = maior prioridade)
     };
     
     // Se botToken fornecido, adicionar como parte do jobId para rate limiting
@@ -191,6 +296,7 @@ module.exports = {
     closeAll,
     scheduleRecurringCleanupQRCodes,
     QUEUE_NAMES,
+    QUEUE_CONFIGS,
     BULLMQ_CONCURRENCY,
     BULLMQ_RATE_LIMIT_MAX,
     BULLMQ_RATE_LIMIT_WINDOW,

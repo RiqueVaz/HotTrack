@@ -1,6 +1,6 @@
 // Workers BullMQ para processar jobs das filas
 const { Worker, RateLimitError } = require('bullmq');
-const { QUEUE_NAMES, BULLMQ_CONCURRENCY, BULLMQ_RATE_LIMIT_MAX, BULLMQ_RATE_LIMIT_WINDOW, redisConnection } = require('./queue');
+const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, BULLMQ_RATE_LIMIT_MAX, BULLMQ_RATE_LIMIT_WINDOW, redisConnection } = require('./queue');
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
 const logger = require('../logger');
@@ -54,10 +54,21 @@ async function checkRateLimit(botToken) {
 }
 
 /**
- * Cria um worker para uma fila
+ * Cria um worker para uma fila com configurações otimizadas
  */
 function createWorker(queueName, processor, options = {}) {
-    const { concurrency = BULLMQ_CONCURRENCY } = options;
+    // Obter configurações específicas da fila ou usar padrões
+    const config = QUEUE_CONFIGS[queueName] || {
+        concurrency: BULLMQ_CONCURRENCY,
+        limiter: { max: BULLMQ_CONCURRENCY, duration: 1000 },
+        stalledInterval: 30000,
+        maxStalledCount: 2,
+    };
+    
+    const concurrency = options.concurrency || config.concurrency;
+    const limiter = config.limiter;
+    const stalledInterval = config.stalledInterval || 30000;
+    const maxStalledCount = config.maxStalledCount || 2;
     
     const worker = new Worker(
         queueName,
@@ -78,18 +89,23 @@ function createWorker(queueName, processor, options = {}) {
                 });
             }
             
-            // Aplicar rate limiting se botToken fornecido
-            if (botToken) {
-                const allowed = await checkRateLimit(botToken);
+            // Aplicar rate limiting se botToken fornecido (apenas para disparos)
+            if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
+                let allowed = await checkRateLimit(botToken);
                 if (!allowed) {
-                    logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id}`, {
-                        jobId: job.id,
-                        queueName,
-                        historyId: data.history_id
-                    });
-                    // Rate limit excedido, rejeitar job para retry
-                    // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
-                    throw new RateLimitError(`Rate limit exceeded for bot token. Retrying...`);
+                    // Aguardar um pouco e retentar antes de rejeitar
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    allowed = await checkRateLimit(botToken);
+                    if (!allowed) {
+                        logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id}`, {
+                            jobId: job.id,
+                            queueName,
+                            historyId: data.history_id
+                        });
+                        // Rate limit excedido, rejeitar job para retry
+                        // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
+                        throw new RateLimitError(`Rate limit exceeded for bot token. Retrying...`);
+                    }
                 }
             } else if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
                 // Log warning se não houver botToken para disparo batch
@@ -118,13 +134,10 @@ function createWorker(queueName, processor, options = {}) {
         {
             connection: redisConnection,
             concurrency,
-            limiter: {
-                max: concurrency,
-                duration: 1000,
-            },
+            limiter: limiter, // Usar limiter específico da fila (pode ser undefined)
             // Configurações para evitar jobs stalled prematuramente
-            stalledInterval: queueName === QUEUE_NAMES.DISPARO_BATCH ? 300000 : 30000, // 5 minutos para disparos, 30s para outros
-            maxStalledCount: 2, // Permitir até 2 tentativas antes de marcar como failed
+            stalledInterval: stalledInterval,
+            maxStalledCount: maxStalledCount,
             removeOnComplete: {
                 age: 24 * 3600, // Manter jobs completos por 24 horas
                 count: 1000
@@ -149,10 +162,14 @@ function createWorker(queueName, processor, options = {}) {
     });
     
     worker.on('completed', (job, result) => {
+        const processingTime = job.processedOn && job.finishedOn ? job.finishedOn - job.processedOn : undefined;
         logger.info(`[BullMQ] Job ${job.id} completed in queue ${queueName}`, {
             jobId: job.id,
             queueName,
             historyId: job.data?.history_id,
+            batchIndex: job.data?.batch_index,
+            contactsCount: job.data?.contacts?.length || 0,
+            processingTime: processingTime ? `${processingTime}ms` : undefined,
             result: result
         });
     });
