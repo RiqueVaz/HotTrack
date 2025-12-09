@@ -107,6 +107,7 @@ const QUEUE_CONFIGS = {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
         stalledInterval: 120000, // 2 minutos - jobs podem levar até 60s para processar
+        lockDuration: 3600000, // 1 hora - jobs delayed podem ter delays longos (horas)
         attempts: 3,
         backoff: {
             type: 'exponential',

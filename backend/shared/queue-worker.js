@@ -69,6 +69,7 @@ function createWorker(queueName, processor, options = {}) {
     const limiter = config.limiter;
     const stalledInterval = config.stalledInterval || 30000;
     const maxStalledCount = config.maxStalledCount || 2;
+    const lockDuration = config.lockDuration; // lockDuration específico da fila (opcional)
     
     const worker = new Worker(
         queueName,
@@ -157,6 +158,8 @@ function createWorker(queueName, processor, options = {}) {
             // Configurações para evitar jobs stalled prematuramente
             stalledInterval: stalledInterval,
             maxStalledCount: maxStalledCount,
+            // lockDuration para jobs delayed com delays longos (evita erros de lock renewal)
+            ...(lockDuration && { lockDuration }),
             removeOnComplete: {
                 age: 24 * 3600, // Manter jobs completos por 24 horas
                 count: 1000
@@ -205,6 +208,17 @@ function createWorker(queueName, processor, options = {}) {
     });
     
     worker.on('error', (err) => {
+        // Tratar erros de lock renewal silenciosamente para jobs delayed que ainda não começaram
+        // Esses erros são esperados quando jobs têm delays muito longos
+        if (err.message && err.message.includes('could not renew lock')) {
+            // Não logar como ERROR - é esperado para jobs delayed com delays longos
+            logger.debug(`[BullMQ] Lock renewal error (esperado para jobs delayed): ${queueName}`, {
+                queueName,
+                error: err.message
+            });
+            return;
+        }
+        
         logger.error(`[BullMQ] Worker error in queue ${queueName}:`, {
             queueName,
             error: err.message,
