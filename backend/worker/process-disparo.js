@@ -680,7 +680,8 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
             logger.debug(`${logPrefix} Processando nó ${currentNodeId} (tipo: ${currentNode.type}, iteração: ${safetyLock})`);
             
             if (currentNode.type === 'trigger') {
-                // Nó de 'trigger' é apenas um ponto de partida, executa ações aninhadas (se houver) e segue
+                // No disparo, processar apenas o trigger (primeira mensagem) e parar
+                // O fluxo completo será processado depois quando o usuário interagir
                 if (currentNode.data?.actions && currentNode.data.actions.length > 0) {
                     try {
                         const actionResult = await processDisparoActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
@@ -707,12 +708,10 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                         }
                     }
                 }
-                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
-                if (!currentNodeId) {
-                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
-                    break;
-                }
-                continue;
+                // PARAR AQUI - não continuar para próximos nós no disparo
+                // O fluxo completo será processado quando o usuário interagir
+                logger.debug(`${logPrefix} [Flow Engine] Trigger processado. Encerrando disparo (fluxo completo será processado após interação do usuário).`);
+                break;
             }
             
             if (currentNode.type === 'action') {
