@@ -65,18 +65,55 @@ function createWorker(queueName, processor, options = {}) {
             const { data } = job;
             const botToken = data._botToken;
             
+            // Log detalhado do início do processamento
+            if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
+                logger.info(`[BullMQ-Worker] Processando job ${job.id} da fila ${queueName}`, {
+                    jobId: job.id,
+                    historyId: data.history_id,
+                    batchIndex: data.batch_index,
+                    totalBatches: data.total_batches,
+                    contactsCount: data.contacts?.length || 0,
+                    hasBotToken: !!botToken,
+                    botTokenLength: botToken?.length || 0
+                });
+            }
+            
             // Aplicar rate limiting se botToken fornecido
             if (botToken) {
                 const allowed = await checkRateLimit(botToken);
                 if (!allowed) {
+                    logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id}`, {
+                        jobId: job.id,
+                        queueName,
+                        historyId: data.history_id
+                    });
                     // Rate limit excedido, rejeitar job para retry
                     // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
                     throw new RateLimitError(`Rate limit exceeded for bot token. Retrying...`);
                 }
+            } else if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
+                // Log warning se não houver botToken para disparo batch
+                logger.warn(`[BullMQ-Worker] Job ${job.id} sem botToken (pode causar problemas)`, {
+                    jobId: job.id,
+                    historyId: data.history_id,
+                    batchIndex: data.batch_index
+                });
             }
             
-            // Processar job
-            return await processor(data, job);
+            // Processar job com tratamento de erro robusto
+            try {
+                return await processor(data, job);
+            } catch (error) {
+                logger.error(`[BullMQ-Worker] Erro ao processar job ${job.id} na fila ${queueName}:`, {
+                    jobId: job.id,
+                    queueName,
+                    historyId: data.history_id,
+                    batchIndex: data.batch_index,
+                    error: error.message,
+                    stack: error.stack
+                });
+                throw error; // Re-throw para que BullMQ faça retry
+            }
         },
         {
             connection: redisConnection,
@@ -88,17 +125,52 @@ function createWorker(queueName, processor, options = {}) {
         }
     );
     
-    // Event handlers
-    worker.on('completed', (job) => {
-        logger.debug(`[BullMQ] Job ${job.id} completed in queue ${queueName}`);
+    // Event handlers com logs detalhados
+    worker.on('active', (job) => {
+        logger.info(`[BullMQ] Job ${job.id} started processing in queue ${queueName}`, {
+            jobId: job.id,
+            queueName,
+            dataKeys: Object.keys(job.data || {}),
+            historyId: job.data?.history_id,
+            contactsCount: job.data?.contacts?.length || 0,
+            batchIndex: job.data?.batch_index,
+            totalBatches: job.data?.total_batches
+        });
+    });
+    
+    worker.on('completed', (job, result) => {
+        logger.info(`[BullMQ] Job ${job.id} completed in queue ${queueName}`, {
+            jobId: job.id,
+            queueName,
+            historyId: job.data?.history_id,
+            result: result
+        });
     });
     
     worker.on('failed', (job, err) => {
-        logger.error(`[BullMQ] Job ${job?.id} failed in queue ${queueName}:`, err);
+        logger.error(`[BullMQ] Job ${job?.id} failed in queue ${queueName}:`, {
+            jobId: job?.id,
+            queueName,
+            historyId: job?.data?.history_id,
+            batchIndex: job?.data?.batch_index,
+            error: err.message,
+            stack: err.stack
+        });
     });
     
     worker.on('error', (err) => {
-        logger.error(`[BullMQ] Worker error in queue ${queueName}:`, err);
+        logger.error(`[BullMQ] Worker error in queue ${queueName}:`, {
+            queueName,
+            error: err.message,
+            stack: err.stack
+        });
+    });
+    
+    worker.on('stalled', (jobId) => {
+        logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName}`, {
+            jobId,
+            queueName
+        });
     });
     
     return worker;
@@ -241,9 +313,34 @@ async function closeAllWorkers() {
     workers.clear();
 }
 
+/**
+ * Verifica status dos workers
+ */
+function getWorkersStatus() {
+    const status = {};
+    for (const [queueName, worker] of workers.entries()) {
+        status[queueName] = {
+            isRunning: worker.isRunning(),
+            name: worker.name
+        };
+    }
+    return status;
+}
+
+/**
+ * Verifica se um worker específico está rodando
+ */
+function isWorkerRunning(queueName) {
+    const worker = workers.get(queueName);
+    return worker ? worker.isRunning() : false;
+}
+
 module.exports = {
     initializeWorkers,
     closeAllWorkers,
     createWorker,
     processors,
+    getWorkersStatus,
+    isWorkerRunning,
+    workers, // Exportar para acesso direto se necessário
 };

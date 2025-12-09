@@ -9592,10 +9592,25 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 console.log(`[DISPARO ${historyId}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
                 
+                // Validar que temos contatos antes de criar batches
+                if (contactsForBatch.length === 0) {
+                    console.error(`[DISPARO ${historyId}] ERRO: Nenhum contato para processar após preparação!`);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                    );
+                    return;
+                }
+                
                 for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
                     const batchStart = batchIndex * batchSize;
                     const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
                     const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
+                    
+                    // Validar formato dos contatos do batch
+                    const invalidContacts = batchContacts.filter(c => !c.chat_id || !c.bot_id);
+                    if (invalidContacts.length > 0) {
+                        console.error(`[DISPARO ${historyId}] ERRO: Batch ${batchIndex + 1} contém ${invalidContacts.length} contatos inválidos:`, invalidContacts);
+                    }
                     
                     // Calcular delay base para este batch (delay escalonado entre batches)
                     const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
@@ -9603,6 +9618,10 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     // Obter bot_token do primeiro contato do batch para rate limiting
                     const firstContactBotId = batchContacts[0]?.bot_id;
                     const botToken = botTokenMap.get(firstContactBotId) || '';
+                    
+                    if (!botToken && firstContactBotId) {
+                        console.warn(`[DISPARO ${historyId}] AVISO: Bot token não encontrado para bot_id ${firstContactBotId} no batch ${batchIndex + 1}`);
+                    }
                     
                     const batchPayload = {
                         history_id: historyId,
@@ -9614,8 +9633,10 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         total_batches: totalBatches
                     };
                     
-                    qstashPromises.push(
-                        addJobWithDelay(
+                    console.log(`[DISPARO ${historyId}] Criando job para batch ${batchIndex + 1}/${totalBatches} com ${batchContacts.length} contatos (delay: ${batchDelaySeconds}s)`);
+                    
+                    try {
+                        const jobResult = await addJobWithDelay(
                             QUEUE_NAMES.DISPARO_BATCH,
                             'process-disparo-batch',
                             batchPayload,
@@ -9623,16 +9644,42 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 delay: `${batchDelaySeconds}s`,
                                 botToken: botToken
                             }
-                        )
-                    );
+                        );
+                        
+                        console.log(`[DISPARO ${historyId}] Job criado com sucesso para batch ${batchIndex + 1}:`, jobResult.jobId);
+                        qstashPromises.push(Promise.resolve(jobResult));
+                    } catch (jobError) {
+                        console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch ${batchIndex + 1}:`, {
+                            error: jobError.message,
+                            stack: jobError.stack,
+                            batchIndex,
+                            contactsCount: batchContacts.length
+                        });
+                        // Continuar criando outros batches mesmo se um falhar
+                    }
                 }
                 
                 if (qstashPromises.length > 0) {
                     console.log(`[DISPARO ${historyId}] Publicando ${qstashPromises.length} batches no BullMQ...`);
-                    await Promise.all(qstashPromises);
+                    const results = await Promise.allSettled(qstashPromises);
+                    
+                    const successful = results.filter(r => r.status === 'fulfilled').length;
+                    const failed = results.filter(r => r.status === 'rejected').length;
+                    
+                    console.log(`[DISPARO ${historyId}] Resultado da publicação: ${successful} sucessos, ${failed} falhas`);
+                    
+                    if (failed > 0) {
+                        console.error(`[DISPARO ${historyId}] ERRO: ${failed} batches falharam ao ser criados!`, 
+                            results.filter(r => r.status === 'rejected').map(r => r.reason));
+                    }
+                } else {
+                    console.error(`[DISPARO ${historyId}] ERRO CRÍTICO: Nenhum batch foi criado!`);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                    );
                 }
                 
-                console.log(`[DISPARO ${historyId}] Disparo processado com sucesso em background.`);
+                console.log(`[DISPARO ${historyId}] Disparo processado com sucesso em background. ${qstashPromises.length} batches criados.`);
                 
                 // Limpar Maps temporários para liberar memória
                 if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
@@ -13149,12 +13196,61 @@ app.post('/api/disparos/check-conversions/:historyId', authenticateJwt, async (r
 
 // Health check endpoint para Render
 app.get('/api/health', (req, res) => {
+    const { getWorkersStatus } = require('./shared/queue-worker');
+    const workersStatus = getWorkersStatus();
+    
     res.status(200).json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
-        port: PORT
+        port: PORT,
+        workers: workersStatus
     });
+});
+
+// Endpoint de diagnóstico para workers e disparos
+app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
+    try {
+        const { getWorkersStatus, isWorkerRunning } = require('./shared/queue-worker');
+        const { QUEUE_NAMES } = require('./shared/queue');
+        
+        const workersStatus = getWorkersStatus();
+        const disparoBatchWorkerRunning = isWorkerRunning(QUEUE_NAMES.DISPARO_BATCH);
+        
+        // Verificar disparos que podem estar travados (RUNNING há mais de 1 hora sem progresso)
+        const stuckDisparos = await sqlWithRetry(sqlTx`
+            SELECT 
+                id,
+                seller_id,
+                status,
+                current_step,
+                total_jobs,
+                processed_jobs,
+                created_at,
+                updated_at,
+                EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60 as minutes_since_update
+            FROM disparo_history
+            WHERE status = 'RUNNING'
+                AND total_jobs > 0
+                AND (processed_jobs = 0 OR processed_jobs < total_jobs)
+                AND updated_at < NOW() - INTERVAL '30 minutes'
+            ORDER BY updated_at ASC
+            LIMIT 10
+        `);
+        
+        res.status(200).json({
+            workers: workersStatus,
+            disparoBatchWorkerRunning,
+            stuckDisparos: stuckDisparos || [],
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('[DIAGNOSTIC] Erro ao verificar status dos workers:', error);
+        res.status(500).json({ 
+            error: 'Erro ao verificar status dos workers',
+            message: error.message 
+        });
+    }
 });
 
 
