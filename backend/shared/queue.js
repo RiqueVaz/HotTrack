@@ -2,6 +2,79 @@
 const { Queue, QueueEvents } = require('bullmq');
 const Redis = require('ioredis');
 
+// Circuit Breaker para Redis
+class RedisCircuitBreaker {
+    constructor(options = {}) {
+        this.failureThreshold = options.failureThreshold || 5;
+        this.resetTimeout = options.resetTimeout || 30000; // 30 segundos
+        this.successThreshold = options.successThreshold || 2;
+        
+        this.state = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
+        this.failureCount = 0;
+        this.successCount = 0;
+        this.nextAttempt = null;
+    }
+    
+    async execute(operation) {
+        // Se circuit está aberto, verificar se já passou o timeout
+        if (this.state === 'OPEN') {
+            if (Date.now() < this.nextAttempt) {
+                throw new Error('Redis circuit breaker is OPEN. Redis appears to be unavailable.');
+            }
+            // Tentar reconectar (mover para HALF_OPEN)
+            this.state = 'HALF_OPEN';
+            this.successCount = 0;
+        }
+        
+        try {
+            const result = await operation();
+            
+            // Sucesso: resetar contadores
+            if (this.state === 'HALF_OPEN') {
+                this.successCount++;
+                if (this.successCount >= this.successThreshold) {
+                    this.state = 'CLOSED';
+                    this.failureCount = 0;
+                    this.successCount = 0;
+                }
+            } else {
+                // Em CLOSED, resetar failure count em caso de sucesso
+                this.failureCount = 0;
+            }
+            
+            return result;
+        } catch (error) {
+            // Falha: incrementar contador
+            this.failureCount++;
+            
+            if (this.state === 'HALF_OPEN') {
+                // Se falhou em HALF_OPEN, voltar para OPEN
+                this.state = 'OPEN';
+                this.nextAttempt = Date.now() + this.resetTimeout;
+                this.successCount = 0;
+            } else if (this.failureCount >= this.failureThreshold) {
+                // Se atingiu threshold, abrir circuit
+                this.state = 'OPEN';
+                this.nextAttempt = Date.now() + this.resetTimeout;
+            }
+            
+            throw error;
+        }
+    }
+    
+    getState() {
+        return {
+            state: this.state,
+            failureCount: this.failureCount,
+            successCount: this.successCount,
+            nextAttempt: this.nextAttempt ? new Date(this.nextAttempt).toISOString() : null
+        };
+    }
+}
+
+// Instância global do circuit breaker
+const redisCircuitBreaker = new RedisCircuitBreaker();
+
 // Configuração Redis otimizada
 const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null, // BullMQ requer null para funcionar corretamente
@@ -25,6 +98,17 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:63
         }
         return false;
     },
+});
+
+// Monitorar erros de conexão Redis para circuit breaker
+redisConnection.on('error', (err) => {
+    // Erros de conexão são tratados pelo circuit breaker
+    if (err.message.includes('ECONNREFUSED') || 
+        err.message.includes('ETIMEDOUT') || 
+        err.message.includes('ENOTFOUND') ||
+        err.message.includes('ECONNRESET')) {
+        // Circuit breaker vai detectar a falha na próxima operação
+    }
 });
 
 // Configurações equivalentes ao QStash
@@ -188,6 +272,88 @@ function getQueue(queueName) {
 }
 
 /**
+ * Verifica rate limit para bot token (usado para rate limiting pré-emptive)
+ * @param {string} botToken - Token do bot Telegram
+ * @returns {Promise<boolean>} - true se dentro do limite, false se excedido
+ */
+async function checkRateLimit(botToken) {
+    if (!botToken) return true; // Sem bot token, permite processamento
+    
+    const key = `rate-limit:${botToken}`;
+    const now = Date.now();
+    const windowStart = now - BULLMQ_RATE_LIMIT_WINDOW;
+    const requestId = `${now}-${Math.random()}`;
+    
+    try {
+        // Usar circuit breaker para operações Redis
+        return await redisCircuitBreaker.execute(async () => {
+            // Usar pipeline do Redis para operações atômicas
+            const pipeline = redisConnection.pipeline();
+            
+            // Remover entradas antigas (fora da janela)
+            pipeline.zremrangebyscore(key, 0, windowStart);
+            
+            // Adicionar timestamp atual
+            pipeline.zadd(key, now, requestId);
+            
+            // Contar requisições na janela atual (depois de adicionar)
+            pipeline.zcard(key);
+            
+            // Definir expiração da chave
+            pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
+            
+            const results = await pipeline.exec();
+            
+            // results[2][1] é o resultado do zcard (contagem depois de adicionar)
+            const currentCount = results[2][1];
+            
+            // Se já atingiu o limite, remover a entrada que acabamos de adicionar
+            if (currentCount > BULLMQ_RATE_LIMIT_MAX) {
+                await redisConnection.zrem(key, requestId);
+                return false; // Rate limit excedido
+            }
+            
+            return true; // Dentro do limite
+        });
+    } catch (error) {
+        // Em caso de erro (incluindo circuit breaker aberto), permitir processamento (fail open)
+        const logger = require('./logger');
+        logger.warn(`[RateLimit] Erro ao verificar rate limit (fail open):`, error.message);
+        return true;
+    }
+}
+
+/**
+ * Aguarda até o rate limit permitir processamento (com timeout)
+ * @param {string} botToken - Token do bot Telegram
+ * @param {number} maxWaitTime - Tempo máximo de espera em ms (padrão: 5s)
+ * @returns {Promise<{allowed: boolean, waitTime: number}>} - Se permitido e tempo de espera necessário
+ */
+async function waitForRateLimit(botToken, maxWaitTime = 5000) {
+    if (!botToken) return { allowed: true, waitTime: 0 };
+    
+    const startTime = Date.now();
+    const checkInterval = 100; // Verificar a cada 100ms
+    
+    while (Date.now() - startTime < maxWaitTime) {
+        const allowed = await checkRateLimit(botToken);
+        
+        if (allowed) {
+            return { allowed: true, waitTime: Date.now() - startTime };
+        }
+        
+        // Aguardar antes de verificar novamente
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    // Timeout: calcular tempo de espera necessário baseado no rate limit
+    // Estimativa: se rate limit é 100/segundo, cada requisição precisa de ~10ms de espaçamento
+    const estimatedWaitTime = Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / BULLMQ_RATE_LIMIT_MAX);
+    
+    return { allowed: false, waitTime: estimatedWaitTime };
+}
+
+/**
  * Calcula limites escaláveis para jobs de disparo baseado no tamanho do batch
  * @param {number} contactsCount - Número de contatos no batch
  * @returns {object} - Objeto com attempts calculado (lockDuration é configuração do Worker, não pode ser por job)
@@ -211,6 +377,19 @@ function calculateScalableLimits(contactsCount) {
  * @param {object} options - Opções (delay, botToken para rate limiting, etc.)
  */
 async function addJobWithDelay(queueName, jobName, data, options = {}) {
+    const logger = require('./logger');
+    
+    // Verificar circuit breaker antes de operações Redis
+    const circuitState = redisCircuitBreaker.getState();
+    if (circuitState.state === 'OPEN') {
+        const nextAttemptTime = circuitState.nextAttempt ? new Date(circuitState.nextAttempt).getTime() : 0;
+        if (Date.now() < nextAttemptTime) {
+            logger.error(`[Queue] Redis circuit breaker is OPEN. Cannot add job to queue ${queueName}.`);
+            throw new Error('Redis is currently unavailable. Please try again later.');
+        }
+    }
+    
+    // getQueue não faz operações Redis diretamente, apenas cria/cacheia objetos Queue
     const queue = getQueue(queueName);
     
     const { delay, botToken, jobId } = options;
@@ -234,6 +413,33 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
             delayMs = delay;
         }
     }
+    
+    // Rate limiting pré-emptive para DISPARO_BATCH
+    let rateLimitDelay = 0;
+    if (queueName === QUEUE_NAMES.DISPARO_BATCH && botToken) {
+        const logger = require('./logger');
+        try {
+            const rateLimitResult = await waitForRateLimit(botToken, 5000); // Max 5s de espera
+            
+            if (!rateLimitResult.allowed) {
+                // Se rate limit excedido após timeout, calcular delay adicional
+                rateLimitDelay = rateLimitResult.waitTime;
+                logger.warn(`[Queue] Rate limit excedido para bot token. Adicionando delay de ${rateLimitDelay}ms ao job.`, {
+                    queueName,
+                    waitTime: rateLimitDelay
+                });
+            } else if (rateLimitResult.waitTime > 0) {
+                // Se teve que esperar, logar (mas não adicionar delay extra, já esperou)
+                logger.debug(`[Queue] Rate limit: aguardou ${rateLimitResult.waitTime}ms antes de adicionar job.`);
+            }
+        } catch (error) {
+            // Em caso de erro no rate limiting, continuar (fail open)
+            logger.warn(`[Queue] Erro ao verificar rate limit pré-emptive (continuando):`, error.message);
+        }
+    }
+    
+    // Adicionar delay do rate limiting ao delay original
+    delayMs += rateLimitDelay;
     
     // Calcular limites escaláveis para jobs de DISPARO_BATCH
     let scalableLimits = {};
@@ -266,7 +472,9 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
         data._botToken = botToken;
     }
     
-    const job = await queue.add(jobName, data, jobOptions);
+    const job = await redisCircuitBreaker.execute(async () => {
+        return await queue.add(jobName, data, jobOptions);
+    });
     
     return {
         jobId: job.id,
@@ -393,4 +601,6 @@ module.exports = {
     BULLMQ_RATE_LIMIT_MAX,
     BULLMQ_RATE_LIMIT_WINDOW,
     redisConnection,
+    redisCircuitBreaker,
+    checkRateLimit, // Exportar para uso no worker como fallback
 };
