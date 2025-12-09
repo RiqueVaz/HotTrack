@@ -2005,19 +2005,48 @@ async function processDisparoBatchData(data) {
                 }
                 
                 // Processar fluxo de disparo para este contato
-                await processDisparoFlow(
-                    contact.chat_id,
-                    contact.bot_id,
-                    bot.bot_token,
-                    bot.seller_id,
-                    start_node_id,
-                    userVariables,
-                    flowNodes,
-                    flowEdges,
-                    history_id
-                );
+                try {
+                    await processDisparoFlow(
+                        contact.chat_id,
+                        contact.bot_id,
+                        bot.bot_token,
+                        bot.seller_id,
+                        start_node_id,
+                        userVariables,
+                        flowNodes,
+                        flowEdges,
+                        history_id
+                    );
+                    
+                    processedCount++;
+                } catch (flowError) {
+                    // Se processDisparoFlow falhar ANTES de atualizar processed_jobs,
+                    // precisamos atualizar manualmente para não travar o disparo
+                    errorCount++;
+                    logger.error(`[WORKER-DISPARO-BATCH] Erro ao processar fluxo para contato ${contact?.chat_id}:`, {
+                        error: flowError.message,
+                        stack: flowError.stack,
+                        contact: {
+                            chat_id: contact?.chat_id,
+                            bot_id: contact?.bot_id
+                        },
+                        history_id,
+                        batch_index
+                    });
+                    
+                    // Garantir que processed_jobs seja atualizado mesmo em caso de erro no fluxo
+                    try {
+                        await sqlWithRetry(sqlTx`
+                            UPDATE disparo_history 
+                            SET processed_jobs = processed_jobs + 1,
+                                failure_count = failure_count + 1
+                            WHERE id = ${history_id}
+                        `);
+                    } catch (updateError) {
+                        logger.error(`[WORKER-DISPARO-BATCH] Erro ao atualizar contador após falha no fluxo:`, updateError.message);
+                    }
+                }
                 
-                processedCount++;
                 if (processedCount % 50 === 0) {
                     logger.info(`[WORKER-DISPARO-BATCH] Processados ${processedCount}/${contacts.length} contatos do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`);
                 }

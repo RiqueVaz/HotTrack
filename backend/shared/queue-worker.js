@@ -122,6 +122,16 @@ function createWorker(queueName, processor, options = {}) {
                 max: concurrency,
                 duration: 1000,
             },
+            // Configurações para evitar jobs stalled prematuramente
+            stalledInterval: queueName === QUEUE_NAMES.DISPARO_BATCH ? 300000 : 30000, // 5 minutos para disparos, 30s para outros
+            maxStalledCount: 2, // Permitir até 2 tentativas antes de marcar como failed
+            removeOnComplete: {
+                age: 24 * 3600, // Manter jobs completos por 24 horas
+                count: 1000
+            },
+            removeOnFail: {
+                age: 7 * 24 * 3600 // Manter jobs failed por 7 dias
+            }
         }
     );
     
