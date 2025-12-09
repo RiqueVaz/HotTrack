@@ -13217,7 +13217,8 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
         const workersStatus = getWorkersStatus();
         const disparoBatchWorkerRunning = isWorkerRunning(QUEUE_NAMES.DISPARO_BATCH);
         
-        // Verificar disparos que podem estar travados (RUNNING há mais de 1 hora sem progresso)
+        // Verificar disparos que podem estar travados (RUNNING há mais de 30 minutos sem progresso)
+        // Usar created_at ao invés de updated_at (que não existe na tabela)
         const stuckDisparos = await sqlWithRetry(sqlTx`
             SELECT 
                 id,
@@ -13227,14 +13228,13 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
                 total_jobs,
                 processed_jobs,
                 created_at,
-                updated_at,
-                EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60 as minutes_since_update
+                EXTRACT(EPOCH FROM (NOW() - created_at)) / 60 as minutes_since_creation
             FROM disparo_history
             WHERE status = 'RUNNING'
                 AND total_jobs > 0
                 AND (processed_jobs = 0 OR processed_jobs < total_jobs)
-                AND updated_at < NOW() - INTERVAL '30 minutes'
-            ORDER BY updated_at ASC
+                AND created_at < NOW() - INTERVAL '30 minutes'
+            ORDER BY created_at ASC
             LIMIT 10
         `);
         
