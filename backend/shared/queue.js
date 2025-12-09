@@ -377,7 +377,7 @@ function calculateScalableLimits(contactsCount) {
  * @param {object} options - Opções (delay, botToken para rate limiting, etc.)
  */
 async function addJobWithDelay(queueName, jobName, data, options = {}) {
-    const logger = require('./logger');
+    const logger = require('../logger');
     
     // Verificar circuit breaker antes de operações Redis
     const circuitState = redisCircuitBreaker.getState();
