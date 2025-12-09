@@ -46,10 +46,11 @@ const QUEUE_NAMES = {
 // Configurações específicas por fila para otimização
 const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_BATCH]: {
-        concurrency: 400, // Alta concorrência para disparos (aumentado de 200 para acelerar)
+        concurrency: 200, // Reduzido de 400 para evitar contenção no Redis/DB
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
-        stalledInterval: 600000, // 10 minutos (aumentado de 5min para dar mais margem)
+        stalledInterval: 600000, // 10 minutos (tempo para detectar jobs realmente travados)
         maxStalledCount: 2,
+        lockDuration: 900000, // 15 minutos - tempo máximo esperado para processar um batch (100 contatos * ~9s cada)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -66,7 +67,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO]: {
         concurrency: 50,
         limiter: undefined,
-        stalledInterval: 60000, // 1 minuto
+        stalledInterval: 120000, // 2 minutos (aumentado de 1min - pode processar vários contatos)
+        lockDuration: 300000, // 5 minutos - jobs individuais podem demorar alguns minutos
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -77,6 +79,7 @@ const QUEUE_CONFIGS = {
         concurrency: 30,
         limiter: { max: 30, duration: 1000 },
         stalledInterval: 600000, // 10 minutos (aumentado de 2min para dar mais margem para delays longos)
+        lockDuration: 7200000, // 2 horas - jobs delayed podem ter delays muito longos (horas)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -86,7 +89,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.VALIDATION_DISPARO]: {
         concurrency: 10,
         limiter: { max: 10, duration: 1000 },
-        stalledInterval: 300000, // 5 minutos
+        stalledInterval: 600000, // 10 minutos (aumentado de 5min - validação pode processar muitos contatos)
+        lockDuration: 1800000, // 30 minutos - validação pode demorar muito com muitos contatos
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -96,7 +100,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.SCHEDULED_DISPARO]: {
         concurrency: 5,
         limiter: { max: 5, duration: 1000 },
-        stalledInterval: 60000,
+        stalledInterval: 600000, // 10 minutos (aumentado de 1min - processa muitos contatos e cria batches)
+        lockDuration: 1800000, // 30 minutos - pode processar muitos contatos e criar muitos batches
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -107,7 +112,7 @@ const QUEUE_CONFIGS = {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
         stalledInterval: 120000, // 2 minutos - jobs podem levar até 60s para processar
-        lockDuration: 3600000, // 1 hora - jobs delayed podem ter delays longos (horas)
+        lockDuration: 3600000, // 1 hora - jobs delayed podem ter delays longos (horas) - já estava correto
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -118,6 +123,7 @@ const QUEUE_CONFIGS = {
         concurrency: 1, // Baixa concorrência - tarefa de manutenção
         limiter: { max: 1, duration: 1000 },
         stalledInterval: 600000, // 10 minutos
+        lockDuration: 1800000, // 30 minutos - cleanup pode demorar se houver muitos QR codes
         attempts: 2,
         backoff: {
             type: 'fixed',

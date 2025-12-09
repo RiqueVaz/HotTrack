@@ -94,11 +94,10 @@ function createWorker(queueName, processor, options = {}) {
             if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
                 let allowed = await checkRateLimit(botToken);
                 if (!allowed) {
-                    // Calcular delay progressivo baseado no número de tentativas
-                    // Isso evita que muitos jobs sejam rejeitados simultaneamente
+                    // Delay mais curto e agressivo para não bloquear jobs por muito tempo
                     const attemptsMade = job.attemptsMade || 0;
-                    const baseDelay = Math.min(1000 * Math.pow(2, attemptsMade), 10000); // Max 10s
-                    const jitter = Math.random() * 500; // 0-500ms de jitter aleatório
+                    const baseDelay = Math.min(500 * Math.pow(1.5, attemptsMade), 3000); // Max 3s (reduzido de 10s)
+                    const jitter = Math.random() * 200; // 0-200ms de jitter (reduzido de 500ms)
                     const delay = baseDelay + jitter;
                     
                     // Aguardar antes de retentar (delay progressivo com jitter)
@@ -108,8 +107,8 @@ function createWorker(queueName, processor, options = {}) {
                     allowed = await checkRateLimit(botToken);
                     if (!allowed) {
                         // Se ainda não permitido após delay, aguardar mais um pouco antes de rejeitar
-                        // Isso evita sobrecarga no Redis quando muitos jobs são movidos para delayed
-                        const finalDelay = Math.min(2000 + (attemptsMade * 500), 5000); // 2-5s
+                        // Delay reduzido para não bloquear jobs por muito tempo
+                        const finalDelay = Math.min(1000 + (attemptsMade * 200), 2000); // 1-2s (reduzido de 2-5s)
                         await new Promise(resolve => setTimeout(resolve, finalDelay));
                         
                         // Verificar uma última vez
