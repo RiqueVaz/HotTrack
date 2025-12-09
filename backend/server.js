@@ -13212,7 +13212,7 @@ app.get('/api/health', (req, res) => {
 app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
     try {
         const { getWorkersStatus, isWorkerRunning } = require('./shared/queue-worker');
-        const { QUEUE_NAMES } = require('./shared/queue');
+        const { QUEUE_NAMES, getQueue } = require('./shared/queue');
         
         const workersStatus = getWorkersStatus();
         const disparoBatchWorkerRunning = isWorkerRunning(QUEUE_NAMES.DISPARO_BATCH);
@@ -13238,10 +13238,51 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
             LIMIT 10
         `);
         
+        // Verificar status dos jobs na fila disparo-batch-queue
+        let queueStats = null;
+        try {
+            const queue = getQueue(QUEUE_NAMES.DISPARO_BATCH);
+            const [waiting, delayed, active, completed, failed] = await Promise.all([
+                queue.getWaitingCount(),
+                queue.getDelayedCount(),
+                queue.getActiveCount(),
+                queue.getCompletedCount(),
+                queue.getFailedCount()
+            ]);
+            
+            // Buscar alguns jobs delayed para ver quando ficarão prontos
+            const delayedJobs = await queue.getJobs(['delayed'], 0, 10);
+            const delayedJobsInfo = delayedJobs.map(job => ({
+                id: job.id,
+                name: job.name,
+                delay: job.delay,
+                delayUntil: job.delay ? new Date(Date.now() + job.delay).toISOString() : null,
+                data: {
+                    history_id: job.data.history_id,
+                    batch_index: job.data.batch_index,
+                    total_batches: job.data.total_batches,
+                    contactsCount: job.data.contacts?.length || 0
+                }
+            }));
+            
+            queueStats = {
+                waiting,
+                delayed,
+                active,
+                completed,
+                failed,
+                delayedJobs: delayedJobsInfo
+            };
+        } catch (queueError) {
+            logger.error('[DIAGNOSTIC] Erro ao obter estatísticas da fila:', queueError);
+            queueStats = { error: queueError.message };
+        }
+        
         res.status(200).json({
             workers: workersStatus,
             disparoBatchWorkerRunning,
             stuckDisparos: stuckDisparos || [],
+            queueStats,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
