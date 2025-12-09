@@ -9606,26 +9606,57 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
                     const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
                     
+                    // Validar dados antes de criar o job
+                    if (!batchContacts || batchContacts.length === 0) {
+                        console.warn(`[DISPARO ${historyId}] Batch ${batchIndex + 1} está vazio. Pulando criação do job.`);
+                        continue;
+                    }
+                    
                     // Validar formato dos contatos do batch
-                    const invalidContacts = batchContacts.filter(c => !c.chat_id || !c.bot_id);
+                    const invalidContacts = batchContacts.filter(c => !c || !c.chat_id || !c.bot_id);
                     if (invalidContacts.length > 0) {
-                        console.error(`[DISPARO ${historyId}] ERRO: Batch ${batchIndex + 1} contém ${invalidContacts.length} contatos inválidos:`, invalidContacts);
+                        console.warn(`[DISPARO ${historyId}] Batch ${batchIndex + 1} contém ${invalidContacts.length} contatos inválidos que serão ignorados durante o processamento.`);
+                    }
+                    
+                    // Validar se há pelo menos um contato válido
+                    const validContacts = batchContacts.filter(c => c && c.chat_id && c.bot_id);
+                    if (validContacts.length === 0) {
+                        console.error(`[DISPARO ${historyId}] Batch ${batchIndex + 1} não contém nenhum contato válido. Pulando criação do job.`);
+                        continue;
+                    }
+                    
+                    // Validar dados do fluxo
+                    if (!flowNodes || !Array.isArray(flowNodes) || flowNodes.length === 0) {
+                        console.error(`[DISPARO ${historyId}] ERRO: flowNodes inválido ou vazio. Não é possível criar jobs.`);
+                        continue;
+                    }
+                    
+                    if (!flowEdges || !Array.isArray(flowEdges)) {
+                        console.error(`[DISPARO ${historyId}] ERRO: flowEdges inválido. Não é possível criar jobs.`);
+                        continue;
+                    }
+                    
+                    if (!startNodeId) {
+                        console.error(`[DISPARO ${historyId}] ERRO: startNodeId não fornecido. Não é possível criar jobs.`);
+                        continue;
                     }
                     
                     // Calcular delay base para este batch (delay escalonado entre batches)
                     const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
                     
-                    // Obter bot_token do primeiro contato do batch para rate limiting
-                    const firstContactBotId = batchContacts[0]?.bot_id;
+                    // Obter bot_token do primeiro contato válido do batch para rate limiting
+                    const firstValidContact = validContacts[0];
+                    const firstContactBotId = firstValidContact?.bot_id;
                     const botToken = botTokenMap.get(firstContactBotId) || '';
                     
                     if (!botToken && firstContactBotId) {
-                        console.warn(`[DISPARO ${historyId}] AVISO: Bot token não encontrado para bot_id ${firstContactBotId} no batch ${batchIndex + 1}`);
+                        console.warn(`[DISPARO ${historyId}] AVISO: Bot token não encontrado para bot_id ${firstContactBotId} no batch ${batchIndex + 1}. O token será buscado durante o processamento.`);
                     }
                     
+                    // Usar apenas contatos válidos no payload
                     const batchPayload = {
                         history_id: historyId,
-                        contacts: batchContacts,
+                        contacts: validContacts, // Usar apenas contatos válidos
                         flow_nodes: JSON.stringify(flowNodes),
                         flow_edges: JSON.stringify(flowEdges),
                         start_node_id: startNodeId,
@@ -9633,7 +9664,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         total_batches: totalBatches
                     };
                     
-                    console.log(`[DISPARO ${historyId}] Criando job para batch ${batchIndex + 1}/${totalBatches} com ${batchContacts.length} contatos (delay: ${batchDelaySeconds}s)`);
+                    console.log(`[DISPARO ${historyId}] Criando job para batch ${batchIndex + 1}/${totalBatches} com ${validContacts.length} contatos válidos (${batchContacts.length} total, delay: ${batchDelaySeconds}s)`);
                     
                     try {
                         const jobResult = await addJobWithDelay(
@@ -9653,7 +9684,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             error: jobError.message,
                             stack: jobError.stack,
                             batchIndex,
-                            contactsCount: batchContacts.length
+                            contactsCount: validContacts.length
                         });
                         // Continuar criando outros batches mesmo se um falhar
                     }

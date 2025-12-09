@@ -1839,33 +1839,35 @@ async function handler(req, res) {
 // Função para processar múltiplos contatos em batch com controle de concorrência
 async function processDisparoBatchData(data) {
     const { history_id, contacts, flow_nodes, flow_edges, start_node_id, batch_index = 0, total_batches = 1 } = data;
+    const contactsCount = contacts?.length || 0;
     
-    // Log inicial detalhado
-    logger.info(`[WORKER-DISPARO-BATCH] Iniciando processamento do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`, {
-        history_id,
-        batch_index,
-        total_batches,
-        contactsCount: contacts?.length || 0,
-        hasFlowNodes: !!flow_nodes,
-        hasFlowEdges: !!flow_edges,
-        hasStartNodeId: !!start_node_id,
-        contactsType: Array.isArray(contacts) ? 'array' : typeof contacts,
-        contactsSample: contacts && Array.isArray(contacts) && contacts.length > 0 ? contacts.slice(0, 2) : null
-    });
-    
-    // Verificar se disparo foi cancelado antes de processar
     try {
-        const [disparoStatus] = await sqlWithRetry(
-            sqlTx`SELECT status FROM disparo_history WHERE id = ${history_id}`
-        );
+        // Log inicial detalhado
+        logger.info(`[WORKER-DISPARO-BATCH] Iniciando processamento do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`, {
+            history_id,
+            batch_index,
+            total_batches,
+            contactsCount: contactsCount,
+            hasFlowNodes: !!flow_nodes,
+            hasFlowEdges: !!flow_edges,
+            hasStartNodeId: !!start_node_id,
+            contactsType: Array.isArray(contacts) ? 'array' : typeof contacts,
+            contactsSample: contacts && Array.isArray(contacts) && contacts.length > 0 ? contacts.slice(0, 2) : null
+        });
         
-        if (!disparoStatus || disparoStatus.status === 'CANCELLED') {
-            logger.info(`[WORKER-DISPARO-BATCH] Disparo ${history_id} foi cancelado. Ignorando batch ${batch_index + 1}/${total_batches}.`);
-            return; // Não processar batch
+        // Verificar se disparo foi cancelado antes de processar
+        try {
+            const [disparoStatus] = await sqlWithRetry(
+                sqlTx`SELECT status FROM disparo_history WHERE id = ${history_id}`
+            );
+            
+            if (!disparoStatus || disparoStatus.status === 'CANCELLED') {
+                logger.info(`[WORKER-DISPARO-BATCH] Disparo ${history_id} foi cancelado. Ignorando batch ${batch_index + 1}/${total_batches}.`);
+                return; // Não processar batch
+            }
+        } catch (error) {
+            logger.warn(`[WORKER-DISPARO-BATCH] Erro ao verificar status do disparo (continuando):`, error.message);
         }
-    } catch (error) {
-        logger.warn(`[WORKER-DISPARO-BATCH] Erro ao verificar status do disparo (continuando):`, error.message);
-    }
     
     // Validação de dados obrigatórios com mensagens detalhadas
     if (!flow_nodes || !flow_edges || !start_node_id || !contacts || !Array.isArray(contacts)) {
@@ -1886,16 +1888,33 @@ async function processDisparoBatchData(data) {
         throw new Error(`Formato inválido. Requer contacts (array), flow_nodes, flow_edges e start_node_id. Campos faltando: ${missingFields.join(', ')}`);
     }
     
-    // Validar formato dos contatos
-    if (contacts.length > 0) {
-        const firstContact = contacts[0];
-        if (!firstContact.chat_id || !firstContact.bot_id) {
-            logger.error(`[WORKER-DISPARO-BATCH] Contatos com formato inválido. Primeiro contato:`, JSON.stringify(firstContact));
-            throw new Error(`Contatos devem ter chat_id e bot_id. Primeiro contato recebido: ${JSON.stringify(firstContact)}`);
-        }
-    } else {
+    // Validar se há contatos para processar
+    if (contacts.length === 0) {
         logger.warn(`[WORKER-DISPARO-BATCH] Batch ${batch_index + 1}/${total_batches} para disparo ${history_id} está vazio (0 contatos)`);
         return { processed: 0, total: 0 };
+    }
+    
+    // Validar formato básico dos contatos (mas não bloquear se alguns forem inválidos)
+    // Contatos inválidos serão tratados individualmente durante o processamento
+    const validContactsCount = contacts.filter(c => c && c.chat_id && c.bot_id).length;
+    if (validContactsCount === 0) {
+        logger.error(`[WORKER-DISPARO-BATCH] Nenhum contato válido encontrado no batch ${batch_index + 1}/${total_batches}. Todos os contatos estão sem chat_id ou bot_id.`);
+        // Atualizar contador para não travar o disparo
+        try {
+            await sqlWithRetry(sqlTx`
+                UPDATE disparo_history 
+                SET processed_jobs = processed_jobs + ${contacts.length},
+                    failure_count = failure_count + ${contacts.length}
+                WHERE id = ${history_id}
+            `);
+        } catch (updateError) {
+            logger.error(`[WORKER-DISPARO-BATCH] Erro ao atualizar contador após validação:`, updateError.message);
+        }
+        throw new Error(`Nenhum contato válido encontrado no batch. Todos os contatos estão sem chat_id ou bot_id.`);
+    }
+    
+    if (validContactsCount < contacts.length) {
+        logger.warn(`[WORKER-DISPARO-BATCH] Batch ${batch_index + 1}/${total_batches} contém ${contacts.length - validContactsCount} contatos inválidos que serão ignorados. Processando ${validContactsCount} contatos válidos.`);
     }
     
     // Parse dos dados JSON com tratamento de erro
@@ -2079,11 +2098,37 @@ async function processDisparoBatchData(data) {
         }
     });
     
-    await Promise.all(workers);
-    
-    logger.info(`[WORKER-DISPARO-BATCH] Batch ${batch_index + 1}/${total_batches} concluído para disparo ${history_id}: ${processedCount}/${contacts.length} contatos processados com sucesso, ${errorCount} erros`);
-    
-    return { processed: processedCount, total: contacts.length, errors: errorCount };
+        await Promise.all(workers);
+        
+        logger.info(`[WORKER-DISPARO-BATCH] Batch ${batch_index + 1}/${total_batches} concluído para disparo ${history_id}: ${processedCount}/${contacts.length} contatos processados com sucesso, ${errorCount} erros`);
+        
+        return { processed: processedCount, total: contacts.length, errors: errorCount };
+    } catch (error) {
+        // Se o batch falhar completamente ANTES de processar qualquer contato,
+        // atualizar o contador para não travar o disparo
+        logger.error(`[WORKER-DISPARO-BATCH] Erro crítico ao processar batch ${batch_index + 1}/${total_batches}:`, {
+            error: error.message,
+            stack: error.stack,
+            history_id,
+            batch_index,
+            contactsCount
+        });
+        
+        // Atualizar contador mesmo em caso de falha completa do batch
+        try {
+            await sqlWithRetry(sqlTx`
+                UPDATE disparo_history 
+                SET processed_jobs = processed_jobs + ${contactsCount},
+                    failure_count = failure_count + ${contactsCount}
+                WHERE id = ${history_id}
+            `);
+            logger.info(`[WORKER-DISPARO-BATCH] Contador atualizado após falha completa: +${contactsCount} contatos marcados como processados/falhados`);
+        } catch (updateError) {
+            logger.error(`[WORKER-DISPARO-BATCH] Erro ao atualizar contador após falha completa:`, updateError.message);
+        }
+        
+        throw error; // Re-throw para BullMQ fazer retry se necessário
+    }
 }
 
 // Exportar funções para permitir uso em diferentes contextos
