@@ -9582,7 +9582,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 
                 // Agrupar contatos em batches
                 const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 50;
-                const DISPARO_BATCH_DELAY_SECONDS = parseFloat(process.env.DISPARO_BATCH_DELAY_SECONDS) || 2;
+                const DISPARO_BATCH_DELAY_SECONDS = parseFloat(process.env.DISPARO_BATCH_DELAY_SECONDS) || 0.5;
                 const QSTASH_CONCURRENCY = parseInt(process.env.QSTASH_CONCURRENCY) || 5;
                 const QSTASH_RATE_LIMIT_MAX = parseInt(process.env.QSTASH_RATE_LIMIT_MAX) || 10;
                 
