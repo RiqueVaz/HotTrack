@@ -687,8 +687,10 @@ app.post(
                         const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
                         const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
                         
-                        // Calcular delay base para este batch (delay escalonado entre batches)
-                        const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
+                        // Delay muito pequeno entre batches (0.01s por batch para evitar sobrecarga inicial)
+                        // Com concorrência alta do BullMQ, não precisamos de delay grande
+                        const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+                        const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
                         
                         // Obter bot_token do primeiro contato do batch para rate limiting
                         // (assumindo que batches são agrupados por bot quando possível)
@@ -954,8 +956,10 @@ app.post(
                         const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
                         const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
                         
-                        // Calcular delay base para este batch (delay escalonado entre batches)
-                        const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
+                        // Delay muito pequeno entre batches (0.01s por batch para evitar sobrecarga inicial)
+                        // Com concorrência alta do BullMQ, não precisamos de delay grande
+                        const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+                        const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
                         
                         // Obter bot_token do primeiro contato do batch para rate limiting
                         const firstContactBotId = batchContacts[0]?.bot_id;
@@ -9641,8 +9645,10 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         continue;
                     }
                     
-                    // Calcular delay base para este batch (delay escalonado entre batches)
-                    const batchDelaySeconds = batchIndex * DISPARO_BATCH_DELAY_SECONDS;
+                    // Delay muito pequeno entre batches (0.01s por batch para evitar sobrecarga inicial)
+                    // Com concorrência alta do BullMQ, não precisamos de delay grande
+                    const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+                    const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
                     
                     // Obter bot_token do primeiro contato válido do batch para rate limiting
                     const firstValidContact = validContacts[0];
