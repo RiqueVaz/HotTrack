@@ -48,10 +48,13 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_BATCH]: {
         concurrency: 200, // Reduzido de 400 para evitar contenção no Redis/DB
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
-        stalledInterval: 1800000, // 30 minutos (aumentado de 10min para dar margem em batches longos com rate limiting)
-        maxStalledCount: 5, // Aumentado de 2 para 5 (dar mais chances antes de falhar)
-        lockDuration: 3600000, // 1 hora (aumentado de 15min para dar margem suficiente para batches grandes)
-        attempts: 5, // Aumentado de 3 para 5 (mais tentativas antes de falhar definitivamente)
+        // stalledInterval, maxStalledCount e lockDuration são configurações do Worker (não podem ser por job)
+        // Valores conservadores que funcionam para qualquer tamanho de batch
+        stalledInterval: 1800000, // 30 minutos (tempo para detectar jobs realmente travados)
+        maxStalledCount: 5, // Dar mais chances antes de falhar
+        lockDuration: 3600000, // 1 hora (configuração global do Worker - funciona para batches grandes)
+        // attempts padrão (será sobrescrito por job via calculateScalableLimits quando possível)
+        attempts: 5, // Padrão (fallback para jobs sem cálculo dinâmico)
         backoff: {
             type: 'exponential',
             delay: 2000,
@@ -185,6 +188,22 @@ function getQueue(queueName) {
 }
 
 /**
+ * Calcula limites escaláveis para jobs de disparo baseado no tamanho do batch
+ * @param {number} contactsCount - Número de contatos no batch
+ * @returns {object} - Objeto com attempts calculado (lockDuration é configuração do Worker, não pode ser por job)
+ */
+function calculateScalableLimits(contactsCount) {
+    // Aumentar attempts baseado no tamanho do batch (batches maiores = mais tentativas)
+    // Fórmula: 3 tentativas base + 1 tentativa a cada 50 contatos (máximo 10)
+    const attempts = Math.min(
+        Math.max(3, 3 + Math.floor(contactsCount / 50)),
+        10 // Máximo 10 tentativas
+    );
+    
+    return { attempts };
+}
+
+/**
  * Adiciona um job com delay (equivalente ao publishJSON do QStash)
  * @param {string} queueName - Nome da fila
  * @param {string} jobName - Nome do job
@@ -216,11 +235,19 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
         }
     }
     
+    // Calcular limites escaláveis para jobs de DISPARO_BATCH
+    let scalableLimits = {};
+    if (queueName === QUEUE_NAMES.DISPARO_BATCH && data.contacts && Array.isArray(data.contacts)) {
+        scalableLimits = calculateScalableLimits(data.contacts.length);
+    }
+    
     // Configurar rate limiting por bot token se fornecido
     const jobOptions = {
         delay: delayMs,
         jobId: jobId || undefined, // Para deduplicação baseada em conteúdo
         priority: queueName === QUEUE_NAMES.DISPARO_BATCH ? 1 : 0, // Prioridade para disparos (maior número = maior prioridade)
+        // Aplicar attempts escalável se calculado (lockDuration é configuração do Worker, não pode ser por job)
+        ...(scalableLimits.attempts && { attempts: scalableLimits.attempts }),
     };
     
     // Se botToken fornecido, adicionar como parte do jobId para rate limiting
