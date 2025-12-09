@@ -32,7 +32,7 @@ const apiRateLimiter = require('./shared/api-rate-limiter');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
 const { migrateMediaOnDemand } = require('./shared/migrate-media-on-demand');
-const { addJobWithDelay, removeJob, QUEUE_NAMES, scheduleRecurringCleanupQRCodes } = require('./shared/queue');
+const { addJobWithDelay, removeJob, removeJobsByHistoryId, QUEUE_NAMES, scheduleRecurringCleanupQRCodes } = require('./shared/queue');
 const { initializeWorkers, closeAllWorkers } = require('./shared/queue-worker');
 
 function parseJsonField(value, context) {
@@ -9585,7 +9585,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 });
                 
                 // Agrupar contatos em batches
-                const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 50;
+                const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 100; // Aumentado de 50 para 100 para acelerar
                 const DISPARO_BATCH_DELAY_SECONDS = parseFloat(process.env.DISPARO_BATCH_DELAY_SECONDS) || 0.5;
                 const QSTASH_CONCURRENCY = parseInt(process.env.QSTASH_CONCURRENCY) || 5;
                 const QSTASH_RATE_LIMIT_MAX = parseInt(process.env.QSTASH_RATE_LIMIT_MAX) || 10;
@@ -13055,6 +13055,15 @@ app.post('/api/disparos/cancel/:historyId', authenticateJwt, async (req, res) =>
                   WHERE id = ${historyId}`
         );
 
+        // Remover todos os jobs BullMQ (waiting, delayed, active) do disparo cancelado
+        try {
+            const removalResult = await removeJobsByHistoryId(QUEUE_NAMES.DISPARO_BATCH, parseInt(historyId));
+            console.log(`[CANCEL DISPARO] Jobs BullMQ removidos do disparo ${historyId}:`, removalResult);
+        } catch (jobsError) {
+            // Logar erro mas não falhar o cancelamento
+            console.warn(`[CANCEL DISPARO] Erro ao remover jobs BullMQ (pode não haver jobs na fila):`, jobsError.message);
+        }
+
         console.log(`[CANCEL DISPARO] Disparo ${historyId} cancelado com sucesso.`);
 
         res.status(200).json({ 
@@ -13448,6 +13457,103 @@ app.post('/api/diagnostic/clean-failed-jobs', authenticateJwt, async (req, res) 
         logger.error('[DIAGNOSTIC] Erro ao limpar/retentar jobs failed:', error);
         res.status(500).json({ 
             error: 'Erro ao processar ação',
+            message: error.message 
+        });
+    }
+});
+
+// Endpoint para limpar jobs antigos com suporte a dry run e filtros
+app.post('/api/diagnostic/clean-old-jobs', authenticateJwt, async (req, res) => {
+    try {
+        const { QUEUE_NAMES, getQueue } = require('./shared/queue');
+        const {
+            queueName = QUEUE_NAMES.DISPARO_BATCH,
+            types = 'failed,stalled,waiting,delayed', // Tipos de jobs para limpar
+            historyId, // Opcional: limpar apenas jobs de um disparo específico
+            olderThanHours = 24, // Limpar jobs mais antigos que X horas
+            dryRun = false // Se true, apenas conta mas não remove
+        } = req.body;
+
+        const queue = getQueue(queueName);
+        const typeArray = types.split(',').map(t => t.trim());
+        const cutoffTime = Date.now() - (olderThanHours * 60 * 60 * 1000);
+        
+        const stats = {
+            found: 0,
+            removed: 0,
+            byType: {},
+            byHistoryId: {},
+            errors: []
+        };
+
+        // Processar cada tipo de job
+        for (const type of typeArray) {
+            if (!['failed', 'stalled', 'waiting', 'delayed', 'active', 'completed'].includes(type)) {
+                stats.errors.push(`Tipo inválido: ${type}`);
+                continue;
+            }
+
+            try {
+                // Buscar todos os jobs do tipo especificado
+                const jobs = await queue.getJobs([type], 0, -1);
+                
+                // Filtrar jobs
+                let filteredJobs = jobs;
+                
+                // Filtrar por historyId se fornecido
+                if (historyId) {
+                    filteredJobs = filteredJobs.filter(job => job.data?.history_id === parseInt(historyId));
+                }
+                
+                // Filtrar por idade
+                filteredJobs = filteredJobs.filter(job => {
+                    const jobTime = job.timestamp || job.processedOn || job.finishedOn || 0;
+                    return jobTime < cutoffTime;
+                });
+
+                stats.found += filteredJobs.length;
+                stats.byType[type] = filteredJobs.length;
+
+                // Agrupar por history_id para análise
+                const byHistoryId = {};
+                for (const job of filteredJobs) {
+                    const hid = job.data?.history_id || 'unknown';
+                    byHistoryId[hid] = (byHistoryId[hid] || 0) + 1;
+                }
+                stats.byHistoryId[type] = byHistoryId;
+
+                // Remover jobs se não for dry run
+                if (!dryRun && filteredJobs.length > 0) {
+                    for (const job of filteredJobs) {
+                        try {
+                            await job.remove();
+                            stats.removed++;
+                        } catch (error) {
+                            stats.errors.push(`Erro ao remover job ${job.id}: ${error.message}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                stats.errors.push(`Erro ao processar tipo ${type}: ${error.message}`);
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            dryRun,
+            queueName,
+            filters: {
+                types: typeArray,
+                historyId: historyId || 'all',
+                olderThanHours
+            },
+            stats,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('[DIAGNOSTIC] Erro ao limpar jobs antigos:', error);
+        res.status(500).json({ 
+            error: 'Erro ao limpar jobs antigos',
             message: error.message 
         });
     }

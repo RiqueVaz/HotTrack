@@ -1990,8 +1990,8 @@ async function processDisparoBatchData(data) {
     const botMap = new Map(bots.map(b => [b.id, b]));
     
     // Configurações de concorrência (usar valores padrão se não disponíveis via env)
-    const INTERNAL_CONCURRENCY = parseInt(process.env.DISPARO_INTERNAL_CONCURRENCY) || 30;
-    const DELAY_BETWEEN_CONTACTS = parseFloat(process.env.DISPARO_DELAY_BETWEEN_MESSAGES) || 0.1;
+    const INTERNAL_CONCURRENCY = parseInt(process.env.DISPARO_INTERNAL_CONCURRENCY) || 50; // Aumentado de 30 para 50 para acelerar
+    const DELAY_BETWEEN_CONTACTS = parseFloat(process.env.DISPARO_DELAY_BETWEEN_MESSAGES) || 0.05; // Reduzido de 0.1s para 0.05s para acelerar
     
     logger.info(`[WORKER-DISPARO-BATCH] Processando batch ${batch_index + 1}/${total_batches} com ${contacts.length} contatos (concorrência: ${INTERNAL_CONCURRENCY})`);
     
