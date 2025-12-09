@@ -4,7 +4,7 @@ const Redis = require('ioredis');
 
 // Configuração Redis otimizada
 const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: 3, // Limitar tentativas por comando
+    maxRetriesPerRequest: null, // BullMQ requer null para funcionar corretamente
     enableReadyCheck: false,
     enableOfflineQueue: true, // Permitir enfileirar comandos quando offline
     connectTimeout: 10000,
