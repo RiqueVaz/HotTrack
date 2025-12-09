@@ -708,10 +708,12 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                         }
                     }
                 }
-                // PARAR AQUI - não continuar para próximos nós no disparo
-                // O fluxo completo será processado quando o usuário interagir
-                logger.debug(`${logPrefix} [Flow Engine] Trigger processado. Encerrando disparo (fluxo completo será processado após interação do usuário).`);
-                break;
+                currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                if (!currentNodeId) {
+                    logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
+                    break;
+                }
+                continue;
             }
             
             if (currentNode.type === 'action') {
