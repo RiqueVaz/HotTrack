@@ -93,18 +93,37 @@ function createWorker(queueName, processor, options = {}) {
             if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
                 let allowed = await checkRateLimit(botToken);
                 if (!allowed) {
-                    // Aguardar um pouco e retentar antes de rejeitar
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    // Calcular delay progressivo baseado no número de tentativas
+                    // Isso evita que muitos jobs sejam rejeitados simultaneamente
+                    const attemptsMade = job.attemptsMade || 0;
+                    const baseDelay = Math.min(1000 * Math.pow(2, attemptsMade), 10000); // Max 10s
+                    const jitter = Math.random() * 500; // 0-500ms de jitter aleatório
+                    const delay = baseDelay + jitter;
+                    
+                    // Aguardar antes de retentar (delay progressivo com jitter)
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    
+                    // Retentar após o delay
                     allowed = await checkRateLimit(botToken);
                     if (!allowed) {
-                        logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id}`, {
-                            jobId: job.id,
-                            queueName,
-                            historyId: data.history_id
-                        });
-                        // Rate limit excedido, rejeitar job para retry
-                        // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
-                        throw new RateLimitError(`Rate limit exceeded for bot token. Retrying...`);
+                        // Se ainda não permitido após delay, aguardar mais um pouco antes de rejeitar
+                        // Isso evita sobrecarga no Redis quando muitos jobs são movidos para delayed
+                        const finalDelay = Math.min(2000 + (attemptsMade * 500), 5000); // 2-5s
+                        await new Promise(resolve => setTimeout(resolve, finalDelay));
+                        
+                        // Verificar uma última vez
+                        allowed = await checkRateLimit(botToken);
+                        if (!allowed) {
+                            logger.warn(`[BullMQ-Worker] Rate limit exceeded for bot token in job ${job.id} after ${attemptsMade + 1} attempts`, {
+                                jobId: job.id,
+                                queueName,
+                                historyId: data.history_id,
+                                attemptsMade: attemptsMade + 1
+                            });
+                            // Rate limit excedido, rejeitar job para retry com delay maior
+                            // Usar RateLimitError para que o BullMQ trate como rate limit, não como falha
+                            throw new RateLimitError(`Rate limit exceeded for bot token. Retrying with backoff...`);
+                        }
                     }
                 }
             } else if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
