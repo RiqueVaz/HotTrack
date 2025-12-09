@@ -46,9 +46,9 @@ const QUEUE_NAMES = {
 // Configurações específicas por fila para otimização
 const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_BATCH]: {
-        concurrency: 200, // Alta concorrência para disparos
+        concurrency: 400, // Alta concorrência para disparos (aumentado de 200 para acelerar)
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
-        stalledInterval: 300000, // 5 minutos
+        stalledInterval: 600000, // 10 minutos (aumentado de 5min para dar mais margem)
         maxStalledCount: 2,
         attempts: 3,
         backoff: {
@@ -256,6 +256,51 @@ async function removeJob(queueName, jobId) {
 }
 
 /**
+ * Remove todos os jobs de um disparo específico (por history_id)
+ * Busca em waiting, delayed e active
+ */
+async function removeJobsByHistoryId(queueName, historyId) {
+    const queue = getQueue(queueName);
+    let totalRemoved = 0;
+    
+    try {
+        // Buscar jobs waiting
+        const waitingJobs = await queue.getJobs(['waiting'], 0, -1);
+        const waitingToRemove = waitingJobs.filter(job => job.data?.history_id === historyId);
+        
+        // Buscar jobs delayed
+        const delayedJobs = await queue.getJobs(['delayed'], 0, -1);
+        const delayedToRemove = delayedJobs.filter(job => job.data?.history_id === historyId);
+        
+        // Buscar jobs active
+        const activeJobs = await queue.getJobs(['active'], 0, -1);
+        const activeToRemove = activeJobs.filter(job => job.data?.history_id === historyId);
+        
+        // Remover todos os jobs encontrados
+        const allJobsToRemove = [...waitingToRemove, ...delayedToRemove, ...activeToRemove];
+        
+        for (const job of allJobsToRemove) {
+            try {
+                await job.remove();
+                totalRemoved++;
+            } catch (error) {
+                console.error(`[QUEUE] Erro ao remover job ${job.id}:`, error.message);
+            }
+        }
+        
+        return {
+            removed: totalRemoved,
+            waiting: waitingToRemove.length,
+            delayed: delayedToRemove.length,
+            active: activeToRemove.length
+        };
+    } catch (error) {
+        console.error(`[QUEUE] Erro ao remover jobs do disparo ${historyId}:`, error);
+        throw error;
+    }
+}
+
+/**
  * Fecha todas as conexões
  */
 async function closeAll() {
@@ -305,6 +350,7 @@ module.exports = {
     getQueue,
     addJobWithDelay,
     removeJob,
+    removeJobsByHistoryId,
     closeAll,
     scheduleRecurringCleanupQRCodes,
     QUEUE_NAMES,

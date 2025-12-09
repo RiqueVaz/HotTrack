@@ -8111,27 +8111,28 @@ function generatePreviewHTML(data) {
         </div>
     );
 
-    
-    const [isCancelling, setIsCancelling] = useState(null);
-    
     const handleCancelDisparo = async (historyId, campaignName) => {
         if (!confirm(`Tem certeza que deseja cancelar o disparo "${campaignName}"?`)) {
             return;
         }
         
-        setIsCancelling(historyId);
-        try {
-            const res = await App.apiRequest(`/api/disparos/cancel/${historyId}`, 'POST');
-            App.showToast(res.message || 'Disparo cancelado com sucesso!', 'success');
-            fetchHistory(currentPage, false);
-            // Verificar se ainda há disparo ativo após cancelamento
-            const activeCheck = await App.apiRequest('/api/disparos/check-active', 'GET');
-            setIsDisparoInProgress(activeCheck.active);
-        } catch (error) {
-            App.showToast('Erro ao cancelar: ' + (error.response?.data?.message || error.message), 'error');
-        } finally {
-            setIsCancelling(null);
-        }
+        // Mostrar feedback imediato
+        App.showToast('Cancelando disparo...', 'info');
+        
+        // Fazer requisição assíncrona sem bloquear a UI
+        (async () => {
+            try {
+                const res = await App.apiRequest(`/api/disparos/cancel/${historyId}`, 'POST');
+                App.showToast(res.message || 'Disparo cancelado com sucesso!', 'success');
+                // Atualizar lista em background
+                fetchHistory(currentPage, false);
+                // Verificar se ainda há disparo ativo após cancelamento
+                const activeCheck = await App.apiRequest('/api/disparos/check-active', 'GET');
+                setIsDisparoInProgress(activeCheck.active);
+            } catch (error) {
+                App.showToast('Erro ao cancelar: ' + (error.response?.data?.message || error.message), 'error');
+            }
+        })();
     };
     
     const getStatusChip = (status) => {
@@ -8248,12 +8249,11 @@ function generatePreviewHTML(data) {
                                 <th style={{padding: '1rem'}}>Agendado Para</th>
                                 <th style={{padding: '1rem'}}>Status</th>
                                 <th style={{padding: '1rem'}}>Envios</th>
-                                <th style={{padding: '1rem'}}>Conversões</th>
                                 <th style={{padding: '1rem'}}>Ações</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {isLoadingHistory ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                            {isLoadingHistory ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
                              history.map(item => {
                                 const progressPercentage = item.total_jobs > 0 
                                     ? Math.round((item.processed_jobs / item.total_jobs) * 100)
@@ -8275,27 +8275,24 @@ function generatePreviewHTML(data) {
                                             </td>
                                             <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
                                             <td style={{padding: '1rem'}}>{item.total_jobs || 0}</td>
-                                            <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
                                             <td style={{padding: '1rem'}}>
                                                 <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
                                                     {item.status === 'SCHEDULED' && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
-                                                            disabled={isCancelling === item.id}
                                                             style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
                                                         >
-                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                            Cancelar
                                                         </button>
                                                     )}
                                                     {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
-                                                            disabled={isCancelling === item.id}
                                                             style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
                                                         >
-                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                            Cancelar
                                                         </button>
                                                     )}
                                                 </div>
@@ -8541,23 +8538,24 @@ function generatePreviewHTML(data) {
         }, [history, fetchHistory, pollingInterval]);
         
         
-        const [isCancelling, setIsCancelling] = useState(null);
-        
         const handleCancelDisparo = async (historyId, campaignName) => {
             if (!confirm(`Tem certeza que deseja cancelar o disparo "${campaignName}"?`)) {
                 return;
             }
             
-            setIsCancelling(historyId);
-            try {
-                const res = await api.post(`/api/disparos/cancel/${historyId}`);
-                alert(res.data.message || 'Disparo cancelado com sucesso!');
-                fetchHistory();
-            } catch (error) {
-                alert('Erro ao cancelar: ' + (error.response?.data?.message || error.message));
-            } finally {
-                setIsCancelling(null);
-            }
+            // Mostrar feedback imediato
+            alert('Cancelando disparo...');
+            
+            // Fazer requisição assíncrona sem bloquear a UI
+            (async () => {
+                try {
+                    const res = await api.post(`/api/disparos/cancel/${historyId}`);
+                    alert(res.data.message || 'Disparo cancelado com sucesso!');
+                    fetchHistory();
+                } catch (error) {
+                    alert('Erro ao cancelar: ' + (error.response?.data?.message || error.message));
+                }
+            })();
         };
         
         const getStatusChip = (status) => {
@@ -8592,12 +8590,11 @@ function generatePreviewHTML(data) {
                                 <th style={{padding: '1rem'}}>Agendado Para</th>
                                 <th style={{padding: '1rem'}}>Status</th>
                                 <th style={{padding: '1rem'}}>Envios</th>
-                                <th style={{padding: '1rem'}}>Conversões</th>
                                 <th style={{padding: '1rem'}}>Ações</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {isLoading ? (<tr><td colSpan="7" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
+                            {isLoading ? (<tr><td colSpan="6" style={{textAlign: 'center', padding: '2rem'}}>A carregar...</td></tr>) : 
                              history.map(item => {
                                 const progressPercentage = item.total_jobs > 0 
                                     ? Math.round((item.processed_jobs / item.total_jobs) * 100)
@@ -8619,27 +8616,24 @@ function generatePreviewHTML(data) {
                                             </td>
                                             <td style={{padding: '1rem'}}>{getStatusChip(item.status)}</td>
                                             <td style={{padding: '1rem'}}>{item.total_jobs || 0}</td>
-                                            <td style={{padding: '1rem', fontWeight: 'bold', color: 'var(--brand-primary)'}}>{item.conversions || 0}</td>
                                             <td style={{padding: '1rem'}}>
                                                 <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
                                                     {item.status === 'SCHEDULED' && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
-                                                            disabled={isCancelling === item.id}
                                                             style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
                                                         >
-                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                            Cancelar
                                                         </button>
                                                     )}
                                                     {(item.status === 'RUNNING' || item.status === 'PENDING') && (
                                                         <button 
                                                             className="btn btn-secondary btn-sm" 
                                                             onClick={() => handleCancelDisparo(item.id, item.campaign_name)} 
-                                                            disabled={isCancelling === item.id}
                                                             style={{background: 'var(--danger)', borderColor: 'var(--danger)'}}
                                                         >
-                                                            {isCancelling === item.id ? 'Cancelando...' : 'Cancelar'}
+                                                            Cancelar
                                                         </button>
                                                     )}
                                                 </div>
