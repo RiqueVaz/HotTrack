@@ -76,7 +76,7 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_DELAY]: {
         concurrency: 30,
         limiter: { max: 30, duration: 1000 },
-        stalledInterval: 120000, // 2 minutos
+        stalledInterval: 600000, // 10 minutos (aumentado de 2min para dar mais margem para delays longos)
         attempts: 3,
         backoff: {
             type: 'exponential',
