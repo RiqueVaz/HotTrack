@@ -574,7 +574,7 @@ function findNextNode(nodeId, handle, edges) {
 
 // Função simplificada para processar fluxo de disparo
 // Esta função processa o fluxo completo começando do start_node_id
-async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId) {
+async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId, skipCounterUpdate = false) {
     const logPrefix = '[WORKER-DISPARO]';
     const startTime = Date.now();
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
@@ -921,7 +921,8 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
     }
     
     // Atualizar histórico e salvar disparo_log
-    if (historyId) {
+    // Se skipCounterUpdate for true, o contador já foi atualizado pelo chamador (processDisparoBatchData)
+    if (historyId && !skipCounterUpdate) {
         try {
             // Atualizar processed_jobs e verificar se concluído
             let updatedHistory = null;
@@ -958,8 +959,32 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
         } catch (error) {
             logger.error(`${logPrefix} Erro ao atualizar histórico:`, error);
         }
-        
-        // Salvar disparo_log
+    } else if (historyId && skipCounterUpdate) {
+        // Apenas verificar se concluído (contador já foi atualizado pelo chamador)
+        try {
+            const [updatedHistory] = await sqlWithRetry(sqlTx`
+                SELECT processed_jobs, total_jobs, status
+                FROM disparo_history
+                WHERE id = ${historyId}
+            `);
+            
+            if (updatedHistory && updatedHistory.processed_jobs >= updatedHistory.total_jobs && updatedHistory.total_jobs > 0) {
+                if (updatedHistory.status !== 'COMPLETED') {
+                    await sqlWithRetry(sqlTx`
+                        UPDATE disparo_history 
+                        SET status = 'COMPLETED', current_step = NULL
+                        WHERE id = ${historyId}
+                    `);
+                    logger.debug(`${logPrefix} Disparo ${historyId} concluído. Todas as mensagens foram enviadas.`);
+                }
+            }
+        } catch (error) {
+            logger.error(`${logPrefix} Erro ao verificar conclusão do disparo:`, error);
+        }
+    }
+    
+    // Salvar disparo_log (sempre que houver historyId)
+    if (historyId) {
         try {
             await sqlWithRetry(
                 sqlTx`INSERT INTO disparo_log (history_id, chat_id, bot_id, status, details, transaction_id) 
@@ -2024,7 +2049,16 @@ async function processDisparoBatchData(data) {
                 }
                 
                 // Processar fluxo de disparo para este contato
+                // IMPORTANTE: Atualizar contador ANTES de processar para garantir que seja atualizado mesmo se falhar
                 try {
+                    // Atualizar contador ANTES de processar o contato
+                    await sqlWithRetry(sqlTx`
+                        UPDATE disparo_history 
+                        SET processed_jobs = processed_jobs + 1
+                        WHERE id = ${history_id}
+                    `);
+                    
+                    // Processar fluxo (skipCounterUpdate=true porque já atualizamos acima)
                     await processDisparoFlow(
                         contact.chat_id,
                         contact.bot_id,
@@ -2034,13 +2068,14 @@ async function processDisparoBatchData(data) {
                         userVariables,
                         flowNodes,
                         flowEdges,
-                        history_id
+                        history_id,
+                        true // skipCounterUpdate: contador já foi atualizado
                     );
                     
                     processedCount++;
                 } catch (flowError) {
-                    // Se processDisparoFlow falhar ANTES de atualizar processed_jobs,
-                    // precisamos atualizar manualmente para não travar o disparo
+                    // Se processDisparoFlow falhar, atualizar failure_count
+                    // O processed_jobs já foi atualizado antes, então só precisamos atualizar failure_count
                     errorCount++;
                     logger.error(`[WORKER-DISPARO-BATCH] Erro ao processar fluxo para contato ${contact?.chat_id}:`, {
                         error: flowError.message,
@@ -2053,16 +2088,15 @@ async function processDisparoBatchData(data) {
                         batch_index
                     });
                     
-                    // Garantir que processed_jobs seja atualizado mesmo em caso de erro no fluxo
+                    // Atualizar failure_count (processed_jobs já foi incrementado antes)
                     try {
                         await sqlWithRetry(sqlTx`
                             UPDATE disparo_history 
-                            SET processed_jobs = processed_jobs + 1,
-                                failure_count = failure_count + 1
+                            SET failure_count = failure_count + 1
                             WHERE id = ${history_id}
                         `);
                     } catch (updateError) {
-                        logger.error(`[WORKER-DISPARO-BATCH] Erro ao atualizar contador após falha no fluxo:`, updateError.message);
+                        logger.error(`[WORKER-DISPARO-BATCH] Erro ao atualizar failure_count após falha no fluxo:`, updateError.message);
                     }
                 }
                 
