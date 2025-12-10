@@ -177,6 +177,7 @@ const QUEUE_CONFIGS = {
         concurrency: 10,
         limiter: { max: 10, duration: 1000 },
         stalledInterval: 600000, // 10 minutos (aumentado de 5min - validação pode processar muitos contatos)
+        maxStalledCount: 10, // Aumentado para dar mais chances antes de falhar (igual DISPARO_BATCH)
         lockDuration: 1800000, // 30 minutos - validação pode demorar muito com muitos contatos
         attempts: 3,
         backoff: {
@@ -188,6 +189,7 @@ const QUEUE_CONFIGS = {
         concurrency: 5,
         limiter: { max: 5, duration: 1000 },
         stalledInterval: 600000, // 10 minutos (aumentado de 1min - processa muitos contatos e cria batches)
+        maxStalledCount: 10, // Aumentado para dar mais chances antes de falhar (igual DISPARO_BATCH)
         lockDuration: 1800000, // 30 minutos - pode processar muitos contatos e criar muitos batches
         attempts: 3,
         backoff: {
