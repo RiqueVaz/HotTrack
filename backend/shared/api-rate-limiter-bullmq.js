@@ -775,7 +775,13 @@ class ApiRateLimiterBullMQ {
                     await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
                 } else {
                     logger.error(`[API Rate Limiter] Erro crítico ao garantir worker para ${queueName} após ${maxRetries} tentativas:`, error.message);
-                    // Se não conseguir criar worker, tentar requisição direta como fallback
+                    // APIs de geolocalização têm sistema de múltiplas APIs como fallback
+                    const geoLocationApis = ['ip-api', 'ipapi-co', 'ipgeolocation-io'];
+                    if (geoLocationApis.includes(provider)) {
+                        logger.debug(`[API Rate Limiter] Worker indisponível para API de geolocalização ${provider}. Sistema de múltiplas APIs assumirá.`);
+                        throw new Error(`Worker não disponível para ${provider}. Sistema de múltiplas APIs assumirá.`);
+                    }
+                    // Se não conseguir criar worker, tentar requisição direta como fallback (apenas para APIs não-geolocalização)
                     logger.warn(`[API Rate Limiter] Tentando requisição direta como fallback para ${queueName}`);
                     return await this._makeDirectRequest({
                         provider,
@@ -796,7 +802,13 @@ class ApiRateLimiterBullMQ {
         }
         
         if (!worker) {
-            // Se não conseguir criar worker, tentar requisição direta como fallback
+            // APIs de geolocalização têm sistema de múltiplas APIs como fallback
+            const geoLocationApis = ['ip-api', 'ipapi-co', 'ipgeolocation-io'];
+            if (geoLocationApis.includes(provider)) {
+                logger.debug(`[API Rate Limiter] Worker não disponível para API de geolocalização ${provider}. Sistema de múltiplas APIs assumirá.`);
+                throw new Error(`Worker não disponível para ${provider}. Sistema de múltiplas APIs assumirá.`);
+            }
+            // Se não conseguir criar worker, tentar requisição direta como fallback (apenas para APIs não-geolocalização)
             logger.warn(`[API Rate Limiter] Worker não disponível para ${queueName}. Tentando requisição direta como fallback`);
             return await this._makeDirectRequest({
                 provider,
@@ -858,8 +870,14 @@ class ApiRateLimiterBullMQ {
 
             return result;
         } catch (error) {
+            // APIs de geolocalização têm sistema de múltiplas APIs como fallback,
+            // então não usar fallback de requisição direta para evitar bypass do rate limiting
+            const geoLocationApis = ['ip-api', 'ipapi-co', 'ipgeolocation-io'];
+            const isGeoLocationApi = geoLocationApis.includes(provider);
+            
             // Se timeout na fila e fallback está habilitado, tentar requisição direta
-            if (error.timeout && this.FALLBACK_ON_TIMEOUT) {
+            // EXCETO para APIs de geolocalização (que têm sistema de múltiplas APIs)
+            if (error.timeout && this.FALLBACK_ON_TIMEOUT && !isGeoLocationApi) {
                 logger.warn(`[API Rate Limiter] Timeout na fila ${queueName} após ${timeoutMs}ms. Tentando requisição direta como fallback`);
                 
                 try {
@@ -882,6 +900,10 @@ class ApiRateLimiterBullMQ {
                     logger.error(`[API Rate Limiter] Fallback direto também falhou para ${queueName}:`, fallbackError.message);
                     throw error; // Lançar erro original (timeout na fila)
                 }
+            } else if (error.timeout && isGeoLocationApi) {
+                // Para APIs de geolocalização, lançar erro imediatamente para que sistema de múltiplas APIs assuma
+                logger.debug(`[API Rate Limiter] Timeout na fila ${queueName} para API de geolocalização. Sistema de múltiplas APIs assumirá.`);
+                throw error;
             }
             
             // Não registrar falha no circuit breaker para erros específicos
