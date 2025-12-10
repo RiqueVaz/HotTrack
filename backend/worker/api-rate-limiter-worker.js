@@ -22,7 +22,7 @@ const PROVIDER_CONFIGS = {
     'pixup': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
     'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
-    'ip-api': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 5000 },
+    'ip-api': { limiter: { max: 1, duration: 1500 }, concurrency: 1, timeout: 10000 }, // 1 req/1.5s, concorrência 1, timeout 10s
     'utmify': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 20000 },
     'default': { limiter: { max: 1, duration: 1000 }, concurrency: 1, timeout: 10000 }
 };

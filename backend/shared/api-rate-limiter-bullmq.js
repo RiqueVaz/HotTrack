@@ -123,9 +123,9 @@ class ApiRateLimiterBullMQ {
                 circuitBreakerSuccessThreshold: 2
             }],
             ['ip-api', {
-                limiter: { max: 1, duration: 2000 },
-                concurrency: 2,
-                timeout: 5000,
+                limiter: { max: 1, duration: 1500 }, // 1 req/1.5s para respeitar 45 req/min da API free tier
+                concurrency: 1, // Reduzido de 2 para 1 para evitar sobrecarga
+                timeout: 10000, // Aumentado de 5s para 10s quando fila está cheia
                 cacheTTL: 24 * 3600_000, // 24 horas
                 maxRetries: 1,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
