@@ -9,7 +9,7 @@
  * - Prioridades (high para PIX generate)
  */
 
-const { Queue } = require('bullmq');
+const { Queue, QueueEvents } = require('bullmq');
 const axios = require('axios');
 const { redisConnection } = require('./queue');
 const redisCache = require('./redis-cache');
@@ -19,6 +19,9 @@ class ApiRateLimiterBullMQ {
     constructor() {
         // Filas por provedor e seller: `${provider}-${sellerId}`
         this.queues = new Map();
+        
+        // QueueEvents por fila para aguardar conclusão de jobs
+        this.queueEvents = new Map();
         
         // Circuit breakers: `${provider}_${sellerId}` -> { failures: 0, successes: 0, openedAt: null, state: 'closed' }
         this.circuitBreakers = new Map();
@@ -186,6 +189,58 @@ class ApiRateLimiterBullMQ {
         }
         
         return this.queues.get(key);
+    }
+
+    /**
+     * Obtém ou cria QueueEvents para uma fila
+     */
+    _getQueueEvents(queueName) {
+        if (!this.queueEvents.has(queueName)) {
+            const queueEvents = new QueueEvents(queueName, {
+                connection: redisConnection
+            });
+            this.queueEvents.set(queueName, queueEvents);
+        }
+        return this.queueEvents.get(queueName);
+    }
+
+    /**
+     * Aguarda conclusão de um job usando QueueEvents
+     */
+    async _waitForJobCompletion(queueName, jobId, timeoutMs) {
+        const queueEvents = this._getQueueEvents(queueName);
+        
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                reject(new Error(`Timeout aguardando job ${jobId} (${timeoutMs}ms)`));
+            }, timeoutMs);
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                queueEvents.off('completed', onCompleted);
+                queueEvents.off('failed', onFailed);
+            };
+
+            const onCompleted = ({ jobId: eventJobId, returnvalue }) => {
+                if (eventJobId === jobId) {
+                    cleanup();
+                    resolve(returnvalue);
+                }
+            };
+
+            const onFailed = ({ jobId: eventJobId, failedReason }) => {
+                if (eventJobId === jobId) {
+                    cleanup();
+                    const error = new Error(failedReason || 'Job failed');
+                    error.jobId = jobId;
+                    reject(error);
+                }
+            };
+
+            queueEvents.on('completed', onCompleted);
+            queueEvents.on('failed', onFailed);
+        });
     }
 
     /**
@@ -372,21 +427,11 @@ class ApiRateLimiterBullMQ {
             }
         );
 
-        // Aguardar resultado com timeout e verificação de método
+        // Aguardar resultado usando QueueEvents
         try {
-            // Verificar se job.finished existe (pode não existir se worker não foi criado)
-            if (!job || typeof job.finished !== 'function') {
-                throw new Error(`Job não possui método finished(). Worker pode não ter sido criado para api-${provider}-${sellerId}`);
-            }
-
             // Aguardar resultado com timeout (máximo 30 segundos ou timeout do config)
             const timeoutMs = Math.max(config.timeout || 10000, 30000);
-            const result = await Promise.race([
-                job.finished(),
-                new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error(`Timeout aguardando job ${job.id} (${timeoutMs}ms)`)), timeoutMs)
-                )
-            ]);
+            const result = await this._waitForJobCompletion(queueName, job.id, timeoutMs);
 
             // Registrar sucesso
             this._recordSuccess(provider, sellerId);
@@ -443,13 +488,17 @@ class ApiRateLimiterBullMQ {
     }
 
     /**
-     * Fecha todas as filas
+     * Fecha todas as filas e QueueEvents
      */
     async close() {
         for (const queue of this.queues.values()) {
             await queue.close();
         }
+        for (const queueEvents of this.queueEvents.values()) {
+            await queueEvents.close();
+        }
         this.queues.clear();
+        this.queueEvents.clear();
     }
 }
 
