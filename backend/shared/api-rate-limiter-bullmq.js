@@ -132,6 +132,26 @@ class ApiRateLimiterBullMQ {
                 circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
+            ['ipapi-co', {
+                limiter: { max: 1, duration: 2000 }, // 1 req/2s para respeitar limites da API free tier
+                concurrency: 1,
+                timeout: 10000,
+                cacheTTL: 24 * 3600_000, // 24 horas
+                maxRetries: 1,
+                circuitBreakerThreshold: 20,
+                circuitBreakerTimeout: 60000,
+                circuitBreakerSuccessThreshold: 2
+            }],
+            ['ipgeolocation-io', {
+                limiter: { max: 1, duration: 2000 }, // 1 req/2s para respeitar limites da API free tier
+                concurrency: 1,
+                timeout: 10000,
+                cacheTTL: 24 * 3600_000, // 24 horas
+                maxRetries: 1,
+                circuitBreakerThreshold: 20,
+                circuitBreakerTimeout: 60000,
+                circuitBreakerSuccessThreshold: 2
+            }],
             ['utmify', {
                 limiter: { max: 1, duration: 2000 },
                 concurrency: 2, // Aumentado de 1 para 2 (mais conservador)

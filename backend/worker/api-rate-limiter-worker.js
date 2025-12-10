@@ -23,6 +23,8 @@ const PROVIDER_CONFIGS = {
     'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'ip-api': { limiter: { max: 1, duration: 1500 }, concurrency: 1, timeout: 10000 }, // 1 req/1.5s, concorrência 1, timeout 10s
+    'ipapi-co': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 }, // 1 req/2s, concorrência 1, timeout 10s
+    'ipgeolocation-io': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 }, // 1 req/2s, concorrência 1, timeout 10s
     'utmify': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 20000 },
     'default': { limiter: { max: 1, duration: 1000 }, concurrency: 1, timeout: 10000 }
 };
@@ -94,8 +96,8 @@ function createWorkerForQueue(queueName) {
                         '5'
                     );
                     
-                    // Para alguns provedores, não fazer retry
-                    if (provider === 'ip-api' || provider === 'utmify') {
+                    // Para alguns provedores, não fazer retry (fallback será usado)
+                    if (provider === 'ip-api' || provider === 'ipapi-co' || provider === 'ipgeolocation-io' || provider === 'utmify') {
                         throw error;
                     }
                     
