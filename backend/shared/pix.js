@@ -675,12 +675,22 @@ function createPixService({
       throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
     }
 
-    // Tentar todos os provedores em paralelo
-    const promises = providerOrder.map(provider => 
-      generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal)
+    // Tentar todos os provedores em paralelo com timeout individual de 8s por provedor
+    const PROVIDER_TIMEOUT = 8000; // 8 segundos máximo por provedor
+    const promises = providerOrder.map(provider => {
+      const providerPromise = generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal)
         .then(result => ({ success: true, provider, result }))
-        .catch(error => ({ success: false, provider, error }))
-    );
+        .catch(error => ({ success: false, provider, error }));
+      
+      // Adicionar timeout individual usando Promise.race
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`Timeout de ${PROVIDER_TIMEOUT}ms para ${provider}`)), PROVIDER_TIMEOUT)
+      );
+      
+      return Promise.race([providerPromise, timeoutPromise])
+        .then(result => result)
+        .catch(error => ({ success: false, provider, error }));
+    });
 
     const results = await Promise.allSettled(promises);
     
