@@ -30,10 +30,10 @@ class ApiRateLimiterBullMQ {
         this.providerMetrics = new Map();
         
         // Configurações do sistema híbrido
-        this.QUEUE_THRESHOLD = 10; // Se há mais de 10 jobs na fila, usar requisição direta
-        this.MAX_DIRECT_TIMEOUT = 20000; // Timeout máximo para requisições diretas (20s)
-        this.DYNAMIC_TIMEOUT_MULTIPLIER = 2000; // Multiplicador para timeout dinâmico (2s por job)
-        this.MIN_QUEUE_TIMEOUT = 15000; // Timeout mínimo quando usa fila (15s)
+        this.QUEUE_THRESHOLD = 3; // Reduzido de 10 para 3 - se há mais de 3 jobs na fila, usar requisição direta
+        this.MAX_DIRECT_TIMEOUT = 15000; // Reduzido de 20s para 15s - timeout máximo para requisições diretas
+        this.DYNAMIC_TIMEOUT_MULTIPLIER = 1000; // Reduzido de 2000 para 1000 - multiplicador para timeout dinâmico (1s por job)
+        this.MIN_QUEUE_TIMEOUT = 10000; // Reduzido de 15s para 10s - timeout mínimo quando usa fila
         this.FALLBACK_ON_TIMEOUT = true; // Tentar requisição direta se timeout na fila
         
         // Cache de contagem de jobs por fila (evita múltiplas queries Redis)
@@ -45,7 +45,7 @@ class ApiRateLimiterBullMQ {
             ['pushinpay', {
                 limiter: { max: 2, duration: 1000 }, // 2 req/segundo
                 concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
-                timeout: 20000,
+                timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 1,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
@@ -65,7 +65,7 @@ class ApiRateLimiterBullMQ {
             ['brpix', {
                 limiter: { max: 1, duration: 2000 }, // 1 req/2s
                 concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
-                timeout: 20000,
+                timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
@@ -75,7 +75,7 @@ class ApiRateLimiterBullMQ {
             ['cnpay', {
                 limiter: { max: 1, duration: 2000 },
                 concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
-                timeout: 20000,
+                timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
@@ -85,7 +85,7 @@ class ApiRateLimiterBullMQ {
             ['oasyfy', {
                 limiter: { max: 1, duration: 2000 },
                 concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
-                timeout: 20000,
+                timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
@@ -95,7 +95,7 @@ class ApiRateLimiterBullMQ {
             ['pixup', {
                 limiter: { max: 1, duration: 2000 },
                 concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
-                timeout: 20000,
+                timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 3,
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
@@ -464,7 +464,7 @@ class ApiRateLimiterBullMQ {
                 headers,
                 data,
                 params,
-                timeout: Math.min(config.timeout || 10000, this.MAX_DIRECT_TIMEOUT)
+                timeout: Math.min(config.timeout || 15000, this.MAX_DIRECT_TIMEOUT)
             });
             
             // Registrar sucesso
@@ -538,11 +538,11 @@ class ApiRateLimiterBullMQ {
         
         // Verificar tamanho da fila antes de decidir estratégia
         const queueSize = await this._getQueueSize(queue);
-        // Usar requisição direta apenas se fila está cheia (não apenas por prioridade alta)
-        // Prioridade alta ainda vai para fila, mas com timeout maior e pode fazer fallback
-        const shouldUseDirectRequest = queueSize > this.QUEUE_THRESHOLD;
+        // Para PIX generation (priority === 'high'), SEMPRE usar requisição direta se há jobs na fila
+        // Para outras requisições, usar direta apenas se fila está cheia (threshold)
+        const shouldUseDirectRequest = (priority === 'high' && queueSize > 0) || queueSize > this.QUEUE_THRESHOLD;
         
-        // Se fila está muito cheia ou é alta prioridade, usar requisição direta
+        // Se fila está muito cheia ou é alta prioridade com jobs na fila, usar requisição direta
         if (shouldUseDirectRequest) {
             logger.debug(`[API Rate Limiter] Fila ${queueName} tem ${queueSize} jobs. Usando requisição direta (threshold: ${this.QUEUE_THRESHOLD})`);
             
@@ -646,12 +646,12 @@ class ApiRateLimiterBullMQ {
 
         // Aguardar resultado usando QueueEvents
         // Timeout dinâmico baseado no tamanho da fila
-        // Mínimo 15s, +2s por job na fila
-        const dynamicTimeout = Math.max(
-            this.MIN_QUEUE_TIMEOUT,
-            queueSize * this.DYNAMIC_TIMEOUT_MULTIPLIER
+        // Mínimo 10s + 1s por job na fila, máximo 15s para evitar 499
+        const dynamicTimeout = Math.min(
+            Math.max(this.MIN_QUEUE_TIMEOUT, this.MIN_QUEUE_TIMEOUT + (queueSize * this.DYNAMIC_TIMEOUT_MULTIPLIER)),
+            15000 // Máximo de 15s para evitar 499
         );
-        const timeoutMs = Math.min(dynamicTimeout, config.timeout || 20000);
+        const timeoutMs = Math.min(dynamicTimeout, config.timeout || 15000);
         
         try {
             logger.debug(`[API Rate Limiter] Aguardando job ${job.id} na fila ${queueName} (timeout: ${timeoutMs}ms, fila: ${queueSize} jobs)`);

@@ -1822,9 +1822,13 @@ async function handler(req, res) {
 }
 
 // Função para processar múltiplos contatos em batch com controle de concorrência
-async function processDisparoBatchData(data) {
+async function processDisparoBatchData(data, job = null) {
     const { history_id, contacts, flow_nodes, flow_edges, start_node_id, batch_index = 0, total_batches = 1 } = data;
     const contactsCount = contacts?.length || 0;
+    
+    // Renovação periódica de lock para evitar jobs stalled em batches grandes
+    let lastLockRenewal = Date.now();
+    const LOCK_RENEWAL_INTERVAL = 5 * 60 * 1000; // 5 minutos
     
     try {
         // Log inicial detalhado
@@ -2062,6 +2066,8 @@ async function processDisparoBatchData(data) {
                 
                 if (processedCount % 50 === 0) {
                     logger.info(`[WORKER-DISPARO-BATCH] Processados ${processedCount}/${contacts.length} contatos do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`);
+                    // Renovar lock periodicamente durante processamento de batches grandes
+                    await renewLockIfNeeded();
                 }
             } catch (error) {
                 errorCount++;

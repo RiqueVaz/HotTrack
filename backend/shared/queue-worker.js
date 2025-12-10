@@ -179,8 +179,8 @@ const processors = {
         await processDisparoData(data);
     },
     
-    [QUEUE_NAMES.DISPARO_BATCH]: async (data) => {
-        await processDisparoBatchData(data);
+    [QUEUE_NAMES.DISPARO_BATCH]: async (data, job) => {
+        await processDisparoBatchData(data, job);
     },
     
     [QUEUE_NAMES.DISPARO_DELAY]: async (data) => {
@@ -263,14 +263,14 @@ const processors = {
         }
     },
     
-    [QUEUE_NAMES.VALIDATION_DISPARO]: async (data) => {
+    [QUEUE_NAMES.VALIDATION_DISPARO]: async (data, job) => {
         // Processar validação e disparo (chama processDisparoBatchData)
-        await processDisparoBatchData(data);
+        await processDisparoBatchData(data, job);
     },
     
-    [QUEUE_NAMES.SCHEDULED_DISPARO]: async (data) => {
+    [QUEUE_NAMES.SCHEDULED_DISPARO]: async (data, job) => {
         // Processar disparo agendado (chama processDisparoBatchData)
-        await processDisparoBatchData(data);
+        await processDisparoBatchData(data, job);
     },
     
     [QUEUE_NAMES.CLEANUP_QRCODES]: async (data) => {
