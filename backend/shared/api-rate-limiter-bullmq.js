@@ -435,6 +435,82 @@ class ApiRateLimiterBullMQ {
     }
 
     /**
+     * Aplica rate limiting não-bloqueante (apenas registra, não espera)
+     * Usado para PIX generation (priority === 'high') para evitar bloqueios em requisições paralelas
+     */
+    async _applyNonBlockingRateLimit(provider, sellerId, config) {
+        const key = `api-rate-limit:${provider}:${sellerId}`;
+        const now = Date.now();
+        const windowMs = config.limiter.duration * 1000;
+        const maxRequests = config.limiter.max;
+        
+        try {
+            // Remover requisições antigas da janela
+            await redisConnection.zremrangebyscore(key, 0, now - windowMs);
+            
+            // Contar requisições na janela
+            const count = await redisConnection.zcard(key);
+            
+            // Calcular tempo de espera necessário (mas não bloquear)
+            let waitTime = 0;
+            if (count >= maxRequests) {
+                const oldestRequests = await redisConnection.zrange(key, 0, 0, 'WITHSCORES');
+                if (oldestRequests && oldestRequests.length > 0) {
+                    const oldestTimestamp = parseInt(oldestRequests[1]);
+                    waitTime = Math.max(0, (oldestTimestamp + windowMs) - now);
+                }
+            }
+            
+            // Adicionar requisição atual (mesmo se exceder limite - confia no rate limit do provedor)
+            await redisConnection.zadd(key, now, `${now}-${Math.random()}`);
+            await redisConnection.expire(key, Math.ceil(windowMs / 1000) + 10); // +10s de margem
+            
+            // Retornar informação sobre rate limit (sem bloquear)
+            return {
+                allowed: count < maxRequests,
+                waitTime: waitTime,
+                count: count,
+                maxRequests: maxRequests
+            };
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao aplicar rate limiting não-bloqueante para ${provider} (fail open):`, error.message);
+            // Fail open: retornar como se permitido
+            return { allowed: true, waitTime: 0, count: 0, maxRequests: maxRequests };
+        }
+    }
+
+    /**
+     * Adquire lock distribuído usando Redis SET NX EX
+     * @param {string} key - Chave do lock
+     * @param {number} ttl - TTL em segundos (padrão: 3s)
+     * @returns {Promise<boolean>} - true se lock adquirido, false caso contrário
+     */
+    async _acquireLock(key, ttl = 3) {
+        try {
+            const lockKey = `api-lock:${key}`;
+            const lockValue = `${Date.now()}-${Math.random()}`;
+            const result = await redisConnection.set(lockKey, lockValue, 'EX', ttl, 'NX');
+            return result === 'OK';
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao adquirir lock ${key} (fail open):`, error.message);
+            return false; // Fail open: assumir que lock não foi adquirido
+        }
+    }
+
+    /**
+     * Libera lock distribuído
+     * @param {string} key - Chave do lock
+     */
+    async _releaseLock(key) {
+        try {
+            const lockKey = `api-lock:${key}`;
+            await redisConnection.del(lockKey);
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao liberar lock ${key} (não crítico):`, error.message);
+        }
+    }
+
+    /**
      * Faz requisição HTTP direta (bypass da fila BullMQ)
      * Usado quando fila está cheia ou como fallback
      */
@@ -449,12 +525,20 @@ class ApiRateLimiterBullMQ {
         config,
         skipCache,
         resourceId,
-        responseTransformer
+        responseTransformer,
+        skipBlockingRateLimit = false
     }) {
-        logger.debug(`[API Rate Limiter] Fazendo requisição direta para ${provider} (bypass da fila)`);
+        logger.debug(`[API Rate Limiter] Fazendo requisição direta para ${provider} (bypass da fila, skipBlocking: ${skipBlockingRateLimit})`);
         
-        // Aplicar rate limiting manualmente
-        await this._applyDirectRateLimit(provider, sellerId, config);
+        // Aplicar rate limiting (bloqueante ou não-bloqueante)
+        if (skipBlockingRateLimit) {
+            const rateLimitInfo = await this._applyNonBlockingRateLimit(provider, sellerId, config);
+            if (!rateLimitInfo.allowed && rateLimitInfo.waitTime > 0) {
+                logger.debug(`[API Rate Limiter] Rate limit excedido para ${provider} (${rateLimitInfo.count}/${rateLimitInfo.maxRequests}), mas continuando sem bloquear (waitTime: ${rateLimitInfo.waitTime}ms)`);
+            }
+        } else {
+            await this._applyDirectRateLimit(provider, sellerId, config);
+        }
         
         try {
             const axios = require('axios');
@@ -544,25 +628,106 @@ class ApiRateLimiterBullMQ {
         
         // Se fila está muito cheia ou é alta prioridade com jobs na fila, usar requisição direta
         if (shouldUseDirectRequest) {
-            logger.debug(`[API Rate Limiter] Fila ${queueName} tem ${queueSize} jobs. Usando requisição direta (threshold: ${this.QUEUE_THRESHOLD})`);
+            logger.debug(`[API Rate Limiter] Fila ${queueName} tem ${queueSize} jobs. Usando requisição direta (threshold: ${this.QUEUE_THRESHOLD}, priority: ${priority})`);
             
-            try {
-                return await this._makeDirectRequest({
-                    provider,
-                    sellerId,
-                    method,
-                    url,
-                    headers,
-                    data,
-                    params,
-                    config,
-                    skipCache,
-                    resourceId,
-                    responseTransformer
-                });
-            } catch (error) {
-                // Se requisição direta falhar, não tentar fila (já está sobrecarregada)
-                throw error;
+            // Para PIX generation (priority === 'high'), usar lock distribuído para coordenar requisições paralelas
+            if (priority === 'high') {
+                const lockKey = `${provider}:${sellerId}`;
+                const lockAcquired = await this._acquireLock(lockKey, 3); // Lock por 3 segundos
+                
+                if (lockAcquired) {
+                    try {
+                        // Lock adquirido - fazer requisição
+                        logger.debug(`[API Rate Limiter] Lock adquirido para ${lockKey}, fazendo requisição direta`);
+                        return await this._makeDirectRequest({
+                            provider,
+                            sellerId,
+                            method,
+                            url,
+                            headers,
+                            data,
+                            params,
+                            config,
+                            skipCache,
+                            resourceId,
+                            responseTransformer,
+                            skipBlockingRateLimit: true // Não bloquear para PIX
+                        });
+                    } finally {
+                        await this._releaseLock(lockKey);
+                    }
+                } else {
+                    // Lock não adquirido - aguardar até 100ms e verificar se resultado já existe
+                    logger.debug(`[API Rate Limiter] Lock não adquirido para ${lockKey}, aguardando até 100ms`);
+                    const maxWait = 100; // 100ms máximo
+                    const startWait = Date.now();
+                    
+                    while (Date.now() - startWait < maxWait) {
+                        await new Promise(resolve => setTimeout(resolve, 10)); // Aguardar 10ms
+                        
+                        // Verificar se lock foi liberado
+                        const lockAcquiredNow = await this._acquireLock(lockKey, 3);
+                        if (lockAcquiredNow) {
+                            try {
+                                logger.debug(`[API Rate Limiter] Lock adquirido após espera para ${lockKey}`);
+                                return await this._makeDirectRequest({
+                                    provider,
+                                    sellerId,
+                                    method,
+                                    url,
+                                    headers,
+                                    data,
+                                    params,
+                                    config,
+                                    skipCache,
+                                    resourceId,
+                                    responseTransformer,
+                                    skipBlockingRateLimit: true
+                                });
+                            } finally {
+                                await this._releaseLock(lockKey);
+                            }
+                        }
+                    }
+                    
+                    // Se não conseguiu lock após espera, fazer requisição mesmo assim (sem lock)
+                    logger.debug(`[API Rate Limiter] Não conseguiu lock após ${maxWait}ms para ${lockKey}, fazendo requisição sem lock`);
+                    return await this._makeDirectRequest({
+                        provider,
+                        sellerId,
+                        method,
+                        url,
+                        headers,
+                        data,
+                        params,
+                        config,
+                        skipCache,
+                        resourceId,
+                        responseTransformer,
+                        skipBlockingRateLimit: true
+                    });
+                }
+            } else {
+                // Requisição normal (não PIX) - usar rate limiting bloqueante
+                try {
+                    return await this._makeDirectRequest({
+                        provider,
+                        sellerId,
+                        method,
+                        url,
+                        headers,
+                        data,
+                        params,
+                        config,
+                        skipCache,
+                        resourceId,
+                        responseTransformer,
+                        skipBlockingRateLimit: false
+                    });
+                } catch (error) {
+                    // Se requisição direta falhar, não tentar fila (já está sobrecarregada)
+                    throw error;
+                }
             }
         }
         
@@ -603,7 +768,8 @@ class ApiRateLimiterBullMQ {
                         config,
                         skipCache,
                         resourceId,
-                        responseTransformer
+                        responseTransformer,
+                        skipBlockingRateLimit: priority === 'high'
                     });
                 }
             }
@@ -688,7 +854,8 @@ class ApiRateLimiterBullMQ {
                         config,
                         skipCache,
                         resourceId,
-                        responseTransformer
+                        responseTransformer,
+                        skipBlockingRateLimit: priority === 'high' // Não bloquear se for PIX
                     });
                 } catch (fallbackError) {
                     // Se fallback também falhar, lançar erro original (timeout na fila)
