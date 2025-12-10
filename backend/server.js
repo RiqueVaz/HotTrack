@@ -6179,6 +6179,84 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
         // Retorna o click_id limpo para o frontend/JS da pressel
         res.status(200).json({ status: 'success', click_id: clean_click_id });
 
+        // Função helper para normalizar respostas das diferentes APIs de geolocalização
+        function normalizeGeoResponse(apiName, response) {
+            if (!response) return null;
+            
+            switch (apiName) {
+                case 'ip-api':
+                    if (response.status === 'success') {
+                        return {
+                            city: response.city || null,
+                            state: response.regionName || null
+                        };
+                    }
+                    return null;
+                case 'ipapi-co':
+                    // ipapi.co retorna { city: '...', region: '...' }
+                    return {
+                        city: response.city || null,
+                        state: response.region || null
+                    };
+                case 'ipgeolocation-io':
+                    // ipgeolocation.io retorna { city: '...', state_prov: '...' }
+                    return {
+                        city: response.city || null,
+                        state: response.state_prov || null
+                    };
+                default:
+                    return null;
+            }
+        }
+
+        // Função de fallback que tenta múltiplas APIs em ordem
+        async function getGeolocationWithFallback(ip_address) {
+            const apis = [
+                {
+                    name: 'ip-api',
+                    provider: 'ip-api',
+                    url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
+                    headers: {}
+                },
+                {
+                    name: 'ipapi-co',
+                    provider: 'ipapi-co',
+                    url: `https://ipapi.co/${ip_address}/json/`,
+                    headers: {}
+                },
+                {
+                    name: 'ipgeolocation-io',
+                    provider: 'ipgeolocation-io',
+                    url: `https://api.ipgeolocation.io/ipgeo?ip=${ip_address}${process.env.IPGEOLOCATION_API_KEY ? `&apiKey=${process.env.IPGEOLOCATION_API_KEY}` : ''}`,
+                    headers: {}
+                }
+            ];
+
+            for (const api of apis) {
+                try {
+                    const response = await apiRateLimiterBullMQ.request({
+                        provider: api.provider,
+                        sellerId: 0, // Global, não por seller
+                        method: 'get',
+                        url: api.url,
+                        headers: api.headers
+                    });
+
+                    const normalized = normalizeGeoResponse(api.name, response);
+                    if (normalized && (normalized.city || normalized.state)) {
+                        return normalized;
+                    }
+                } catch (error) {
+                    // Se for 429 ou outro erro, tentar próxima API
+                    // Não logar aqui para evitar spam - apenas tentar próxima
+                    continue;
+                }
+            }
+
+            // Se todas as APIs falharam, retornar null
+            return null;
+        }
+
         // Tarefas assíncronas (Geolocalização e Evento Meta)
         (async () => {
             try {
@@ -6186,37 +6264,22 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 // Adiciona verificação para IPs locais comuns
                 const isLocalIp = ip_address === '::1' || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.') || ip_address.startsWith('10.');
                 if (ip_address && !isLocalIp) {
-                    // Usar apenas apiRateLimiter que já tem cache interno
+                    // Usar função de fallback que tenta múltiplas APIs
                     try {
-                        const geo = await apiRateLimiterBullMQ.request({
-                            provider: 'ip-api',
-                            sellerId: 0, // Global, não por seller
-                            method: 'get',
-                            url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
-                            headers: {}
-                        });
-                        if (geo.status === 'success') {
+                        const geo = await getGeolocationWithFallback(ip_address);
+                        if (geo) {
                             city = geo.city || city;
-                            state = geo.regionName || state;
-                            // Removido log de debug - não é necessário em produção
+                            state = geo.state || state;
                         } else {
-                            // Logar apenas em desenvolvimento
-                            if (shouldLogDebug()) {
-                                logger.warn(`[GEO] Falha ao obter geolocalização para IP ${ip_address}: ${geo.message || 'Status não foi success'}`);
+                            // Se todas as APIs falharam, logar apenas ocasionalmente
+                            if (shouldLogOccasionally(0.01)) {
+                                logger.warn(`[GEO] Todas as APIs de geolocalização falharam para IP ${ip_address}. Usando valores padrão.`);
                             }
                         }
                     } catch (geoError) {
-                        // Se der 429, não tentar novamente - usar valores padrão
-                        if (geoError.response?.status === 429) {
-                            // Logar apenas ocasionalmente (1% das vezes) para evitar spam
-                            if (shouldLogOccasionally(0.01)) {
-                                logger.warn(`[GEO] Rate limit atingido para IP ${ip_address}. Usando valores padrão.`);
-                            }
-                        } else {
-                            // Logar apenas erros críticos
-                            if (shouldLogDebug()) {
-                                logger.error(`[GEO] Erro na API de geolocalização para IP ${ip_address}:`, geoError.message);
-                            }
+                        // Logar apenas erros críticos
+                        if (shouldLogDebug()) {
+                            logger.error(`[GEO] Erro crítico na geolocalização para IP ${ip_address}:`, geoError.message);
                         }
                     }
                 } else if (isLocalIp) {
