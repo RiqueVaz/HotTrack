@@ -33,7 +33,7 @@ class ApiRateLimiterBullMQ {
         this.providerConfigs = new Map([
             ['pushinpay', {
                 limiter: { max: 2, duration: 1000 }, // 2 req/segundo
-                concurrency: 1,
+                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
@@ -43,7 +43,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['syncpay', {
                 limiter: { max: 1, duration: 2000 }, // 1 req/2s
-                concurrency: 1,
+                concurrency: 2, // Aumentado de 1 para 2 (mais conservador, 1 req/2s)
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -53,7 +53,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['brpix', {
                 limiter: { max: 1, duration: 2000 }, // 1 req/2s
-                concurrency: 1,
+                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -63,7 +63,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['cnpay', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -73,7 +73,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['oasyfy', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -83,7 +83,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['pixup', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -93,7 +93,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['wiinpay', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 2, // Aumentado de 1 para 2 (mais conservador)
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -103,7 +103,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['paradise', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 2, // Aumentado de 1 para 2 (mais conservador)
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -123,7 +123,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['utmify', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 1,
+                concurrency: 2, // Aumentado de 1 para 2 (mais conservador)
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
@@ -217,7 +217,11 @@ class ApiRateLimiterBullMQ {
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 cleanup();
-                reject(new Error(`Timeout aguardando job ${jobId} (${timeoutMs}ms)`));
+                const timeoutError = new Error(`Timeout aguardando job ${jobId} (${timeoutMs}ms)`);
+                timeoutError.timeout = true; // Marcar como timeout para não registrar como falha no circuit breaker
+                timeoutError.jobId = jobId;
+                timeoutError.queueName = queueName;
+                reject(timeoutError);
             }, timeoutMs);
 
             const cleanup = () => {
@@ -433,9 +437,8 @@ class ApiRateLimiterBullMQ {
 
         // Aguardar resultado usando QueueEvents
         try {
-            // Timeout reduzido para evitar esperas muito longas
-            // Permite que o sistema tente próximo provedor mais rapidamente se o atual estiver lento
-            const timeoutMs = Math.min(config.timeout || 10000, 10000); // 10s máximo
+            // Timeout balanceado para dar tempo suficiente quando há fila, mas evitar esperas muito longas
+            const timeoutMs = Math.min(config.timeout || 10000, 15000); // 15s máximo
             const result = await this._waitForJobCompletion(queueName, job.id, timeoutMs);
 
             // Registrar sucesso
@@ -454,6 +457,7 @@ class ApiRateLimiterBullMQ {
         } catch (error) {
             // Não registrar falha no circuit breaker para erros específicos
             const shouldRecordFailure = !error.circuitBreakerOpen && 
+                                       !error.timeout && // Timeout - pode ser temporário (fila cheia), não indica problema real com o provedor
                                        error.response?.status !== 405 && // Método incorreto - erro de configuração
                                        error.response?.status !== 429;   // Rate limit - esperado, não é falha do provedor
             
