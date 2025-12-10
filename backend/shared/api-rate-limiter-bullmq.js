@@ -37,8 +37,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['syncpay', {
@@ -47,8 +47,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['brpix', {
@@ -57,8 +57,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['cnpay', {
@@ -67,8 +67,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['oasyfy', {
@@ -77,8 +77,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['pixup', {
@@ -87,8 +87,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['wiinpay', {
@@ -97,8 +97,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['paradise', {
@@ -107,8 +107,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['ip-api', {
@@ -117,8 +117,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 5000,
                 cacheTTL: 24 * 3600_000, // 24 horas
                 maxRetries: 1,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['utmify', {
@@ -127,8 +127,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
             ['default', {
@@ -137,8 +137,8 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 30_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
-                circuitBreakerTimeout: 300_000,
+                circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
+                circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }]
         ]);
@@ -433,8 +433,9 @@ class ApiRateLimiterBullMQ {
 
         // Aguardar resultado usando QueueEvents
         try {
-            // Aguardar resultado com timeout (máximo 30 segundos ou timeout do config)
-            const timeoutMs = Math.max(config.timeout || 10000, 30000);
+            // Timeout reduzido para evitar esperas muito longas
+            // Permite que o sistema tente próximo provedor mais rapidamente se o atual estiver lento
+            const timeoutMs = Math.min(config.timeout || 10000, 10000); // 10s máximo
             const result = await this._waitForJobCompletion(queueName, job.id, timeoutMs);
 
             // Registrar sucesso
