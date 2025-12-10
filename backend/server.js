@@ -31,7 +31,6 @@ const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEvent
 const apiRateLimiterBullMQ = require('./shared/api-rate-limiter-bullmq');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
-const { migrateMediaOnDemand } = require('./shared/migrate-media-on-demand');
 const { addJobWithDelay, removeJob, removeJobsByHistoryId, QUEUE_NAMES, scheduleRecurringCleanupQRCodes } = require('./shared/queue');
 const { initializeWorkers, closeAllWorkers } = require('./shared/queue-worker');
 
@@ -1055,16 +1054,34 @@ const json70mb = express.json({ limit: '70mb' });
 function validateTelegramSize(fileBuffer, fileType) {
     const size = fileBuffer.length; // bytes
     const MB = 1024 * 1024;
-    try {
-        if (fileType && fileType.startsWith && fileType.startsWith('video/')) {
-            if (size > 50 * MB) throw new Error('Arquivo de vídeo excede 50 MB (limite do Telegram).');
-        } else if (fileType && fileType.startsWith && fileType.startsWith('image/')) {
-            if (size > 10 * MB) throw new Error('Imagem excede 10 MB (limite do Telegram).');
-        } else if (fileType && fileType.startsWith && fileType.startsWith('audio/')) {
-            if (size > 50 * MB) throw new Error('Áudio excede 50 MB (limite do Telegram).');
+    
+    // Limites da API do Telegram Bot para upload via InputStream:
+    // - Fotos: 10 MB
+    // - Vídeos: 50 MB
+    // - Áudio/Voice: 50 MB
+    // - Documentos: 50 MB
+    
+    if (!fileType || typeof fileType !== 'string') {
+        throw new Error('Tipo de arquivo não especificado.');
+    }
+    
+    if (fileType.startsWith('image/')) {
+        if (size > 10 * MB) {
+            throw new Error(`Imagem excede 10 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
         }
-    } catch (e) {
-        throw e;
+    } else if (fileType.startsWith('video/')) {
+        if (size > 50 * MB) {
+            throw new Error(`Vídeo excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
+    } else if (fileType.startsWith('audio/')) {
+        if (size > 50 * MB) {
+            throw new Error(`Áudio excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
+    } else {
+        // Para outros tipos (documentos, etc), aplicar limite padrão de 50 MB
+        if (size > 50 * MB) {
+            throw new Error(`Arquivo excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
     }
 }
 
@@ -2396,7 +2413,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
             
             if (!media) {
                 const [mediaResult] = await sqlWithRetry(`
-                    SELECT id, file_id, storage_url, storage_type, migration_status
+                    SELECT id, file_id, storage_url, storage_type
                     FROM media_library 
                     WHERE id = $1 AND seller_id = $2
                     LIMIT 1
@@ -2422,7 +2439,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
         
         if (!media) {
             const [mediaResult] = await sqlWithRetry(`
-                SELECT id, file_id, storage_url, storage_type, migration_status
+                SELECT id, file_id, storage_url, storage_type
                 FROM media_library 
                 WHERE file_id = $1 AND seller_id = $2
                 LIMIT 1
@@ -2435,53 +2452,18 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
         }
 
         if (media) {
-            // 2. PRIORIDADE 1: Se já está no R2, baixar e fazer upload
+            // Se está no R2, baixar e fazer upload
             if (media.storage_type === 'r2' && media.storage_url) {
-                try {
-                    return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption, media.id, botId);
-                } catch (urlError) {
-                    logger.warn(`[Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
-                    // Não tentar fallback com file_id se R2 falhou - file_id provavelmente também é inválido
-                    throw urlError;
-                }
-            }
-
-            // 3. PRIORIDADE 2: Se não está migrado, tentar migrar sob demanda
-            if (media.storage_type === 'telegram' && media.migration_status !== 'migrated') {
-                try {
-                    logger.info(`[Media] Migrando mídia ${media.id} sob demanda...`);
-                    const migrationResult = await migrateMediaOnDemand(media.id);
-                    
-                    if (migrationResult?.success && migrationResult?.storageUrl) {
-                        // Invalidar cache
-                        await redisCache.delete(cacheKey);
-                        
-                        const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                        const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                        const method = methodMap[fileType];
-                        const field = fieldMap[fileType];
-                        
-                        const payload = normalizeTelegramPayload({
-                            chat_id: chatId,
-                            [field]: migrationResult.storageUrl,
-                            caption: caption,
-                            parse_mode: 'HTML'
-                        });
-                        
-                        return await sendTelegramRequest(destinationBotToken, method, payload, { 
-                            timeout: fileType === 'video' ? 120000 : 60000 
-                        });
-                    }
-                } catch (migrationError) {
-                    logger.error(`[Media] Erro na migração sob demanda:`, migrationError.message);
-                    // Continuar com método antigo apenas se migração falhou
-                }
+                return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption, media.id, botId);
+            } else {
+                // Mídia não está no R2 - não suportado mais
+                throw new Error(`Mídia ${media.id} não está armazenada no R2. Apenas mídias no R2 são suportadas.`);
             }
         }
     }
 
-    // 4. Fallback: método antigo (download/re-upload) - apenas se não encontrou no banco ou migração falhou
-    return await sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption);
+    // Se não encontrou mídia no banco, lançar erro
+    throw new Error(`Mídia não encontrada na biblioteca para file_id: ${fileId}`);
 }
 
 async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, mediaId = null, botId = null) {
@@ -2650,108 +2632,6 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
 }
 
 // Função original mantida para compatibilidade
-async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption) {
-    // Normalizar caption para evitar UNDEFINED_VALUE (Telegram não aceita undefined)
-    caption = caption || "";
-    
-    const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-    if (!storageBotToken) throw new Error('Token do bot de armazenamento não configurado.');
-
-    try {
-    const fileInfo = await sendTelegramRequest(storageBotToken, 'getFile', { file_id: fileId });
-        if (!fileInfo.ok) {
-            // Se getFile falhar com "file is too big", tentar usar file_id diretamente
-            if (fileInfo.error_code === 400 && fileInfo.description && fileInfo.description.includes('too big')) {
-                logger.warn(`[Flow Media] Arquivo muito grande para getFile. Tentando usar file_id diretamente: ${fileId}`);
-                const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-                const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-                const method = methodMap[fileType];
-                const field = fieldMap[fileType];
-                const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
-                try {
-                    const payload = normalizeTelegramPayload({
-                        chat_id: chatId, 
-                        [field]: fileId, 
-                        caption: caption || ""
-                    });
-                    return await sendTelegramRequest(destinationBotToken, method, payload, { timeout });
-                } catch (bigFileError) {
-                    const bigFileErrorMessage = bigFileError.message || bigFileError.description || '';
-                    const bigFileErrorResponseDesc = bigFileError.response?.data?.description || '';
-                    if (bigFileErrorMessage.includes('wrong remote file identifier') || 
-                        bigFileErrorResponseDesc.includes('wrong remote file identifier')) {
-                        logger.warn(`[Flow Media] File ID inválido para arquivo grande ${fileType}. Pulando envio.`);
-                        return null;
-                    }
-                    throw bigFileError;
-                }
-            }
-            throw new Error('Não foi possível obter informações do arquivo da biblioteca.');
-        }
-
-    const fileUrl = `https://api.telegram.org/file/bot${storageBotToken}/${fileInfo.result.file_path}`;
-
-    const { data: fileBuffer, headers: fileHeaders } = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    
-    const formData = new FormData();
-    formData.append('chat_id', chatId);
-    if (caption) {
-        formData.append('caption', caption);
-    }
-
-    const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-    const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-    const fileNameMap = { image: 'image.jpg', video: 'video.mp4', audio: 'audio.ogg' };
-
-    const method = methodMap[fileType];
-    const field = fieldMap[fileType];
-    const fileName = fileNameMap[fileType];
-        const timeout = fileType === 'video' ? 120000 : 30000; // Timeout maior para vídeos
-
-    if (!method) throw new Error('Tipo de arquivo não suportado.');
-
-    formData.append(field, fileBuffer, { filename: fileName, contentType: fileHeaders['content-type'] });
-
-    return await sendTelegramRequest(destinationBotToken, method, formData, { headers: formData.getHeaders(), timeout });
-    } catch (error) {
-        // Verificar se é erro de file_id inválido
-        const errorMessage = error.message || error.description || '';
-        const responseDesc = error.response?.data?.description || '';
-        if (errorMessage.includes('wrong remote file identifier') || 
-            responseDesc.includes('wrong remote file identifier')) {
-            logger.warn(`[Flow Media] File ID inválido em sendMediaAsProxy para ${fileType}. Pulando envio.`);
-            return null;
-        }
-        
-        // Se falhar ao baixar o arquivo (timeout, network error, etc.), tentar usar file_id diretamente
-        if (error.message && (error.message.includes('timeout') || error.message.includes('too big') || error.message.includes('network') || error.code === 'ECONNABORTED')) {
-            logger.warn(`[Flow Media] Erro ao baixar arquivo (${error.message}). Tentando usar file_id diretamente: ${fileId}`);
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[fileType];
-            const field = fieldMap[fileType];
-            const timeout = fileType === 'video' ? 120000 : 60000; // Timeout maior para arquivos grandes
-            try {
-                const payload = normalizeTelegramPayload({
-                    chat_id: chatId, 
-                    [field]: fileId, 
-                    caption: caption || ""
-                });
-                return await sendTelegramRequest(destinationBotToken, method, payload, { timeout });
-            } catch (fallbackError) {
-                const fallbackErrorMessage = fallbackError.message || fallbackError.description || '';
-                const fallbackErrorResponseDesc = fallbackError.response?.data?.description || '';
-                if (fallbackErrorMessage.includes('wrong remote file identifier') || 
-                    fallbackErrorResponseDesc.includes('wrong remote file identifier')) {
-                    logger.warn(`[Flow Media] File ID inválido no fallback de sendMediaAsProxy para ${fileType}. Pulando envio.`);
-                    return null;
-                }
-                throw fallbackError;
-            }
-        }
-        throw error;
-    }
-}
 
 // Função removida - não é mais necessária com BullMQ (usamos Promise.all diretamente)
 /*
@@ -2812,7 +2692,7 @@ async function processStepsForQStashBatch(steps, sellerId) {
         // Busca todos os file_ids de uma vez usando IN (incluindo informações do R2)
         const fileIdsArray = Array.from(fileIdsToLookup);
         const mediaResults = await sqlWithRetry(
-            sqlTx`SELECT id, file_id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
+            sqlTx`SELECT id, file_id, storage_url, storage_type FROM media_library WHERE file_id = ANY(${fileIdsArray}) AND seller_id = ${sellerId}`
         );
         
         // Cria um Map de file_id -> dados completos da mídia para lookup rápido
@@ -2821,8 +2701,7 @@ async function processStepsForQStashBatch(steps, sellerId) {
             fileIdToMediaData.set(media.file_id, {
                 id: media.id,
                 storage_url: media.storage_url,
-                storage_type: media.storage_type,
-                migration_status: media.migration_status
+                storage_type: media.storage_type
             });
         }
         
@@ -2859,7 +2738,6 @@ async function processStepsForQStashBatch(steps, sellerId) {
                     processedStep.storageUrl = mediaData.storage_url;
                     processedStep.storageType = mediaData.storage_type;
                 }
-                processedStep.migrationStatus = mediaData.migration_status;
                 processedStepsCache.set(stepKey, processedStep);
             } else {
                 // Não encontrado na biblioteca, mantém original
@@ -2903,7 +2781,7 @@ async function processStepForQStash(step, sellerId) {
     try {
         // Busca o ID da biblioteca de mídia pelo file_id (incluindo informações do R2)
         const [media] = await sqlWithRetry(
-            'SELECT id, storage_url, storage_type, migration_status FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
+            'SELECT id, storage_url, storage_type FROM media_library WHERE file_id = $1 AND seller_id = $2 LIMIT 1',
             [fileUrl, sellerId]
         );
         
@@ -2921,7 +2799,6 @@ async function processStepForQStash(step, sellerId) {
             processedStep.storageUrl = media.storage_url;
             processedStep.storageType = media.storage_type;
         }
-        processedStep.migrationStatus = media.migration_status;
         
         console.log(`[processStepForQStash] File_id ${fileUrl} substituído por mediaLibraryId: ${media.id}${media.storage_url ? ' (R2 disponível)' : ''}`);
         
@@ -2982,30 +2859,37 @@ async function handleMediaNode(node, botToken, chatId, caption, sellerId = null,
                 return null; // Não tentar fallback se file_id é inválido
             }
             
-            // Se sendMediaFromLibrary falhar, tentar usar file_id diretamente como fallback
-            logger.warn(`[Flow Media] Erro ao enviar mídia via library (${error.message}). Tentando file_id diretamente.`);
-            const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
-            const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
-            const method = methodMap[type];
-            const field = fieldMap[type];
-            
-            const fallbackPayload = normalizeTelegramPayload({ 
-                chat_id: chatId, 
-                [field]: fileIdentifier, 
-                caption: caption || "" 
-            });
-            
-            try {
-            response = await sendTelegramRequest(botToken, method, fallbackPayload, { timeout });
-            } catch (fallbackError) {
-                const fallbackMessage = fallbackError.message || fallbackError.description || '';
-                const fallbackResponseDesc = fallbackError.response?.data?.description || '';
-                if (fallbackMessage.includes('wrong remote file identifier') || 
-                    fallbackResponseDesc.includes('wrong remote file identifier')) {
-                    logger.warn(`[Flow Media] File ID inválido no fallback para ${type} (nó ${nodeId}). Pulando envio.`);
-                    return null;
+            // Se sendMediaFromLibrary falhar e não for file_id da biblioteca, tentar usar file_id diretamente como fallback
+            const isLibraryFileId = fileIdentifier && (fileIdentifier.startsWith('BAAC') || fileIdentifier.startsWith('AgAC') || fileIdentifier.startsWith('AwAC') || fileIdentifier.startsWith('R2_'));
+            if (!isLibraryFileId) {
+                logger.warn(`[Flow Media] Erro ao enviar mídia via library (${error.message}). Tentando file_id diretamente.`);
+                const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
+                const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
+                const method = methodMap[type];
+                const field = fieldMap[type];
+                
+                const fallbackPayload = normalizeTelegramPayload({ 
+                    chat_id: chatId, 
+                    [field]: fileIdentifier, 
+                    caption: caption || "" 
+                });
+                
+                try {
+                    response = await sendTelegramRequest(botToken, method, fallbackPayload, { timeout });
+                } catch (fallbackError) {
+                    const fallbackMessage = fallbackError.message || fallbackError.description || '';
+                    const fallbackResponseDesc = fallbackError.response?.data?.description || '';
+                    if (fallbackMessage.includes('wrong remote file identifier') || 
+                        fallbackResponseDesc.includes('wrong remote file identifier')) {
+                        logger.warn(`[Flow Media] File ID inválido no fallback para ${type} (nó ${nodeId}). Pulando envio.`);
+                        return null;
+                    }
+                    throw fallbackError;
                 }
-                throw fallbackError;
+            } else {
+                // É file_id da biblioteca - não pode usar diretamente
+                logger.warn(`[Flow Media] Erro ao enviar mídia da biblioteca (${error.message}). Mídia da biblioteca requer R2.`);
+                throw error;
             }
         }
     } else {
@@ -11669,7 +11553,7 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
         );
         
         if (media) {
-          // Se tem storage_url e é R2 (mídia nova), redirecionar para URL do R2
+          // Se tem storage_url e é R2, fazer proxy do arquivo
           if (media.storage_url && media.storage_type === 'r2') {
             // Verificar se é thumbnail ou arquivo principal
             const [thumbCheck] = await sqlWithRetry(
@@ -11679,54 +11563,38 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
             
             const urlToUse = thumbCheck ? (media.thumbnail_storage_url || media.storage_url) : media.storage_url;
             if (urlToUse) {
-              return res.redirect(302, urlToUse);
+              try {
+                // Fazer proxy do arquivo do R2
+                const fileResponse = await axios.get(urlToUse, {
+                  responseType: 'stream',
+                  timeout: 30000,
+                  httpsAgent: httpsAgent
+                });
+                
+                // Definir Content-Type baseado no tipo de arquivo
+                const contentType = media.file_type === 'image' ? 'image/jpeg' :
+                                   media.file_type === 'video' ? 'video/mp4' :
+                                   media.file_type === 'audio' ? 'audio/ogg' :
+                                   fileResponse.headers['content-type'] || 'application/octet-stream';
+                
+                // Headers CORS e cache
+                res.setHeader('Content-Type', contentType);
+                res.setHeader('Cache-Control', 'public, max-age=31536000');
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                
+                fileResponse.data.pipe(res);
+                return;
+              } catch (r2Error) {
+                console.error('[Media Preview] Erro ao fazer proxy do R2:', r2Error.message);
+                // Se erro 404 ou 403, retornar erro específico
+                if (r2Error.response?.status === 404 || r2Error.response?.status === 403) {
+                  return res.status(404).send('Arquivo não encontrado no R2.');
+                }
+                // Para outros erros, continuar para fallback
+              }
             }
           }
           
-          // Se storage_type = 'telegram' (mídia antiga ainda não migrada), usar storage bot token
-          if (media.storage_type === 'telegram') {
-            const token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-            if (!token) return res.status(404).send('Bot de armazenamento não configurado.');
-            
-            const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-            if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-              return res.status(404).send('Arquivo não encontrado no Telegram.');
-            }
-            
-            const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
-            const response = await axios.get(fileUrl, { 
-              responseType: 'stream',
-              httpsAgent: httpsAgent
-            });
-            
-            res.setHeader('Content-Type', response.headers['content-type']);
-            response.data.pipe(res);
-            return;
-          }
-        }
-        
-        // PRIORIDADE 2: Se não encontrou na biblioteca, verificar formato do file_id
-        // Se começa com BAAC, AgAC, AwAC (formatos do storage bot), usar storage bot token
-        const isStorageBotFileId = file_id.startsWith('BAAC') || file_id.startsWith('AgAC') || file_id.startsWith('AwAC');
-        
-        if (isStorageBotFileId) {
-          const token = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-          if (!token) return res.status(404).send('Bot de armazenamento não configurado.');
-          
-          const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-          if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-            return res.status(404).send('Arquivo não encontrado no Telegram.');
-          }
-          
-          const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
-          const response = await axios.get(fileUrl, { 
-            responseType: 'stream',
-            httpsAgent: httpsAgent
-          });
-          
-          res.setHeader('Content-Type', response.headers['content-type']);
-          response.data.pipe(res);
-          return;
         }
         
         // PRIORIDADE 3: Fallback - usar token do bot informado (para mídias muito antigas que não estão na biblioteca)
@@ -11755,6 +11623,71 @@ app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
       }
     });
 
+// Endpoint alternativo de preview sem bot_id (para compatibilidade com frontend)
+app.get('/api/media/preview/storage/:file_id', async (req, res) => {
+  try {
+    const { file_id } = req.params;
+    
+    // Buscar mídia na biblioteca pelo file_id
+    const [media] = await sqlWithRetry(
+      'SELECT storage_url, thumbnail_storage_url, file_type, storage_type FROM media_library WHERE file_id = $1 OR thumbnail_file_id = $1 LIMIT 1',
+      [file_id]
+    );
+    
+    if (!media) {
+      return res.status(404).send('Mídia não encontrada na biblioteca.');
+    }
+    
+    // Se tem storage_url e é R2, fazer proxy do arquivo
+    if (media.storage_url && media.storage_type === 'r2') {
+      // Verificar se é thumbnail ou arquivo principal
+      const [thumbCheck] = await sqlWithRetry(
+        'SELECT id FROM media_library WHERE thumbnail_file_id = $1 LIMIT 1',
+        [file_id]
+      );
+      
+      const urlToUse = thumbCheck ? (media.thumbnail_storage_url || media.storage_url) : media.storage_url;
+      if (urlToUse) {
+        try {
+          // Fazer proxy do arquivo do R2
+          const fileResponse = await axios.get(urlToUse, {
+            responseType: 'stream',
+            timeout: 30000,
+            httpsAgent: httpsAgent
+          });
+          
+          // Definir Content-Type baseado no tipo de arquivo
+          const contentType = media.file_type === 'image' ? 'image/jpeg' :
+                             media.file_type === 'video' ? 'video/mp4' :
+                             media.file_type === 'audio' ? 'audio/ogg' :
+                             fileResponse.headers['content-type'] || 'application/octet-stream';
+          
+          // Headers CORS e cache
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Cache-Control', 'public, max-age=31536000');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          
+          fileResponse.data.pipe(res);
+          return;
+        } catch (r2Error) {
+          console.error('[Media Preview] Erro ao fazer proxy do R2:', r2Error.message);
+          if (r2Error.response?.status === 404 || r2Error.response?.status === 403) {
+            return res.status(404).send('Arquivo não encontrado no R2.');
+          }
+          return res.status(500).send('Erro ao buscar arquivo do R2.');
+        }
+      }
+    }
+    
+    // Se não é R2 ou não tem storage_url, retornar erro
+    return res.status(404).send('Mídia não disponível. Apenas mídias no R2 são suportadas.');
+    
+  } catch (error) {
+    console.error("Erro no preview:", error.message);
+    res.status(500).send('Erro ao buscar o arquivo.');
+  }
+});
+
 // Endpoint 11: Listar biblioteca de mídia
 app.get('/api/media', authenticateJwt, async (req, res) => {
     try {
@@ -11776,109 +11709,38 @@ app.post('/api/media/upload', authenticateJwt, json70mb, async (req, res) => {
         if (!mimeHint) return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
         try { validateTelegramSize(buffer, mimeHint); } catch (e) { return res.status(413).json({ message: e.message }); }
 
-        // Tentar upload para R2 primeiro (se habilitado)
-        if (r2Storage.enabled) {
-            try {
-                const { storageKey, publicUrl } = await r2Storage.uploadFile(
-                    buffer,
-                    fileName,
-                    fileType,
-                    req.user.id
-                );
-
-                // Gerar file_id temporário único para R2 (mídias que não passam pelo Telegram)
-                // Formato: R2_timestamp_sellerId_randomHex
-                const r2FileId = `R2_${Date.now()}_${req.user.id}_${crypto.randomBytes(8).toString('hex')}`;
-
-                // Salvar no banco com R2
-                const [newMedia] = await sqlWithRetry(`
-                    INSERT INTO media_library 
-                    (seller_id, file_name, file_id, file_type, storage_url, storage_key, storage_type, migration_status)
-                    VALUES ($1, $2, $3, $4, $5, $6, 'r2', 'migrated')
-                    RETURNING id, file_name, file_id, file_type, storage_url, storage_key, storage_type;
-                `, [req.user.id, fileName, r2FileId, fileType, publicUrl, storageKey]);
-
-                return res.status(201).json(newMedia);
-            } catch (r2Error) {
-                console.error('[Media Upload] Erro ao fazer upload para R2, tentando fallback Telegram:', r2Error.message);
-                // Continuar para fallback do Telegram
-            }
+        // Upload apenas para R2 (obrigatório)
+        if (!r2Storage.enabled) {
+            return res.status(503).json({ message: 'Armazenamento R2 não está habilitado. Configure as credenciais do R2 para fazer upload de mídia.' });
         }
 
-        // Fallback: método antigo (Telegram)
-        const storageBotToken = process.env.TELEGRAM_STORAGE_BOT_TOKEN;
-        const storageChannelId = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
-        if (!storageBotToken || !storageChannelId) throw new Error('Credenciais do bot de armazenamento não configuradas.');
-        
-        const formData = new FormData();
-        formData.append('chat_id', storageChannelId);
-        let telegramMethod = '', fieldName = '';
-        if (fileType === 'image') {
-            telegramMethod = 'sendPhoto';
-            fieldName = 'photo';
-        } else if (fileType === 'video') {
-            telegramMethod = 'sendVideo';
-            fieldName = 'video';
-        } else if (fileType === 'audio') {
-            telegramMethod = 'sendVoice';
-            fieldName = 'voice';
-        } else {
-            return res.status(400).json({ message: 'Tipo de ficheiro não suportado.' });
-        }
-        formData.append(fieldName, buffer, { filename: fileName });
-        
-        // Adicionar timeout maior para uploads grandes (120 segundos)
-        const response = await sendTelegramRequest(
-            storageBotToken, 
-            telegramMethod, 
-            formData, 
-            { 
-                headers: formData.getHeaders(),
-                timeout: 120000 // 120 segundos para uploads grandes
-            }
-        );
-        
-        if (!response?.ok || !response.result) {
-            const errorMsg = response?.description || 'Resposta inválida do Telegram ao enviar mídia.';
-            console.error('[Media Upload] Resposta inválida:', errorMsg);
-            if (!res.headersSent) {
-                return res.status(500).json({ message: `Erro ao enviar mídia: ${errorMsg}` });
-            }
-            return;
-        }
-        
-        const result = response.result; // Mensagem retornada pelo Telegram
+        try {
+            const { storageKey, publicUrl } = await r2Storage.uploadFile(
+                buffer,
+                fileName,
+                fileType,
+                req.user.id
+            );
 
-        let fileId, thumbnailFileId = null;
-        if (fileType === 'image') {
-            const photos = Array.isArray(result.photo) ? result.photo : [];
-            fileId = photos.length > 0 ? photos[photos.length - 1].file_id : null;
-            thumbnailFileId = photos.length > 0 ? photos[0].file_id : null;
-        } else if (fileType === 'video') {
-            // Pode vir como result.video ou como result.document com mime de vídeo
-            const videoObj = result.video || (result.document && result.document.mime_type?.startsWith('video/') ? result.document : null);
-            fileId = videoObj?.file_id || null;
-            thumbnailFileId = videoObj?.thumbnail?.file_id || videoObj?.thumb?.file_id || null;
-        } else {
-            // audio -> enviamos como voice
-            fileId = result.voice?.file_id || null;
-        }
-        
-        if (!fileId) {
-            console.error('[Media Upload] Resposta Telegram inesperada (sem file_id):', JSON.stringify(result).slice(0, 1000));
-            if (!res.headersSent) {
-                return res.status(500).json({ message: 'Não foi possível obter o file_id do Telegram.' });
-            }
-            return;
-        }
-        
-        const [newMedia] = await sqlWithRetry(`
-            INSERT INTO media_library (seller_id, file_name, file_id, file_type, thumbnail_file_id, storage_type)
-            VALUES ($1, $2, $3, $4, $5, 'telegram') RETURNING id, file_name, file_id, file_type, thumbnail_file_id, storage_type;
-        `, [req.user.id, fileName, fileId, fileType, thumbnailFileId]);
-        
-        if (!res.headersSent) {
+            // Gerar file_id temporário único para R2 (mídias que não passam pelo Telegram)
+            // Formato: R2_timestamp_sellerId_randomHex
+            const r2FileId = `R2_${Date.now()}_${req.user.id}_${crypto.randomBytes(8).toString('hex')}`;
+
+            // Salvar no banco com R2
+            const [newMedia] = await sqlWithRetry(`
+                INSERT INTO media_library 
+                (seller_id, file_name, file_id, file_type, storage_url, storage_key, storage_type, migration_status)
+                VALUES ($1, $2, $3, $4, $5, $6, 'r2', 'migrated')
+                RETURNING id, file_name, file_id, file_type, storage_url, storage_key, storage_type;
+            `, [req.user.id, fileName, r2FileId, fileType, publicUrl, storageKey]);
+
             return res.status(201).json(newMedia);
+        } catch (r2Error) {
+            console.error('[Media Upload] Erro ao fazer upload para R2:', r2Error.message);
+            if (!res.headersSent) {
+                return res.status(500).json({ message: `Erro ao fazer upload para R2: ${r2Error.message}` });
+            }
+            return;
         }
     } catch (error) {
         console.error('[Media Upload] Erro:', error);
