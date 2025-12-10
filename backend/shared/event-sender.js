@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const logger = require('../logger');
 const { shouldLogDebug } = require('./logger-helper');
-const apiRateLimiter = require('./api-rate-limiter');
+const apiRateLimiter = require('./api-rate-limiter-bullmq');
 
 /**
  * Envia evento para Utmify

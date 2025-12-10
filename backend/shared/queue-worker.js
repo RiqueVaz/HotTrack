@@ -286,6 +286,7 @@ const workers = new Map();
  * Inicializa todos os workers
  */
 function initializeWorkers() {
+    // Inicializar workers das filas principais
     for (const [queueName, processor] of Object.entries(processors)) {
         if (!workers.has(queueName)) {
             const worker = createWorker(queueName, processor);
@@ -293,16 +294,40 @@ function initializeWorkers() {
             logger.info(`[BullMQ] Worker initialized for queue: ${queueName}`);
         }
     }
+    
+    // Inicializar workers de API rate limiter (filas dinâmicas)
+    try {
+        const { initializeWorkers: initApiWorkers } = require('../worker/api-rate-limiter-worker');
+        initApiWorkers().catch(err => {
+            logger.warn(`[BullMQ] Erro ao inicializar API rate limiter workers:`, err.message);
+        });
+    } catch (error) {
+        logger.warn(`[BullMQ] Não foi possível carregar API rate limiter workers:`, error.message);
+    }
+    
+    // Telegram rate limiter agora usa Redis diretamente (sem fila BullMQ)
+    // Não precisa de worker separado
 }
 
 /**
  * Fecha todos os workers
  */
 async function closeAllWorkers() {
+    // Fechar workers das filas principais
     for (const worker of workers.values()) {
         await worker.close();
     }
     workers.clear();
+    
+    // Fechar workers de API rate limiter
+    try {
+        const { closeAll: closeApiWorkers } = require('../worker/api-rate-limiter-worker');
+        await closeApiWorkers();
+    } catch (error) {
+        logger.warn(`[BullMQ] Erro ao fechar API rate limiter workers:`, error.message);
+    }
+    
+    // Telegram rate limiter não tem workers para fechar (usa Redis diretamente)
 }
 
 /**

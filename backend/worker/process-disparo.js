@@ -14,58 +14,25 @@ const crypto = require('crypto');
 const { createPixService } = require('../shared/pix');
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
-const telegramRateLimiter = require('../shared/telegram-rate-limiter');
+const telegramRateLimiter = require('../shared/telegram-rate-limiter-bullmq');
 const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
 const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('../shared/queue');
+const redisCache = require('../shared/redis-cache');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
 
-// Cache global de file_ids do Telegram (evita queries repetidas durante batches)
-if (!global.mediaFileIdCache) {
-    global.mediaFileIdCache = new Map();
-    // Limpar cache a cada 10 minutos
-    setInterval(() => {
-        if (global.mediaFileIdCache.size > 1000) {
-            global.mediaFileIdCache.clear();
-        }
-    }, 10 * 60 * 1000);
-}
+// Cache de file_ids do Telegram agora usa Redis (via redis-cache.js)
+// Mantido global.mediaFileIdCache para compatibilidade, mas não é mais usado
 
 // ==========================================================
 //                   INICIALIZAÇÃO
 // ==========================================================
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
-const syncPayTokenCache = new Map();
-const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100; // Limite máximo de tokens no cache
-
-// Cleanup automático do cache de tokens SyncPay (evita memory leak)
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [sellerId, tokenData] of syncPayTokenCache.entries()) {
-        if (tokenData.expiresAt && now > tokenData.expiresAt) {
-            syncPayTokenCache.delete(sellerId);
-            cleaned++;
-        }
-    }
-    
-    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
-    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
-        const entries = Array.from(syncPayTokenCache.entries())
-            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
-        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
-        for (let i = 0; i < toRemove && i < entries.length; i++) {
-            syncPayTokenCache.delete(entries[i][0]);
-        }
-        cleaned += toRemove;
-    }
-    
-    // Removido log de memory cleanup - não é necessário em produção
-}, 5 * 60 * 1000); // A cada 5 minutos
+// syncPayTokenCache removido - agora usa Redis via redis-cache.js
 
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const PUSHINPAY_SPLIT_ACCOUNT_ID = process.env.PUSHINPAY_SPLIT_ACCOUNT_ID;
@@ -398,31 +365,29 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, mediaId = null, botId = null) {
     // Se temos mediaId e botId, verificar se já existe file_id cacheado
     if (mediaId && botId) {
-        // Verificar cache em memória primeiro (se disponível)
-        const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
-        if (global.mediaFileIdCache && global.mediaFileIdCache.has(cacheKey)) {
-            const cachedFileId = global.mediaFileIdCache.get(cacheKey);
-            if (cachedFileId) {
-                // Usar file_id cacheado diretamente
-                const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
-                const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
-                const timeout = fileType === 'video' ? 120000 : 60000;
-                const payload = normalizeTelegramPayload({
-                    chat_id: chatId,
-                    [field]: cachedFileId,
-                    caption: caption || "",
-                    parse_mode: 'HTML'
-                });
-                try {
-                    return await sendTelegramRequest(botToken, method, payload, { timeout });
-                } catch (error) {
-                    // Se file_id expirou, remover do cache e continuar para download
-                    if (error.response?.data?.description?.includes('wrong remote file identifier')) {
-                        global.mediaFileIdCache.delete(cacheKey);
-                        // Continuar para baixar do R2
-                    } else {
-                        throw error;
-                    }
+        // Verificar cache no Redis primeiro
+        const cacheKey = `telegram_file_id:${mediaId}:${botId}`;
+        const cachedFileId = await redisCache.get(cacheKey);
+        if (cachedFileId) {
+            // Usar file_id cacheado diretamente
+            const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
+            const field = { image: 'photo', video: 'video', audio: 'voice' }[fileType];
+            const timeout = fileType === 'video' ? 120000 : 60000;
+            const payload = normalizeTelegramPayload({
+                chat_id: chatId,
+                [field]: cachedFileId,
+                caption: caption || "",
+                parse_mode: 'HTML'
+            });
+            try {
+                return await sendTelegramRequest(botToken, method, payload, { timeout });
+            } catch (error) {
+                // Se file_id expirou, remover do cache e continuar para download
+                if (error.response?.data?.description?.includes('wrong remote file identifier')) {
+                    await redisCache.delete(cacheKey);
+                    // Continuar para baixar do R2
+                } else {
+                    throw error;
                 }
             }
         }
@@ -437,10 +402,8 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
             const botIdStr = String(botId);
             if (botIdStr && botIdStr !== 'null' && botIdStr !== 'undefined' && media?.telegram_file_ids?.[botIdStr]) {
                 const fileId = media.telegram_file_ids[botIdStr];
-                // Adicionar ao cache em memória
-                if (global.mediaFileIdCache) {
-                    global.mediaFileIdCache.set(cacheKey, fileId);
-                }
+                // Adicionar ao cache no Redis (TTL de 24 horas)
+                await redisCache.set(cacheKey, fileId, 24 * 3600 * 1000);
                 
                 // Usar file_id do banco
                 const method = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' }[fileType];
@@ -461,9 +424,7 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
                             'UPDATE media_library SET telegram_file_ids = telegram_file_ids - $1 WHERE id = $2',
                             [botIdStr, mediaId]
                         );
-                        if (global.mediaFileIdCache) {
-                            global.mediaFileIdCache.delete(cacheKey);
-                        }
+                        await redisCache.delete(cacheKey);
                         // Continuar para baixar do R2
                     } else {
                         throw error;
@@ -545,11 +506,9 @@ async function sendMediaFromR2(botToken, chatId, storageUrl, fileType, caption, 
                     [botIdStr, fileIdStr, mediaId]
                 );
                 
-                // Adicionar ao cache em memória
-                if (global.mediaFileIdCache) {
-                    const cacheKey = `telegram_file_id_${mediaId}_${botId}`;
-                    global.mediaFileIdCache.set(cacheKey, fileId);
-                }
+                // Adicionar ao cache no Redis (TTL de 24 horas)
+                const cacheKey = `telegram_file_id:${mediaId}:${botId}`;
+                await redisCache.set(cacheKey, fileId, 24 * 3600 * 1000);
             } catch (saveError) {
                 // Não crítico se não conseguir salvar
                 logger.warn(`[Disparo Media] Erro ao salvar file_id no banco:`, saveError.message);

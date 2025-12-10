@@ -1474,35 +1474,7 @@ const PIXUP_SPLIT_USERNAME = process.env.PIXUP_SPLIT_USERNAME;
 const PARADISE_SPLIT_RECIPIENT_ID = process.env.PARADISE_SPLIT_RECIPIENT_ID;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 const SYNCPAY_API_BASE_URL = 'https://api.syncpayments.com.br';
-const syncPayTokenCache = new Map();
-const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100; // Limite máximo de tokens no cache
-
-// Cleanup automático do cache de tokens SyncPay (evita memory leak)
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [sellerId, tokenData] of syncPayTokenCache.entries()) {
-        if (tokenData.expiresAt && now > tokenData.expiresAt) {
-            syncPayTokenCache.delete(sellerId);
-            cleaned++;
-        }
-    }
-    
-    // Se cache ainda estiver acima do limite, remover 20% das entradas mais antigas
-    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
-        const entries = Array.from(syncPayTokenCache.entries())
-            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
-        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
-        for (let i = 0; i < toRemove && i < entries.length; i++) {
-            syncPayTokenCache.delete(entries[i][0]);
-        }
-        cleaned += toRemove;
-    }
-    
-    if (cleaned > 0 && shouldLogDebug()) {
-        // Removido log de memory cleanup
-    }
-}, 5 * 60 * 1000); // A cada 5 minutos
+// syncPayTokenCache removido - agora usa Redis via redis-cache.js
 
 // Map de promises pendentes para evitar queries duplicadas em getClickGeo
 const pendingGeoQueries = new Map();
@@ -1549,7 +1521,7 @@ const {
     sqlWithRetry,
     axios,
     uuidv4,
-    syncPayTokenCache,
+    // syncPayTokenCache e pixupTokenCache removidos - agora usa Redis
     adminApiKey: ADMIN_API_KEY,
     synPayBaseUrl: SYNCPAY_API_BASE_URL,
     pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
@@ -2172,7 +2144,7 @@ async function generatePresselHTML(pressel, pixelIds) {
 // ==========================================================
 //          FUNÇÕES DO HOTBOT INTEGRADAS
 // ==========================================================
-const telegramRateLimiter = require('./shared/telegram-rate-limiter');
+const telegramRateLimiter = require('./shared/telegram-rate-limiter-bullmq');
 
 // Função helper para marcar bloqueio na tabela bot_blocks
 async function markBotBlockedInDb(botId, chatId, sellerId) {
