@@ -134,9 +134,9 @@ const QUEUE_CONFIGS = {
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
         // stalledInterval, maxStalledCount e lockDuration são configurações do Worker (não podem ser por job)
         // Valores conservadores que funcionam para qualquer tamanho de batch
-        stalledInterval: 1800000, // 30 minutos (tempo para detectar jobs realmente travados)
-        maxStalledCount: 5, // Dar mais chances antes de falhar
-        lockDuration: 3600000, // 1 hora (configuração global do Worker - funciona para batches grandes)
+        stalledInterval: 3600000, // 60 minutos (aumentado de 30min para evitar falsos positivos de stalled)
+        maxStalledCount: 10, // Aumentado de 5 para 10 - dar mais chances antes de falhar
+        lockDuration: 7200000, // 2 horas (aumentado de 1h para batches muito grandes)
         // attempts padrão (será sobrescrito por job via calculateScalableLimits quando possível)
         attempts: 5, // Padrão (fallback para jobs sem cálculo dinâmico)
         backoff: {
