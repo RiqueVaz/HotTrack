@@ -473,6 +473,7 @@ function createPixService({
       const pushinpayResponse = await apiRateLimiter.createTransaction({
         provider: 'pushinpay',
         sellerId: seller.id,
+        method: 'post',
         url: 'https://api.pushinpay.com.br/api/pix/cashIn',
         headers: { Authorization: `Bearer ${seller.pushinpay_token}` },
         data: payload

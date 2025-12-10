@@ -100,7 +100,7 @@ async function markBotBlockedInDb(botId, chatId, sellerId) {
         );
         // Também atualizar cache em memória (opcional, para performance)
         const dbCache = require('../shared/db-cache');
-        dbCache.markBotBlocked(botId, chatId);
+        await dbCache.markBotBlocked(botId, chatId);
     } catch (error) {
         logger.error(`[Bot Blocks] Erro ao marcar bloqueio: ${error.message}`);
     }
@@ -116,10 +116,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     // VERIFICAR CACHE ANTES DE TENTAR
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         const dbCache = require('../shared/db-cache');
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
-        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
@@ -137,7 +137,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                         sqlTx`DELETE FROM bot_blocks WHERE bot_id = ${botId} AND chat_id = ${chatId}`
                     );
                     const dbCache = require('../shared/db-cache');
-                    dbCache.unmarkBotBlocked(botId, chatId);
+                    await dbCache.unmarkBotBlocked(botId, chatId);
                 } catch (unblockError) {
                     // Não crítico, apenas logar
                     logger.debug(`[Bot Blocks] Erro ao remover bloqueio (não crítico): ${unblockError.message}`);
@@ -154,7 +154,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 // MARCAR NO CACHE E NA TABELA QUANDO RECEBER 403
                 if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
                     if (botId) {
-                        dbCache.markBotBlocked(botId, errorChatId);
+                        await dbCache.markBotBlocked(botId, errorChatId);
                         // Buscar seller_id do bot e inserir na tabela
                         try {
                             const [bot] = await sqlWithRetry(
@@ -167,7 +167,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                             logger.warn(`[Bot Blocks] Erro ao buscar seller_id para bot ${botId}: ${dbError.message}`);
                         }
                     } else {
-                        dbCache.markBotTokenBlocked(botToken, errorChatId);
+                        await dbCache.markBotTokenBlocked(botToken, errorChatId);
                     }
                 }
                 

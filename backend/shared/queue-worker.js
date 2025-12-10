@@ -51,7 +51,8 @@ function createWorker(queueName, processor, options = {}) {
                 const allowed = await checkRateLimit(botToken);
                 if (!allowed) {
                     // Se rate limit ainda excedido (raro, mas possível), usar RateLimitError para retry
-                    logger.warn(`[BullMQ-Worker] Rate limit ainda excedido no worker para job ${job.id} (fallback)`, {
+                    // Mudar para debug para reduzir spam de logs
+                    logger.debug(`[BullMQ-Worker] Rate limit ainda excedido no worker para job ${job.id} (fallback)`, {
                         jobId: job.id,
                         queueName,
                         historyId: data.history_id,

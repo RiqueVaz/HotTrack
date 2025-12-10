@@ -34,7 +34,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -44,7 +44,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -54,7 +54,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -64,7 +64,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -74,7 +74,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -84,7 +84,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -94,7 +94,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -104,7 +104,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 60_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -114,7 +114,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 5000,
                 cacheTTL: 24 * 3600_000, // 24 horas
                 maxRetries: 1,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -124,7 +124,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 20000,
                 cacheTTL: 60_000,
                 maxRetries: 1,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }],
@@ -134,7 +134,7 @@ class ApiRateLimiterBullMQ {
                 timeout: 10000,
                 cacheTTL: 30_000,
                 maxRetries: 3,
-                circuitBreakerThreshold: 5,
+                circuitBreakerThreshold: 10, // Aumentado de 5 para 10
                 circuitBreakerTimeout: 300_000,
                 circuitBreakerSuccessThreshold: 2
             }]
@@ -314,8 +314,17 @@ class ApiRateLimiterBullMQ {
             }
         }
 
-        // Obter fila
+        // Obter fila e garantir que worker existe
         const queue = this._getQueue(provider, sellerId);
+        
+        // Garantir que worker foi criado antes de adicionar job
+        try {
+            const { getOrCreateWorker } = require('../worker/api-rate-limiter-worker');
+            getOrCreateWorker(`api-${provider}-${sellerId}`);
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao garantir worker para api-${provider}-${sellerId}:`, error.message);
+            // Continuar mesmo assim - o worker pode já existir
+        }
 
         // Adicionar job na fila
         const job = await queue.add(
@@ -334,9 +343,21 @@ class ApiRateLimiterBullMQ {
             }
         );
 
-        // Aguardar resultado
+        // Aguardar resultado com timeout e verificação de método
         try {
-            const result = await job.finished();
+            // Verificar se job.finished existe (pode não existir se worker não foi criado)
+            if (!job || typeof job.finished !== 'function') {
+                throw new Error(`Job não possui método finished(). Worker pode não ter sido criado para api-${provider}-${sellerId}`);
+            }
+
+            // Aguardar resultado com timeout (máximo 30 segundos ou timeout do config)
+            const timeoutMs = Math.max(config.timeout || 10000, 30000);
+            const result = await Promise.race([
+                job.finished(),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error(`Timeout aguardando job ${job.id} (${timeoutMs}ms)`)), timeoutMs)
+                )
+            ]);
 
             // Registrar sucesso
             this._recordSuccess(provider, sellerId);
@@ -352,8 +373,15 @@ class ApiRateLimiterBullMQ {
 
             return result;
         } catch (error) {
-            // Registrar falha
-            this._recordFailure(provider, sellerId);
+            // Não registrar falha no circuit breaker para erros específicos
+            const shouldRecordFailure = !error.circuitBreakerOpen && 
+                                       error.response?.status !== 405 && // Método incorreto - erro de configuração
+                                       error.response?.status !== 429;   // Rate limit - esperado, não é falha do provedor
+            
+            if (shouldRecordFailure) {
+                this._recordFailure(provider, sellerId);
+            }
+            
             const metrics = this._getMetrics(provider, sellerId);
             metrics.errors++;
             
@@ -367,7 +395,7 @@ class ApiRateLimiterBullMQ {
     async createTransaction({
         provider,
         sellerId,
-        method,
+        method = 'post', // Default POST para transações
         url,
         headers,
         data,
@@ -376,7 +404,7 @@ class ApiRateLimiterBullMQ {
         return this.request({
             provider,
             sellerId,
-            method,
+            method: method.toLowerCase(), // Garantir lowercase
             url,
             headers,
             data,

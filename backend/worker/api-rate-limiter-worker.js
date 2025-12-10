@@ -61,6 +61,16 @@ function createWorkerForQueue(queueName) {
                 
                 return response.data;
             } catch (error) {
+                // Tratamento especial para 405 (método não permitido)
+                if (error.response?.status === 405) {
+                    const methodError = new Error(`Método HTTP não permitido (405) para ${url}. Método usado: ${method || 'não especificado'}. Verifique se o método está correto (POST para PIX).`);
+                    methodError.status = 405;
+                    methodError.method = method;
+                    methodError.url = url;
+                    logger.error(`[API Rate Limiter Worker] Erro 405:`, methodError.message);
+                    throw methodError;
+                }
+                
                 // Tratamento especial para 429
                 if (error.response?.status === 429) {
                     const retryAfter = parseInt(
