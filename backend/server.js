@@ -1565,7 +1565,7 @@ async function invalidateBotCache(botId, sellerId) {
  */
 async function getClickGeo(clickId, sellerId) {
     const cacheKey = `click_geo:${clickId}:${sellerId}`;
-    const cached = dbCache.get(cacheKey);
+    const cached = await dbCache.get(cacheKey);
     
     if (cached !== null) {
         // Retornar cache diretamente - já tem a propriedade 'exists' correta
@@ -2096,7 +2096,7 @@ async function markBotBlockedInDb(botId, chatId, sellerId) {
                   DO UPDATE SET last_verified_at = NOW()`
         );
         // Também atualizar cache em memória (opcional, para performance)
-        dbCache.markBotBlocked(botId, chatId);
+        await dbCache.markBotBlocked(botId, chatId);
     } catch (error) {
         logger.error(`[Bot Blocks] Erro ao marcar bloqueio: ${error.message}`);
     }
@@ -2221,7 +2221,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 // MARCAR NO CACHE E NA TABELA QUANDO RECEBER ERRO DE BLOQUEIO
                 if (chatId && chatId !== 'unknown') {
                     if (botId) {
-                        dbCache.markBotBlocked(botId, chatId);
+                        await dbCache.markBotBlocked(botId, chatId);
                         // Buscar seller_id do bot e inserir na tabela
                         try {
                             const [bot] = await sqlWithRetry(
@@ -2234,7 +2234,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                             logger.warn(`[Bot Blocks] Erro ao buscar seller_id para bot ${botId}: ${dbError.message}`);
                         }
                     } else {
-                        dbCache.markBotTokenBlocked(botToken, chatId);
+                        await dbCache.markBotTokenBlocked(botToken, chatId);
                     }
                 }
                 // Removido log - não é crítico
@@ -6885,7 +6885,7 @@ function findNextNode(currentNodeId, handleId, edges) {
 async function sendTypingAction(chatId, botToken) {
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (dbCache.isBotTokenBlocked(botToken, chatId)) {
+        if (await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return;
         }
@@ -6926,10 +6926,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
     
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit
             return;
-        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return;
         }
@@ -11001,7 +11001,7 @@ async function processBatchWithConcurrency(contacts, botTokenMap, dbCache, concu
             if (!contact) break;
             
             // Verificar cache primeiro
-            if (dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
+            if (await dbCache.isBotBlocked(contact.bot_id, contact.chat_id)) {
                 results.push(contact);
                 continue;
             }
