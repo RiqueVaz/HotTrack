@@ -1,14 +1,15 @@
 const axiosDefault = require('axios');
 const { v4: uuidv4Default } = require('uuid');
-const apiRateLimiter = require('./api-rate-limiter');
+const apiRateLimiter = require('./api-rate-limiter-bullmq');
+const redisCache = require('./redis-cache');
 
 function createPixService({
   sql,
   sqlWithRetry,
   axios = axiosDefault,
   uuidv4 = uuidv4Default,
-  syncPayTokenCache = new Map(),
-  pixupTokenCache = new Map(),
+  syncPayTokenCache = null, // Deprecated: usar redisCache agora
+  pixupTokenCache = null, // Deprecated: usar redisCache agora
   adminApiKey,
   synPayBaseUrl = 'https://api.syncpayments.com.br',
   pushinpaySplitAccountId = null,
@@ -38,20 +39,19 @@ function createPixService({
   };
 
   async function getSyncPayAuthToken(seller) {
-    if (!syncPayTokenCache) {
-      throw new Error('createPixService: syncPayTokenCache não foi fornecido.');
-    }
-
-    // Limpar tokens expirados antes de verificar cache (cleanup proativo)
-    const now = Date.now();
-    const cachedToken = syncPayTokenCache.get(seller.id);
-    if (cachedToken) {
-      if (cachedToken.expiresAt && now > cachedToken.expiresAt) {
-        // Token expirado, remover do cache
-        syncPayTokenCache.delete(seller.id);
-      } else if (cachedToken.expiresAt && cachedToken.expiresAt > now + 60000) {
+    const cacheKey = `syncpay-token:${seller.id}`;
+    
+    // Verificar cache no Redis
+    const cached = await redisCache.get(cacheKey);
+    if (cached) {
+      const now = Date.now();
+      if (cached.expiresAt && now < cached.expiresAt && cached.expiresAt > now + 60000) {
         // Token válido e ainda tem mais de 1 minuto
-        return cachedToken.accessToken;
+        return cached.accessToken;
+      }
+      // Token expirado, remover do cache
+      if (cached.expiresAt && now >= cached.expiresAt) {
+        await redisCache.delete(cacheKey);
       }
     }
 
@@ -69,42 +69,30 @@ function createPixService({
     const { access_token, expires_in } = response.data;
     const expiresAt = Date.now() + (expires_in * 1000);
     
-    // Verificar limite antes de adicionar (limite padrão: 100)
-    const MAX_SYNCPAY_TOKEN_CACHE_SIZE = 100;
-    if (syncPayTokenCache.size >= MAX_SYNCPAY_TOKEN_CACHE_SIZE) {
-        // Remover 20% das entradas mais antigas
-        const entries = Array.from(syncPayTokenCache.entries())
-            .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
-        const toRemove = Math.floor(MAX_SYNCPAY_TOKEN_CACHE_SIZE * 0.2);
-        for (let i = 0; i < toRemove && i < entries.length; i++) {
-            syncPayTokenCache.delete(entries[i][0]);
-        }
-    }
+    // Armazenar no Redis com TTL
+    await redisCache.set(cacheKey, { accessToken: access_token, expiresAt }, expires_in * 1000);
     
-    syncPayTokenCache.set(seller.id, { accessToken: access_token, expiresAt });
     return access_token;
   }
 
   async function getPixupAuthToken(seller) {
-    if (!pixupTokenCache) {
-      throw new Error('createPixService: pixupTokenCache não foi fornecido.');
-    }
-
     if (!seller.pixup_client_id || !seller.pixup_client_secret) {
       throw new Error('Credenciais da Pixup não configuradas para este vendedor. Configure pixup_client_id e pixup_client_secret.');
     }
 
-    const cacheKey = seller.id;
-    // Limpar tokens expirados antes de verificar cache (cleanup proativo)
-    const now = Date.now();
-    const cachedToken = pixupTokenCache.get(cacheKey);
-    if (cachedToken) {
-      if (cachedToken.expiresAt && now > cachedToken.expiresAt) {
-        // Token expirado, remover do cache
-        pixupTokenCache.delete(cacheKey);
-      } else if (cachedToken.expiresAt && cachedToken.expiresAt > now + 60000) {
+    const cacheKey = `pixup-token:${seller.id}`;
+    
+    // Verificar cache no Redis
+    const cached = await redisCache.get(cacheKey);
+    if (cached) {
+      const now = Date.now();
+      if (cached.expiresAt && now < cached.expiresAt && cached.expiresAt > now + 60000) {
         // Token válido e ainda tem mais de 1 minuto
-        return cachedToken.accessToken;
+        return cached.accessToken;
+      }
+      // Token expirado, remover do cache
+      if (cached.expiresAt && now >= cached.expiresAt) {
+        await redisCache.delete(cacheKey);
       }
     }
 
@@ -141,7 +129,10 @@ function createPixService({
       }
 
       const expiresAt = Date.now() + (expires_in * 1000);
-      pixupTokenCache.set(cacheKey, { accessToken: access_token, expiresAt });
+      
+      // Armazenar no Redis com TTL
+      await redisCache.set(cacheKey, { accessToken: access_token, expiresAt }, expires_in * 1000);
+      
       if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_VERBOSE_LOGS === 'true') {
         console.log(`[PIXUP AUTH] Seller ID: ${seller.id} - Token obtido com sucesso, expira em ${expires_in}s`);
       }
