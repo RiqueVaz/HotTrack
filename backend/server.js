@@ -11605,88 +11605,9 @@ app.post('/api/chats/start-flow', authenticateJwt, async (req, res) => {
     }
 });
 
-app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
-      try {
-        const { bot_id, file_id } = req.params;
-        
-        // PRIORIDADE 1: Verificar se file_id existe na media_library (todas as mídias devem estar lá)
-        const [media] = await sqlWithRetry(
-          'SELECT storage_url, thumbnail_storage_url, file_type, storage_type FROM media_library WHERE file_id = $1 OR thumbnail_file_id = $1 LIMIT 1',
-          [file_id]
-        );
-        
-        if (media) {
-          // Se tem storage_url e é R2, fazer proxy do arquivo
-          if (media.storage_url && media.storage_type === 'r2') {
-            // Verificar se é thumbnail ou arquivo principal
-            const [thumbCheck] = await sqlWithRetry(
-              'SELECT id FROM media_library WHERE thumbnail_file_id = $1 LIMIT 1',
-              [file_id]
-            );
-            
-            const urlToUse = thumbCheck ? (media.thumbnail_storage_url || media.storage_url) : media.storage_url;
-            if (urlToUse) {
-              try {
-                // Fazer proxy do arquivo do R2
-                const fileResponse = await axios.get(urlToUse, {
-                  responseType: 'stream',
-                  timeout: 30000,
-                  httpsAgent: httpsAgent
-                });
-                
-                // Definir Content-Type baseado no tipo de arquivo
-                const contentType = media.file_type === 'image' ? 'image/jpeg' :
-                                   media.file_type === 'video' ? 'video/mp4' :
-                                   media.file_type === 'audio' ? 'audio/ogg' :
-                                   fileResponse.headers['content-type'] || 'application/octet-stream';
-                
-                // Headers CORS e cache
-                res.setHeader('Content-Type', contentType);
-                res.setHeader('Cache-Control', 'public, max-age=31536000');
-                res.setHeader('Access-Control-Allow-Origin', '*');
-                
-                fileResponse.data.pipe(res);
-                return;
-              } catch (r2Error) {
-                console.error('[Media Preview] Erro ao fazer proxy do R2:', r2Error.message);
-                // Se erro 404 ou 403, retornar erro específico
-                if (r2Error.response?.status === 404 || r2Error.response?.status === 403) {
-                  return res.status(404).send('Arquivo não encontrado no R2.');
-                }
-                // Para outros erros, continuar para fallback
-              }
-            }
-          }
-          
-        }
-        
-        // PRIORIDADE 3: Fallback - usar token do bot informado (para mídias muito antigas que não estão na biblioteca)
-        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [bot_id]);
-        const token = bot?.bot_token;
-    
-        if (!token) return res.status(404).send('Bot não encontrado.');
-    
-        const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
-        if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
-          return res.status(404).send('Arquivo não encontrado no Telegram.');
-        }
-    
-        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
-        const response = await axios.get(fileUrl, { 
-          responseType: 'stream',
-          httpsAgent: httpsAgent
-        });
-    
-        res.setHeader('Content-Type', response.headers['content-type']);
-        response.data.pipe(res);
-    
-      } catch (error) {
-        console.error("Erro no preview:", error.message);
-        res.status(500).send('Erro ao buscar o arquivo.');
-      }
-    });
-
 // Endpoint alternativo de preview sem bot_id (para compatibilidade com frontend)
+// IMPORTANTE: Esta rota deve vir ANTES da rota genérica /api/media/preview/:bot_id/:file_id
+// para evitar que "storage" seja interpretado como bot_id
 app.get('/api/media/preview/storage/:file_id', async (req, res) => {
   try {
     const { file_id } = req.params;
@@ -11750,6 +11671,94 @@ app.get('/api/media/preview/storage/:file_id', async (req, res) => {
     res.status(500).send('Erro ao buscar o arquivo.');
   }
 });
+
+// Endpoint genérico de preview com bot_id (deve vir DEPOIS da rota específica /storage/:file_id)
+app.get('/api/media/preview/:bot_id/:file_id', async (req, res) => {
+      try {
+        const { bot_id, file_id } = req.params;
+        
+        // PRIORIDADE 1: Verificar se file_id existe na media_library (todas as mídias devem estar lá)
+        const [media] = await sqlWithRetry(
+          'SELECT storage_url, thumbnail_storage_url, file_type, storage_type FROM media_library WHERE file_id = $1 OR thumbnail_file_id = $1 LIMIT 1',
+          [file_id]
+        );
+        
+        if (media) {
+          // Se tem storage_url e é R2, fazer proxy do arquivo
+          if (media.storage_url && media.storage_type === 'r2') {
+            // Verificar se é thumbnail ou arquivo principal
+            const [thumbCheck] = await sqlWithRetry(
+              'SELECT id FROM media_library WHERE thumbnail_file_id = $1 LIMIT 1',
+              [file_id]
+            );
+            
+            const urlToUse = thumbCheck ? (media.thumbnail_storage_url || media.storage_url) : media.storage_url;
+            if (urlToUse) {
+              try {
+                // Fazer proxy do arquivo do R2
+                const fileResponse = await axios.get(urlToUse, {
+                  responseType: 'stream',
+                  timeout: 30000,
+                  httpsAgent: httpsAgent
+                });
+                
+                // Definir Content-Type baseado no tipo de arquivo
+                const contentType = media.file_type === 'image' ? 'image/jpeg' :
+                                   media.file_type === 'video' ? 'video/mp4' :
+                                   media.file_type === 'audio' ? 'audio/ogg' :
+                                   fileResponse.headers['content-type'] || 'application/octet-stream';
+                
+                // Headers CORS e cache
+                res.setHeader('Content-Type', contentType);
+                res.setHeader('Cache-Control', 'public, max-age=31536000');
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                
+                fileResponse.data.pipe(res);
+                return;
+              } catch (r2Error) {
+                console.error('[Media Preview] Erro ao fazer proxy do R2:', r2Error.message);
+                // Se erro 404 ou 403, retornar erro específico
+                if (r2Error.response?.status === 404 || r2Error.response?.status === 403) {
+                  return res.status(404).send('Arquivo não encontrado no R2.');
+                }
+                // Para outros erros, continuar para fallback
+              }
+            }
+          }
+          
+        }
+        
+        // PRIORIDADE 3: Fallback - usar token do bot informado (para mídias muito antigas que não estão na biblioteca)
+        // Validar que bot_id é um número antes de fazer query
+        const botIdNum = parseInt(bot_id, 10);
+        if (isNaN(botIdNum)) {
+          return res.status(400).send('Bot ID inválido.');
+        }
+        
+        const [bot] = await sqlWithRetry('SELECT bot_token FROM telegram_bots WHERE id = $1', [botIdNum]);
+        const token = bot?.bot_token;
+    
+        if (!token) return res.status(404).send('Bot não encontrado.');
+    
+        const fileInfoResponse = await sendTelegramRequest(token, 'getFile', { file_id });
+        if (!fileInfoResponse.ok || !fileInfoResponse.result?.file_path) {
+          return res.status(404).send('Arquivo não encontrado no Telegram.');
+        }
+    
+        const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfoResponse.result.file_path}`;
+        const response = await axios.get(fileUrl, { 
+          responseType: 'stream',
+          httpsAgent: httpsAgent
+        });
+    
+        res.setHeader('Content-Type', response.headers['content-type']);
+        response.data.pipe(res);
+    
+      } catch (error) {
+        console.error("Erro no preview:", error.message);
+        res.status(500).send('Erro ao buscar o arquivo.');
+      }
+    });
 
 // Endpoint 11: Listar biblioteca de mídia
 app.get('/api/media', authenticateJwt, async (req, res) => {
