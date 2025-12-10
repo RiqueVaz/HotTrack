@@ -1473,7 +1473,7 @@ const {
  */
 async function getSellerSettings(sellerId) {
     const cacheKey = `seller:${sellerId}`;
-    const cached = dbCache.get(cacheKey);
+    const cached = await dbCache.get(cacheKey);
     
     if (cached !== null) {
         return cached;
@@ -1485,7 +1485,7 @@ async function getSellerSettings(sellerId) {
     const result = settings || {};
     
     if (settings) {
-        dbCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutos
+        await dbCache.set(cacheKey, result, 5 * 60 * 1000); // 5 minutos
     }
     
     return result;
@@ -1494,8 +1494,8 @@ async function getSellerSettings(sellerId) {
 /**
  * Invalida cache de configurações do seller
  */
-function invalidateSellerCache(sellerId) {
-    dbCache.delete(`seller:${sellerId}`);
+async function invalidateSellerCache(sellerId) {
+    await dbCache.delete(`seller:${sellerId}`);
 }
 
 /**
@@ -1535,7 +1535,7 @@ async function getBotToken(botId, sellerId) {
  */
 async function getBot(botId, sellerId = null) {
     const cacheKey = sellerId ? `bot_full:${botId}:${sellerId}` : `bot_full:${botId}`;
-    const cached = dbCache.get(cacheKey);
+    const cached = await dbCache.get(cacheKey);
     
     if (cached !== null) {
         return cached;
@@ -1546,7 +1546,7 @@ async function getBot(botId, sellerId = null) {
         : await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId}`;
     
     if (bot) {
-        dbCache.set(cacheKey, bot, 10 * 60 * 1000); // 10 minutos
+        await dbCache.set(cacheKey, bot, 10 * 60 * 1000); // 10 minutos
     }
     
     return bot;
@@ -1555,9 +1555,9 @@ async function getBot(botId, sellerId = null) {
 /**
  * Invalida cache de bot token
  */
-function invalidateBotCache(botId, sellerId) {
-    dbCache.delete(`bot:${botId}:${sellerId}`);
-    dbCache.delete(`bot_full:${botId}:${sellerId}`);
+async function invalidateBotCache(botId, sellerId) {
+    await dbCache.delete(`bot:${botId}:${sellerId}`);
+    await dbCache.delete(`bot_full:${botId}:${sellerId}`);
 }
 
 /**
@@ -1596,7 +1596,7 @@ async function getClickGeo(clickId, sellerId) {
                     state: clickResult[0].state,
                     exists: false // Indica que foi encontrado em clicks, não precisa verificar telegram_chats
                 };
-                dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
+                await dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000); // 24 horas
                 return geo;
             }
             
@@ -1613,7 +1613,7 @@ async function getClickGeo(clickId, sellerId) {
                 // Retornar null/null para indicar que existe mas sem dados de geolocalização
                 // Cachear também para evitar consultas repetidas
                 const geo = { city: null, state: null, exists: true };
-                dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000);
+                await dbCache.set(cacheKey, geo, 24 * 60 * 60 * 1000);
                 return geo;
             }
             
@@ -5141,7 +5141,7 @@ app.put('/api/bots/:id', authenticateJwt, async (req, res) => {
                 telegram_supergroup_id = ${telegram_supergroup_id || null}
             WHERE id = ${id} AND seller_id = ${req.user.id}`;
         // Invalida cache após atualização bem-sucedida
-        invalidateBotCache(parseInt(id), req.user.id);
+        await invalidateBotCache(parseInt(id), req.user.id);
         res.status(200).json({ message: 'Bot atualizado com sucesso.' });
     } catch (error) {
         console.error("Erro ao atualizar token do bot:", error);
@@ -6055,7 +6055,7 @@ app.post('/api/settings/pix', authenticateJwt, async (req, res) => {
     } = req.body;
     try {
         // Invalida cache do seller ao atualizar configurações
-        invalidateSellerCache(req.user.id);
+        await invalidateSellerCache(req.user.id);
         await sqlTx`UPDATE sellers SET 
             pushinpay_token = ${pushinpay_token || null}, 
             cnpay_public_key = ${cnpay_public_key || null}, 
@@ -6346,7 +6346,7 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 const [clickRecord] = await sqlTx`SELECT click_id, seller_id FROM clicks WHERE id = ${click_record_id}`;
                 if (clickRecord?.click_id) {
                     const cacheKey = `click_geo:${clickRecord.click_id}:${clickRecord.seller_id}`;
-                    dbCache.delete(cacheKey);
+                    await dbCache.delete(cacheKey);
                     logger.debug(`[CACHE] Cache invalidado para click_id ${clickRecord.click_id} após atualização de geolocalização.`);
                 }
                 
@@ -8421,7 +8421,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
         if (!bot) {
             // Tentar invalidar cache e buscar novamente (pode ser problema de cache)
             const cacheKey = `bot_full:${botId}`;
-            dbCache.delete(cacheKey);
+            await dbCache.delete(cacheKey);
             const botRetry = await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId}`;
             
             if (!botRetry || botRetry.length === 0) {
@@ -8431,7 +8431,7 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
             
             // Se encontrou na segunda tentativa, atualizar cache
             const [foundBot] = botRetry;
-            dbCache.set(cacheKey, foundBot, 10 * 60 * 1000);
+            await dbCache.set(cacheKey, foundBot, 10 * 60 * 1000);
             logger.info(`[Webhook] Bot ID ${botId} encontrado após invalidar cache.`);
             bot = foundBot;
         }
@@ -10183,7 +10183,7 @@ app.put('/api/settings/hottrack-key', authenticateJwt, async (req, res) => {
     const { apiKey } = req.body;
     if (typeof apiKey === 'undefined') return res.status(400).json({ message: 'O campo apiKey é obrigatório.' });
     try {
-        invalidateSellerCache(req.user.id);
+        await invalidateSellerCache(req.user.id);
         await sqlWithRetry('UPDATE sellers SET api_key = $1 WHERE id = $2', [apiKey, req.user.id]);
         res.status(200).json({ message: 'Chave de API do HotTrack salva com sucesso!' });
     } catch (error) {
