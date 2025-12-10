@@ -29,6 +29,17 @@ class ApiRateLimiterBullMQ {
         // Métricas por provedor: `${provider}_${sellerId}` -> { requests: 0, errors: 0, lastReset: timestamp }
         this.providerMetrics = new Map();
         
+        // Configurações do sistema híbrido
+        this.QUEUE_THRESHOLD = 10; // Se há mais de 10 jobs na fila, usar requisição direta
+        this.MAX_DIRECT_TIMEOUT = 20000; // Timeout máximo para requisições diretas (20s)
+        this.DYNAMIC_TIMEOUT_MULTIPLIER = 2000; // Multiplicador para timeout dinâmico (2s por job)
+        this.MIN_QUEUE_TIMEOUT = 15000; // Timeout mínimo quando usa fila (15s)
+        this.FALLBACK_ON_TIMEOUT = true; // Tentar requisição direta se timeout na fila
+        
+        // Cache de contagem de jobs por fila (evita múltiplas queries Redis)
+        this.queueSizeCache = new Map(); // queueName -> { count: number, timestamp: number }
+        this.QUEUE_SIZE_CACHE_TTL = 2000; // Cache por 2 segundos
+        
         // Configurações por provedor
         this.providerConfigs = new Map([
             ['pushinpay', {
@@ -345,6 +356,145 @@ class ApiRateLimiterBullMQ {
     }
 
     /**
+     * Obtém tamanho da fila (com cache para evitar múltiplas queries)
+     */
+    async _getQueueSize(queue) {
+        const queueName = queue.name;
+        const now = Date.now();
+        
+        // Verificar cache
+        const cached = this.queueSizeCache.get(queueName);
+        if (cached && (now - cached.timestamp) < this.QUEUE_SIZE_CACHE_TTL) {
+            return cached.count;
+        }
+        
+        // Buscar tamanho real da fila
+        try {
+            const [waiting, delayed, active] = await Promise.all([
+                queue.getWaitingCount(),
+                queue.getDelayedCount(),
+                queue.getActiveCount()
+            ]);
+            
+            const total = waiting + delayed + active;
+            
+            // Atualizar cache
+            this.queueSizeCache.set(queueName, {
+                count: total,
+                timestamp: now
+            });
+            
+            return total;
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao obter tamanho da fila ${queueName}:`, error.message);
+            // Em caso de erro, assumir fila vazia (fail open)
+            return 0;
+        }
+    }
+
+    /**
+     * Aplica rate limiting direto via Redis (sliding window log)
+     * Usado quando fila está cheia ou para fallback
+     */
+    async _applyDirectRateLimit(provider, sellerId, config) {
+        const key = `api-rate-limit:${provider}:${sellerId}`;
+        const now = Date.now();
+        const windowMs = config.limiter.duration * 1000;
+        const maxRequests = config.limiter.max;
+        
+        try {
+            // Remover requisições antigas da janela
+            await redisConnection.zremrangebyscore(key, 0, now - windowMs);
+            
+            // Contar requisições na janela
+            const count = await redisConnection.zcard(key);
+            
+            if (count >= maxRequests) {
+                // Calcular tempo de espera necessário
+                const oldestRequests = await redisConnection.zrange(key, 0, 0, 'WITHSCORES');
+                if (oldestRequests && oldestRequests.length > 0) {
+                    const oldestTimestamp = parseInt(oldestRequests[1]);
+                    const waitTime = (oldestTimestamp + windowMs) - now;
+                    
+                    if (waitTime > 0) {
+                        logger.debug(`[API Rate Limiter] Aguardando ${waitTime}ms para respeitar rate limit de ${provider} (${count}/${maxRequests} na janela)`);
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
+                        // Remover requisições antigas novamente após espera
+                        await redisConnection.zremrangebyscore(key, 0, Date.now() - windowMs);
+                    }
+                }
+            }
+            
+            // Adicionar requisição atual
+            await redisConnection.zadd(key, now, `${now}-${Math.random()}`);
+            await redisConnection.expire(key, Math.ceil(windowMs / 1000) + 10); // +10s de margem
+        } catch (error) {
+            logger.warn(`[API Rate Limiter] Erro ao aplicar rate limiting direto para ${provider} (fail open):`, error.message);
+            // Fail open: continuar mesmo se rate limiting falhar
+        }
+    }
+
+    /**
+     * Faz requisição HTTP direta (bypass da fila BullMQ)
+     * Usado quando fila está cheia ou como fallback
+     */
+    async _makeDirectRequest({
+        provider,
+        sellerId,
+        method,
+        url,
+        headers,
+        data,
+        params,
+        config,
+        skipCache,
+        resourceId,
+        responseTransformer
+    }) {
+        logger.debug(`[API Rate Limiter] Fazendo requisição direta para ${provider} (bypass da fila)`);
+        
+        // Aplicar rate limiting manualmente
+        await this._applyDirectRateLimit(provider, sellerId, config);
+        
+        try {
+            const axios = require('axios');
+            const response = await axios({
+                method,
+                url,
+                headers,
+                data,
+                params,
+                timeout: Math.min(config.timeout || 10000, this.MAX_DIRECT_TIMEOUT)
+            });
+            
+            // Registrar sucesso
+            this._recordSuccess(provider, sellerId);
+            
+            // Cachear resultado se aplicável
+            if (!skipCache && method.toLowerCase() === 'get' && resourceId) {
+                const cacheKey = `api-cache:${provider}:${resourceId}`;
+                const dataToCache = responseTransformer ? responseTransformer(response.data) : response.data;
+                await redisCache.set(cacheKey, dataToCache, config.cacheTTL);
+            }
+            
+            return response.data;
+        } catch (error) {
+            const shouldRecordFailure = !error.circuitBreakerOpen && 
+                                       error.response?.status !== 405 && 
+                                       error.response?.status !== 429;
+            
+            if (shouldRecordFailure) {
+                this._recordFailure(provider, sellerId);
+            }
+            
+            const metrics = this._getMetrics(provider, sellerId);
+            metrics.errors++;
+            
+            throw error;
+        }
+    }
+
+    /**
      * Faz requisição HTTP com rate limiting via BullMQ
      */
     async request({
@@ -382,10 +532,41 @@ class ApiRateLimiterBullMQ {
             }
         }
 
-        // Obter fila e garantir que worker existe
+        // Obter fila e verificar tamanho
         const queue = this._getQueue(provider, sellerId);
         const queueName = `api-${provider}-${sellerId}`;
         
+        // Verificar tamanho da fila antes de decidir estratégia
+        const queueSize = await this._getQueueSize(queue);
+        // Usar requisição direta apenas se fila está cheia (não apenas por prioridade alta)
+        // Prioridade alta ainda vai para fila, mas com timeout maior e pode fazer fallback
+        const shouldUseDirectRequest = queueSize > this.QUEUE_THRESHOLD;
+        
+        // Se fila está muito cheia ou é alta prioridade, usar requisição direta
+        if (shouldUseDirectRequest) {
+            logger.debug(`[API Rate Limiter] Fila ${queueName} tem ${queueSize} jobs. Usando requisição direta (threshold: ${this.QUEUE_THRESHOLD})`);
+            
+            try {
+                return await this._makeDirectRequest({
+                    provider,
+                    sellerId,
+                    method,
+                    url,
+                    headers,
+                    data,
+                    params,
+                    config,
+                    skipCache,
+                    resourceId,
+                    responseTransformer
+                });
+            } catch (error) {
+                // Se requisição direta falhar, não tentar fila (já está sobrecarregada)
+                throw error;
+            }
+        }
+        
+        // Modo normal: usar fila BullMQ
         // Garantir que worker foi criado ANTES de adicionar job (crítico!)
         // Tentar até 3 vezes com delay crescente
         let worker = null;
@@ -409,13 +590,41 @@ class ApiRateLimiterBullMQ {
                     await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
                 } else {
                     logger.error(`[API Rate Limiter] Erro crítico ao garantir worker para ${queueName} após ${maxRetries} tentativas:`, error.message);
-                    throw new Error(`Worker não disponível para ${queueName}: ${error.message}`);
+                    // Se não conseguir criar worker, tentar requisição direta como fallback
+                    logger.warn(`[API Rate Limiter] Tentando requisição direta como fallback para ${queueName}`);
+                    return await this._makeDirectRequest({
+                        provider,
+                        sellerId,
+                        method,
+                        url,
+                        headers,
+                        data,
+                        params,
+                        config,
+                        skipCache,
+                        resourceId,
+                        responseTransformer
+                    });
                 }
             }
         }
         
         if (!worker) {
-            throw new Error(`Não foi possível criar worker para ${queueName} após ${maxRetries} tentativas`);
+            // Se não conseguir criar worker, tentar requisição direta como fallback
+            logger.warn(`[API Rate Limiter] Worker não disponível para ${queueName}. Tentando requisição direta como fallback`);
+            return await this._makeDirectRequest({
+                provider,
+                sellerId,
+                method,
+                url,
+                headers,
+                data,
+                params,
+                config,
+                skipCache,
+                resourceId,
+                responseTransformer
+            });
         }
 
         // Adicionar job na fila
@@ -436,9 +645,17 @@ class ApiRateLimiterBullMQ {
         );
 
         // Aguardar resultado usando QueueEvents
+        // Timeout dinâmico baseado no tamanho da fila
+        // Mínimo 15s, +2s por job na fila
+        const dynamicTimeout = Math.max(
+            this.MIN_QUEUE_TIMEOUT,
+            queueSize * this.DYNAMIC_TIMEOUT_MULTIPLIER
+        );
+        const timeoutMs = Math.min(dynamicTimeout, config.timeout || 20000);
+        
         try {
-            // Timeout balanceado para dar tempo suficiente quando há fila, mas evitar esperas muito longas
-            const timeoutMs = Math.min(config.timeout || 10000, 15000); // 15s máximo
+            logger.debug(`[API Rate Limiter] Aguardando job ${job.id} na fila ${queueName} (timeout: ${timeoutMs}ms, fila: ${queueSize} jobs)`);
+            
             const result = await this._waitForJobCompletion(queueName, job.id, timeoutMs);
 
             // Registrar sucesso
@@ -455,6 +672,31 @@ class ApiRateLimiterBullMQ {
 
             return result;
         } catch (error) {
+            // Se timeout na fila e fallback está habilitado, tentar requisição direta
+            if (error.timeout && this.FALLBACK_ON_TIMEOUT) {
+                logger.warn(`[API Rate Limiter] Timeout na fila ${queueName} após ${timeoutMs}ms. Tentando requisição direta como fallback`);
+                
+                try {
+                    return await this._makeDirectRequest({
+                        provider,
+                        sellerId,
+                        method,
+                        url,
+                        headers,
+                        data,
+                        params,
+                        config,
+                        skipCache,
+                        resourceId,
+                        responseTransformer
+                    });
+                } catch (fallbackError) {
+                    // Se fallback também falhar, lançar erro original (timeout na fila)
+                    logger.error(`[API Rate Limiter] Fallback direto também falhou para ${queueName}:`, fallbackError.message);
+                    throw error; // Lançar erro original (timeout na fila)
+                }
+            }
+            
             // Não registrar falha no circuit breaker para erros específicos
             const shouldRecordFailure = !error.circuitBreakerOpen && 
                                        !error.timeout && // Timeout - pode ser temporário (fila cheia), não indica problema real com o provedor
