@@ -1055,16 +1055,34 @@ const json70mb = express.json({ limit: '70mb' });
 function validateTelegramSize(fileBuffer, fileType) {
     const size = fileBuffer.length; // bytes
     const MB = 1024 * 1024;
-    try {
-        if (fileType && fileType.startsWith && fileType.startsWith('video/')) {
-            if (size > 50 * MB) throw new Error('Arquivo de vídeo excede 50 MB (limite do Telegram).');
-        } else if (fileType && fileType.startsWith && fileType.startsWith('image/')) {
-            if (size > 10 * MB) throw new Error('Imagem excede 10 MB (limite do Telegram).');
-        } else if (fileType && fileType.startsWith && fileType.startsWith('audio/')) {
-            if (size > 50 * MB) throw new Error('Áudio excede 50 MB (limite do Telegram).');
+    
+    // Limites da API do Telegram Bot para upload via InputStream:
+    // - Fotos: 10 MB
+    // - Vídeos: 50 MB
+    // - Áudio/Voice: 50 MB
+    // - Documentos: 50 MB
+    
+    if (!fileType || typeof fileType !== 'string') {
+        throw new Error('Tipo de arquivo não especificado.');
+    }
+    
+    if (fileType.startsWith('image/')) {
+        if (size > 10 * MB) {
+            throw new Error(`Imagem excede 10 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
         }
-    } catch (e) {
-        throw e;
+    } else if (fileType.startsWith('video/')) {
+        if (size > 50 * MB) {
+            throw new Error(`Vídeo excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
+    } else if (fileType.startsWith('audio/')) {
+        if (size > 50 * MB) {
+            throw new Error(`Áudio excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
+    } else {
+        // Para outros tipos (documentos, etc), aplicar limite padrão de 50 MB
+        if (size > 50 * MB) {
+            throw new Error(`Arquivo excede 50 MB (limite do Telegram). Tamanho atual: ${(size / MB).toFixed(2)} MB`);
+        }
     }
 }
 

@@ -8809,6 +8809,7 @@ function generatePreviewHTML(data) {
         const [users, setUsers] = useState([]);
         const [filteredUsers, setFilteredUsers] = useState([]);
         const [selectedChat, setSelectedChat] = useState(null);
+        const [selectedFileInfoChat, setSelectedFileInfoChat] = useState(null);
         const [messages, setMessages] = useState([]);
         const [newMessage, setNewMessage] = useState('');
         const [searchTerm, setSearchTerm] = useState('');
@@ -9228,32 +9229,37 @@ function generatePreviewHTML(data) {
     const handleSend = async (e) => { e.preventDefault(); const txt = newMessage.trim(); if (!txt || !selectedChat) return; setNewMessage(''); try { await api.post(`/api/chats/${selectedBotId}/send-message`, { chatId: selectedChat.chat_id, text: txt }); await fetchMessages(); } catch (e) { console.error("Erro", e); alert('Erro ao enviar mensagem.');} };
 		const handleFileChange = (e) => {
 			const file = e.target.files[0];
-			if (!file || !selectedChat) return;
+			if (!file || !selectedChat) {
+				setSelectedFileInfoChat(null);
+				return;
+			}
 			const MB = 1024 * 1024;
-			if (file.type?.startsWith('video/') && file.size > 50 * MB) {
-				alert('Vídeo maior que 50 MB (limite do Telegram).');
+			const fileSizeMB = (file.size / MB).toFixed(2);
+			const fileType = file.type?.startsWith('video/') ? 'video' : (file.type?.startsWith('image/') ? 'image' : (file.type?.startsWith('audio/') ? 'audio' : null));
+			const maxSize = fileType === 'image' ? 10 : 50;
+			
+			if ((fileType === 'video' && file.size > 50 * MB) || 
+			    (fileType === 'image' && file.size > 10 * MB) || 
+			    (fileType === 'audio' && file.size > 50 * MB)) {
+				alert(`${fileType === 'image' ? 'Imagem' : fileType === 'video' ? 'Vídeo' : 'Áudio'} excede ${maxSize} MB (limite do Telegram).\nTamanho atual: ${fileSizeMB} MB\nLimite máximo: ${maxSize} MB`);
 				e.target.value = null;
+				setSelectedFileInfoChat(null);
 				return;
 			}
-			if (file.type?.startsWith('image/') && file.size > 10 * MB) {
-				alert('Imagem maior que 10 MB (limite do Telegram).');
-				e.target.value = null;
-				return;
-			}
-			if (file.type?.startsWith('audio/') && file.size > 50 * MB) {
-				alert('Áudio maior que 50 MB (limite do Telegram).');
-				e.target.value = null;
-				return;
-			}
+			
+			setSelectedFileInfoChat({ name: file.name, size: fileSizeMB, type: fileType, maxSize });
+			
 			const reader = new FileReader();
 			reader.readAsDataURL(file);
 			reader.onload = async () => {
 				try {
 					const base64Data = reader.result.split(',')[1];
 					await api.post(`/api/chats/${selectedBotId}/send-media`, { chatId: selectedChat.chat_id, fileData: base64Data, fileType: file.type, fileName: file.name });
+					setSelectedFileInfoChat(null);
 					fetchMessages();
 				} catch (error) {
 					alert('Falha no upload: ' + (error.response?.data?.message || error.message));
+					setSelectedFileInfoChat(null);
 				}
 			};
 			e.target.value = null;
@@ -9617,10 +9623,17 @@ function generatePreviewHTML(data) {
                                     <div className="chat-input-area">
                                         <form onSubmit={handleSend} className="chat-input-form">
                                             <input type="file" ref={fileInputRef} onChange={handleFileChange} hidden accept="image/*,video/*,audio/*" />
-                                            <button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button>
-                                            <button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button>
-                                            <input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." />
-                                            <button className="btn btn-primary" type="submit">{Icons.send}</button>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%'}}>
+                                                <button type="button" className="attach-btn" onClick={() => fileInputRef.current.click()} title="Anexar do computador">{Icons.attach}</button>
+                                                <button type="button" className="attach-btn" onClick={() => setIsMediaModalOpen(true)} title="Selecionar da Biblioteca">{Icons.media}</button>
+                                                <input className="form-input chat-input" value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Digite..." />
+                                                <button className="btn btn-primary" type="submit">{Icons.send}</button>
+                                            </div>
+                                            {selectedFileInfoChat && (
+                                                <div style={{fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.25rem', marginLeft: '3rem'}}>
+                                                    {selectedFileInfoChat.name} ({selectedFileInfoChat.size} MB / {selectedFileInfoChat.maxSize} MB)
+                                                </div>
+                                            )}
                                         </form>
                                     </div>
                                 </>
@@ -9773,6 +9786,7 @@ function generatePreviewHTML(data) {
     function MediaLibraryPage() {
         const [media, setMedia] = useState([]);
         const [isUploading, setIsUploading] = useState(false);
+        const [selectedFileInfo, setSelectedFileInfo] = useState(null);
         const [activeTab, setActiveTab] = useState('image'); // 'image' | 'video' | 'audio'
         const fetchMedia = async () => { try { const { data } = await api.get('/api/media'); setMedia(data); } catch (e) { console.error("Erro ao buscar mídias", e); }};
         useEffect(() => { fetchMedia(); }, []);
@@ -9799,20 +9813,36 @@ function generatePreviewHTML(data) {
         const filtered = media.filter(item => resolveType(item) === activeTab);
         const handleFileChange = (e) => {
             const file = e.target.files[0];
-            if (!file) return;
+            if (!file) {
+                setSelectedFileInfo(null);
+                return;
+            }
             const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : (file.type.startsWith('audio/') ? 'audio' : null));
             if (!fileType) {
                 alert("Formato de ficheiro não suportado.");
+                setSelectedFileInfo(null);
                 return;
             }
 			const MB = 1024 * 1024;
-			if (fileType === 'video' && file.size > 50 * MB) { alert('Vídeo maior que 50 MB (limite do Telegram).'); e.target.value = null; return; }
-			if (fileType === 'image' && file.size > 10 * MB) { alert('Imagem maior que 10 MB (limite do Telegram).'); e.target.value = null; return; }
-			if (fileType === 'audio' && file.size > 50 * MB) { alert('Áudio maior que 50 MB (limite do Telegram).'); e.target.value = null; return; }
+			const fileSizeMB = (file.size / MB).toFixed(2);
+			const maxSize = fileType === 'image' ? 10 : 50;
+			
+			if ((fileType === 'video' && file.size > 50 * MB) || 
+			    (fileType === 'image' && file.size > 10 * MB) || 
+			    (fileType === 'audio' && file.size > 50 * MB)) { 
+				alert(`${fileType === 'image' ? 'Imagem' : fileType === 'video' ? 'Vídeo' : 'Áudio'} excede ${maxSize} MB (limite do Telegram).\nTamanho atual: ${fileSizeMB} MB\nLimite máximo: ${maxSize} MB`); 
+				e.target.value = null;
+				setSelectedFileInfo(null);
+				return; 
+			}
+			
+			setSelectedFileInfo({ name: file.name, size: fileSizeMB, type: fileType, maxSize });
+			
             const reader = new FileReader();
             reader.readAsDataURL(file);
             reader.onload = async () => {
                 setIsUploading(true);
+                setSelectedFileInfo(null);
                 try {
                     const base64Data = reader.result.split(',')[1];
                     await api.post('/api/media/upload', { fileName: file.name, fileData: base64Data, fileType: fileType });
@@ -9829,10 +9859,19 @@ function generatePreviewHTML(data) {
             <div style={{ padding: '2rem 3rem', height: '100%', overflowY: 'auto' }}>
                 <div className="page-header">
                     <h2>Biblioteca de Mídia</h2>
-                    <label className={`btn btn-primary ${isUploading ? 'disabled' : ''}`}>
-                        {isUploading ? 'A carregar...' : '+ Carregar Mídia'}
-                        <input type="file" hidden onChange={handleFileChange} disabled={isUploading} accept="image/*,video/*,audio/*" />
-                    </label>
+                    <div style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem'}}>
+                        <label className={`btn btn-primary ${isUploading ? 'disabled' : ''}`}>
+                            {isUploading ? 'A carregar...' : '+ Carregar Mídia'}
+                            <input type="file" hidden onChange={handleFileChange} disabled={isUploading} accept="image/*,video/*,audio/*" />
+                        </label>
+                        <div style={{fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right'}}>
+                            {selectedFileInfo ? (
+                                <span>{selectedFileInfo.name} ({selectedFileInfo.size} MB / {selectedFileInfo.maxSize} MB)</span>
+                            ) : (
+                                <span>Limites: Imagens 10 MB • Vídeos/Áudios 50 MB</span>
+                            )}
+                        </div>
+                    </div>
                 </div>
                 <div style={{display:'flex', gap: '0.5rem', marginBottom: '1rem'}}>
                     <button className={`btn btn-secondary ${activeTab==='image'?'active':''}`} onClick={()=>setActiveTab('image')}>Imagens</button>
