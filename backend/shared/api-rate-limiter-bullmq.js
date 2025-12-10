@@ -199,6 +199,10 @@ class ApiRateLimiterBullMQ {
             const queueEvents = new QueueEvents(queueName, {
                 connection: redisConnection
             });
+            // Aumentar limite de listeners para evitar warnings quando há muitas requisições simultâneas
+            // Cada requisição adiciona 2 listeners (completed + failed)
+            // 200 permite ~100 requisições simultâneas por fila, que é suficiente para a maioria dos casos
+            queueEvents.setMaxListeners(200);
             this.queueEvents.set(queueName, queueEvents);
         }
         return this.queueEvents.get(queueName);
