@@ -171,12 +171,17 @@ class ApiRateLimiterBullMQ {
             
             this.queues.set(key, queue);
             
-            // Criar worker para esta fila se ainda não existir
+            // Criar worker para esta fila se ainda não existir (síncrono, não bloqueia)
+            // O worker será garantido antes de adicionar jobs no método request()
             try {
                 const { getOrCreateWorker } = require('../worker/api-rate-limiter-worker');
-                getOrCreateWorker(`api-${key}`);
+                const worker = getOrCreateWorker(`api-${key}`);
+                if (worker) {
+                    logger.debug(`[API Rate Limiter] Worker criado para fila api-${key}`);
+                }
             } catch (error) {
-                logger.warn(`[API Rate Limiter] Erro ao criar worker para fila api-${key}:`, error.message);
+                // Não lançar erro aqui - será tratado no request() quando tentar usar
+                logger.debug(`[API Rate Limiter] Worker será criado sob demanda para api-${key}`);
             }
         }
         
@@ -316,14 +321,38 @@ class ApiRateLimiterBullMQ {
 
         // Obter fila e garantir que worker existe
         const queue = this._getQueue(provider, sellerId);
+        const queueName = `api-${provider}-${sellerId}`;
         
-        // Garantir que worker foi criado antes de adicionar job
-        try {
-            const { getOrCreateWorker } = require('../worker/api-rate-limiter-worker');
-            getOrCreateWorker(`api-${provider}-${sellerId}`);
-        } catch (error) {
-            logger.warn(`[API Rate Limiter] Erro ao garantir worker para api-${provider}-${sellerId}:`, error.message);
-            // Continuar mesmo assim - o worker pode já existir
+        // Garantir que worker foi criado ANTES de adicionar job (crítico!)
+        // Tentar até 3 vezes com delay crescente
+        let worker = null;
+        const maxRetries = 3;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                const { getOrCreateWorker } = require('../worker/api-rate-limiter-worker');
+                worker = getOrCreateWorker(queueName);
+                
+                if (worker) {
+                    break; // Worker criado com sucesso
+                }
+                
+                // Se não conseguiu criar, aguardar antes de tentar novamente
+                if (attempt < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+                }
+            } catch (error) {
+                logger.warn(`[API Rate Limiter] Tentativa ${attempt + 1} de criar worker para ${queueName} falhou:`, error.message);
+                if (attempt < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+                } else {
+                    logger.error(`[API Rate Limiter] Erro crítico ao garantir worker para ${queueName} após ${maxRetries} tentativas:`, error.message);
+                    throw new Error(`Worker não disponível para ${queueName}: ${error.message}`);
+                }
+            }
+        }
+        
+        if (!worker) {
+            throw new Error(`Não foi possível criar worker para ${queueName} após ${maxRetries} tentativas`);
         }
 
         // Adicionar job na fila
