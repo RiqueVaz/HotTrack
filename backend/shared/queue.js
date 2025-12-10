@@ -133,10 +133,10 @@ const QUEUE_CONFIGS = {
         concurrency: 200, // Reduzido de 400 para evitar contenção no Redis/DB
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
         // stalledInterval, maxStalledCount e lockDuration são configurações do Worker (não podem ser por job)
-        // Valores conservadores que funcionam para qualquer tamanho de batch
-        stalledInterval: 3600000, // 60 minutos (aumentado de 30min para evitar falsos positivos de stalled)
-        maxStalledCount: 10, // Aumentado de 5 para 10 - dar mais chances antes de falhar
-        lockDuration: 7200000, // 2 horas (aumentado de 1h para batches muito grandes)
+        // Valores otimizados: batches muito grandes podem demorar até 1.5h, então lockDuration = 3h (2x margem)
+        stalledInterval: 5400000, // 90 minutos - verificar stalled a cada 1.5h
+        maxStalledCount: 5, // Reduzido de 10 para evitar reprocessamento excessivo
+        lockDuration: 10800000, // 3 horas - batches muito grandes podem demorar até 1.5h
         // attempts padrão (será sobrescrito por job via calculateScalableLimits quando possível)
         attempts: 5, // Padrão (fallback para jobs sem cálculo dinâmico)
         backoff: {
@@ -154,8 +154,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO]: {
         concurrency: 50,
         limiter: undefined,
-        stalledInterval: 120000, // 2 minutos (aumentado de 1min - pode processar vários contatos)
-        lockDuration: 300000, // 5 minutos - jobs individuais podem demorar alguns minutos
+        stalledInterval: 420000, // 7 minutos - verificar stalled periodicamente
+        lockDuration: 900000, // 15 minutos - fluxos complexos podem demorar até 7-8 minutos
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -165,8 +165,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_DELAY]: {
         concurrency: 30,
         limiter: { max: 30, duration: 1000 },
-        stalledInterval: 600000, // 10 minutos (aumentado de 2min para dar mais margem para delays longos)
-        lockDuration: 7200000, // 2 horas - jobs delayed podem ter delays muito longos (horas)
+        stalledInterval: 7200000, // 2 horas - verificar stalled a cada 2h
+        lockDuration: 14400000, // 4 horas - delays podem ser muito longos (até 2h de processamento)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -176,9 +176,9 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.VALIDATION_DISPARO]: {
         concurrency: 10,
         limiter: { max: 10, duration: 1000 },
-        stalledInterval: 600000, // 10 minutos (aumentado de 5min - validação pode processar muitos contatos)
-        maxStalledCount: 10, // Aumentado para dar mais chances antes de falhar (igual DISPARO_BATCH)
-        lockDuration: 1800000, // 30 minutos - validação pode demorar muito com muitos contatos
+        stalledInterval: 2700000, // 45 minutos - verificar stalled periodicamente
+        maxStalledCount: 5, // Reduzido para evitar reprocessamento excessivo
+        lockDuration: 5400000, // 1.5 horas - validação pode demorar muito com muitos contatos (até 45min)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -188,9 +188,9 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.SCHEDULED_DISPARO]: {
         concurrency: 5,
         limiter: { max: 5, duration: 1000 },
-        stalledInterval: 600000, // 10 minutos (aumentado de 1min - processa muitos contatos e cria batches)
-        maxStalledCount: 10, // Aumentado para dar mais chances antes de falhar (igual DISPARO_BATCH)
-        lockDuration: 1800000, // 30 minutos - pode processar muitos contatos e criar muitos batches
+        stalledInterval: 1800000, // 30 minutos - verificar stalled periodicamente
+        maxStalledCount: 3, // Reduzido para evitar reprocessamento excessivo
+        lockDuration: 3600000, // 1 hora - pode processar muitos contatos e criar muitos batches (até 30min)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -200,8 +200,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
-        stalledInterval: 120000, // 2 minutos - jobs podem levar até 60s para processar
-        lockDuration: 3600000, // 1 hora - jobs delayed podem ter delays longos (horas) - já estava correto
+        stalledInterval: 300000, // 5 minutos - verificar stalled periodicamente
+        lockDuration: 600000, // 10 minutos - jobs são rápidos (< 1 minuto), mas manter margem de segurança
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -211,8 +211,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.CLEANUP_QRCODES]: {
         concurrency: 1, // Baixa concorrência - tarefa de manutenção
         limiter: { max: 1, duration: 1000 },
-        stalledInterval: 600000, // 10 minutos
-        lockDuration: 1800000, // 30 minutos - cleanup pode demorar se houver muitos QR codes
+        stalledInterval: 1800000, // 30 minutos - verificar stalled periodicamente
+        lockDuration: 3600000, // 1 hora - cleanup pode demorar se houver muitos QR codes (até 30min)
         attempts: 2,
         backoff: {
             type: 'fixed',

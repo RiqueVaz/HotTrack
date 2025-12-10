@@ -30,58 +30,96 @@ function createWorker(queueName, processor, options = {}) {
             const { data } = job;
             const botToken = data._botToken;
             
-            // Log detalhado do início do processamento
-            if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
-                logger.info(`[BullMQ-Worker] Processando job ${job.id} da fila ${queueName}`, {
-                    jobId: job.id,
-                    historyId: data.history_id,
-                    batchIndex: data.batch_index,
-                    totalBatches: data.total_batches,
-                    contactsCount: data.contacts?.length || 0,
-                    hasBotToken: !!botToken,
-                    botTokenLength: botToken?.length || 0
-                });
+            // Renovação automática de lock para jobs longos
+            // Configurar intervalo baseado no lockDuration da fila (renovar a cada 1/4 do lockDuration)
+            const queueLockDuration = lockDuration || 300000; // Default 5 minutos se não especificado
+            const lockRenewInterval = Math.max(60000, Math.floor(queueLockDuration / 4)); // Mínimo 1 minuto, máximo 1/4 do lockDuration
+            let lockRenewTimer = null;
+            
+            // Iniciar renovação automática de lock para jobs que podem demorar muito (> 5 minutos)
+            if (job && typeof job.updateProgress === 'function' && queueLockDuration > 300000) {
+                lockRenewTimer = setInterval(async () => {
+                    try {
+                        // Atualizar progresso para renovar o lock implicitamente
+                        await job.updateProgress(1);
+                        logger.debug(`[BullMQ-Worker] Lock renovado automaticamente para job ${job.id} na fila ${queueName}`);
+                    } catch (renewError) {
+                        // Não é crítico se falhar, apenas logar
+                        logger.debug(`[BullMQ-Worker] Erro ao renovar lock automaticamente (não crítico):`, renewError.message);
+                    }
+                }, lockRenewInterval);
             }
             
-            // Rate limiting pré-emptive já foi feito antes de adicionar o job
-            // Manter apenas verificação básica como fallback de segurança (opcional)
-            // Se rate limit foi excedido mesmo assim, usar RateLimitError para retry com backoff
-            if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
-                // Verificação rápida como fallback (não deve ser necessário na maioria dos casos)
-                const allowed = await checkRateLimit(botToken);
-                if (!allowed) {
-                    // Se rate limit ainda excedido (raro, mas possível), usar RateLimitError para retry
-                    // Mudar para debug para reduzir spam de logs
-                    logger.debug(`[BullMQ-Worker] Rate limit ainda excedido no worker para job ${job.id} (fallback)`, {
+            try {
+                // Log detalhado do início do processamento
+                if (queueName === QUEUE_NAMES.DISPARO_BATCH) {
+                    logger.info(`[BullMQ-Worker] Processando job ${job.id} da fila ${queueName}`, {
+                        jobId: job.id,
+                        historyId: data.history_id,
+                        batchIndex: data.batch_index,
+                        totalBatches: data.total_batches,
+                        contactsCount: data.contacts?.length || 0,
+                        hasBotToken: !!botToken,
+                        botTokenLength: botToken?.length || 0,
+                        lockRenewInterval: lockRenewTimer ? `${Math.round(lockRenewInterval / 1000)}s` : 'disabled'
+                    });
+                }
+                
+                // Rate limiting pré-emptive já foi feito antes de adicionar o job
+                // Manter apenas verificação básica como fallback de segurança (opcional)
+                // Se rate limit foi excedido mesmo assim, usar RateLimitError para retry com backoff
+                if (botToken && queueName === QUEUE_NAMES.DISPARO_BATCH) {
+                    // Verificação rápida como fallback (não deve ser necessário na maioria dos casos)
+                    const allowed = await checkRateLimit(botToken);
+                    if (!allowed) {
+                        // Se rate limit ainda excedido (raro, mas possível), usar RateLimitError para retry
+                        // Mudar para debug para reduzir spam de logs
+                        logger.debug(`[BullMQ-Worker] Rate limit ainda excedido no worker para job ${job.id} (fallback)`, {
+                            jobId: job.id,
+                            queueName,
+                            historyId: data.history_id,
+                            attemptsMade: job.attemptsMade || 0
+                        });
+                        throw new RateLimitError(`Rate limit exceeded for bot token. Retrying with backoff...`);
+                    }
+                } else if (queueName === QUEUE_NAMES.DISPARO_BATCH && !botToken) {
+                    // Log warning se não houver botToken para disparo batch
+                    logger.warn(`[BullMQ-Worker] Job ${job.id} sem botToken (pode causar problemas)`, {
+                        jobId: job.id,
+                        historyId: data.history_id,
+                        batchIndex: data.batch_index
+                    });
+                }
+                
+                // Processar job com tratamento de erro robusto
+                try {
+                    const result = await processor(data, job);
+                    // Limpar timer de renovação de lock ao concluir
+                    if (lockRenewTimer) {
+                        clearInterval(lockRenewTimer);
+                    }
+                    return result;
+                } catch (error) {
+                    // Limpar timer de renovação de lock em caso de erro
+                    if (lockRenewTimer) {
+                        clearInterval(lockRenewTimer);
+                    }
+                    logger.error(`[BullMQ-Worker] Erro ao processar job ${job.id} na fila ${queueName}:`, {
                         jobId: job.id,
                         queueName,
                         historyId: data.history_id,
-                        attemptsMade: job.attemptsMade || 0
+                        batchIndex: data.batch_index,
+                        error: error.message,
+                        stack: error.stack
                     });
-                    throw new RateLimitError(`Rate limit exceeded for bot token. Retrying with backoff...`);
+                    throw error; // Re-throw para que BullMQ faça retry
                 }
-            } else if (queueName === QUEUE_NAMES.DISPARO_BATCH && !botToken) {
-                // Log warning se não houver botToken para disparo batch
-                logger.warn(`[BullMQ-Worker] Job ${job.id} sem botToken (pode causar problemas)`, {
-                    jobId: job.id,
-                    historyId: data.history_id,
-                    batchIndex: data.batch_index
-                });
-            }
-            
-            // Processar job com tratamento de erro robusto
-            try {
-                return await processor(data, job);
             } catch (error) {
-                logger.error(`[BullMQ-Worker] Erro ao processar job ${job.id} na fila ${queueName}:`, {
-                    jobId: job.id,
-                    queueName,
-                    historyId: data.history_id,
-                    batchIndex: data.batch_index,
-                    error: error.message,
-                    stack: error.stack
-                });
-                throw error; // Re-throw para que BullMQ faça retry
+                // Limpar timer de renovação de lock em caso de erro não tratado
+                if (lockRenewTimer) {
+                    clearInterval(lockRenewTimer);
+                }
+                throw error;
             }
         },
         {
@@ -160,9 +198,40 @@ function createWorker(queueName, processor, options = {}) {
     });
     
     worker.on('stalled', (jobId) => {
-        logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName}`, {
-            jobId,
-            queueName
+        // Buscar informações do job para log mais detalhado
+        const queueLockDuration = lockDuration || 300000; // Usar lockDuration do escopo da função
+        worker.getJob(jobId).then(job => {
+            if (job) {
+                const processingTime = job.processedOn ? Date.now() - job.processedOn : null;
+                const lockDurationMinutes = Math.round(queueLockDuration / 60000);
+                const processingTimeMinutes = processingTime ? Math.round(processingTime / 60000) : null;
+                
+                logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName}`, {
+                    jobId,
+                    queueName,
+                    historyId: job.data?.history_id,
+                    batchIndex: job.data?.batch_index,
+                    totalBatches: job.data?.total_batches,
+                    contactsCount: job.data?.contacts?.length || 0,
+                    processingTime: processingTime ? `${processingTimeMinutes}min (${Math.round(processingTime / 1000)}s)` : 'unknown',
+                    lockDuration: `${lockDurationMinutes}min`,
+                    stalledInterval: `${Math.round(stalledInterval / 60000)}min`,
+                    attemptsMade: job.attemptsMade || 0,
+                    progress: job.progress || 0,
+                    timestamp: new Date().toISOString()
+                });
+            } else {
+                logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName} (job not found)`, {
+                    jobId,
+                    queueName
+                });
+            }
+        }).catch(err => {
+            logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName} (error getting job details)`, {
+                jobId,
+                queueName,
+                error: err.message
+            });
         });
     });
     
