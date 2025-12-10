@@ -34,23 +34,32 @@ const workers = new Map();
  * Cria worker para uma fila específica
  */
 function createWorkerForQueue(queueName) {
-    // Extrair provider do nome da fila: api-{provider}-{sellerId}
-    const match = queueName.match(/^api-(.+?)-(\d+)$/);
-    if (!match) {
-        logger.error(`[API Rate Limiter Worker] Nome de fila inválido: ${queueName}`);
-        return null;
-    }
-    
-    const provider = match[1];
-    const config = PROVIDER_CONFIGS[provider] || PROVIDER_CONFIGS['default'];
-    
-    // Verificar se já existe worker para esta fila (evitar duplicação)
-    if (workers.has(queueName)) {
-        logger.debug(`[API Rate Limiter Worker] Worker já existe para ${queueName}`);
-        return workers.get(queueName);
-    }
-    
-    const worker = new Worker(
+    try {
+        // Extrair provider do nome da fila: api-{provider}-{sellerId}
+        const match = queueName.match(/^api-(.+?)-(\d+)$/);
+        if (!match) {
+            logger.error(`[API Rate Limiter Worker] Nome de fila inválido: ${queueName}`);
+            return null;
+        }
+        
+        const provider = match[1];
+        const sellerId = match[2];
+        const config = PROVIDER_CONFIGS[provider] || PROVIDER_CONFIGS['default'];
+        
+        if (!config) {
+            logger.error(`[API Rate Limiter Worker] Configuração não encontrada para provider ${provider} na fila ${queueName}`);
+            return null;
+        }
+        
+        // Verificar se já existe worker para esta fila (evitar duplicação)
+        if (workers.has(queueName)) {
+            logger.debug(`[API Rate Limiter Worker] Worker já existe para ${queueName}`);
+            return workers.get(queueName);
+        }
+        
+        logger.info(`[API Rate Limiter Worker] Criando worker para ${queueName} (provider: ${provider}, sellerId: ${sellerId})`);
+        
+        const worker = new Worker(
         queueName,
         async (job) => {
             const { method, url, headers, data, params, timeout } = job.data;
@@ -125,13 +134,26 @@ function createWorkerForQueue(queueName) {
         logger.info(`[API Rate Limiter Worker] Worker pronto para processar jobs na fila ${queueName}`);
     });
     
-    // Verificar se worker foi criado corretamente
-    if (!worker || typeof worker.process !== 'function') {
-        logger.error(`[API Rate Limiter Worker] Worker inválido criado para ${queueName}`);
+        // Verificar se worker foi criado corretamente
+        if (!worker) {
+            logger.error(`[API Rate Limiter Worker] Worker é null para ${queueName}`);
+            return null;
+        }
+        
+        // Verificar se worker é uma instância válida (Worker do BullMQ)
+        // Não verificar propriedades específicas pois podem não estar disponíveis imediatamente
+        if (typeof worker !== 'object') {
+            logger.error(`[API Rate Limiter Worker] Worker inválido criado para ${queueName} - não é um objeto`);
+            return null;
+        }
+        
+        logger.info(`[API Rate Limiter Worker] Worker criado com sucesso para ${queueName}`);
+        return worker;
+    } catch (error) {
+        logger.error(`[API Rate Limiter Worker] Erro ao criar worker para ${queueName}:`, error);
+        logger.error(`[API Rate Limiter Worker] Stack trace:`, error.stack);
         return null;
     }
-    
-    return worker;
 }
 
 /**
