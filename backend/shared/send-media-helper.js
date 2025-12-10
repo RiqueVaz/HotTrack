@@ -1,6 +1,5 @@
-// Helper para envio de mídias com suporte a R2 e migração sob demanda
+// Helper para envio de mídias com suporte a R2
 const { sqlWithRetry } = require('../db');
-const { migrateMediaOnDemand } = require('./migrate-media-on-demand');
 
 /**
  * Normaliza payload do Telegram removendo undefined e garantindo tipos corretos
@@ -30,11 +29,10 @@ function normalizeTelegramPayload(payload) {
 /**
  * Cria uma função sendMediaFromLibrary configurada com as dependências
  * @param {Function} sendTelegramRequest - Função para enviar requisições ao Telegram
- * @param {Function} sendMediaAsProxy - Função de fallback (método antigo)
  * @param {Object} logger - Objeto logger (opcional)
  * @returns {Function} Função sendMediaFromLibrary configurada
  */
-function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logger = console) {
+function createSendMediaFromLibrary(sendTelegramRequest, logger = console) {
     // Cache de mídias para evitar queries repetidas
     const mediaCache = new Map();
     const MEDIA_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
@@ -241,7 +239,7 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
                 media = cached.media;
             } else {
                 const [mediaResult] = await sqlWithRetry(`
-                    SELECT id, file_id, storage_url, storage_type, migration_status
+                    SELECT id, file_id, storage_url, storage_type
                     FROM media_library 
                     WHERE file_id = $1 AND seller_id = $2
                     LIMIT 1
@@ -254,39 +252,18 @@ function createSendMediaFromLibrary(sendTelegramRequest, sendMediaAsProxy, logge
             }
 
             if (media) {
-                // 2. PRIORIDADE 1: Se já está no R2, baixar e fazer upload
+                // Se está no R2, baixar e fazer upload
                 if (media.storage_type === 'r2' && media.storage_url) {
-                    try {
-                        return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption, media.id, botId);
-                    } catch (urlError) {
-                        logger.warn(`[Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
-                        // Não tentar fallback com file_id se R2 falhou
-                        throw urlError;
-                    }
-                }
-
-                // 3. PRIORIDADE 2: Se não está migrado, tentar migrar sob demanda
-                if (media.storage_type === 'telegram' && media.migration_status !== 'migrated') {
-                    try {
-                        logger.info(`[Media] Migrando mídia ${media.id} sob demanda...`);
-                        const migrationResult = await migrateMediaOnDemand(media.id);
-                        
-                        if (migrationResult?.success && migrationResult?.storageUrl) {
-                            // Invalidar cache
-                            mediaCache.delete(cacheKey);
-                            
-                            return await sendMediaFromR2(destinationBotToken, chatId, migrationResult.storageUrl, fileType, caption, media.id, botId);
-                        }
-                    } catch (migrationError) {
-                        logger.error(`[Media] Erro na migração sob demanda:`, migrationError.message);
-                        // Continuar com método antigo apenas se migração falhou
-                    }
+                    return await sendMediaFromR2(destinationBotToken, chatId, media.storage_url, fileType, caption, media.id, botId);
+                } else {
+                    // Mídia não está no R2 - não suportado mais
+                    throw new Error(`Mídia ${media.id} não está armazenada no R2. Apenas mídias no R2 são suportadas.`);
                 }
             }
         }
 
-        // 4. Fallback: método antigo (download/re-upload) - apenas se não encontrou no banco ou migração falhou
-        return await sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, caption);
+        // Se não encontrou mídia no banco, lançar erro
+        throw new Error(`Mídia não encontrada na biblioteca para file_id: ${fileId}`);
     };
 }
 
