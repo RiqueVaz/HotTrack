@@ -675,31 +675,26 @@ function createPixService({
       throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
     }
 
-    // Tentar todos os provedores em paralelo com timeout individual de 8s por provedor
+    // Timeout individual de 8s por provedor
     const PROVIDER_TIMEOUT = 8000; // 8 segundos máximo por provedor
-    const promises = providerOrder.map(provider => {
-      const providerPromise = generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal)
-        .then(result => ({ success: true, provider, result }))
-        .catch(error => ({ success: false, provider, error }));
-      
-      // Adicionar timeout individual usando Promise.race
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`Timeout de ${PROVIDER_TIMEOUT}ms para ${provider}`)), PROVIDER_TIMEOUT)
-      );
-      
-      return Promise.race([providerPromise, timeoutPromise])
-        .then(result => result)
-        .catch(error => ({ success: false, provider, error }));
-    });
-
-    const results = await Promise.allSettled(promises);
     
-    // Priorizar primeiro provedor bem-sucedido na ordem de preferência
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if (result.status === 'fulfilled' && result.value.success) {
-        const pixResult = result.value.result;
+    // Tentar provedores sequencialmente (só tenta próximo se anterior falhar)
+    const errors = [];
+    
+    for (let i = 0; i < providerOrder.length; i++) {
+      const provider = providerOrder[i];
+      
+      try {
+        // Criar promise com timeout
+        const providerPromise = generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Timeout de ${PROVIDER_TIMEOUT}ms para ${provider}`)), PROVIDER_TIMEOUT)
+        );
         
+        // Tentar com timeout
+        const pixResult = await Promise.race([providerPromise, timeoutPromise]);
+        
+        // Se chegou aqui, foi sucesso - inserir no banco e retornar
         const [transaction] = await runQuery`
           INSERT INTO pix_transactions (
               click_id_internal, pix_value, qr_code_text, qr_code_base64,
@@ -712,13 +707,24 @@ function createPixService({
 
         pixResult.internal_transaction_id = transaction.id;
         return pixResult;
+        
+      } catch (error) {
+        // Se falhou, adicionar aos erros e tentar próximo provedor
+        errors.push({ provider, error });
+        
+        // Se não é o último provedor, continuar para o próximo
+        if (i < providerOrder.length - 1) {
+          continue;
+        }
       }
     }
 
-    // Se nenhum funcionou, usar o primeiro erro
-    const firstError = results.find(r => r.status === 'fulfilled' && !r.value.success)?.value?.error ||
-                      results.find(r => r.status === 'rejected')?.reason;
-    const specificMessage = firstError?.response?.data?.message || firstError?.message || 'Todos os provedores de PIX falharam.';
+    // Se chegou aqui, todos os provedores falharam
+    // Usar mensagem do primeiro erro ou mensagem genérica
+    const firstError = errors[0]?.error;
+    const specificMessage = firstError?.response?.data?.message || 
+                           firstError?.message || 
+                           'Todos os provedores de PIX falharam.';
     throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
   }
 
