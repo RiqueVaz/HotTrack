@@ -12852,7 +12852,9 @@ app.get('/api/disparos/status/:historyId', authenticateJwt, async (req, res) => 
 
     } catch (error) {
         console.error('Erro ao consultar status do disparo:', error);
-        res.status(500).json({ message: 'Erro interno ao consultar status do disparo.' });
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Erro interno ao consultar status do disparo.' });
+        }
     }
 });
 
@@ -12925,7 +12927,9 @@ app.get('/api/disparos/check-active', authenticateJwt, async (req, res) => {
 
     } catch (error) {
         console.error('Erro ao verificar disparo ativo:', error);
-        res.status(500).json({ message: 'Erro interno ao verificar disparo ativo.' });
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Erro interno ao verificar disparo ativo.' });
+        }
     }
 });
 
