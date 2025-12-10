@@ -272,9 +272,50 @@ function getQueue(queueName) {
 }
 
 /**
- * Verifica rate limit para bot token (usado para rate limiting pré-emptive)
+ * Verifica rate limit SEM adicionar requisição (apenas leitura)
+ * Usado para waitForRateLimit verificar se pode adicionar sem poluir o contador
  * @param {string} botToken - Token do bot Telegram
  * @returns {Promise<boolean>} - true se dentro do limite, false se excedido
+ */
+async function checkRateLimitWithoutAdding(botToken) {
+    if (!botToken) return true;
+    
+    const key = `rate-limit:${botToken}`;
+    const now = Date.now();
+    const windowStart = now - BULLMQ_RATE_LIMIT_WINDOW;
+    
+    try {
+        return await redisCircuitBreaker.execute(async () => {
+            const pipeline = redisConnection.pipeline();
+            
+            // Remover entradas antigas (fora da janela)
+            pipeline.zremrangebyscore(key, 0, windowStart);
+            
+            // Contar requisições na janela atual (SEM adicionar)
+            pipeline.zcard(key);
+            
+            // Definir expiração da chave
+            pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
+            
+            const results = await pipeline.exec();
+            
+            // results[1][1] é o resultado do zcard (contagem atual)
+            const currentCount = results[1][1];
+            
+            // Verificar se está dentro do limite (deixar margem de 1 slot para a requisição que será adicionada)
+            return currentCount < BULLMQ_RATE_LIMIT_MAX;
+        });
+    } catch (error) {
+        const logger = require('../logger');
+        logger.warn(`[RateLimit] Erro ao verificar rate limit (fail open):`, error.message);
+        return true;
+    }
+}
+
+/**
+ * Verifica rate limit para bot token e RESERVA uma vaga (adiciona ao contador)
+ * @param {string} botToken - Token do bot Telegram
+ * @returns {Promise<boolean>} - true se dentro do limite e vaga reservada, false se excedido
  */
 async function checkRateLimit(botToken) {
     if (!botToken) return true; // Sem bot token, permite processamento
@@ -313,7 +354,7 @@ async function checkRateLimit(botToken) {
                 return false; // Rate limit excedido
             }
             
-            return true; // Dentro do limite
+            return true; // Dentro do limite e vaga reservada
         });
     } catch (error) {
         // Em caso de erro (incluindo circuit breaker aberto), permitir processamento (fail open)
@@ -336,10 +377,16 @@ async function waitForRateLimit(botToken, maxWaitTime = 5000) {
     const checkInterval = 100; // Verificar a cada 100ms
     
     while (Date.now() - startTime < maxWaitTime) {
-        const allowed = await checkRateLimit(botToken);
+        // Verificar SEM adicionar ao contador (evita poluir o contador durante a espera)
+        const allowed = await checkRateLimitWithoutAdding(botToken);
         
         if (allowed) {
-            return { allowed: true, waitTime: Date.now() - startTime };
+            // Se permitido, AGORA SIM reservar a vaga chamando checkRateLimit (que adiciona)
+            const reserved = await checkRateLimit(botToken);
+            if (reserved) {
+                return { allowed: true, waitTime: Date.now() - startTime };
+            }
+            // Se não conseguiu reservar (race condition), continuar tentando
         }
         
         // Aguardar antes de verificar novamente
