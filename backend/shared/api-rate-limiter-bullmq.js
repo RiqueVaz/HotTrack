@@ -33,7 +33,7 @@ class ApiRateLimiterBullMQ {
         this.QUEUE_THRESHOLD = 3; // Reduzido de 10 para 3 - se há mais de 3 jobs na fila, usar requisição direta
         this.MAX_DIRECT_TIMEOUT = 15000; // Reduzido de 20s para 15s - timeout máximo para requisições diretas
         this.DYNAMIC_TIMEOUT_MULTIPLIER = 1000; // Reduzido de 2000 para 1000 - multiplicador para timeout dinâmico (1s por job)
-        this.MIN_QUEUE_TIMEOUT = 10000; // Reduzido de 15s para 10s - timeout mínimo quando usa fila
+        this.MIN_QUEUE_TIMEOUT = 15000; // Aumentado de 10s para 15s - timeout mínimo quando usa fila (10s era muito curto)
         this.FALLBACK_ON_TIMEOUT = true; // Tentar requisição direta se timeout na fila
         
         // Cache de contagem de jobs por fila (evita múltiplas queries Redis)
@@ -43,8 +43,8 @@ class ApiRateLimiterBullMQ {
         // Configurações por provedor
         this.providerConfigs = new Map([
             ['pushinpay', {
-                limiter: { max: 2, duration: 1000 }, // 2 req/segundo
-                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
+                limiter: { max: 1, duration: 2000 }, // Reduzido de 2 req/s para 1 req/2s para evitar 429
+                concurrency: 2, // Reduzido de 3 para 2 para evitar 429
                 timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 1,
@@ -84,7 +84,7 @@ class ApiRateLimiterBullMQ {
             }],
             ['oasyfy', {
                 limiter: { max: 1, duration: 2000 },
-                concurrency: 3, // Aumentado de 1 para 3 para processar mais jobs simultaneamente
+                concurrency: 2, // Reduzido de 3 para 2 para evitar timeouts e 429
                 timeout: 15000, // Reduzido de 20s para 15s para evitar 499
                 cacheTTL: 60_000,
                 maxRetries: 3,
@@ -538,9 +538,9 @@ class ApiRateLimiterBullMQ {
         
         // Verificar tamanho da fila antes de decidir estratégia
         const queueSize = await this._getQueueSize(queue);
-        // Para PIX generation (priority === 'high'), SEMPRE usar requisição direta se há jobs na fila
+        // Para PIX generation (priority === 'high'), SEMPRE usar requisição direta (não esperar fila)
         // Para outras requisições, usar direta apenas se fila está cheia (threshold)
-        const shouldUseDirectRequest = (priority === 'high' && queueSize > 0) || queueSize > this.QUEUE_THRESHOLD;
+        const shouldUseDirectRequest = priority === 'high' || queueSize > this.QUEUE_THRESHOLD;
         
         // Se fila está muito cheia ou é alta prioridade com jobs na fila, usar requisição direta
         if (shouldUseDirectRequest) {

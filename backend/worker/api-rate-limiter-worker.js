@@ -14,11 +14,11 @@ const logger = require('../logger');
 
 // Configurações por provedor (mesmas do api-rate-limiter-bullmq.js)
 const PROVIDER_CONFIGS = {
-    'pushinpay': { limiter: { max: 2, duration: 1000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
+    'pushinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 15000 }, // Reduzido para evitar 429
     'syncpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'brpix': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
     'cnpay': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
-    'oasyfy': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
+    'oasyfy': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 15000 }, // Reduzido para evitar timeouts
     'pixup': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 15000 }, // Reduzido de 20s para 15s
     'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
