@@ -1502,20 +1502,30 @@ function invalidateSellerCache(sellerId) {
  * Obtém bot token com cache de 10 minutos
  */
 async function getBotToken(botId, sellerId) {
-    const cacheKey = `bot:${botId}:${sellerId}`;
-    const cached = dbCache.get(cacheKey);
+    // Converter botId para número se necessário
+    const numericBotId = typeof botId === 'string' ? parseInt(botId, 10) : botId;
+    const numericSellerId = typeof sellerId === 'string' ? parseInt(sellerId, 10) : sellerId;
+    
+    if (!numericBotId || isNaN(numericBotId) || !numericSellerId || isNaN(numericSellerId)) {
+        logger.warn(`[getBotToken] IDs inválidos: botId=${botId}, sellerId=${sellerId}`);
+        return null;
+    }
+    
+    const cacheKey = `bot:${numericBotId}:${numericSellerId}`;
+    const cached = await dbCache.get(cacheKey);
     
     if (cached !== null) {
         return cached;
     }
     
-    const [bot] = await sqlTx`SELECT bot_token, seller_id FROM telegram_bots WHERE id = ${botId} AND seller_id = ${sellerId}`;
+    const [bot] = await sqlTx`SELECT bot_token, seller_id FROM telegram_bots WHERE id = ${numericBotId} AND seller_id = ${numericSellerId}`;
     
-    if (bot) {
-        dbCache.set(cacheKey, bot.bot_token, 10 * 60 * 1000); // 10 minutos
+    if (bot && bot.bot_token) {
+        await dbCache.set(cacheKey, bot.bot_token, 10 * 60 * 1000); // 10 minutos
         return bot.bot_token;
     }
     
+    logger.warn(`[getBotToken] Bot não encontrado: botId=${numericBotId}, sellerId=${numericSellerId}`);
     return null;
 }
 
@@ -2101,10 +2111,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     
     // VERIFICAR CACHE ANTES DE TENTAR
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit - não é necessário em produção
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
-        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit - não é necessário em produção
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
@@ -2127,7 +2137,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                     await sqlWithRetry(
                         sqlTx`DELETE FROM bot_blocks WHERE bot_id = ${botId} AND chat_id = ${chatId}`
                     );
-                    dbCache.unmarkBotBlocked(botId, chatId);
+                    await dbCache.unmarkBotBlocked(botId, chatId);
                 } catch (unblockError) {
                     // Não crítico - logar apenas em desenvolvimento
                     if (shouldLogDebug()) {
@@ -2146,7 +2156,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 // MARCAR NO CACHE E NA TABELA QUANDO RECEBER 403
                 if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
                     if (botId) {
-                        dbCache.markBotBlocked(botId, errorChatId);
+                        await dbCache.markBotBlocked(botId, errorChatId);
                         // Buscar seller_id do bot e inserir na tabela
                         try {
                             const [bot] = await sqlWithRetry(
@@ -2159,7 +2169,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                             logger.warn(`[Bot Blocks] Erro ao buscar seller_id para bot ${botId}: ${dbError.message}`);
                         }
                     } else {
-                        dbCache.markBotTokenBlocked(botToken, errorChatId);
+                        await dbCache.markBotTokenBlocked(botToken, errorChatId);
                     }
                 }
                 
@@ -4223,14 +4233,29 @@ app.post('/api/chats/:botId/send-message', authenticateJwt, async (req, res) => 
     const { chatId, text } = req.body;
     if (!chatId || !text) return res.status(400).json({ message: 'Chat ID e texto são obrigatórios.' });
     try {
-        const botToken = await getBotToken(req.params.botId, req.user.id);
-        if (!botToken) return res.status(404).json({ message: 'Bot não encontrado.' });
-        const response = await sendTelegramRequest(botToken, 'sendMessage', { chat_id: chatId, text });
+        const botId = parseInt(req.params.botId, 10);
+        if (!botId || isNaN(botId)) {
+            return res.status(400).json({ message: 'Bot ID inválido.' });
+        }
+        
+        const botToken = await getBotToken(botId, req.user.id);
+        if (!botToken) {
+            logger.warn(`[send-message] Bot não encontrado: botId=${botId}, sellerId=${req.user.id}`);
+            return res.status(404).json({ message: 'Bot não encontrado.' });
+        }
+        
+        const response = await sendTelegramRequest(botToken, 'sendMessage', { chat_id: chatId, text }, {}, 3, 1500, botId);
         if (response.ok) {
-            await saveMessageToDb(req.user.id, req.params.botId, response.result, 'operator');
+            await saveMessageToDb(req.user.id, botId, response.result, 'operator');
+        } else {
+            logger.warn(`[send-message] Erro ao enviar mensagem: ${response.error_code} - ${response.description}`);
+            return res.status(500).json({ message: `Erro ao enviar mensagem: ${response.description || 'Erro desconhecido'}` });
         }
         res.status(200).json({ message: 'Mensagem enviada!' });
-    } catch (error) { res.status(500).json({ message: 'Não foi possível enviar a mensagem.' }); }
+    } catch (error) {
+        logger.error(`[send-message] Erro ao enviar mensagem:`, error);
+        res.status(500).json({ message: 'Não foi possível enviar a mensagem.' });
+    }
 });
 
 app.post('/api/chats/:botId/send-library-media', authenticateJwt, async (req, res) => {
