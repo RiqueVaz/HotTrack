@@ -675,13 +675,21 @@ function createPixService({
       throw new Error('Nenhum provedor de PIX configurado para este vendedor.');
     }
 
-    let lastError = null;
+    // Tentar todos os provedores em paralelo
+    const promises = providerOrder.map(provider => 
+      generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal)
+        .then(result => ({ success: true, provider, result }))
+        .catch(error => ({ success: false, provider, error }))
+    );
 
-    for (const provider of providerOrder) {
-      try {
-        const pixResult = await generatePixForProvider(provider, seller, value_cents, host, apiKey, ip_address, click_id_internal);
-        // Removido log de debug - não é necessário em produção
-
+    const results = await Promise.allSettled(promises);
+    
+    // Priorizar primeiro provedor bem-sucedido na ordem de preferência
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'fulfilled' && result.value.success) {
+        const pixResult = result.value.result;
+        
         const [transaction] = await runQuery`
           INSERT INTO pix_transactions (
               click_id_internal, pix_value, qr_code_text, qr_code_base64,
@@ -691,17 +699,16 @@ function createPixService({
               ${pixResult.qr_code_base64}, ${pixResult.provider},
               ${pixResult.transaction_id}, ${pixResult.transaction_id}
           ) RETURNING id`;
-        // Removido log de debug - não é necessário em produção
 
         pixResult.internal_transaction_id = transaction.id;
         return pixResult;
-      } catch (error) {
-        lastError = error;
       }
     }
 
-    const specificMessage =
-      lastError?.response?.data?.message || lastError?.message || 'Todos os provedores de PIX falharam.';
+    // Se nenhum funcionou, usar o primeiro erro
+    const firstError = results.find(r => r.status === 'fulfilled' && !r.value.success)?.value?.error ||
+                      results.find(r => r.status === 'rejected')?.reason;
+    const specificMessage = firstError?.response?.data?.message || firstError?.message || 'Todos os provedores de PIX falharam.';
     throw new Error(`Não foi possível gerar o PIX: ${specificMessage}`);
   }
 
