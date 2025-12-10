@@ -14,16 +14,16 @@ const logger = require('../logger');
 
 // Configurações por provedor (mesmas do api-rate-limiter-bullmq.js)
 const PROVIDER_CONFIGS = {
-    'pushinpay': { limiter: { max: 2, duration: 1000 }, concurrency: 1, timeout: 20000 },
-    'syncpay': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 },
-    'brpix': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 20000 },
-    'cnpay': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 20000 },
-    'oasyfy': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 20000 },
-    'pixup': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 20000 },
-    'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 },
-    'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 },
+    'pushinpay': { limiter: { max: 2, duration: 1000 }, concurrency: 3, timeout: 20000 },
+    'syncpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
+    'brpix': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 20000 },
+    'cnpay': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 20000 },
+    'oasyfy': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 20000 },
+    'pixup': { limiter: { max: 1, duration: 2000 }, concurrency: 3, timeout: 20000 },
+    'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
+    'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'ip-api': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 5000 },
-    'utmify': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 20000 },
+    'utmify': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 20000 },
     'default': { limiter: { max: 1, duration: 1000 }, concurrency: 1, timeout: 10000 }
 };
 
