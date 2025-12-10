@@ -1,5 +1,5 @@
 // Workers BullMQ para processar jobs das filas
-const { Worker, RateLimitError } = require('bullmq');
+const { Worker, Queue, RateLimitError } = require('bullmq');
 const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, redisConnection, checkRateLimit, addJobWithDelay } = require('./queue');
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
@@ -23,6 +23,11 @@ function createWorker(queueName, processor, options = {}) {
     const stalledInterval = config.stalledInterval || 30000;
     const maxStalledCount = config.maxStalledCount || 2;
     const lockDuration = config.lockDuration; // lockDuration específico da fila (opcional)
+    
+    // Criar Queue para obter informações do job quando stalled
+    const queue = new Queue(queueName, {
+        connection: redisConnection
+    });
     
     const worker = new Worker(
         queueName,
@@ -200,7 +205,7 @@ function createWorker(queueName, processor, options = {}) {
     worker.on('stalled', (jobId) => {
         // Buscar informações do job para log mais detalhado
         const queueLockDuration = lockDuration || 300000; // Usar lockDuration do escopo da função
-        worker.getJob(jobId).then(job => {
+        queue.getJob(jobId).then(job => {
             if (job) {
                 const processingTime = job.processedOn ? Date.now() - job.processedOn : null;
                 const lockDurationMinutes = Math.round(queueLockDuration / 60000);
@@ -235,7 +240,8 @@ function createWorker(queueName, processor, options = {}) {
         });
     });
     
-    return worker;
+    // Retornar worker e queue para poder fechar ambos quando necessário
+    return { worker, queue };
 }
 
 // Processadores para cada tipo de job
@@ -833,8 +839,8 @@ function initializeWorkers() {
     // Inicializar workers das filas principais
     for (const [queueName, processor] of Object.entries(processors)) {
         if (!workers.has(queueName)) {
-            const worker = createWorker(queueName, processor);
-            workers.set(queueName, worker);
+            const { worker, queue } = createWorker(queueName, processor);
+            workers.set(queueName, { worker, queue });
             logger.info(`[BullMQ] Worker initialized for queue: ${queueName}`);
         }
     }
@@ -858,8 +864,9 @@ function initializeWorkers() {
  */
 async function closeAllWorkers() {
     // Fechar workers das filas principais
-    for (const worker of workers.values()) {
+    for (const { worker, queue } of workers.values()) {
         await worker.close();
+        await queue.close();
     }
     workers.clear();
     
@@ -879,10 +886,10 @@ async function closeAllWorkers() {
  */
 function getWorkersStatus() {
     const status = {};
-    for (const [queueName, worker] of workers.entries()) {
+    for (const [queueName, workerData] of workers.entries()) {
         status[queueName] = {
-            isRunning: worker.isRunning(),
-            name: worker.name
+            isRunning: workerData.worker.isRunning(),
+            name: workerData.worker.name
         };
     }
     return status;
@@ -892,8 +899,8 @@ function getWorkersStatus() {
  * Verifica se um worker específico está rodando
  */
 function isWorkerRunning(queueName) {
-    const worker = workers.get(queueName);
-    return worker ? worker.isRunning() : false;
+    const workerData = workers.get(queueName);
+    return workerData ? workerData.worker.isRunning() : false;
 }
 
 module.exports = {
