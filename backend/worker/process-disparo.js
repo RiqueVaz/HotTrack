@@ -1830,6 +1830,25 @@ async function processDisparoBatchData(data, job = null) {
     let lastLockRenewal = Date.now();
     const LOCK_RENEWAL_INTERVAL = 5 * 60 * 1000; // 5 minutos
     
+    // Função para renovar lock do job BullMQ se necessário
+    const renewLockIfNeeded = async () => {
+        const now = Date.now();
+        if (now - lastLockRenewal >= LOCK_RENEWAL_INTERVAL) {
+            if (job && typeof job.updateProgress === 'function') {
+                try {
+                    // Atualizar progresso do job para renovar o lock implicitamente
+                    // Usar um valor fixo pequeno para não interferir com o progresso real
+                    await job.updateProgress(1);
+                    lastLockRenewal = now;
+                    logger.debug(`[WORKER-DISPARO-BATCH] Lock renovado para job ${job.id}`);
+                } catch (renewError) {
+                    // Não é crítico se falhar, apenas logar
+                    logger.warn(`[WORKER-DISPARO-BATCH] Erro ao renovar lock (não crítico):`, renewError.message);
+                }
+            }
+        }
+    };
+    
     try {
         // Log inicial detalhado
         logger.info(`[WORKER-DISPARO-BATCH] Iniciando processamento do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`, {
