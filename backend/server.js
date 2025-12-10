@@ -8392,10 +8392,23 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
         const text = message.text || '';
         const isStartCommand = text.startsWith('/start');
 
-        const bot = await getBot(botId, null);
+        let bot = await getBot(botId, null);
         if (!bot) {
-            logger.warn(`[Webhook] Bot ID ${botId} não encontrado.`);
-            return;
+            // Tentar invalidar cache e buscar novamente (pode ser problema de cache)
+            const cacheKey = `bot_full:${botId}`;
+            dbCache.delete(cacheKey);
+            const botRetry = await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId}`;
+            
+            if (!botRetry || botRetry.length === 0) {
+                logger.warn(`[Webhook] Bot ID ${botId} não encontrado no banco de dados. O bot pode ter sido deletado ou o webhook ainda está configurado no Telegram para um bot inexistente.`);
+                return;
+            }
+            
+            // Se encontrou na segunda tentativa, atualizar cache
+            const [foundBot] = botRetry;
+            dbCache.set(cacheKey, foundBot, 10 * 60 * 1000);
+            logger.info(`[Webhook] Bot ID ${botId} encontrado após invalidar cache.`);
+            bot = foundBot;
         }
         const { seller_id: sellerId, bot_token: botToken } = bot;
 
@@ -9850,7 +9863,12 @@ app.post('/api/webhook/oasyfy', async (req, res) => {
             console.error(`[Webhook Oasy.fy] Stack:`, error.stack);
         }
     } else {
-        console.log(`[Webhook Oasy.fy] Recebido webhook com status '${status}', não identificado como pago. Ignorando.`);
+        // Status PENDING é esperado e normal - o webhook será enviado novamente quando o pagamento for confirmado
+        if (normalized === 'pending') {
+            console.log(`[Webhook Oasy.fy] Status 'PENDING' recebido para transactionId: ${transactionId}. Aguardando confirmação do pagamento.`);
+        } else {
+            console.log(`[Webhook Oasy.fy] Recebido webhook com status '${status}' (não processado). Ignorando.`);
+        }
     }
     res.sendStatus(200);
 });
