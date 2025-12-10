@@ -15,7 +15,7 @@ const { sqlTx, sqlWithRetry } = require('../db');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('../shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('../shared/event-sender');
 const telegramRateLimiter = require('../shared/telegram-rate-limiter-bullmq');
-const apiRateLimiter = require('../shared/api-rate-limiter');
+const apiRateLimiterBullMQ = require('../shared/api-rate-limiter-bullmq');
 const dbCache = require('../shared/db-cache');
 const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
 const { migrateMediaOnDemand } = require('../shared/migrate-media-on-demand');
@@ -162,10 +162,10 @@ async function getWiinpayPaymentStatus(paymentId, apiKey, sellerId = null) {
     }
     // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
     if (sellerId) {
-        const response = await apiRateLimiter.getTransactionStatus({
+        const response = await apiRateLimiterBullMQ.request({
             provider: 'wiinpay',
             sellerId: sellerId,
-            transactionId: paymentId,
+            method: 'get',
             url: `https://api-v2.wiinpay.com.br/payment/list/${paymentId}`,
             headers: {
                 Accept: 'application/json',
@@ -195,10 +195,10 @@ async function getParadisePaymentStatus(transactionId, secretKey, sellerId = nul
         // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
         let data;
         if (sellerId) {
-            data = await apiRateLimiter.getTransactionStatus({
+            data = await apiRateLimiterBullMQ.request({
                 provider: 'paradise',
                 sellerId: sellerId,
-                transactionId: transactionId,
+                method: 'get',
                 url: `https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`,
                 headers: {
                     'X-API-Key': secretKey,
@@ -268,7 +268,7 @@ async function markBotBlockedInDb(botId, chatId, sellerId) {
         );
         // Também atualizar cache em memória (opcional, para performance)
         const dbCache = require('../shared/db-cache');
-        dbCache.markBotBlocked(botId, chatId);
+        await dbCache.markBotBlocked(botId, chatId);
     } catch (error) {
         console.error(`[Bot Blocks] Erro ao marcar bloqueio: ${error.message}`);
     }
@@ -284,10 +284,10 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
     // VERIFICAR CACHE ANTES DE TENTAR
     if (chatId && chatId !== 'unknown' && chatId !== null) {
         const dbCache = require('../shared/db-cache');
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
-        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
@@ -305,7 +305,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                         sqlTx`DELETE FROM bot_blocks WHERE bot_id = ${botId} AND chat_id = ${chatId}`
                     );
                     const dbCache = require('../shared/db-cache');
-                    dbCache.unmarkBotBlocked(botId, chatId);
+                    await dbCache.unmarkBotBlocked(botId, chatId);
                 } catch (unblockError) {
                     // Não crítico, apenas logar
                     console.debug(`[Bot Blocks] Erro ao remover bloqueio (não crítico): ${unblockError.message}`);
@@ -323,7 +323,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                 // MARCAR NO CACHE E NA TABELA QUANDO RECEBER 403
                 if (description.includes('bot was blocked by the user') && errorChatId && errorChatId !== 'unknown') {
                     if (botId) {
-                        dbCache.markBotBlocked(botId, errorChatId);
+                        await dbCache.markBotBlocked(botId, errorChatId);
                         // Buscar seller_id do bot e inserir na tabela
                         try {
                             const [bot] = await sqlWithRetry(
@@ -336,7 +336,7 @@ async function sendTelegramRequest(botToken, method, data, options = {}, retries
                             console.warn(`[Bot Blocks] Erro ao buscar seller_id para bot ${botId}: ${dbError.message}`);
                         }
                     } else {
-                        dbCache.markBotTokenBlocked(botToken, errorChatId);
+                        await dbCache.markBotTokenBlocked(botToken, errorChatId);
                     }
                 }
                 
@@ -396,10 +396,10 @@ async function sendMediaAsProxy(destinationBotToken, chatId, fileId, fileType, c
 
     // VERIFICAR CACHE ANTES DE QUALQUER OPERAÇÃO
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
-        } else if (!botId && dbCache.isBotTokenBlocked(destinationBotToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(destinationBotToken, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
@@ -673,10 +673,10 @@ async function handleMediaNode(node, botToken, chatId, caption, botId = null, se
 
     // Verificar cache antes de processar mídia
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (botId && dbCache.isBotBlocked(botId, chatId)) {
+        if (botId && await dbCache.isBotBlocked(botId, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
-        } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+        } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' };
         }
@@ -938,7 +938,7 @@ async function showTypingForDuration(chatId, botToken, durationMs) {
 async function sendTypingAction(chatId, botToken) {
     // Verificar cache antes de enviar
     if (chatId && chatId !== 'unknown' && chatId !== null) {
-        if (dbCache.isBotTokenBlocked(botToken, chatId)) {
+        if (await dbCache.isBotTokenBlocked(botToken, chatId)) {
             // Removido log de cache hit
             return;
         }
@@ -974,10 +974,10 @@ async function sendMessage(chatId, text, botToken, sellerId, botId, showTyping, 
   
   // Verificar cache antes de enviar
   if (chatId && chatId !== 'unknown' && chatId !== null) {
-      if (botId && dbCache.isBotBlocked(botId, chatId)) {
+      if (botId && await dbCache.isBotBlocked(botId, chatId)) {
           // Removido log de cache hit
           return;
-      } else if (!botId && dbCache.isBotTokenBlocked(botToken, chatId)) {
+      } else if (!botId && await dbCache.isBotTokenBlocked(botToken, chatId)) {
           // Removido log de cache hit
           return;
       }

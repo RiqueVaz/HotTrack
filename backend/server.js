@@ -28,7 +28,7 @@ const { sqlTx, sqlWithRetry } = require('./db');
 const { shouldLogDebug, shouldLogOccasionally } = require('./shared/logger-helper');
 const { handleSuccessfulPayment: handleSuccessfulPaymentShared } = require('./shared/payment-handler');
 const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEventShared } = require('./shared/event-sender');
-const apiRateLimiter = require('./shared/api-rate-limiter');
+const apiRateLimiterBullMQ = require('./shared/api-rate-limiter-bullmq');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
 const { migrateMediaOnDemand } = require('./shared/migrate-media-on-demand');
@@ -1158,117 +1158,47 @@ function rateLimitMiddleware(req, res, next) {
     next();
 }
 
-// Rate limiting específico para webhook do Telegram (muitas requisições simultâneas)
-const webhookRateLimit = new Map();
-const WEBHOOK_RATE_LIMIT_WINDOW = 60 * 1000; // 1 minuto
-const WEBHOOK_RATE_LIMIT_MAX = 100; // 100 requisições por minuto por bot
+// Rate limiting específico para webhook do Telegram usando Redis
+const { webhook: webhookRateLimiter } = require('./shared/webhook-rate-limiter');
 
-// Limpar entradas expiradas do webhookRateLimit periodicamente (evita memory leak)
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, data] of webhookRateLimit.entries()) {
-        if (now > data.resetTime) {
-            webhookRateLimit.delete(key);
-        }
-    }
-}, 2 * 60 * 1000); // Limpar a cada 2 minutos
-
-function webhookRateLimitMiddleware(req, res, next) {
+async function webhookRateLimitMiddleware(req, res, next) {
     const botId = req.params.botId;
     if (!botId) return next();
     
-    const key = `webhook_${botId}`;
-    const now = Date.now();
+    // Verificar rate limit usando Redis
+    const allowed = await webhookRateLimiter.checkAndIncrement(botId);
     
-    if (!webhookRateLimit.has(key)) {
-        webhookRateLimit.set(key, { count: 1, resetTime: now + WEBHOOK_RATE_LIMIT_WINDOW });
-        return next();
-    }
-    
-    const data = webhookRateLimit.get(key);
-    
-    if (now > data.resetTime) {
-        webhookRateLimit.set(key, { count: 1, resetTime: now + WEBHOOK_RATE_LIMIT_WINDOW });
-        return next();
-    }
-    
-    if (data.count >= WEBHOOK_RATE_LIMIT_MAX) {
+    if (!allowed) {
         // Retornar 200 para não causar retry do Telegram, mas não processar
         return res.status(200).json({ ok: true, message: 'Rate limit exceeded' });
     }
     
-    data.count++;
     next();
 }
 
-// Rate limiting para worker de disparo (evita sobrecarga simultânea)
-const workerDisparoRateLimit = new Map();
-const WORKER_DISPARO_RATE_LIMIT_WINDOW = 10 * 1000; // 10 segundos
-const WORKER_DISPARO_MAX_CONCURRENT = 5; // Máximo 5 workers simultâneos
+// Rate limiting para worker de disparo usando Redis
+const { workerDisparo: workerDisparoRateLimiter } = require('./shared/webhook-rate-limiter');
 
-// Limpar entradas expiradas do workerDisparoRateLimit periodicamente (evita memory leak)
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [key, data] of workerDisparoRateLimit.entries()) {
-        if (data.resetTime && now > data.resetTime) {
-            workerDisparoRateLimit.delete(key);
-            cleaned++;
-        }
-    }
-    if (cleaned > 0 && shouldLogDebug()) {
-        // Removido log de memory cleanup
-    }
-}, 2 * 60 * 1000); // Limpar a cada 2 minutos
-
-function workerDisparoRateLimitMiddleware(req, res, next) {
-    const now = Date.now();
-    const key = 'worker_disparo';
+async function workerDisparoRateLimitMiddleware(req, res, next) {
+    const sellerId = req.user?.id || req.body?.seller_id || null;
+    if (!sellerId) return next();
     
-    // Limpar entradas antigas
-    if (workerDisparoRateLimit.has(key)) {
-        const data = workerDisparoRateLimit.get(key);
-        if (now > data.resetTime) {
-            workerDisparoRateLimit.delete(key);
-        }
-    }
+    // Verificar e incrementar contador usando Redis
+    const { allowed, active } = await workerDisparoRateLimiter.incrementAndCheck(sellerId);
     
-    // Contar requisições ativas
-    if (!workerDisparoRateLimit.has(key)) {
-        workerDisparoRateLimit.set(key, { 
-            active: 1, 
-            resetTime: now + WORKER_DISPARO_RATE_LIMIT_WINDOW 
-        });
-        
-        // Decrementar quando terminar
-        res.on('finish', () => {
-            if (workerDisparoRateLimit.has(key)) {
-                const d = workerDisparoRateLimit.get(key);
-                d.active = Math.max(0, d.active - 1);
-            }
-        });
-        
-        return next();
-    }
-    
-    const data = workerDisparoRateLimit.get(key);
-    
-    if (data.active >= WORKER_DISPARO_MAX_CONCURRENT) {
+    if (!allowed) {
         // Retornar 429 para QStash retry mais tarde
         return res.status(429).json({ 
             error: 'Too many concurrent workers', 
-            retryAfter: Math.ceil((data.resetTime - now) / 1000) 
+            retryAfter: 10 // 10 segundos
         });
     }
     
-    data.active++;
-    
     // Decrementar quando terminar
     res.on('finish', () => {
-        if (workerDisparoRateLimit.has(key)) {
-            const d = workerDisparoRateLimit.get(key);
-            d.active = Math.max(0, d.active - 1);
-        }
+        workerDisparoRateLimiter.decrement(sellerId).catch(err => {
+            // Não crítico, apenas logar se necessário
+        });
     });
     
     next();
@@ -2417,23 +2347,9 @@ function normalizeTelegramPayload(payload) {
 }
 
 // Cache de mídias para evitar queries repetidas
-const mediaCache = new Map();
-const MEDIA_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
-
-/**
- * Limpa cache de mídias expirado
- */
-function cleanupMediaCache() {
-    const now = Date.now();
-    for (const [key, cached] of mediaCache.entries()) {
-        if (now - cached.timestamp > MEDIA_CACHE_TTL) {
-            mediaCache.delete(key);
-        }
-    }
-}
-
-// Limpar cache periodicamente
-setInterval(cleanupMediaCache, 60 * 1000); // A cada 1 minuto
+// Cache de mídias usando Redis
+const redisCache = require('./shared/redis-cache');
+const MEDIA_CACHE_TTL = 5 * 60; // 5 minutos em segundos (Redis usa segundos)
 
 // Cache global de file_ids do Telegram (evita queries repetidas durante batches)
 if (!global.mediaFileIdCache) {
@@ -2466,7 +2382,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
         const mediaId = parseInt(fileId, 10);
         if (!isNaN(mediaId)) {
             const cacheKey = `media_${sellerId}_${mediaId}`;
-            let media = mediaCache.get(cacheKey)?.media;
+            let media = await redisCache.get(cacheKey);
             
             if (!media) {
                 const [mediaResult] = await sqlWithRetry(`
@@ -2478,7 +2394,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
                 
                 if (mediaResult) {
                     media = mediaResult;
-                    mediaCache.set(cacheKey, { media, timestamp: Date.now() });
+                    await redisCache.set(cacheKey, media, MEDIA_CACHE_TTL);
                 }
             }
             
@@ -2492,11 +2408,9 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
     let media = null;
     if (sellerId) {
         const cacheKey = `media_${sellerId}_${fileId}`;
-        const cached = mediaCache.get(cacheKey);
+        media = await redisCache.get(cacheKey);
         
-        if (cached && (Date.now() - cached.timestamp) < MEDIA_CACHE_TTL) {
-            media = cached.media;
-        } else {
+        if (!media) {
             const [mediaResult] = await sqlWithRetry(`
                 SELECT id, file_id, storage_url, storage_type, migration_status
                 FROM media_library 
@@ -2506,7 +2420,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
 
             if (mediaResult) {
                 media = mediaResult;
-                mediaCache.set(cacheKey, { media, timestamp: Date.now() });
+                await redisCache.set(cacheKey, media, MEDIA_CACHE_TTL);
             }
         }
 
@@ -2530,7 +2444,7 @@ async function sendMediaFromLibrary(destinationBotToken, chatId, fileId, fileTyp
                     
                     if (migrationResult?.success && migrationResult?.storageUrl) {
                         // Invalidar cache
-                        mediaCache.delete(cacheKey);
+                        await redisCache.delete(cacheKey);
                         
                         const methodMap = { image: 'sendPhoto', video: 'sendVideo', audio: 'sendVoice' };
                         const fieldMap = { image: 'photo', video: 'video', audio: 'voice' };
@@ -3333,9 +3247,10 @@ async function getWiinpayPaymentStatus(paymentId, apiKey, sellerId = null) {
     }
     // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
     if (sellerId) {
-        const response = await apiRateLimiter.getTransactionStatus({
+        const response = await apiRateLimiterBullMQ.request({
             provider: 'wiinpay',
             sellerId: sellerId,
+            method: 'get',
             transactionId: paymentId,
             url: `https://api-v2.wiinpay.com.br/payment/list/${paymentId}`,
             headers: {
@@ -3366,10 +3281,10 @@ async function getParadisePaymentStatus(transactionId, secretKey, sellerId = nul
         // Usar rate limiter se sellerId fornecido, senão usar axios direto (compatibilidade)
         let data;
         if (sellerId) {
-            data = await apiRateLimiter.getTransactionStatus({
+            data = await apiRateLimiterBullMQ.request({
                 provider: 'paradise',
                 sellerId: sellerId,
-                transactionId: transactionId,
+                method: 'get',
                 url: `https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${transactionId}`,
                 headers: {
                     'X-API-Key': secretKey,
@@ -6364,10 +6279,10 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                 if (ip_address && !isLocalIp) {
                     // Usar apenas apiRateLimiter que já tem cache interno
                     try {
-                        const geo = await apiRateLimiter.getTransactionStatus({
+                        const geo = await apiRateLimiterBullMQ.request({
                             provider: 'ip-api',
                             sellerId: 0, // Global, não por seller
-                            transactionId: ip_address,
+                            method: 'get',
                             url: `http://ip-api.com/json/${ip_address}?fields=status,city,regionName`,
                             headers: {}
                         });

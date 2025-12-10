@@ -1,41 +1,24 @@
 /**
  * Database Cache Module
- * Cache genérico em memória com TTL configurável
- * Suporta invalidação manual e cleanup automático
+ * Cache usando Redis com TTL configurável
+ * Mantém a mesma interface do cache em memória para compatibilidade
  */
+
+const redisCache = require('./redis-cache');
 
 class DbCache {
     constructor() {
-        // Cache: key -> { value, expiresAt }
-        this.cache = new Map();
-        
-        // Limite máximo de entradas no cache (evita crescimento indefinido)
-        this.MAX_CACHE_SIZE = 10000;
-        
-        // Cleanup periódico
-        this.lastCleanup = Date.now();
-        this.CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutos
+        // Usa redis-cache.js internamente
+        // Não precisa mais de Map, cleanup manual, etc. - Redis gerencia TTL automaticamente
     }
 
     /**
-     * Obtém valor do cache se ainda não expirou
+     * Obtém valor do cache
      * @param {string} key - Chave do cache
-     * @returns {any|null} - Valor cacheado ou null se expirado/não existe
+     * @returns {Promise<any|null>} - Valor cacheado ou null se expirado/não existe
      */
-    get(key) {
-        const entry = this.cache.get(key);
-        
-        if (!entry) {
-            return null;
-        }
-        
-        // Verificar se expirou
-        if (Date.now() > entry.expiresAt) {
-            this.cache.delete(key);
-            return null;
-        }
-        
-        return entry.value;
+    async get(key) {
+        return await redisCache.get(key);
     }
 
     /**
@@ -44,80 +27,42 @@ class DbCache {
      * @param {any} value - Valor a ser cacheado
      * @param {number} ttlMs - Time to live em milissegundos
      */
-    set(key, value, ttlMs) {
-        // Se cache está cheio, fazer limpeza agressiva
-        if (this.cache.size >= this.MAX_CACHE_SIZE) {
-            this._cleanup();
-            
-            // Se ainda estiver cheio após cleanup, remover 20% das entradas mais antigas
-            if (this.cache.size >= this.MAX_CACHE_SIZE) {
-                const entries = Array.from(this.cache.entries())
-                    .sort((a, b) => a[1].expiresAt - b[1].expiresAt);
-                const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
-                for (let i = 0; i < toRemove && i < entries.length; i++) {
-                    this.cache.delete(entries[i][0]);
-                }
-            }
-        }
-        
-        const expiresAt = Date.now() + ttlMs;
-        this.cache.set(key, { value, expiresAt });
-        
-        // Cleanup periódico
-        if (Date.now() - this.lastCleanup > this.CLEANUP_INTERVAL) {
-            this._cleanup();
-        }
+    async set(key, value, ttlMs) {
+        // Converter TTL de ms para segundos (Redis usa segundos)
+        const ttlSeconds = Math.ceil(ttlMs / 1000);
+        await redisCache.set(key, value, ttlSeconds);
     }
 
     /**
      * Remove entrada do cache
      * @param {string} key - Chave a ser removida
      */
-    delete(key) {
-        this.cache.delete(key);
+    async delete(key) {
+        await redisCache.delete(key);
     }
 
     /**
-     * Limpa todo o cache
+     * Limpa todo o cache (não implementado para evitar apagar tudo acidentalmente)
      */
-    clear() {
-        this.cache.clear();
+    async clear() {
+        // Não implementado - Redis não tem método para limpar tudo facilmente
+        // e pode ser perigoso apagar todo o cache
+        const logger = require('../logger');
+        logger.warn(`[DbCache] clear() não implementado para evitar apagar todo o cache Redis.`);
     }
 
     /**
-     * Remove entradas expiradas do cache
+     * Obtém estatísticas do cache (não disponível para Redis sem operações custosas)
+     * @returns {Promise<Object>} - Estatísticas do cache
      */
-    _cleanup() {
-        const now = Date.now();
-        for (const [key, entry] of this.cache.entries()) {
-            if (now > entry.expiresAt) {
-                this.cache.delete(key);
-            }
-        }
-        this.lastCleanup = now;
-    }
-
-    /**
-     * Obtém estatísticas do cache (útil para debug)
-     * @returns {Object} - Estatísticas do cache
-     */
-    getStats() {
-        const now = Date.now();
-        let expired = 0;
-        let active = 0;
-        
-        for (const entry of this.cache.values()) {
-            if (now > entry.expiresAt) {
-                expired++;
-            } else {
-                active++;
-            }
-        }
-        
+    async getStats() {
+        // Redis não fornece estatísticas fáceis sem scan de todas as chaves
+        // Retornar objeto vazio para manter compatibilidade
         return {
-            total: this.cache.size,
-            active,
-            expired
+            total: 0,
+            active: 0,
+            expired: 0,
+            note: 'Estatísticas não disponíveis para cache Redis'
         };
     }
 
@@ -125,11 +70,12 @@ class DbCache {
      * Verifica se um bot está bloqueado por um chat
      * @param {number} botId - ID do bot
      * @param {string|number} chatId - ID do chat
-     * @returns {boolean} - true se bloqueado
+     * @returns {Promise<boolean>} - true se bloqueado
      */
-    isBotBlocked(botId, chatId) {
+    async isBotBlocked(botId, chatId) {
         const cacheKey = `blocked:${botId}:${chatId}`;
-        return this.get(cacheKey) === true;
+        const value = await this.get(cacheKey);
+        return value === true;
     }
 
     /**
@@ -138,9 +84,9 @@ class DbCache {
      * @param {string|number} chatId - ID do chat
      * @param {number} ttlHours - TTL em horas (padrão 24h)
      */
-    markBotBlocked(botId, chatId, ttlHours = 24) {
+    async markBotBlocked(botId, chatId, ttlHours = 24) {
         const cacheKey = `blocked:${botId}:${chatId}`;
-        this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
+        await this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
     }
 
     /**
@@ -148,20 +94,21 @@ class DbCache {
      * @param {number} botId - ID do bot
      * @param {string|number} chatId - ID do chat
      */
-    unmarkBotBlocked(botId, chatId) {
+    async unmarkBotBlocked(botId, chatId) {
         const cacheKey = `blocked:${botId}:${chatId}`;
-        this.delete(cacheKey);
+        await this.delete(cacheKey);
     }
 
     /**
      * Verifica se um bot está bloqueado usando botToken (fallback quando botId não disponível)
      * @param {string} botToken - Token do bot
      * @param {string|number} chatId - ID do chat
-     * @returns {boolean} - true se bloqueado
+     * @returns {Promise<boolean>} - true se bloqueado
      */
-    isBotTokenBlocked(botToken, chatId) {
+    async isBotTokenBlocked(botToken, chatId) {
         const cacheKey = `blocked_token:${botToken}:${chatId}`;
-        return this.get(cacheKey) === true;
+        const value = await this.get(cacheKey);
+        return value === true;
     }
 
     /**
@@ -170,9 +117,9 @@ class DbCache {
      * @param {string|number} chatId - ID do chat
      * @param {number} ttlHours - TTL em horas (padrão 24h)
      */
-    markBotTokenBlocked(botToken, chatId, ttlHours = 24) {
+    async markBotTokenBlocked(botToken, chatId, ttlHours = 24) {
         const cacheKey = `blocked_token:${botToken}:${chatId}`;
-        this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
+        await this.set(cacheKey, true, ttlHours * 60 * 60 * 1000);
     }
 
     /**
@@ -180,9 +127,9 @@ class DbCache {
      * @param {string} botToken - Token do bot
      * @param {string|number} chatId - ID do chat
      */
-    unmarkBotTokenBlocked(botToken, chatId) {
+    async unmarkBotTokenBlocked(botToken, chatId) {
         const cacheKey = `blocked_token:${botToken}:${chatId}`;
-        this.delete(cacheKey);
+        await this.delete(cacheKey);
     }
 }
 

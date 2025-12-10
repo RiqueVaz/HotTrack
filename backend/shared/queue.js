@@ -302,8 +302,10 @@ async function checkRateLimitWithoutAdding(botToken) {
             // results[1][1] é o resultado do zcard (contagem atual)
             const currentCount = results[1][1];
             
-            // Verificar se está dentro do limite (deixar margem de 1 slot para a requisição que será adicionada)
-            return currentCount < BULLMQ_RATE_LIMIT_MAX;
+            // Verificar se está dentro do limite com margem de segurança maior (10% do limite)
+            // Isso evita race conditions quando múltiplos jobs são adicionados simultaneamente
+            const safetyMargin = Math.max(1, Math.floor(BULLMQ_RATE_LIMIT_MAX * 0.1));
+            return currentCount < (BULLMQ_RATE_LIMIT_MAX - safetyMargin);
         });
     } catch (error) {
         const logger = require('../logger');
@@ -314,6 +316,7 @@ async function checkRateLimitWithoutAdding(botToken) {
 
 /**
  * Verifica rate limit para bot token e RESERVA uma vaga (adiciona ao contador)
+ * Usa lock distribuído para evitar race conditions
  * @param {string} botToken - Token do bot Telegram
  * @returns {Promise<boolean>} - true se dentro do limite e vaga reservada, false se excedido
  */
@@ -321,40 +324,77 @@ async function checkRateLimit(botToken) {
     if (!botToken) return true; // Sem bot token, permite processamento
     
     const key = `rate-limit:${botToken}`;
+    const lockKey = `rate-limit-lock:${botToken}`;
     const now = Date.now();
     const windowStart = now - BULLMQ_RATE_LIMIT_WINDOW;
     const requestId = `${now}-${Math.random()}`;
+    const lockId = `${now}-${Math.random()}`;
+    const lockTTL = 1000; // Lock expira em 1 segundo
     
     try {
         // Usar circuit breaker para operações Redis
         return await redisCircuitBreaker.execute(async () => {
-            // Usar pipeline do Redis para operações atômicas
-            const pipeline = redisConnection.pipeline();
+            // Tentar adquirir lock distribuído (evita race conditions)
+            const lockAcquired = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
             
-            // Remover entradas antigas (fora da janela)
-            pipeline.zremrangebyscore(key, 0, windowStart);
-            
-            // Adicionar timestamp atual
-            pipeline.zadd(key, now, requestId);
-            
-            // Contar requisições na janela atual (depois de adicionar)
-            pipeline.zcard(key);
-            
-            // Definir expiração da chave
-            pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
-            
-            const results = await pipeline.exec();
-            
-            // results[2][1] é o resultado do zcard (contagem depois de adicionar)
-            const currentCount = results[2][1];
-            
-            // Se já atingiu o limite, remover a entrada que acabamos de adicionar
-            if (currentCount > BULLMQ_RATE_LIMIT_MAX) {
-                await redisConnection.zrem(key, requestId);
-                return false; // Rate limit excedido
+            if (!lockAcquired) {
+                // Se não conseguiu lock, aguardar um pouco e tentar novamente (máximo 3 tentativas)
+                for (let i = 0; i < 3; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 10)); // 10ms
+                    const retryLock = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
+                    if (retryLock) break;
+                }
             }
             
-            return true; // Dentro do limite e vaga reservada
+            try {
+                // Usar pipeline do Redis para operações atômicas
+                const pipeline = redisConnection.pipeline();
+                
+                // Remover entradas antigas (fora da janela)
+                pipeline.zremrangebyscore(key, 0, windowStart);
+                
+                // Contar requisições ANTES de adicionar (para verificar com margem de segurança)
+                pipeline.zcard(key);
+                
+                // Adicionar timestamp atual
+                pipeline.zadd(key, now, requestId);
+                
+                // Contar requisições DEPOIS de adicionar
+                pipeline.zcard(key);
+                
+                // Definir expiração da chave
+                pipeline.expire(key, Math.ceil(BULLMQ_RATE_LIMIT_WINDOW / 1000));
+                
+                const results = await pipeline.exec();
+                
+                // results[0][1] é o resultado do zcard ANTES de adicionar
+                const countBefore = results[0][1];
+                // results[2][1] é o resultado do zcard DEPOIS de adicionar
+                const countAfter = results[2][1];
+                
+                // Verificar com margem de segurança (10% do limite)
+                const safetyMargin = Math.max(1, Math.floor(BULLMQ_RATE_LIMIT_MAX * 0.1));
+                
+                // Se já estava próximo do limite ANTES de adicionar, remover e retornar false
+                if (countBefore >= (BULLMQ_RATE_LIMIT_MAX - safetyMargin)) {
+                    await redisConnection.zrem(key, requestId);
+                    return false; // Rate limit excedido
+                }
+                
+                // Se depois de adicionar excedeu o limite, remover e retornar false
+                if (countAfter > BULLMQ_RATE_LIMIT_MAX) {
+                    await redisConnection.zrem(key, requestId);
+                    return false; // Rate limit excedido
+                }
+                
+                return true; // Dentro do limite e vaga reservada
+            } finally {
+                // Liberar lock (apenas se ainda for nosso lock)
+                const currentLock = await redisConnection.get(lockKey);
+                if (currentLock === lockId) {
+                    await redisConnection.del(lockKey);
+                }
+            }
         });
     } catch (error) {
         // Em caso de erro (incluindo circuit breaker aberto), permitir processamento (fail open)
@@ -374,7 +414,9 @@ async function waitForRateLimit(botToken, maxWaitTime = 5000) {
     if (!botToken) return { allowed: true, waitTime: 0 };
     
     const startTime = Date.now();
-    const checkInterval = 100; // Verificar a cada 100ms
+    const checkInterval = 50; // Verificar a cada 50ms (mais frequente para melhor responsividade)
+    let consecutiveFailures = 0;
+    const maxConsecutiveFailures = 10; // Após 10 falhas consecutivas, aumentar intervalo
     
     while (Date.now() - startTime < maxWaitTime) {
         // Verificar SEM adicionar ao contador (evita poluir o contador durante a espera)
@@ -386,11 +428,19 @@ async function waitForRateLimit(botToken, maxWaitTime = 5000) {
             if (reserved) {
                 return { allowed: true, waitTime: Date.now() - startTime };
             }
-            // Se não conseguiu reservar (race condition), continuar tentando
+            // Se não conseguiu reservar (race condition), incrementar contador de falhas
+            consecutiveFailures++;
+        } else {
+            consecutiveFailures++;
         }
         
+        // Se muitas falhas consecutivas, aumentar intervalo de verificação (backoff adaptativo)
+        const currentInterval = consecutiveFailures > maxConsecutiveFailures 
+            ? checkInterval * 2 
+            : checkInterval;
+        
         // Aguardar antes de verificar novamente
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        await new Promise(resolve => setTimeout(resolve, currentInterval));
     }
     
     // Timeout: calcular tempo de espera necessário baseado no rate limit
