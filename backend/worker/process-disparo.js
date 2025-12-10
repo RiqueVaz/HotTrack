@@ -50,7 +50,7 @@ const {
     sqlWithRetry,
     axios,
     uuidv4,
-    syncPayTokenCache,
+    // syncPayTokenCache e pixupTokenCache removidos - agora usa Redis
     adminApiKey: ADMIN_API_KEY,
     synPayBaseUrl: SYNCPAY_API_BASE_URL,
     pushinpaySplitAccountId: PUSHINPAY_SPLIT_ACCOUNT_ID,
