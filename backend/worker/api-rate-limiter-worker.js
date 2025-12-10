@@ -37,12 +37,18 @@ function createWorkerForQueue(queueName) {
     // Extrair provider do nome da fila: api-{provider}-{sellerId}
     const match = queueName.match(/^api-(.+?)-(\d+)$/);
     if (!match) {
-        logger.warn(`[API Rate Limiter Worker] Nome de fila inválido: ${queueName}`);
+        logger.error(`[API Rate Limiter Worker] Nome de fila inválido: ${queueName}`);
         return null;
     }
     
     const provider = match[1];
     const config = PROVIDER_CONFIGS[provider] || PROVIDER_CONFIGS['default'];
+    
+    // Verificar se já existe worker para esta fila (evitar duplicação)
+    if (workers.has(queueName)) {
+        logger.debug(`[API Rate Limiter Worker] Worker já existe para ${queueName}`);
+        return workers.get(queueName);
+    }
     
     const worker = new Worker(
         queueName,
@@ -115,6 +121,16 @@ function createWorkerForQueue(queueName) {
         logger.error(`[API Rate Limiter Worker] Erro no worker da fila ${queueName}:`, err);
     });
     
+    worker.on('ready', () => {
+        logger.info(`[API Rate Limiter Worker] Worker pronto para processar jobs na fila ${queueName}`);
+    });
+    
+    // Verificar se worker foi criado corretamente
+    if (!worker || typeof worker.process !== 'function') {
+        logger.error(`[API Rate Limiter Worker] Worker inválido criado para ${queueName}`);
+        return null;
+    }
+    
     return worker;
 }
 
@@ -148,17 +164,29 @@ async function initializeWorkers() {
 
 /**
  * Cria worker dinamicamente quando nova fila é criada
+ * Retorna o worker existente ou cria um novo
  */
 function getOrCreateWorker(queueName) {
-    if (!workers.has(queueName)) {
+    // Se já existe, retornar
+    if (workers.has(queueName)) {
+        return workers.get(queueName);
+    }
+    
+    // Criar novo worker
+    try {
         const worker = createWorkerForQueue(queueName);
         if (worker) {
             workers.set(queueName, worker);
             logger.info(`[API Rate Limiter Worker] Worker criado dinamicamente para fila ${queueName}`);
+            return worker;
+        } else {
+            logger.warn(`[API Rate Limiter Worker] createWorkerForQueue retornou null para ${queueName}`);
+            return null;
         }
-        return worker;
+    } catch (error) {
+        logger.error(`[API Rate Limiter Worker] Erro ao criar worker para ${queueName}:`, error);
+        return null;
     }
-    return workers.get(queueName);
 }
 
 /**
