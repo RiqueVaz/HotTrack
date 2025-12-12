@@ -710,7 +710,9 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                                 is_disparo: true,
                                 history_id: historyId,
                                 disparo_flow_id: disparoFlowId,
-                                timestamp: Date.now()
+                                timestamp: Date.now(),
+                                flow_id: disparoFlowId,
+                                flow_nodes: JSON.stringify(flowNodes)
                             },
                             {
                                 delay: `${timeoutMinutes}m`,
