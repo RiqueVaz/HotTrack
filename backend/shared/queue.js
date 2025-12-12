@@ -550,6 +550,62 @@ function getOptimalLockDuration(queueName, jobData) {
             // Sem informações de flow, usar valor conservador
             lockDuration = 60 * 60 * 1000; // 1 hora padrão
         }
+    } else if (queueName === QUEUE_NAMES.DISPARO_DELAY) {
+        // Calcular baseado no delay do job + margem para processamento
+        // O delay está em jobData.delay_seconds (convertido em addJobWithDelay)
+        const delayMs = jobData.delay_seconds ? jobData.delay_seconds * 1000 : null;
+        if (delayMs) {
+            // Lock duration = delay + 2 horas de margem (para processamento após delay)
+            lockDuration = Math.min(delayMs + (2 * 60 * 60 * 1000), 8 * 60 * 60 * 1000); // Máximo 8 horas
+        } else {
+            // Se não tem delay, usar valor conservador alto (6 horas)
+            lockDuration = 6 * 60 * 60 * 1000;
+        }
+    } else if (queueName === QUEUE_NAMES.DISPARO) {
+        // Estimar baseado em complexidade do flow (similar ao TIMEOUT)
+        if (jobData.flow_nodes) {
+            try {
+                const flowNodes = typeof jobData.flow_nodes === 'string' 
+                    ? JSON.parse(jobData.flow_nodes) 
+                    : jobData.flow_nodes;
+                const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
+                // Estimativa: 1 minuto por nó + base
+                const estimatedMinutes = 5 + (nodes.length * 1);
+                lockDuration = Math.min(estimatedMinutes * 60 * 1000 * 2, 1 * 60 * 60 * 1000); // 2x margem, máximo 1h
+            } catch (e) {
+                lockDuration = 30 * 60 * 1000; // 30 minutos padrão
+            }
+        } else {
+            lockDuration = 30 * 60 * 1000; // 30 minutos padrão
+        }
+    } else if (queueName === QUEUE_NAMES.VALIDATION_DISPARO) {
+        // Estimar baseado em número de contatos a validar
+        if (jobData.total_contacts || jobData.contacts) {
+            const contactsCount = jobData.total_contacts || (Array.isArray(jobData.contacts) ? jobData.contacts.length : 0);
+            if (contactsCount > 0) {
+                // Estimativa: 0.1 segundo por contato + base
+                const estimatedSeconds = 60 + (contactsCount * 0.1);
+                lockDuration = Math.min(estimatedSeconds * 1000 * 2, 2 * 60 * 60 * 1000); // 2x margem, máximo 2h
+            } else {
+                lockDuration = 30 * 60 * 1000; // 30 minutos padrão
+            }
+        } else {
+            lockDuration = 30 * 60 * 1000; // 30 minutos padrão
+        }
+    } else if (queueName === QUEUE_NAMES.SCHEDULED_DISPARO) {
+        // Estimar baseado em número de contatos (similar ao VALIDATION_DISPARO)
+        if (jobData.total_contacts || jobData.contacts) {
+            const contactsCount = jobData.total_contacts || (Array.isArray(jobData.contacts) ? jobData.contacts.length : 0);
+            if (contactsCount > 0) {
+                // Estimativa: 0.05 segundo por contato + base (mais rápido que validação)
+                const estimatedSeconds = 30 + (contactsCount * 0.05);
+                lockDuration = Math.min(estimatedSeconds * 1000 * 2, 1 * 60 * 60 * 1000); // 2x margem, máximo 1h
+            } else {
+                lockDuration = 20 * 60 * 1000; // 20 minutos padrão
+            }
+        } else {
+            lockDuration = 20 * 60 * 1000; // 20 minutos padrão
+        }
     }
     
     // Se não calculou, retornar null para usar valores padrão da fila
@@ -654,6 +710,11 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     let scalableLimits = {};
     if (queueName === QUEUE_NAMES.DISPARO_BATCH && data.contacts && Array.isArray(data.contacts)) {
         scalableLimits = calculateScalableLimits(data.contacts.length);
+    }
+    
+    // Para DISPARO_DELAY, converter delay para segundos e armazenar em jobData
+    if (queueName === QUEUE_NAMES.DISPARO_DELAY && delayMs > 0) {
+        data.delay_seconds = Math.floor(delayMs / 1000);
     }
     
     // Calcular lockDuration dinâmico para jobs que precisam

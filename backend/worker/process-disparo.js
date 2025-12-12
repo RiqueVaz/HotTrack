@@ -452,10 +452,12 @@ function findNextNode(nodeId, handle, edges) {
 
 // Função simplificada para processar fluxo de disparo
 // Esta função processa o fluxo completo começando do start_node_id
-async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId, skipCounterUpdate = false) {
+async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId, initialVariables, flowNodes, flowEdges, historyId, skipCounterUpdate = false, renewLockCallback = null) {
     const logPrefix = '[WORKER-DISPARO]';
     const startTime = Date.now();
     logger.debug(`${logPrefix} [Flow Engine] Iniciando processo de disparo para ${chatId}. Nó inicial: ${startNodeId}`);
+    
+    let nodesProcessed = 0;
     
     // ==========================================================
     // LIMPEZA: Deletar estado de fluxo antigo antes de iniciar
@@ -547,6 +549,11 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
         
         // Processar fluxo - usando lógica similar ao processFlow normal
         while (currentNodeId && safetyLock < maxIterations) {
+            // Renovar lock periodicamente durante processamento
+            if (renewLockCallback && typeof renewLockCallback === 'function') {
+                await renewLockCallback(nodesProcessed);
+            }
+            
             safetyLock++;
             const currentNode = nodeMap.get(currentNodeId); // Busca O(1) ao invés de O(n)
             
@@ -587,6 +594,7 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     }
                 }
                 currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                nodesProcessed++;
                 if (!currentNodeId) {
                     logger.debug(`${logPrefix} Trigger não tem nós conectados. Encerrando fluxo.`);
                     break;
@@ -766,16 +774,19 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                 if (actionResult === 'paid') {
                     logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pago. Seguindo handle 'a'.`);
                     currentNodeId = findNextNode(currentNode.id, 'a', flowEdges); // 'a' = Pago
+                    nodesProcessed++;
                     continue;
                 }
                 if (actionResult === 'pending') {
                     logger.debug(`${logPrefix} [Flow Engine] Resultado do Nó: PIX Pendente. Seguindo handle 'b'.`);
                     currentNodeId = findNextNode(currentNode.id, 'b', flowEdges); // 'b' = Pendente
+                    nodesProcessed++;
                     continue;
                 }
                 
                 // Se nada acima aconteceu, é um nó de ação simples. Segue pelo handle 'a'.
                 currentNodeId = findNextNode(currentNode.id, 'a', flowEdges);
+                nodesProcessed++;
                 continue;
             }
             
@@ -1642,7 +1653,7 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
 
 // Função pura que processa disparo sem depender de objetos HTTP (req/res)
 // Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
-async function processDisparoData(data) {
+async function processDisparoData(data, job = null) {
     const { history_id, chat_id, bot_id, flow_nodes, flow_edges, start_node_id, variables_json } = data;
     
     // Validação de dados obrigatórios
@@ -1661,7 +1672,36 @@ async function processDisparoData(data) {
         throw new Error(`Bot com ID ${bot_id} não encontrado ou sem token.`);
     }
     
+    // Renovação periódica de lock para flows longos
+    let lastLockRenewal = Date.now();
+    const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+    let nodesProcessed = 0;
+    
+    // Função para renovar lock durante processamento
+    const renewLockIfNeeded = async (currentNodesProcessed = 0) => {
+        const now = Date.now();
+        const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
+        const shouldRenewByProgress = currentNodesProcessed > 0 && currentNodesProcessed % 3 === 0; // A cada 3 nós
+        
+        if ((shouldRenewByTime || shouldRenewByProgress) && job && typeof job.updateProgress === 'function') {
+            try {
+                const progress = Math.min(currentNodesProcessed * 10, 90); // Máximo 90% até concluir
+                await job.updateProgress(Math.max(progress, 1));
+                lastLockRenewal = now;
+                logger.debug(`[WORKER-DISPARO] Lock renovado para job ${job.id} (nós processados: ${currentNodesProcessed})`);
+            } catch (renewError) {
+                if (renewError.message?.includes('not found') || 
+                    renewError.message?.includes('completed') ||
+                    renewError.message?.includes('removed')) {
+                    return;
+                }
+                logger.debug(`[WORKER-DISPARO] Erro ao renovar lock (não crítico):`, renewError.message);
+            }
+        }
+    };
+    
     // Processar fluxo de disparo (lógica real não depende de res)
+    // Passar função de renovação para processDisparoFlow
     await processDisparoFlow(
         chat_id, 
         bot_id, 
@@ -1671,7 +1711,9 @@ async function processDisparoData(data) {
         userVariables, 
         flowNodes, 
         flowEdges, 
-        history_id
+        history_id,
+        false, // skipCounterUpdate
+        renewLockIfNeeded // Passar função de renovação
     );
 }
 
