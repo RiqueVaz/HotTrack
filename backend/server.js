@@ -8856,13 +8856,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                     AND lcta.tag_id = ANY(${validCustomTagIds})
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -8897,13 +8901,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -8936,13 +8944,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                     AND lcta.tag_id = ANY(${validCustomTagIds})
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -8976,13 +8988,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -9135,13 +9151,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 LIMIT ${MAX_CONTACTS_PER_QUERY}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -9166,13 +9186,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 LIMIT ${MAX_CONTACTS_PER_QUERY}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -9197,13 +9221,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 LIMIT ${MAX_CONTACTS_PER_QUERY}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -9227,13 +9255,17 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 LIMIT ${MAX_CONTACTS_PER_QUERY}
                             ),
                             paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${validBotIds})
-                                    AND tc.seller_id = ${sellerId}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                                SELECT bc.chat_id
+                                FROM base_contacts bc
+                                WHERE EXISTS (
+                                    SELECT 1
+                                    FROM telegram_chats tc
+                                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                                    WHERE tc.chat_id = bc.chat_id
+                                      AND tc.bot_id = ANY(${validBotIds})
+                                      AND tc.seller_id = ${sellerId}
+                                )
                             )
                             SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
                             FROM base_contacts bc
@@ -10243,17 +10275,16 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
             if (validAutomaticTags.includes('Pagante')) {
                 query += `,
                 paid_contacts AS (
-                    SELECT DISTINCT bc.chat_id
+                    SELECT bc.chat_id
                     FROM base_contacts bc
                     WHERE EXISTS (
                         SELECT 1
                         FROM telegram_chats tc2
-                        JOIN clicks c ON c.click_id = tc2.click_id
-                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        JOIN clicks c ON c.click_id = tc2.click_id AND c.seller_id = tc2.seller_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
                         WHERE tc2.chat_id = bc.chat_id
                           AND tc2.bot_id = ANY($1::int[])
                           AND tc2.seller_id = $2
-                          AND pt.status = 'paid'
                     )
                 )`;
             }
@@ -10475,13 +10506,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
     if (hasPaidTag) {
         // Usar JOIN direto que é mais eficiente que EXISTS com múltiplos JOINs
         paidContactsCTE = sqlTx`, paid_contacts AS (
-            SELECT DISTINCT tc.chat_id
-            FROM telegram_chats tc
-            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-            WHERE tc.bot_id = ANY(${botIds})
-                AND tc.seller_id = ${sellerId}
-                AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+            SELECT bc.chat_id
+            FROM base_contacts bc
+            WHERE EXISTS (
+                SELECT 1
+                FROM telegram_chats tc
+                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                WHERE tc.chat_id = bc.chat_id
+                  AND tc.bot_id = ANY(${botIds})
+                  AND tc.seller_id = ${sellerId}
+            )
         )`;
     }
     
@@ -10547,13 +10582,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                             AND lcta.tag_id = ANY(${validCustomTagIds})
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10588,13 +10627,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10627,13 +10670,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                             AND lcta.tag_id = ANY(${validCustomTagIds})
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10667,13 +10714,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10826,13 +10877,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         LIMIT ${MAX_CONTACTS_PER_QUERY}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10857,13 +10912,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         LIMIT ${MAX_CONTACTS_PER_QUERY}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10888,13 +10947,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         LIMIT ${MAX_CONTACTS_PER_QUERY}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
@@ -10918,13 +10981,17 @@ async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode 
                         LIMIT ${MAX_CONTACTS_PER_QUERY}
                     ),
                     paid_contacts AS (
-                        SELECT DISTINCT tc.chat_id
-                        FROM telegram_chats tc
-                        INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                        INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                        WHERE tc.bot_id = ANY(${botIds})
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
+                        SELECT bc.chat_id
+                        FROM base_contacts bc
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM telegram_chats tc
+                            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                            WHERE tc.chat_id = bc.chat_id
+                              AND tc.bot_id = ANY(${botIds})
+                              AND tc.seller_id = ${sellerId}
+                        )
                     )
                     SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
                     FROM base_contacts bc
