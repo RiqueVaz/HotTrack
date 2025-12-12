@@ -9815,6 +9815,10 @@ function generatePreviewHTML(data) {
             const fileId = useThumbnail ? (item.thumbnail_file_id || item.file_id) : item.file_id;
             return `${API_BASE_URL}/api/media/preview/storage/${fileId}`;
         };
+        // Helper para verificar se uma mídia está no R2
+        const isMediaInR2 = (item) => {
+            return item.storage_type === 'r2' && item.storage_url;
+        };
         const filtered = media.filter(item => resolveType(item) === activeTab);
         const handleFileChange = (e) => {
             const file = e.target.files[0];
@@ -9885,7 +9889,31 @@ function generatePreviewHTML(data) {
                 </div>
                 <div className="grid">
                     {filtered.map(item => (
-                        <div key={item.id} className="bot-card">
+                        <div 
+                            key={item.id} 
+                            className="bot-card"
+                            style={!isMediaInR2(item) ? {
+                                border: '2px solid #f59e0b',
+                                background: 'linear-gradient(135deg, #fef3c7 0%, #fff 100%)',
+                                position: 'relative'
+                            } : {}}
+                        >
+                            {!isMediaInR2(item) && (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '0.5rem',
+                                    right: '0.5rem',
+                                    background: '#f59e0b',
+                                    color: '#78350f',
+                                    padding: '0.25rem 0.5rem',
+                                    borderRadius: '4px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    zIndex: 10
+                                }}>
+                                    ⚠️ Precisa migração
+                                </div>
+                            )}
                              {resolveType(item) === 'image' ? (
                                 <img src={getMediaPreviewUrl(item, true)} className="media-preview" alt={item.file_name} />
                              ) : resolveType(item) === 'video' ? (
@@ -9898,6 +9926,21 @@ function generatePreviewHTML(data) {
                                 <audio src={getMediaPreviewUrl(item, false)} className="media-preview" controls />
                              )}
                              <h3 style={{fontSize: '1.1rem', marginBottom: '0.5rem'}}>{item.file_name}</h3>
+                             {!isMediaInR2(item) && (
+                                <div style={{
+                                    background: '#fef3c7',
+                                    border: '1px solid #fbbf24',
+                                    borderRadius: '6px',
+                                    padding: '0.75rem',
+                                    marginBottom: '0.75rem',
+                                    fontSize: '0.8rem',
+                                    color: '#78350f',
+                                    lineHeight: '1.5'
+                                }}>
+                                    <strong>⚠️ Atenção:</strong> Esta mídia não está no R2 e não funcionará em disparos/fluxos. 
+                                    Exclua e adicione novamente.
+                                </div>
+                             )}
                              <p style={{color: 'var(--text-secondary)', fontSize: '0.8rem', wordBreak: 'break-all', flexGrow: 1, marginBottom: '1rem'}}>File ID: {item.file_id}</p>
                              <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Excluir</button>
                         </div>
