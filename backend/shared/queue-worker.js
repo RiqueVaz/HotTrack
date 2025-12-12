@@ -270,18 +270,41 @@ const processors = {
         await processTimeoutData(data, job);
     },
     
-    [QUEUE_NAMES.DISPARO]: async (data) => {
-        await processDisparoData(data);
+    [QUEUE_NAMES.DISPARO]: async (data, job) => {
+        await processDisparoData(data, job);
     },
     
     [QUEUE_NAMES.DISPARO_BATCH]: async (data, job) => {
         await processDisparoBatchData(data, job);
     },
     
-    [QUEUE_NAMES.DISPARO_DELAY]: async (data) => {
+    [QUEUE_NAMES.DISPARO_DELAY]: async (data, job) => {
         // Processar disparo após delay
         // Buscar dados do fluxo do banco, pois o payload não inclui flow_nodes, flow_edges e start_node_id
         const { history_id, chat_id, bot_id, current_node_id, variables, remaining_actions } = data;
+        
+        // Renovação periódica de lock para delays longos
+        let lastLockRenewal = Date.now();
+        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        
+        // Função para renovar lock durante processamento
+        const renewLockIfNeeded = async () => {
+            const now = Date.now();
+            if ((now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS && job && typeof job.updateProgress === 'function') {
+                try {
+                    await job.updateProgress(1);
+                    lastLockRenewal = now;
+                    logger.debug(`[WORKER-DISPARO-DELAY] Lock renovado para job ${job.id}`);
+                } catch (renewError) {
+                    if (renewError.message?.includes('not found') || 
+                        renewError.message?.includes('completed') ||
+                        renewError.message?.includes('removed')) {
+                        return;
+                    }
+                    logger.debug(`[WORKER-DISPARO-DELAY] Erro ao renovar lock (não crítico):`, renewError.message);
+                }
+            }
+        };
         
         if (!history_id) {
             throw new Error('history_id é obrigatório para processar delay de disparo');
@@ -350,8 +373,15 @@ const processors = {
                 variables_json: variablesJson
             };
             
+            // Renovar lock antes de processar
+            await renewLockIfNeeded();
+            
             // Processar disparo com dados completos
-            await processDisparoData(completeData);
+            // Passar função de renovação para processDisparoData se necessário
+            await processDisparoData(completeData, job);
+            
+            // Renovar lock após processar
+            await renewLockIfNeeded();
         } catch (error) {
             logger.error(`[BullMQ] Erro ao processar delay de disparo para history_id ${history_id}:`, error);
             throw error; // Re-throw para que o BullMQ trate como falha e faça retry
@@ -798,7 +828,34 @@ const processors = {
         
         logger.info(`[SCHEDULED-DISPARO ${history_id}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
         
+        // Renovação periódica de lock para preparação de muitos batches
+        let lastLockRenewal = Date.now();
+        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        
+        // Função para renovar lock durante preparação de batches
+        const renewLockIfNeeded = async () => {
+            const now = Date.now();
+            if ((now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS && job && typeof job.updateProgress === 'function') {
+                try {
+                    await job.updateProgress(1);
+                    lastLockRenewal = now;
+                    logger.debug(`[SCHEDULED-DISPARO] Lock renovado para job ${job.id}`);
+                } catch (renewError) {
+                    if (renewError.message?.includes('not found') || 
+                        renewError.message?.includes('completed') ||
+                        renewError.message?.includes('removed')) {
+                        return;
+                    }
+                    logger.debug(`[SCHEDULED-DISPARO] Erro ao renovar lock (não crítico):`, renewError.message);
+                }
+            }
+        };
+        
         for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+            // Renovar lock periodicamente durante criação de batches
+            if (batchIndex > 0 && batchIndex % 10 === 0) {
+                await renewLockIfNeeded();
+            }
             const batchStart = batchIndex * batchSize;
             const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
             const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
