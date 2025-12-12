@@ -4539,8 +4539,13 @@
             function getCookie(name) {
                 const cookies = document.cookie.split('; ');
                 for (const cookie of cookies) {
-                    const parts = cookie.split('=');
-                    if (parts[0] === name) return parts[1];
+                    const equalIndex = cookie.indexOf('=');
+                    if (equalIndex === -1) continue;
+                    const cookieName = cookie.substring(0, equalIndex).trim();
+                    const cookieValue = cookie.substring(equalIndex + 1);
+                    if (cookieName === name) {
+                        return decodeURIComponent(cookieValue);
+                    }
                 }
                 return null;
             }
