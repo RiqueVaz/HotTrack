@@ -200,8 +200,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
-        stalledInterval: 300000, // 5 minutos - verificar stalled periodicamente
-        lockDuration: 600000, // 10 minutos - jobs são rápidos (< 1 minuto), mas manter margem de segurança
+        stalledInterval: 1200000, // 20 minutos - verificar stalled periodicamente (aumentado de 5min)
+        lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (aumentado de 10min)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -453,6 +453,116 @@ async function waitForRateLimit(botToken, maxWaitTime = 5000) {
 }
 
 /**
+ * Calcula lockDuration dinâmico baseado no tamanho do job
+ * @param {number} contactsCount - Número de contatos no batch
+ * @param {string} queueName - Nome da fila
+ * @returns {number} - LockDuration em milissegundos
+ */
+function calculateDynamicLockDuration(contactsCount, queueName) {
+    // Tempo base por job (5 minutos)
+    const BASE_TIME_MS = 5 * 60 * 1000;
+    
+    // Tempo médio por contato baseado em métricas reais
+    // 100 contatos em 3-4h = ~2-2.4min por contato
+    // Usar valor conservador: 2min por contato
+    const TIME_PER_CONTACT_MS = 2 * 60 * 1000;
+    
+    // Margem de segurança: 2x o tempo estimado
+    const SAFETY_MARGIN = 2;
+    
+    // Calcular tempo estimado
+    const estimatedTime = BASE_TIME_MS + (contactsCount * TIME_PER_CONTACT_MS);
+    const lockDuration = estimatedTime * SAFETY_MARGIN;
+    
+    // Limites mínimos e máximos por fila
+    let minLockDuration, maxLockDuration;
+    
+    switch (queueName) {
+        case QUEUE_NAMES.DISPARO_BATCH:
+            minLockDuration = 30 * 60 * 1000; // 30 minutos mínimo
+            maxLockDuration = 8 * 60 * 60 * 1000; // 8 horas máximo
+            break;
+        case QUEUE_NAMES.TIMEOUT:
+            minLockDuration = 30 * 60 * 1000; // 30 minutos mínimo
+            maxLockDuration = 2 * 60 * 60 * 1000; // 2 horas máximo
+            break;
+        case QUEUE_NAMES.DISPARO:
+            minLockDuration = 10 * 60 * 1000; // 10 minutos mínimo
+            maxLockDuration = 1 * 60 * 60 * 1000; // 1 hora máximo
+            break;
+        default:
+            minLockDuration = 10 * 60 * 1000; // 10 minutos mínimo
+            maxLockDuration = 4 * 60 * 60 * 1000; // 4 horas máximo
+    }
+    
+    return Math.max(minLockDuration, Math.min(lockDuration, maxLockDuration));
+}
+
+/**
+ * Calcula stalledInterval dinâmico baseado no lockDuration
+ * Deve ser ~1/3 do lockDuration para detectar stalled jobs sem ser muito agressivo
+ * @param {number} lockDuration - LockDuration em milissegundos
+ * @returns {number} - StalledInterval em milissegundos
+ */
+function calculateDynamicStalledInterval(lockDuration) {
+    const calculated = Math.floor(lockDuration / 3);
+    // Mínimo 20 minutos, máximo 2 horas
+    return Math.max(20 * 60 * 1000, Math.min(calculated, 2 * 60 * 60 * 1000));
+}
+
+/**
+ * Obtém lockDuration otimizado para um job específico
+ * @param {string} queueName - Nome da fila
+ * @param {object} jobData - Dados do job
+ * @returns {object} - Objeto com lockDuration e stalledInterval calculados
+ */
+function getOptimalLockDuration(queueName, jobData) {
+    // Se já foi calculado, usar o valor existente
+    if (jobData._calculatedLockDuration) {
+        return {
+            lockDuration: jobData._calculatedLockDuration,
+            stalledInterval: jobData._calculatedStalledInterval || calculateDynamicStalledInterval(jobData._calculatedLockDuration)
+        };
+    }
+    
+    // Calcular baseado no tipo de fila e dados do job
+    let lockDuration = null;
+    
+    if (queueName === QUEUE_NAMES.DISPARO_BATCH && jobData.contacts && Array.isArray(jobData.contacts)) {
+        lockDuration = calculateDynamicLockDuration(jobData.contacts.length, queueName);
+    } else if (queueName === QUEUE_NAMES.TIMEOUT) {
+        // Para timeout, estimar baseado em complexidade do flow
+        // Se tem flow_nodes, estimar baseado no número de nós
+        if (jobData.flow_nodes) {
+            try {
+                const flowNodes = typeof jobData.flow_nodes === 'string' 
+                    ? JSON.parse(jobData.flow_nodes) 
+                    : jobData.flow_nodes;
+                const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
+                // Estimativa: 1 minuto por nó + base
+                const estimatedMinutes = 5 + (nodes.length * 1);
+                lockDuration = Math.min(estimatedMinutes * 60 * 1000 * 2, 2 * 60 * 60 * 1000); // 2x margem, máximo 2h
+            } catch (e) {
+                // Se erro ao parsear, usar valor padrão conservador
+                lockDuration = 60 * 60 * 1000; // 1 hora padrão
+            }
+        } else {
+            // Sem informações de flow, usar valor conservador
+            lockDuration = 60 * 60 * 1000; // 1 hora padrão
+        }
+    }
+    
+    // Se não calculou, retornar null para usar valores padrão da fila
+    if (!lockDuration) {
+        return null;
+    }
+    
+    const stalledInterval = calculateDynamicStalledInterval(lockDuration);
+    
+    return { lockDuration, stalledInterval };
+}
+
+/**
  * Calcula limites escaláveis para jobs de disparo baseado no tamanho do batch
  * @param {number} contactsCount - Número de contatos no batch
  * @returns {object} - Objeto com attempts calculado (lockDuration é configuração do Worker, não pode ser por job)
@@ -544,6 +654,14 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     let scalableLimits = {};
     if (queueName === QUEUE_NAMES.DISPARO_BATCH && data.contacts && Array.isArray(data.contacts)) {
         scalableLimits = calculateScalableLimits(data.contacts.length);
+    }
+    
+    // Calcular lockDuration dinâmico para jobs que precisam
+    const optimalLock = getOptimalLockDuration(queueName, data);
+    if (optimalLock) {
+        // Armazenar valores calculados no job data para o worker usar
+        data._calculatedLockDuration = optimalLock.lockDuration;
+        data._calculatedStalledInterval = optimalLock.stalledInterval;
     }
     
     // Configurar rate limiting por bot token se fornecido

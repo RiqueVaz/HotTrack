@@ -1708,25 +1708,41 @@ async function processDisparoBatchData(data, job = null) {
     const contactsCount = contacts?.length || 0;
     
     // Renovação periódica de lock para evitar jobs stalled em batches grandes
-    // Reduzido para 2 minutos para renovação mais frequente durante processamento longo
+    // Renova a cada 10 contatos processados OU 5 minutos (o que ocorrer primeiro)
     let lastLockRenewal = Date.now();
-    const LOCK_RENEWAL_INTERVAL = 2 * 60 * 1000; // 2 minutos (reduzido de 5min para renovação mais frequente)
+    const PROGRESS_REPORT_INTERVAL = 10; // A cada 10 contatos
+    const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
     
-    // Função para renovar lock do job BullMQ se necessário
-    // Baseada em tempo para funcionar corretamente com workers concorrentes
-    const renewLockIfNeeded = async () => {
+    const renewLockIfNeeded = async (currentProcessed, totalContacts) => {
         const now = Date.now();
-        if (now - lastLockRenewal >= LOCK_RENEWAL_INTERVAL) {
+        const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
+        const shouldRenewByProgress = currentProcessed > 0 && currentProcessed % PROGRESS_REPORT_INTERVAL === 0;
+        
+        if (shouldRenewByTime || shouldRenewByProgress) {
             if (job && typeof job.updateProgress === 'function') {
                 try {
-                    // Atualizar progresso do job para renovar o lock implicitamente
-                    // Usar um valor fixo pequeno para não interferir com o progresso real
-                    await job.updateProgress(1);
+                    // Calcular progresso real (0-100%)
+                    const progress = totalContacts > 0 
+                        ? Math.round((currentProcessed / totalContacts) * 100)
+                        : 0;
+                    
+                    // Atualizar progresso para renovar o lock implicitamente
+                    await job.updateProgress(Math.max(progress, 1));
                     lastLockRenewal = now;
-                    logger.debug(`[WORKER-DISPARO-BATCH] Lock renovado para job ${job.id} (tempo decorrido: ${Math.round((now - (job.processedOn || now)) / 1000)}s)`);
+                    
+                    // Log apenas a cada 25 contatos para não poluir logs
+                    if (shouldRenewByProgress && currentProcessed % 25 === 0) {
+                        logger.debug(`[WORKER-DISPARO-BATCH] Lock renovado e progresso atualizado: ${progress}% (${currentProcessed}/${totalContacts}) para job ${job.id}`);
+                    }
                 } catch (renewError) {
+                    // Se job foi concluído ou removido, não é erro crítico
+                    if (renewError.message?.includes('not found') || 
+                        renewError.message?.includes('completed') ||
+                        renewError.message?.includes('removed')) {
+                        return; // Job já foi concluído, não precisa renovar
+                    }
                     // Não é crítico se falhar, apenas logar
-                    logger.warn(`[WORKER-DISPARO-BATCH] Erro ao renovar lock (não crítico):`, renewError.message);
+                    logger.debug(`[WORKER-DISPARO-BATCH] Erro ao renovar lock (não crítico):`, renewError.message);
                 }
             }
         }
@@ -1966,13 +1982,13 @@ async function processDisparoBatchData(data, job = null) {
                     }
                 }
                 
-                // Renovar lock periodicamente durante processamento de batches grandes
-                // Usar verificação baseada em tempo ao invés de contador para funcionar com concorrência
-                await renewLockIfNeeded();
+                // Renovar lock e reportar progresso durante processamento
+                await renewLockIfNeeded(processedCount, contacts.length);
                 
-                // Log de progresso a cada 25 contatos processados (reduzido de 50 para melhor visibilidade)
+                // Log de progresso a cada 25 contatos processados
                 if (processedCount % 25 === 0 && processedCount > 0) {
-                    logger.info(`[WORKER-DISPARO-BATCH] Processados ${processedCount}/${contacts.length} contatos do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`);
+                    const progress = Math.round((processedCount / contacts.length) * 100);
+                    logger.info(`[WORKER-DISPARO-BATCH] Processados ${processedCount}/${contacts.length} contatos (${progress}%) do batch ${batch_index + 1}/${total_batches} para disparo ${history_id}`);
                 }
             } catch (error) {
                 errorCount++;

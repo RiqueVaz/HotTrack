@@ -36,19 +36,36 @@ function createWorker(queueName, processor, options = {}) {
             const botToken = data._botToken;
             
             // Renovação automática de lock para jobs longos
-            // Configurar intervalo baseado no lockDuration da fila (renovar a cada 1/4 do lockDuration)
-            const queueLockDuration = lockDuration || 300000; // Default 5 minutos se não especificado
-            const lockRenewInterval = Math.max(60000, Math.floor(queueLockDuration / 4)); // Mínimo 1 minuto, máximo 1/4 do lockDuration
+            // Usar lockDuration calculado dinamicamente se disponível, senão usar padrão da fila
+            const jobLockDuration = data._calculatedLockDuration || lockDuration || 300000;
+            const lockRenewInterval = Math.min(
+                5 * 60 * 1000, // Máximo 5 minutos entre renovações
+                Math.max(60000, Math.floor(jobLockDuration / 4)) // Mínimo 1 minuto, ou 25% do lockDuration
+            );
             let lockRenewTimer = null;
+            let lastProgress = 0;
             
             // Iniciar renovação automática de lock para jobs que podem demorar muito (> 5 minutos)
-            if (job && typeof job.updateProgress === 'function' && queueLockDuration > 300000) {
+            if (job && typeof job.updateProgress === 'function' && jobLockDuration > 300000) {
                 lockRenewTimer = setInterval(async () => {
                     try {
                         // Atualizar progresso para renovar o lock implicitamente
-                        await job.updateProgress(1);
-                        logger.debug(`[BullMQ-Worker] Lock renovado automaticamente para job ${job.id} na fila ${queueName}`);
+                        // Usar progresso atual do job se disponível, senão incrementar pequeno valor
+                        const currentProgress = job.progress || lastProgress;
+                        await job.updateProgress(Math.max(currentProgress, 1));
+                        lastProgress = currentProgress;
+                        logger.debug(`[BullMQ-Worker] Lock renovado automaticamente para job ${job.id} na fila ${queueName} (lockDuration: ${Math.round(jobLockDuration / 60000)}min)`);
                     } catch (renewError) {
+                        // Se job foi concluído ou removido, limpar timer
+                        if (renewError.message?.includes('not found') || 
+                            renewError.message?.includes('completed') ||
+                            renewError.message?.includes('removed')) {
+                            if (lockRenewTimer) {
+                                clearInterval(lockRenewTimer);
+                                lockRenewTimer = null;
+                            }
+                            return;
+                        }
                         // Não é crítico se falhar, apenas logar
                         logger.debug(`[BullMQ-Worker] Erro ao renovar lock automaticamente (não crítico):`, renewError.message);
                     }
@@ -204,11 +221,13 @@ function createWorker(queueName, processor, options = {}) {
     
     worker.on('stalled', (jobId) => {
         // Buscar informações do job para log mais detalhado
-        const queueLockDuration = lockDuration || 300000; // Usar lockDuration do escopo da função
+        // Usar lockDuration calculado dinamicamente se disponível, senão usar padrão da fila
         queue.getJob(jobId).then(job => {
             if (job) {
+                const jobLockDuration = job.data?._calculatedLockDuration || lockDuration || 300000;
+                const jobStalledInterval = job.data?._calculatedStalledInterval || stalledInterval || 300000;
                 const processingTime = job.processedOn ? Date.now() - job.processedOn : null;
-                const lockDurationMinutes = Math.round(queueLockDuration / 60000);
+                const lockDurationMinutes = Math.round(jobLockDuration / 60000);
                 const processingTimeMinutes = processingTime ? Math.round(processingTime / 60000) : null;
                 
                 logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName}`, {
@@ -220,9 +239,10 @@ function createWorker(queueName, processor, options = {}) {
                     contactsCount: job.data?.contacts?.length || 0,
                     processingTime: processingTime ? `${processingTimeMinutes}min (${Math.round(processingTime / 1000)}s)` : 'unknown',
                     lockDuration: `${lockDurationMinutes}min`,
-                    stalledInterval: `${Math.round(stalledInterval / 60000)}min`,
+                    stalledInterval: `${Math.round(jobStalledInterval / 60000)}min`,
                     attemptsMade: job.attemptsMade || 0,
                     progress: job.progress || 0,
+                    hasDynamicLock: !!job.data?._calculatedLockDuration,
                     timestamp: new Date().toISOString()
                 });
             } else {
@@ -246,8 +266,8 @@ function createWorker(queueName, processor, options = {}) {
 
 // Processadores para cada tipo de job
 const processors = {
-    [QUEUE_NAMES.TIMEOUT]: async (data) => {
-        await processTimeoutData(data);
+    [QUEUE_NAMES.TIMEOUT]: async (data, job) => {
+        await processTimeoutData(data, job);
     },
     
     [QUEUE_NAMES.DISPARO]: async (data) => {

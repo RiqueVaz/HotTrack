@@ -2011,6 +2011,12 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             break;
         }
 
+        // Renovar lock durante processamento de flows longos
+        // Renovar a cada 3 nós processados para evitar jobs stalled
+        if (renewLockCallback && safetyLock % 3 === 0) {
+            await renewLockCallback(safetyLock);
+        }
+
         // Removido log de debug
 
         // Incrementa contador de execução do node (apenas se tiver flow_id)
@@ -2196,10 +2202,40 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 // Função pura que processa timeout sem depender de objetos HTTP (req/res)
 // Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
-async function processTimeoutData(data) {
+async function processTimeoutData(data, job = null) {
     try {
         const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions, is_disparo, history_id, disparo_flow_id } = data;
         const logPrefix = '[WORKER]';
+        
+        // Renovação periódica de lock para evitar jobs stalled em flows longos
+        let lastLockRenewal = Date.now();
+        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        let nodesProcessed = 0;
+        
+        // Função para renovar lock durante processamento de flows longos
+        const renewLockIfNeeded = async (currentNodesProcessed = 0) => {
+            const now = Date.now();
+            const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
+            const shouldRenewByProgress = currentNodesProcessed > 0 && currentNodesProcessed % 5 === 0; // A cada 5 nós
+            
+            if ((shouldRenewByTime || shouldRenewByProgress) && job && typeof job.updateProgress === 'function') {
+                try {
+                    // Estimar progresso baseado em nós processados (se flowNodes disponível)
+                    const progress = Math.min(currentNodesProcessed * 10, 90); // Máximo 90% até concluir
+                    await job.updateProgress(Math.max(progress, 1));
+                    lastLockRenewal = now;
+                    console.debug(`[WORKER-TIMEOUT] Lock renovado para job ${job.id} (nós processados: ${currentNodesProcessed})`);
+                } catch (renewError) {
+                    // Se job foi concluído ou removido, não é erro crítico
+                    if (renewError.message?.includes('not found') || 
+                        renewError.message?.includes('completed') ||
+                        renewError.message?.includes('removed')) {
+                        return;
+                    }
+                    console.debug(`[WORKER-TIMEOUT] Erro ao renovar lock (não crítico):`, renewError.message);
+                }
+            }
+        };
 
         // Validação de dados obrigatórios
         if (!chat_id || !bot_id) {
@@ -2392,7 +2428,8 @@ async function processTimeoutData(data) {
                                         variables,
                                         flowNodes,
                                         flowEdges,
-                                        flowIdForProcess
+                                        flowIdForProcess,
+                                        renewLockIfNeeded // Passar callback de renovação
                                     );
                                 } else {
                                     // Removido log de debug
@@ -2413,7 +2450,8 @@ async function processTimeoutData(data) {
                                         variables,
                                         flowNodes,
                                         flowEdges,
-                                        flowIdForProcess
+                                        flowIdForProcess,
+                                        renewLockIfNeeded // Passar callback de renovação
                                     );
                                 } else {
                                     // Removido log de debug
@@ -2434,7 +2472,8 @@ async function processTimeoutData(data) {
                                     variables,
                                     flowNodes,
                                     flowEdges,
-                                    flowIdForProcess
+                                    flowIdForProcess,
+                                    renewLockIfNeeded // Passar callback de renovação
                                 );
                             } else {
                                 // Não há próximo nó, fluxo terminou
@@ -2451,7 +2490,8 @@ async function processTimeoutData(data) {
                                 variables,
                                 flowNodes,
                                 flowEdges,
-                                flowIdForProcess
+                                flowIdForProcess,
+                                renewLockIfNeeded // Passar callback de renovação
                             );
                         }
                     } catch (parseError) {
@@ -2466,7 +2506,8 @@ async function processTimeoutData(data) {
                             variables,
                             flowNodes,
                             flowEdges,
-                            flowIdForProcess
+                            flowIdForProcess,
+                            renewLockIfNeeded // Passar callback de renovação
                         );
                     }
                 } else if (continueFromDelay && !remainingActionsJson) {
@@ -2492,7 +2533,8 @@ async function processTimeoutData(data) {
                             variables,
                             flowNodes,
                             flowEdges,
-                            flowIdForProcess
+                            flowIdForProcess,
+                            renewLockIfNeeded // Passar callback de renovação
                         );
                     } else {
                         // Removido log de debug
@@ -2508,7 +2550,8 @@ async function processTimeoutData(data) {
                         variables,
                         flowNodes,
                         flowEdges,
-                        flowIdForProcess
+                        flowIdForProcess,
+                        renewLockIfNeeded // Passar callback de renovação
                     );
                 }
                 // Timeout processado com sucesso
