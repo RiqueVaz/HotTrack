@@ -1197,11 +1197,17 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                             }
                         };
                         
-                        await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
+                        const response = await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
+                        if (response && response.ok && response.result) {
+                            await saveMessageToDb(sellerId, botId, response.result, 'bot', variables);
+                        }
                     } else {
                         // Envia mensagem normal sem botão
                         const payload = { chat_id: chatId, text: textToSend, parse_mode: 'HTML' };
-                        await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
+                        const response = await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
+                        if (response && response.ok && response.result) {
+                            await saveMessageToDb(sellerId, botId, response.result, 'bot', variables);
+                        }
                     }
                 } catch (error) {
                     logger.error(`${logPrefix} [Flow Message] Erro ao enviar mensagem: ${error.message}`);
@@ -1283,8 +1289,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         // 1. Tentar usar storage_url se já está migrado
                         if (media.storage_url && media.storage_type === 'r2') {
                             try {
-                                await sendMediaFromR2(botToken, chatId, media.storage_url, action.type, caption, media.id, botId);
-                                sent = true;
+                                const response = await sendMediaFromR2(botToken, chatId, media.storage_url, action.type, caption, media.id, botId);
+                                if (response && response.ok && response.result) {
+                                    await saveMessageToDb(sellerId, botId, response.result, 'bot', variables);
+                                    sent = true;
+                                }
                             } catch (urlError) {
                                 console.warn(`[Disparo Media] Erro ao enviar via R2 (download + upload):`, urlError.message);
                             }
@@ -1306,8 +1315,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 parse_mode: 'HTML' 
                             });
                             try {
-                                await sendTelegramRequest(botToken, method, payload, { timeout });
-                                sent = true;
+                                const response = await sendTelegramRequest(botToken, method, payload, { timeout });
+                                if (response && response.ok && response.result) {
+                                    await saveMessageToDb(sellerId, botId, response.result, 'bot', variables);
+                                    sent = true;
+                                }
                             } catch (error) {
                                 logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao enviar mídia com fileId:`, error.message);
                             }
@@ -1323,8 +1335,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                                 parse_mode: 'HTML' 
                             });
                             try {
-                                await sendTelegramRequest(botToken, method, payload, { timeout });
-                                sent = true;
+                                const response = await sendTelegramRequest(botToken, method, payload, { timeout });
+                                if (response && response.ok && response.result) {
+                                    await saveMessageToDb(sellerId, botId, response.result, 'bot', variables);
+                                    sent = true;
+                                }
                             } catch (error) {
                                 logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Erro ao enviar mídia com file_id:`, error.message);
                             }
@@ -1486,6 +1501,11 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                         }
                     };
                     const sentMessage = await sendTelegramRequest(botToken, 'sendMessage', payload);
+                    
+                    // Salvar mensagem no banco se enviada com sucesso
+                    if (sentMessage && sentMessage.ok && sentMessage.result) {
+                        await saveMessageToDb(sellerId, botId, sentMessage.result, 'bot', variables);
+                    }
                     
                     // Enviar eventos apenas se a mensagem foi enviada com sucesso
                     if (sentMessage && sentMessage.ok) {
