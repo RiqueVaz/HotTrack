@@ -3950,134 +3950,111 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         const offset = usePagination ? (page - 1) * limit : 0;
         const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
         
-        // Query OTIMIZADA - Usa DISTINCT ON para aproveitar índice diretamente
-        // Estratégia: DISTINCT ON pega último registro de cada chat_id usando índice, depois ordena e limita
+        // Query SIMPLIFICADA - Reduz complexidade removendo LEFT JOIN LATERAL e CTEs desnecessárias
+        // Estratégia: Primeiro ordenar e limitar chats, depois buscar dados apenas para esses chats
         const users = await sqlWithRetry(`
-            WITH last_messages_per_chat AS (
-                -- Passo 1: Usar DISTINCT ON para pegar o último registro de cada chat_id (usa índice diretamente)
-                -- Muito mais eficiente que GROUP BY + MAX porque não precisa agrupar tudo
+            WITH last_chats AS (
+                -- Passo 1: Pegar últimos chat_ids ordenados por última mensagem e limitar
                 SELECT DISTINCT ON (chat_id)
                     chat_id,
-                    created_at as last_message_at
+                    created_at as last_message_at,
+                    message_text,
+                    sender_type
                 FROM telegram_chats
                 WHERE bot_id = $1 AND seller_id = $2
-                ORDER BY chat_id, created_at DESC NULLS LAST
+                ORDER BY chat_id, created_at DESC
             ),
             chat_ids_ordered AS (
-                -- Passo 2: Ordenar e limitar apenas os chat_ids já processados (muito mais rápido)
-                SELECT chat_id, last_message_at
-                FROM last_messages_per_chat
+                -- Passo 2: Ordenar e limitar apenas os chat_ids já processados
+                SELECT chat_id, last_message_at, message_text, sender_type
+                FROM last_chats
                 ORDER BY last_message_at DESC NULLS LAST
                 LIMIT $3 OFFSET $4
             ),
             user_data AS (
-                -- Passo 2: Para cada chat_id, pegar dados do registro mais recente com sender_type='user'
-                -- Usa LEFT JOIN LATERAL para garantir que todos os chat_ids sejam incluídos
-                SELECT 
+                -- Passo 3: Dados básicos do usuário (primeiro registro com sender_type='user')
+                SELECT DISTINCT ON (cio.chat_id)
                     cio.chat_id,
-                    t.first_name,
-                    t.last_name,
-                    t.username
+                    tc.first_name,
+                    tc.last_name,
+                    tc.username
                 FROM chat_ids_ordered cio
-                LEFT JOIN LATERAL (
-                    SELECT first_name, last_name, username
-                    FROM telegram_chats
-                    WHERE chat_id = cio.chat_id 
-                      AND bot_id = $1 
-                      AND seller_id = $2
-                      AND sender_type = 'user'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                ) t ON true
+                LEFT JOIN telegram_chats tc ON tc.chat_id = cio.chat_id 
+                    AND tc.bot_id = $1 
+                    AND tc.seller_id = $2
+                    AND tc.sender_type = 'user'
+                ORDER BY cio.chat_id, tc.created_at DESC NULLS LAST
             ),
             click_ids AS (
-                -- Passo 3: Para cada chat_id, pegar click_id do registro mais recente não-nulo
-                -- Usa LEFT JOIN LATERAL para garantir que todos os chat_ids sejam incluídos
-                SELECT 
+                -- Passo 4: Pegar click_id do registro mais recente não-nulo
+                SELECT DISTINCT ON (cio.chat_id)
                     cio.chat_id,
-                    t.click_id
+                    tc.click_id
                 FROM chat_ids_ordered cio
-                LEFT JOIN LATERAL (
-                    SELECT click_id
-                    FROM telegram_chats
-                    WHERE chat_id = cio.chat_id 
-                      AND bot_id = $1 
-                      AND seller_id = $2
-                      AND click_id IS NOT NULL
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                ) t ON true
+                LEFT JOIN telegram_chats tc ON tc.chat_id = cio.chat_id 
+                    AND tc.bot_id = $1 
+                    AND tc.seller_id = $2
+                    AND tc.click_id IS NOT NULL
+                ORDER BY cio.chat_id, tc.created_at DESC NULLS LAST
             ),
-            base_chats AS (
-                -- Passo 4: Combinar tudo
+            chat_basic_info AS (
+                -- Passo 5: Combinar dados básicos
                 SELECT 
                     cio.chat_id,
+                    cio.last_message_at,
+                    cio.message_text,
+                    cio.sender_type,
                     ud.first_name,
                     ud.last_name,
                     ud.username,
-                    ci.click_id,
-                    cio.last_message_at
+                    ci.click_id
                 FROM chat_ids_ordered cio
                 LEFT JOIN user_data ud ON ud.chat_id = cio.chat_id
                 LEFT JOIN click_ids ci ON ci.chat_id = cio.chat_id
-                ORDER BY cio.last_message_at DESC NULLS LAST
             ),
-            latest_messages AS (
-                SELECT DISTINCT ON (chat_id)
-                    chat_id,
-                    message_text,
-                    sender_type,
-                    created_at
-                FROM telegram_chats
-                WHERE bot_id = $1 AND seller_id = $2
-                    AND chat_id IN (SELECT chat_id FROM base_chats)  -- OTIMIZAÇÃO: apenas chats retornados
-                ORDER BY chat_id, created_at DESC
-            ),
-            paid_leads AS (
+            paid_chats AS (
+                -- Passo 6: Verificar chats pagantes (simplificado)
                 SELECT DISTINCT tc.chat_id
                 FROM telegram_chats tc
-                INNER JOIN base_chats bc ON bc.chat_id = tc.chat_id  -- OTIMIZAÇÃO: join apenas com base_chats
+                JOIN chat_basic_info cbi ON cbi.chat_id = tc.chat_id
                 JOIN clicks c ON c.click_id = tc.click_id
                 JOIN pix_transactions pt ON pt.click_id_internal = c.id
                 WHERE tc.bot_id = $1
                   AND tc.seller_id = $2
                   AND pt.status = 'paid'
             ),
-            custom_tags AS (
+            chat_tags AS (
+                -- Passo 7: Tags customizadas (simplificado - sem ORDER BY dentro do json_agg)
                 SELECT
                     lcta.chat_id,
-                    json_agg(
-                        json_build_object(
-                            'id', lct.id,
-                            'title', lct.title,
-                            'color', lct.color,
-                            'bot_id', lct.bot_id
-                        )
-                        ORDER BY LOWER(lct.title)
-                    ) AS tags
+                    COALESCE(
+                        json_agg(
+                            json_build_object('id', lct.id, 'title', lct.title, 'color', lct.color, 'bot_id', lct.bot_id)
+                        ) FILTER (WHERE lct.id IS NOT NULL),
+                        '[]'::json
+                    ) as tags
                 FROM lead_custom_tag_assignments lcta
-                INNER JOIN base_chats bc ON bc.chat_id = lcta.chat_id  -- OTIMIZAÇÃO: join apenas com base_chats
+                JOIN chat_basic_info cbi ON cbi.chat_id = lcta.chat_id
                 JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
                 WHERE lcta.bot_id = $1
                   AND lcta.seller_id = $2
                 GROUP BY lcta.chat_id
             )
             SELECT
-                bc.chat_id,
-                bc.first_name,
-                bc.last_name,
-                bc.username,
-                bc.click_id,
-                bc.last_message_at,
-                lm.message_text,
-                lm.sender_type AS last_sender_type,
+                cbi.chat_id,
+                cbi.first_name,
+                cbi.last_name,
+                cbi.username,
+                cbi.click_id,
+                cbi.last_message_at,
+                cbi.message_text,
+                cbi.sender_type as last_sender_type,
                 COALESCE(ct.tags, '[]'::json) AS custom_tags,
-                CASE WHEN pl.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
-            FROM base_chats bc
-            LEFT JOIN latest_messages lm ON lm.chat_id = bc.chat_id
-            LEFT JOIN paid_leads pl ON pl.chat_id = bc.chat_id
-            LEFT JOIN custom_tags ct ON ct.chat_id = bc.chat_id
-            ORDER BY bc.last_message_at DESC NULLS LAST;
+                CASE WHEN pc.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
+            FROM chat_basic_info cbi
+            LEFT JOIN paid_chats pc ON pc.chat_id = cbi.chat_id
+            LEFT JOIN chat_tags ct ON ct.chat_id = cbi.chat_id
+            ORDER BY cbi.last_message_at DESC NULLS LAST;
         `, [botId, req.user.id, queryLimit, offset]);
         
         // Retornar formato compatível com frontend (array se não paginar, objeto se paginar)
