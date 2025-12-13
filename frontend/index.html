@@ -8816,6 +8816,7 @@ function generatePreviewHTML(data) {
         const [selectedChat, setSelectedChat] = useState(null);
         const [selectedFileInfoChat, setSelectedFileInfoChat] = useState(null);
         const [messages, setMessages] = useState([]);
+        const [isLoadingMessages, setIsLoadingMessages] = useState(false);
         const [newMessage, setNewMessage] = useState('');
         const [searchTerm, setSearchTerm] = useState('');
         
@@ -9105,10 +9106,22 @@ function generatePreviewHTML(data) {
         const fetchMessages = useCallback(async () => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
              try {
+                 // Só ativar loading se não houver mensagens (primeira carga ou após limpar)
+                 setMessages(prevMessages => {
+                     if (prevMessages.length === 0) {
+                         setIsLoadingMessages(true);
+                     }
+                     return prevMessages;
+                 });
                  const { data } = await api.get(`/api/chats/${selectedBotId}/${selectedChat.chat_id}`);
-                 setMessages(prevMessages => JSON.stringify(prevMessages) === JSON.stringify(data) ? prevMessages : data);
+                 setMessages(prevMessages => {
+                     const newMessages = JSON.stringify(prevMessages) === JSON.stringify(data) ? prevMessages : data;
+                     setIsLoadingMessages(false); // Desativar loading após sucesso
+                     return newMessages;
+                 });
              } catch (e) {
                  console.error("Erro ao buscar mensagens", e);
+                 setIsLoadingMessages(false); // Desativar loading em caso de erro
              }
         }, [selectedBotId, selectedChat?.chat_id]);
 
@@ -9223,6 +9236,7 @@ function generatePreviewHTML(data) {
     const handleSelectChat = useCallback((user) => {
         if (selectedChat?.chat_id !== user.chat_id) {
             setMessages([]);
+            setIsLoadingMessages(true); // Ativar loading
             setSelectedChat(user);
             // Fechar drawer de conversas em mobile ao selecionar
             if (window.innerWidth <= 768) {
@@ -9617,13 +9631,28 @@ function generatePreviewHTML(data) {
                                         </div>
                                     </div>
                                     <div className="message-list" ref={chatWindowRef}>
-                                        {messages.map((m, i) => (
-                                            <div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}>
-                                                <strong>{getMessageSender(m)}</strong>
-                                                {renderMessageContent(m)}
-                                                <div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div>
+                                        {isLoadingMessages && messages.length === 0 ? (
+                                            <div style={{
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                height: '100%',
+                                                color: 'var(--text-secondary)',
+                                                gap: '1rem'
+                                            }}>
+                                                <div className="spinner" style={{ width: '40px', height: '40px', margin: 0 }}></div>
+                                                <p style={{ margin: 0 }}>Carregando mensagens...</p>
                                             </div>
-                                        ))}
+                                        ) : (
+                                            messages.map((m, i) => (
+                                                <div key={m.message_id || i} className={`message-bubble ${getMessageBubbleClass(m.sender_type)}`}>
+                                                    <strong>{getMessageSender(m)}</strong>
+                                                    {renderMessageContent(m)}
+                                                    <div className="message-bubble-time">{new Date(m.created_at).toLocaleTimeString()}</div>
+                                                </div>
+                                            ))
+                                        )}
                                     </div>
                                     <div className="chat-input-area">
                                         <form onSubmit={handleSend} className="chat-input-form">
