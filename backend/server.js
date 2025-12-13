@@ -1382,7 +1382,9 @@ const QSTASH_PUBLISH_BATCH_SIZE = resolvePositiveInt(process.env.QSTASH_PUBLISH_
 const QSTASH_PUBLISH_DELAY = resolvePositiveInt(process.env.QSTASH_PUBLISH_DELAY, 100);
 
 // Limite máximo de contatos por query para evitar sobrecarga de memória no PostgreSQL
-const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 50000);
+// Reduzido de 50000 para 10000 para reduzir uso de memória em 80%
+// Para queries maiores, considerar implementar paginação
+const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 10000);
 
 // ==========================================================
 //          LÓGICA DE RETRY PARA O BANCO DE DADOS
@@ -3953,15 +3955,23 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         // Query SIMPLIFICADA - Reduz complexidade removendo LEFT JOIN LATERAL e CTEs desnecessárias
         // Estratégia: Primeiro ordenar e limitar chats, depois buscar dados apenas para esses chats
         const users = await sqlWithRetry(`
-            WITH last_chats AS (
-                -- Passo 1: Pegar últimos chat_ids ordenados por última mensagem e limitar
+            WITH recent_messages AS (
+                -- Passo 0: Limitar mensagens recentes ANTES do DISTINCT ON para reduzir uso de memória
+                -- Processa apenas as últimas 50000 mensagens ao invés de todas
+                SELECT chat_id, created_at, message_text, sender_type
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
+                ORDER BY created_at DESC
+                LIMIT 50000
+            ),
+            last_chats AS (
+                -- Passo 1: Pegar últimos chat_ids ordenados por última mensagem (agora de conjunto limitado)
                 SELECT DISTINCT ON (chat_id)
                     chat_id,
                     created_at as last_message_at,
                     message_text,
                     sender_type
-                FROM telegram_chats
-                WHERE bot_id = $1 AND seller_id = $2
+                FROM recent_messages
                 ORDER BY chat_id, created_at DESC
             ),
             chat_ids_ordered AS (
@@ -4089,10 +4099,84 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
 
 app.get('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
     try {
+        // Paginação opcional para evitar carregar todas as mensagens de uma vez
+        // Limite padrão: 1000 mensagens (últimas mensagens se não especificar offset)
+        const limit = Math.min(parseInt(req.query.limit) || 1000, 1000); // Máximo 1000 por requisição
+        const hasExplicitPagination = req.query.limit !== undefined || req.query.offset !== undefined;
+        
+        // Se não há paginação explícita, buscar últimas 1000 mensagens (mais recentes)
+        // Se há paginação explícita, usar offset fornecido
+        let offset = parseInt(req.query.offset) || 0;
+        let orderDirection = 'ASC'; // Padrão: ordem cronológica (mais antigas primeiro)
+        
+        if (!hasExplicitPagination) {
+            // Buscar total primeiro para calcular offset das últimas mensagens
+            const [countResult] = await sqlWithRetry(`
+                SELECT COUNT(*) as total 
+                FROM telegram_chats 
+                WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3;`, 
+                [req.params.botId, req.params.chatId, req.user.id]);
+            
+            const total = parseInt(countResult.total);
+            
+            if (total > limit) {
+                // Se há mais mensagens que o limite, buscar as últimas (mais recentes)
+                // Ordenar DESC e pegar as últimas, depois inverter ordem
+                const messagesDesc = await sqlWithRetry(`
+                    SELECT * FROM telegram_chats 
+                    WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
+                    ORDER BY created_at DESC 
+                    LIMIT $4;`, 
+                    [req.params.botId, req.params.chatId, req.user.id, limit]);
+                
+                // Inverter para ordem cronológica (mais antigas primeiro)
+                const messages = messagesDesc.reverse();
+                
+                res.status(200).json({
+                    messages: messages,
+                    has_more: true,
+                    total: total
+                });
+                return;
+            }
+            // Se total <= limit, buscar todas normalmente
+        }
+        
+        // Buscar mensagens com LIMIT para evitar uso excessivo de memória
         const messages = await sqlWithRetry(`
-            SELECT * FROM telegram_chats WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 ORDER BY created_at ASC;`, [req.params.botId, req.params.chatId, req.user.id]);
-        res.status(200).json(messages);
-    } catch (error) { res.status(500).json({ message: 'Erro ao buscar mensagens.' }); }
+            SELECT * FROM telegram_chats 
+            WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
+            ORDER BY created_at ${orderDirection} 
+            LIMIT $4 OFFSET $5;`, 
+            [req.params.botId, req.params.chatId, req.user.id, limit, offset]);
+        
+        // Verificar se há mais mensagens para indicar ao frontend
+        const [countResult] = await sqlWithRetry(`
+            SELECT COUNT(*) as total 
+            FROM telegram_chats 
+            WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3;`, 
+            [req.params.botId, req.params.chatId, req.user.id]);
+        
+        const total = parseInt(countResult.total);
+        const has_more = (offset + limit) < total;
+        
+        // Manter compatibilidade: se não há paginação explícita e retornou todas as mensagens, retornar array direto
+        if (!hasExplicitPagination && !has_more) {
+            res.status(200).json(messages);
+        } else {
+            // Retornar objeto com metadata
+            res.status(200).json({
+                messages: messages,
+                has_more: has_more,
+                total: total,
+                limit: limit,
+                offset: offset
+            });
+        }
+    } catch (error) { 
+        console.error('Erro ao buscar mensagens:', error);
+        res.status(500).json({ message: 'Erro ao buscar mensagens.' }); 
+    }
 });
 
 app.post('/api/chats/:botId/send-message', authenticateJwt, async (req, res) => {
@@ -9705,211 +9789,309 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
  * @returns {Promise<Array>} Array de contatos filtrados { chat_id, bot_id, first_name, last_name, username, click_id }
  */
 async function getContactsByTags(botIds, sellerId, tagIds = null, tagFilterMode = 'include', excludeChatIds = null) {
-    // Se não há filtros de tags, retornar todos os contatos (excluindo bloqueados)
-    if (!tagIds || !Array.isArray(tagIds) || tagIds.length === 0) {
-        let query;
-        if (excludeChatIds && excludeChatIds.length > 0) {
-            query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                FROM telegram_chats tc
-                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                WHERE tc.bot_id = ANY(${botIds}) 
-                    AND tc.seller_id = ${sellerId}
-                    AND tc.chat_id > 0
-                    AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                    AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC
-                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
-        } else {
-            query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                FROM telegram_chats tc
-                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                WHERE tc.bot_id = ANY(${botIds}) 
-                    AND tc.seller_id = ${sellerId}
-                    AND tc.chat_id > 0
-                    AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC
-                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
-        }
-        return await sqlWithRetry(query);
-    }
+    // Limite de segurança para evitar OOM
+    const MAX_TOTAL_CONTACTS = 500000;
+    const allContacts = [];
+    let lastChatId = null;
+    let hasMore = true;
+    let pageCount = 0;
     
-    // Separar tags custom de automáticas
+    // Separar tags custom de automáticas (se houver)
     let customTagIds = [];
     let automaticTagNames = [];
-    tagIds.forEach(tagId => {
-        if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
-            customTagIds.push(parseInt(tagId));
-        } else if (typeof tagId === 'string') {
-            automaticTagNames.push(tagId);
-        }
-    });
-    
-    // Validar tags custom
     let validCustomTagIds = [];
-    if (customTagIds.length > 0) {
-        const validTags = await sqlWithRetry(
-            sqlTx`SELECT id FROM lead_custom_tags 
-                  WHERE id = ANY(${customTagIds}) 
-                    AND seller_id = ${sellerId} 
-                    AND bot_id = ANY(${botIds})`
-        );
+    let validAutomaticTags = [];
+    let hasAnyTagFilter = false;
+    
+    if (tagIds && Array.isArray(tagIds) && tagIds.length > 0) {
+        tagIds.forEach(tagId => {
+            if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+                customTagIds.push(parseInt(tagId));
+            } else if (typeof tagId === 'string') {
+                automaticTagNames.push(tagId);
+            }
+        });
         
-        if (validTags && validTags.length > 0) {
-            validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+        // Validar tags custom
+        if (customTagIds.length > 0) {
+            const validTags = await sqlWithRetry(
+                sqlTx`SELECT id FROM lead_custom_tags 
+                      WHERE id = ANY(${customTagIds}) 
+                        AND seller_id = ${sellerId} 
+                        AND bot_id = ANY(${botIds})`
+            );
+            
+            if (validTags && validTags.length > 0) {
+                validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+            }
         }
+        
+        // Validar tags automáticas
+        validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+        hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
     }
     
-    // Validar tags automáticas
-    const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
-    const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
-    
-    // Se não há tags válidas, retornar todos os contatos (excluindo bloqueados)
-    if (!hasAnyTagFilter) {
-        let query;
-        if (excludeChatIds && excludeChatIds.length > 0) {
-            query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                FROM telegram_chats tc
-                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                WHERE tc.bot_id = ANY(${botIds}) 
-                    AND tc.seller_id = ${sellerId}
-                    AND tc.chat_id > 0
-                    AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                    AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC
-                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
-        } else {
-            query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                FROM telegram_chats tc
-                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                WHERE tc.bot_id = ANY(${botIds}) 
-                    AND tc.seller_id = ${sellerId}
-                    AND tc.chat_id > 0
-                    AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id, tc.created_at DESC
-                LIMIT ${MAX_CONTACTS_PER_QUERY}`;
-        }
-        return await sqlWithRetry(query);
-    }
-    
-    // Query unificada com filtros de tags - SIMPLIFICADA
-    // Construir query dinamicamente como string com parâmetros posicionais
     const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
     const hasCustomTags = validCustomTagIds.length > 0;
     const hasPaidTag = validAutomaticTags.includes('Pagante');
     
-    // Construir base_contacts CTE
-    let query = `
-        WITH base_contacts AS (
-            SELECT DISTINCT ON (tc.chat_id) 
-                tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-            FROM telegram_chats tc
-            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-            WHERE tc.bot_id = ANY($1::int[]) 
-                AND tc.seller_id = $2
-                AND tc.chat_id > 0`;
-    
-    let params = [botIds, sellerId];
-    let paramOffset = 3;
-    
-    // Adicionar filtro de excludeChatIds se presente
-    if (excludeChatIds && excludeChatIds.length > 0) {
-        query += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
-        params.push(excludeChatIds);
-        paramOffset++;
-    }
-    
-    query += ` AND bb.chat_id IS NULL
-            ORDER BY tc.chat_id, tc.created_at DESC
-            LIMIT ${MAX_CONTACTS_PER_QUERY}
-        )`;
-    
-    // Adicionar CTE para tags custom se presente
-    if (hasCustomTags) {
-        if (filterMode === 'exclude') {
-            query += `,
-        custom_tagged AS (
-            SELECT DISTINCT lcta.chat_id
-            FROM lead_custom_tag_assignments lcta
-            WHERE lcta.bot_id = ANY($1::int[])
-                AND lcta.seller_id = $2
-                AND lcta.tag_id = ANY($${paramOffset}::int[])
-        )`;
-            params.push(validCustomTagIds);
-            paramOffset++;
-        } else {
-            query += `,
-        custom_tagged AS (
-            SELECT DISTINCT lcta.chat_id
-            FROM lead_custom_tag_assignments lcta
-            WHERE lcta.bot_id = ANY($1::int[])
-                AND lcta.seller_id = $2
-                AND lcta.tag_id = ANY($${paramOffset}::int[])
-            GROUP BY lcta.chat_id
-            HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
-        )`;
-            params.push(validCustomTagIds, validCustomTagIds.length);
-            paramOffset += 2;
+    // Função helper interna para buscar uma página de contatos usando cursor-based pagination
+    async function _getContactsPage(cursorChatId) {
+        // Caso 1: Sem filtros de tags
+        if (!tagIds || !Array.isArray(tagIds) || tagIds.length === 0) {
+            let query;
+            if (excludeChatIds && excludeChatIds.length > 0) {
+                if (cursorChatId) {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > ${cursorChatId}
+                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                } else {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > 0
+                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                }
+            } else {
+                if (cursorChatId) {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > ${cursorChatId}
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                } else {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > 0
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                }
+            }
+            
+            const contacts = await sqlWithRetry(query);
+            const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
+            const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
+            
+            return { contacts, hasMore, lastChatId };
         }
-    }
-    
-    // Adicionar CTE para contatos pagantes se presente
-    if (hasPaidTag) {
-        query += `,
-        paid_contacts AS (
-            SELECT bc.chat_id
-            FROM base_contacts bc
-            WHERE EXISTS (
-                SELECT 1
+        
+        // Caso 2: Sem tags válidas
+        if (!hasAnyTagFilter) {
+            let query;
+            if (excludeChatIds && excludeChatIds.length > 0) {
+                if (cursorChatId) {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > ${cursorChatId}
+                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                } else {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > 0
+                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                }
+            } else {
+                if (cursorChatId) {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > ${cursorChatId}
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                } else {
+                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.bot_id = ANY(${botIds}) 
+                            AND tc.seller_id = ${sellerId}
+                            AND tc.chat_id > 0
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                }
+            }
+            
+            const contacts = await sqlWithRetry(query);
+            const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
+            const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
+            
+            return { contacts, hasMore, lastChatId };
+        }
+        
+        // Caso 3: Com filtros de tags (query complexa com CTEs)
+        // Construir query dinamicamente como string com parâmetros posicionais
+        let query = `
+            WITH base_contacts AS (
+                SELECT DISTINCT ON (tc.chat_id) 
+                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
                 FROM telegram_chats tc
-                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                WHERE tc.chat_id = bc.chat_id
-                  AND tc.bot_id = ANY($1::int[])
-                  AND tc.seller_id = $2
-            )
-        )`;
+                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                WHERE tc.bot_id = ANY($1::int[]) 
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > ${cursorChatId || 0}`;
+        
+        let params = [botIds, sellerId];
+        let paramOffset = 3;
+        
+        // Adicionar filtro de excludeChatIds se presente
+        if (excludeChatIds && excludeChatIds.length > 0) {
+            query += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+            params.push(excludeChatIds);
+            paramOffset++;
+        }
+        
+        query += ` AND bb.chat_id IS NULL
+                ORDER BY tc.chat_id ASC, tc.created_at DESC
+                LIMIT ${MAX_CONTACTS_PER_QUERY}
+            )`;
+        
+        // Adicionar CTE para tags custom se presente
+        if (hasCustomTags) {
+            if (filterMode === 'exclude') {
+                query += `,
+            custom_tagged AS (
+                SELECT DISTINCT lcta.chat_id
+                FROM lead_custom_tag_assignments lcta
+                WHERE lcta.bot_id = ANY($1::int[])
+                    AND lcta.seller_id = $2
+                    AND lcta.tag_id = ANY($${paramOffset}::int[])
+            )`;
+                params.push(validCustomTagIds);
+                paramOffset++;
+            } else {
+                query += `,
+            custom_tagged AS (
+                SELECT DISTINCT lcta.chat_id
+                FROM lead_custom_tag_assignments lcta
+                WHERE lcta.bot_id = ANY($1::int[])
+                    AND lcta.seller_id = $2
+                    AND lcta.tag_id = ANY($${paramOffset}::int[])
+                GROUP BY lcta.chat_id
+                HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+            )`;
+                params.push(validCustomTagIds, validCustomTagIds.length);
+                paramOffset += 2;
+            }
+        }
+        
+        // Adicionar CTE para contatos pagantes se presente
+        if (hasPaidTag) {
+            query += `,
+            paid_contacts AS (
+                SELECT bc.chat_id
+                FROM base_contacts bc
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM telegram_chats tc
+                    INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                    WHERE tc.chat_id = bc.chat_id
+                      AND tc.bot_id = ANY($1::int[])
+                      AND tc.seller_id = $2
+                )
+            )`;
+        }
+        
+        // Construir SELECT final com JOINs condicionais
+        query += `
+            SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
+            FROM base_contacts bc`;
+        
+        // Adicionar JOINs baseado no modo de filtro
+        if (filterMode === 'exclude') {
+            // Modo EXCLUIR: usar LEFT JOIN + WHERE IS NULL
+            if (hasCustomTags) {
+                query += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (hasPaidTag) {
+                query += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+            // Construir WHERE com condições de exclusão
+            const excludeConditions = [];
+            if (hasCustomTags) {
+                excludeConditions.push(`ct.chat_id IS NULL`);
+            }
+            if (hasPaidTag) {
+                excludeConditions.push(`pc.chat_id IS NULL`);
+            }
+            if (excludeConditions.length > 0) {
+                query += ` WHERE ${excludeConditions.join(' AND ')}`;
+            }
+        } else {
+            // Modo INCLUIR: usar INNER JOIN
+            if (hasCustomTags) {
+                query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+            }
+            if (hasPaidTag) {
+                query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+            }
+        }
+        
+        query += `
+            ORDER BY bc.chat_id ASC
+            LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+        
+        const contacts = await sqlWithRetry(query, params);
+        const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
+        const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
+        
+        return { contacts, hasMore, lastChatId };
     }
     
-    // Construir SELECT final com JOINs condicionais
-    query += `
-        SELECT bc.chat_id, bc.bot_id, bc.first_name, bc.last_name, bc.username, bc.click_id
-        FROM base_contacts bc`;
-    
-    // Adicionar JOINs baseado no modo de filtro
-    if (filterMode === 'exclude') {
-        // Modo EXCLUIR: usar LEFT JOIN + WHERE IS NULL
-        if (hasCustomTags) {
-            query += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-        }
-        if (hasPaidTag) {
-            query += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
-        }
-        // Construir WHERE com condições de exclusão
-        const excludeConditions = [];
-        if (hasCustomTags) {
-            excludeConditions.push(`ct.chat_id IS NULL`);
-        }
-        if (hasPaidTag) {
-            excludeConditions.push(`pc.chat_id IS NULL`);
-        }
-        if (excludeConditions.length > 0) {
-            query += ` WHERE ${excludeConditions.join(' AND ')}`;
-        }
-    } else {
-        // Modo INCLUIR: usar INNER JOIN
-        if (hasCustomTags) {
-            query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
-        }
-        if (hasPaidTag) {
-            query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+    // Processar todas as páginas automaticamente
+    while (hasMore && allContacts.length < MAX_TOTAL_CONTACTS) {
+        const page = await _getContactsPage(lastChatId);
+        allContacts.push(...page.contacts);
+        hasMore = page.hasMore;
+        lastChatId = page.lastChatId;
+        pageCount++;
+        
+        if (allContacts.length >= MAX_TOTAL_CONTACTS) {
+            console.warn(`[getContactsByTags] Limite de segurança atingido: ${MAX_TOTAL_CONTACTS} contatos. Processados ${pageCount} páginas.`);
+            break;
         }
     }
     
-    query += `
-        ORDER BY bc.chat_id
-        LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+    if (pageCount > 1) {
+        console.log(`[getContactsByTags] Processados ${allContacts.length} contatos em ${pageCount} páginas`);
+    }
     
-    return await sqlWithRetry(query, params);
+    return allContacts;
 }
 
 /**
