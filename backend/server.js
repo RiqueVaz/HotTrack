@@ -10116,7 +10116,8 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
                     AND tc.chat_id > 0
                     AND tc.chat_id != ALL($3::bigint[])
                     AND bb.chat_id IS NULL`;
-            return await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            const result = await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
         } else {
             query = `SELECT COUNT(DISTINCT tc.chat_id) as count
                 FROM telegram_chats tc
@@ -10125,7 +10126,8 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
                     AND tc.seller_id = $2
                     AND tc.chat_id > 0
                     AND bb.chat_id IS NULL`;
-            return await sqlWithRetry(query, [botIds, sellerId]);
+            const result = await sqlWithRetry(query, [botIds, sellerId]);
+            return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
         }
     }
     
@@ -10171,7 +10173,8 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
                     AND tc.chat_id > 0
                     AND tc.chat_id != ALL($3::bigint[])
                     AND bb.chat_id IS NULL`;
-            return await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            const result = await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
         } else {
             query = `SELECT COUNT(DISTINCT tc.chat_id) as count
                 FROM telegram_chats tc
@@ -10180,7 +10183,8 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
                     AND tc.seller_id = $2
                     AND tc.chat_id > 0
                     AND bb.chat_id IS NULL`;
-            return await sqlWithRetry(query, [botIds, sellerId]);
+            const result = await sqlWithRetry(query, [botIds, sellerId]);
+            return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
         }
     }
     
@@ -10296,7 +10300,7 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
     }
     
     const result = await sqlWithRetry(query, params);
-    return result[0].count;
+    return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
 }
 
 // Função helper para processar batch de contatos com concorrência interna

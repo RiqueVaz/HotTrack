@@ -6958,7 +6958,8 @@ function generatePreviewHTML(data) {
                 };
                 
                 const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
-                setContactCount(response.count);
+                const count = typeof response.count === 'number' ? response.count : (response.count?.count || 0);
+                setContactCount(count);
             } catch (error) {
                 console.error("Erro ao buscar contagem de contatos", error);
                 setContactCount(0);
@@ -6988,12 +6989,13 @@ function generatePreviewHTML(data) {
             }
             
             const response = await App.apiRequest('/api/bots/contacts-count', 'POST', requestBody);
-            setContactCount(response.count);
+            const count = typeof response.count === 'number' ? response.count : (response.count?.count || 0);
+            setContactCount(count);
             
             if (selectedTagIds.length > 0) {
-                App.showToast(`Filtro aplicado: ${response.count} contato(s) encontrado(s).`, 'success');
+                App.showToast(`Filtro aplicado: ${count} contato(s) encontrado(s).`, 'success');
             } else {
-                App.showToast(`Contagem atualizada: ${response.count} contato(s).`, 'success');
+                App.showToast(`Contagem atualizada: ${count} contato(s).`, 'success');
             }
         } catch (error) {
             console.error("Erro ao filtrar contatos", error);
