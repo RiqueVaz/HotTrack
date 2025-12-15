@@ -8945,15 +8945,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: 'Nenhuma tag válida encontrada para os bots selecionados.' });
         }
         
-        // 3. Contar contatos (sem carregar em memória) para validação e mensagens
-        // Para agendados: apenas contar. Para instantâneos: usar streaming diretamente
-        const contactsCount = await getContactsCountByTags(validBotIds, sellerId, tagIds, tagFilterMode, excludeChatIds);
-        
-        if (contactsCount === 0) {
-            return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
-        }
-    
-        // 4. Criar o registro mestre da campanha
+        // 3. Criar o registro mestre da campanha (sem contar contatos - será feito em background com streaming)
         const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
         // Salvar tagIds e tagFilterMode no flow_steps como metadata (incluindo custom e automáticas)
         const allTagIds = [...(validCustomTagIds || []), ...(validAutomaticTags || [])];
@@ -9014,7 +9006,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 // Converter para horário local do Brasil para exibição
                 const displayDate = new Date(scheduledDate.getTime());
                 res.status(202).json({ 
-                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${contactsCount} contatos serão processados.` 
+                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! O processamento ocorrerá em segundo plano.` 
                 });
                 return; // Não processar imediatamente
             } catch (qstashError) {
@@ -9032,23 +9024,18 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             historyId: historyId
         });
         
-        // Atualizar total_jobs e status ANTES de iniciar processamento em background
-        // Isso garante que o frontend veja os valores corretos imediatamente para calcular o progresso
-        if (contactsCount > 0) {
-            await sqlWithRetry(
-                sqlTx`UPDATE disparo_history 
-                      SET total_jobs = ${contactsCount}, 
-                          status = 'RUNNING', 
-                          current_step = 'sending'
-                      WHERE id = ${historyId}`
-            );
-            console.log(`[DISPARO ${historyId}] Status atualizado para RUNNING com ${contactsCount} contatos antes de iniciar processamento.`);
-        }
-        
         // 6. Iniciar disparo diretamente usando streaming (sem higienização - bloqueados já foram filtrados nas queries)
         (async () => {
             try {
                 console.log(`[DISPARO ${historyId}] Iniciando disparo direto usando streaming...`);
+                
+                // Atualizar status para RUNNING no início do processamento em background
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history 
+                          SET status = 'RUNNING', 
+                              current_step = 'sending'
+                          WHERE id = ${historyId}`
+                );
                 
                 // Buscar o fluxo de disparo
                 const [disparoFlow] = await sqlWithRetry(
@@ -9196,6 +9183,16 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         // Atualizar totalContactsProcessed com número real de contatos únicos (após deduplicação)
                         totalContactsProcessed = seenChatIds.size;
                         
+                        // Atualizar total_jobs periodicamente durante streaming (a cada 10 páginas ou primeira página)
+                        if (pageNumber === 1 || pageNumber % 10 === 0) {
+                            const estimatedTotal = seenChatIds.size || (pageNumber * MAX_CONTACTS_PER_QUERY);
+                            await sqlWithRetry(
+                                sqlTx`UPDATE disparo_history 
+                                      SET total_jobs = ${estimatedTotal}
+                                      WHERE id = ${historyId}`
+                            );
+                        }
+                        
                         // Criar batches quando atingir tamanho limite
                         await createBatchIfReady();
                     }
@@ -9284,13 +9281,6 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 // Atualizar total_jobs com valor real do streaming (já deduplicado)
                 // Usar o número real de contatos únicos após deduplicação (seenChatIds.size)
                 const finalTotalJobs = finalUniqueContactsCount;
-                
-                // Validação: comparar com contagem inicial e logar se houver diferença
-                if (Math.abs(finalTotalJobs - contactsCount) > 0) {
-                    console.warn(`[DISPARO ${historyId}] Diferença entre contagem inicial (${contactsCount}) e contatos únicos processados (${finalTotalJobs}). Usando valor do streaming (mais preciso após deduplicação).`);
-                } else {
-                    console.log(`[DISPARO ${historyId}] Contagem inicial (${contactsCount}) confere com contatos únicos processados (${finalTotalJobs}).`);
-                }
                 
                 // Atualizar total_jobs e total_sent com valor real do streaming
                 // Status já está como RUNNING desde antes do processamento
