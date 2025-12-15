@@ -145,6 +145,74 @@ if (isEnabled) {
     buckets: [60, 300, 600, 900, 1800, 3600, 7200, 14400, 28800],
   });
 
+  // Métricas de escalabilidade
+  metrics.contactsQuerySize = new client.Histogram({
+    name: 'hottrack_contacts_query_size',
+    help: 'Número de contatos retornados por query de busca de contatos.',
+    labelNames: ['operation'],
+    buckets: [10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000],
+  });
+
+  metrics.contactsQueryDuration = new client.Histogram({
+    name: 'hottrack_contacts_query_duration_seconds',
+    help: 'Tempo de execução de queries de busca de contatos.',
+    labelNames: ['operation', 'has_tags'],
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60],
+  });
+
+  metrics.contactsProcessedTotal = new client.Counter({
+    name: 'hottrack_contacts_processed_total',
+    help: 'Total de contatos processados em operações de validação, disparo, etc.',
+    labelNames: ['operation', 'status'],
+  });
+
+  metrics.chatsQuerySize = new client.Histogram({
+    name: 'hottrack_chats_query_size',
+    help: 'Número de mensagens processadas em queries de chats.',
+    labelNames: ['operation'],
+    buckets: [100, 500, 1000, 5000, 10000, 20000, 50000, 100000],
+  });
+
+  metrics.chatsQueryDuration = new client.Histogram({
+    name: 'hottrack_chats_query_duration_seconds',
+    help: 'Tempo de execução de queries de chats.',
+    labelNames: ['operation'],
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30],
+  });
+
+  metrics.dbConnectionPoolUsage = new client.Gauge({
+    name: 'hottrack_db_connection_pool_usage',
+    help: 'Uso atual do pool de conexões do banco de dados.',
+    labelNames: ['state'],
+  });
+
+  // Métricas de streaming para validação e disparos
+  metrics.streamingPagesProcessed = new client.Counter({
+    name: 'hottrack_streaming_pages_processed_total',
+    help: 'Total de páginas processadas em operações de streaming.',
+    labelNames: ['operation'],
+  });
+
+  metrics.streamingPageSize = new client.Histogram({
+    name: 'hottrack_streaming_page_size',
+    help: 'Tamanho de cada página processada em streaming.',
+    labelNames: ['operation'],
+    buckets: [10, 50, 100, 500, 1000, 5000, 10000],
+  });
+
+  metrics.streamingPageDuration = new client.Histogram({
+    name: 'hottrack_streaming_page_duration_seconds',
+    help: 'Tempo de processamento de cada página em streaming.',
+    labelNames: ['operation'],
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30],
+  });
+
+  metrics.streamingTotalProcessed = new client.Counter({
+    name: 'hottrack_streaming_total_processed',
+    help: 'Total de contatos processados via streaming.',
+    labelNames: ['operation'],
+  });
+
   Object.values(metrics).forEach((metric) => register.registerMetric(metric));
 }
 

@@ -23,8 +23,10 @@ const resolveSslOption = () => {
 
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
-    // Pool reduzido de 20 para 10 para economizar memória do PostgreSQL
-    // 10 conexões é suficiente para a carga atual (apenas 2 conexões ativas normalmente)
+    // Pool de conexões configurável via variável de ambiente
+    // Padrão: 10 conexões (suficiente para carga atual)
+    // Para alta concorrência, aumentar via PG_POOL_MAX ou PG_MAX_CONNECTIONS
+    // Cada conexão consome ~65-70MB de memória quando idle
     max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 10,
     
     // Timeout maior para dar tempo ao pgbouncer processar quando há fila
