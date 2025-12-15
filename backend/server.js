@@ -1427,7 +1427,8 @@ const QSTASH_PUBLISH_DELAY = resolvePositiveInt(process.env.QSTASH_PUBLISH_DELAY
 // O erro "could not resize shared memory segment" ocorre quando queries muito grandes
 // consomem toda a memória compartilhada disponível do PostgreSQL
 // Configurável via variável de ambiente MAX_CONTACTS_PER_QUERY
-const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 2000);
+// Reduzido temporariamente para 1000 para reduzir pressão de memória
+const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 1000);
 
 // Limite máximo de mensagens de chat por query para evitar sobrecarga de memória compartilhada
 // Reduzido de 50000 para 20000 para reduzir uso de memória em 60%
@@ -10047,57 +10048,112 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
     }
     
         // Caso 1: Sem filtros de tags
+        // OTIMIZADO: Usar ROW_NUMBER ao invés de DISTINCT ON para reduzir uso de memória
         if (!tagIds || !Array.isArray(tagIds) || tagIds.length === 0) {
             let query;
+            let params;
+            
             if (excludeChatIds && excludeChatIds.length > 0) {
                 if (cursorChatId) {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > ${cursorChatId}
-                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > $3
+                                AND tc.chat_id != ALL($4::bigint[])
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, cursorChatId, excludeChatIds];
                 } else {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > 0
-                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > 0
+                                AND tc.chat_id != ALL($3::bigint[])
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, excludeChatIds];
                 }
             } else {
                 if (cursorChatId) {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > ${cursorChatId}
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > $3
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, cursorChatId];
                 } else {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > 0
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > 0
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId];
                 }
             }
             
-            const contacts = await sqlWithRetry(query);
+            const contacts = await sqlWithRetry(query, params);
             const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
             const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
             
@@ -10105,57 +10161,112 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
         }
         
         // Caso 2: Sem tags válidas
+        // OTIMIZADO: Usar ROW_NUMBER ao invés de DISTINCT ON para reduzir uso de memória
         if (!hasAnyTagFilter) {
             let query;
+            let params;
+            
             if (excludeChatIds && excludeChatIds.length > 0) {
                 if (cursorChatId) {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > ${cursorChatId}
-                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > $3
+                                AND tc.chat_id != ALL($4::bigint[])
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, cursorChatId, excludeChatIds];
                 } else {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > 0
-                            AND tc.chat_id != ALL(${excludeChatIds}::bigint[])
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > 0
+                                AND tc.chat_id != ALL($3::bigint[])
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, excludeChatIds];
                 }
             } else {
                 if (cursorChatId) {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > ${cursorChatId}
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > $3
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId, cursorChatId];
                 } else {
-                    query = sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${sellerId}
-                            AND tc.chat_id > 0
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id ASC, tc.created_at DESC
+                    query = `
+                        SELECT chat_id, bot_id, first_name, last_name, username, click_id
+                        FROM (
+                            SELECT 
+                                tc.chat_id, 
+                                tc.bot_id, 
+                                tc.first_name, 
+                                tc.last_name, 
+                                tc.username, 
+                                tc.click_id,
+                                ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                            FROM telegram_chats tc
+                            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                            WHERE tc.bot_id = ANY($1::int[]) 
+                                AND tc.seller_id = $2
+                                AND tc.chat_id > 0
+                                AND bb.chat_id IS NULL
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY chat_id ASC
                         LIMIT ${MAX_CONTACTS_PER_QUERY}`;
+                    params = [botIds, sellerId];
                 }
             }
             
-            const contacts = await sqlWithRetry(query);
+            const contacts = await sqlWithRetry(query, params);
             const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
             const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
             
@@ -10164,15 +10275,25 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
         
         // Caso 3: Com filtros de tags (query complexa com CTEs)
         // Construir query dinamicamente como string com parâmetros posicionais
+        // OTIMIZADO: Usar ROW_NUMBER ao invés de DISTINCT ON para reduzir uso de memória
         let query = `
             WITH base_contacts AS (
-                SELECT DISTINCT ON (tc.chat_id) 
-                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                FROM telegram_chats tc
-                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                WHERE tc.bot_id = ANY($1::int[]) 
-                    AND tc.seller_id = $2
-                    AND tc.chat_id > ${cursorChatId || 0}`;
+                SELECT 
+                    chat_id, first_name, last_name, username, click_id, bot_id
+                FROM (
+                    SELECT 
+                        tc.chat_id, 
+                        tc.first_name, 
+                        tc.last_name, 
+                        tc.username, 
+                        tc.click_id, 
+                        tc.bot_id,
+                        ROW_NUMBER() OVER (PARTITION BY tc.chat_id ORDER BY tc.created_at DESC) as rn
+                    FROM telegram_chats tc
+                    LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                    WHERE tc.bot_id = ANY($1::int[]) 
+                        AND tc.seller_id = $2
+                        AND tc.chat_id > ${cursorChatId || 0}`;
         
         let params = [botIds, sellerId];
         let paramOffset = 3;
@@ -10185,7 +10306,9 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
         }
         
         query += ` AND bb.chat_id IS NULL
-                ORDER BY tc.chat_id ASC, tc.created_at DESC
+                ) ranked
+                WHERE rn = 1
+                ORDER BY chat_id ASC
                 LIMIT ${MAX_CONTACTS_PER_QUERY}
             )`;
         
