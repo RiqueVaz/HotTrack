@@ -92,7 +92,17 @@ async function sqlWithRetry(query, ...args) {
 
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
-            return await execute();
+            // #region agent log
+            const queryStartTime = Date.now();
+            const poolStateBefore = { max: sqlTx.options.max, idle: sqlTx.options.idle_timeout };
+            fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'db.js:94',message:'Query execution start',data:{attempt,isTemplate,isDirectQuery,queryType:isTemplate?'template':isDirectQuery?'direct':'immediate',poolMax:poolStateBefore.max},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            const result = await execute();
+            // #region agent log
+            const queryDuration = Date.now() - queryStartTime;
+            fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'db.js:96',message:'Query execution success',data:{attempt,queryDuration,resultSize:Array.isArray(result)?result.length:'non-array'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            return result;
         } catch (error) {
             // Detectar erro de memória compartilhada do PostgreSQL especificamente
             const isSharedMemoryError = 
@@ -101,6 +111,11 @@ async function sqlWithRetry(query, ...args) {
                     error.message.includes('No space left on device') ||
                     error.message.includes('shared memory segment')
                 );
+            
+            // #region agent log
+            const poolStateOnError = { max: sqlTx.options.max, idle: sqlTx.options.idle_timeout };
+            fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'db.js:104',message:'Query execution error',data:{attempt,isSharedMemoryError,errorCode:error.code,errorMessage:error.message?.substring(0,200),queryType:isTemplate?'template':isDirectQuery?'direct':'immediate',poolMax:poolStateOnError.max,isRetryable},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,C,D,E'})}).catch(()=>{});
+            // #endregion
             
             // Detectar CONNECT_TIMEOUT especificamente
             const isConnectTimeout = 

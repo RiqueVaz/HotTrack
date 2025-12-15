@@ -10027,12 +10027,18 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
             const automaticTagNames = tagIds.filter(t => typeof t === 'string' && !/^\d+$/.test(t));
             
             if (customTagIds.length > 0) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10029',message:'Before tag validation query',data:{customTagIdsCount:customTagIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+                // #endregion
                 const validTags = await sqlWithRetry(
                     sqlTx`SELECT id FROM lead_custom_tags 
                           WHERE id = ANY(${customTagIds}) 
                             AND seller_id = ${sellerId} 
                             AND bot_id = ANY(${botIds})`
                 );
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10035',message:'After tag validation query',data:{validTagsCount:validTags?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+                // #endregion
                 if (validTags && validTags.length > 0) {
                     validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
                 }
@@ -10272,7 +10278,13 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
             ORDER BY bc.chat_id ASC
             LIMIT ${MAX_CONTACTS_PER_QUERY}`;
         
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10273',message:'Before main contacts query',data:{hasCustomTags,hasPaidTag,filterMode,queryLength:query.length,paramsCount:params.length,limit:MAX_CONTACTS_PER_QUERY},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+        // #endregion
         const contacts = await sqlWithRetry(query, params);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10275',message:'After main contacts query',data:{contactsCount:contacts?.length,hasMore:contacts?.length === MAX_CONTACTS_PER_QUERY},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+        // #endregion
         const hasMore = contacts.length === MAX_CONTACTS_PER_QUERY;
         const lastChatId = contacts.length > 0 ? contacts[contacts.length - 1].chat_id : null;
         
@@ -10348,8 +10360,14 @@ async function processContactsInStream(botIds, sellerId, tagIds, tagFilterMode, 
     
     while (hasMore) {
         const pageStartTime = Date.now();
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10349',message:'Before page fetch',data:{pageCount,lastChatId,totalProcessed},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         const page = await _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode, excludeChatIds, lastChatId, tagContext);
         const pageDuration = (Date.now() - pageStartTime) / 1000;
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/79bbecc6-d356-47c9-93f2-f295c2828f98',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:10351',message:'After page fetch',data:{pageCount,pageDuration,contactsCount:page?.contacts?.length,hasMore:page?.hasMore},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         
         if (page.contacts.length > 0) {
             // Registrar métricas de streaming
