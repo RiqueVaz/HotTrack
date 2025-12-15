@@ -134,7 +134,7 @@ const QUEUE_CONFIGS = {
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
         // stalledInterval, maxStalledCount e lockDuration são configurações do Worker (não podem ser por job)
         // Valores otimizados: batches muito grandes podem demorar até 1.5h, então lockDuration = 3h (2x margem)
-        stalledInterval: 5400000, // 90 minutos - verificar stalled a cada 1.5h
+        stalledInterval: 7200000, // 2 horas - aumentado de 90min para acomodar lockDuration dinâmico de até 8h
         maxStalledCount: 5, // Reduzido de 10 para evitar reprocessamento excessivo
         lockDuration: 10800000, // 3 horas - batches muito grandes podem demorar até 1.5h
         // attempts padrão (será sobrescrito por job via calculateScalableLimits quando possível)
@@ -154,7 +154,7 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO]: {
         concurrency: 50,
         limiter: undefined,
-        stalledInterval: 420000, // 7 minutos - verificar stalled periodicamente
+        stalledInterval: 1200000, // 20 minutos - aumentado de 7min para acomodar lockDuration dinâmico de até 1h
         lockDuration: 900000, // 15 minutos - fluxos complexos podem demorar até 7-8 minutos
         attempts: 3,
         backoff: {
@@ -200,7 +200,7 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
-        stalledInterval: 1200000, // 20 minutos - verificar stalled periodicamente (aumentado de 5min)
+        stalledInterval: 3000000, // 50 minutos - aumentado de 20min para acomodar lockDuration dinâmico de até 2h
         lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (aumentado de 10min)
         attempts: 3,
         backoff: {

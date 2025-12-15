@@ -1864,7 +1864,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
  * =================================================================
  * (Colada da sua resposta anterior)
  */
-async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
+async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null, renewLockCallback = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     // Removido log de debug - não é necessário em produção
 
@@ -2002,6 +2002,8 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // PASSO 3: O NOVO LOOP DE NAVEGAÇÃO
     // ==========================================================
     let safetyLock = 0;
+    let lastLockRenewal = Date.now();
+    const LOCK_RENEWAL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos - renovação mais frequente
     // currentFlowId já foi determinado acima
     
     while (currentNodeId && safetyLock < 20) {
@@ -2014,9 +2016,14 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         // Renovar lock durante processamento de flows longos
-        // Renovar a cada 3 nós processados para evitar jobs stalled
-        if (renewLockCallback && safetyLock % 3 === 0) {
+        // Renovar a cada 2 nós processados OU a cada 3 minutos (o que ocorrer primeiro)
+        const now = Date.now();
+        const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
+        const shouldRenewByProgress = safetyLock % 2 === 0; // A cada 2 nós (mais frequente)
+        
+        if (renewLockCallback && (shouldRenewByTime || shouldRenewByProgress)) {
             await renewLockCallback(safetyLock);
+            lastLockRenewal = now;
         }
 
         // Removido log de debug
@@ -2213,14 +2220,14 @@ async function processTimeoutData(data, job = null) {
         
         // Renovação periódica de lock para evitar jobs stalled em flows longos
         let lastLockRenewal = Date.now();
-        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        const LOCK_RENEWAL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos - renovação mais frequente
         let nodesProcessed = 0;
         
         // Função para renovar lock durante processamento de flows longos
         const renewLockIfNeeded = async (currentNodesProcessed = 0) => {
             const now = Date.now();
             const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
-            const shouldRenewByProgress = currentNodesProcessed > 0 && currentNodesProcessed % 5 === 0; // A cada 5 nós
+            const shouldRenewByProgress = currentNodesProcessed > 0 && currentNodesProcessed % 2 === 0; // A cada 2 nós (mais frequente)
             
             if ((shouldRenewByTime || shouldRenewByProgress) && job && typeof job.updateProgress === 'function') {
                 try {
