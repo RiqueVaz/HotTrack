@@ -6,10 +6,23 @@ const { processDisparoData, processDisparoBatchData } = require('../worker/proce
 const logger = require('../logger');
 const { sqlTx, sqlWithRetry } = require('../db');
 
+// Importar métricas Prometheus
+let prometheusMetrics = null;
+function getPrometheusMetrics() {
+    if (!prometheusMetrics) {
+        try {
+            prometheusMetrics = require('../metrics');
+        } catch (e) {
+            // Métricas não disponíveis, continuar sem elas
+        }
+    }
+    return prometheusMetrics;
+}
+
 /**
  * Cria um worker para uma fila com configurações otimizadas
  */
-function createWorker(queueName, processor, options = {}) {
+async function createWorker(queueName, processor, options = {}) {
     // Obter configurações específicas da fila ou usar padrões
     const config = QUEUE_CONFIGS[queueName] || {
         concurrency: BULLMQ_CONCURRENCY,
@@ -20,9 +33,27 @@ function createWorker(queueName, processor, options = {}) {
     
     const concurrency = options.concurrency || config.concurrency;
     const limiter = config.limiter;
-    const stalledInterval = config.stalledInterval || 30000;
     const maxStalledCount = config.maxStalledCount || 2;
     const lockDuration = config.lockDuration; // lockDuration específico da fila (opcional)
+    
+    // Calcular stalledInterval dinamicamente baseado em métricas históricas
+    let stalledInterval = config.stalledInterval || 30000; // Fallback padrão
+    try {
+        const queueMetrics = require('./queue-metrics');
+        // Buscar métricas gerais da fila para calcular stalledInterval médio
+        const metrics = await queueMetrics.getMetrics(queueName, {});
+        if (metrics && metrics.avg && lockDuration) {
+            // Calcular stalledInterval adaptativo baseado no lockDuration médio histórico
+            const adaptiveStalled = await queueMetrics.getAdaptiveStalledInterval(lockDuration, queueName);
+            if (adaptiveStalled) {
+                stalledInterval = adaptiveStalled;
+                logger.debug(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min`);
+            }
+        }
+    } catch (error) {
+        // Se erro ao calcular, usar valor padrão da configuração
+        logger.debug(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando padrão:`, error.message);
+    }
     
     // Criar Queue para obter informações do job quando stalled
     const queue = new Queue(queueName, {
@@ -39,24 +70,36 @@ function createWorker(queueName, processor, options = {}) {
             // Usar lockDuration calculado dinamicamente se disponível, senão usar padrão da fila
             const jobLockDuration = data._calculatedLockDuration || lockDuration || 300000;
             const lockRenewInterval = Math.min(
-                5 * 60 * 1000, // Máximo 5 minutos entre renovações
+                2 * 60 * 1000, // Máximo 2 minutos entre renovações (reduzido de 5min)
                 Math.max(60000, Math.floor(jobLockDuration / 4)) // Mínimo 1 minuto, ou 25% do lockDuration
             );
             let lockRenewTimer = null;
             let lastProgress = 0;
+            let lastRenewalTime = Date.now();
             
-            // Iniciar renovação automática de lock para jobs que podem demorar muito (> 5 minutos)
-            if (job && typeof job.updateProgress === 'function' && jobLockDuration > 300000) {
-                lockRenewTimer = setInterval(async () => {
+            // Função helper para renovar lock com retry
+            const renewLockWithRetry = async (retries = 3) => {
+                for (let i = 0; i < retries; i++) {
                     try {
-                        // Atualizar progresso para renovar o lock implicitamente
-                        // Usar progresso atual do job se disponível, senão incrementar pequeno valor
                         const currentProgress = job.progress || lastProgress;
                         await job.updateProgress(Math.max(currentProgress, 1));
                         lastProgress = currentProgress;
+                        const renewalDuration = (Date.now() - lastRenewalTime) / 1000;
+                        lastRenewalTime = Date.now();
+                        
+                        // Registrar métrica de renovação bem-sucedida
+                        const metrics = getPrometheusMetrics();
+                        if (metrics && metrics.metrics && metrics.metrics.queueLockRenewalTotal) {
+                            metrics.metrics.queueLockRenewalTotal.inc({ queue_name: queueName, status: 'success' });
+                            if (metrics.metrics.queueLockRenewalDuration && renewalDuration > 0) {
+                                metrics.metrics.queueLockRenewalDuration.observe({ queue_name: queueName }, renewalDuration);
+                            }
+                        }
+                        
                         logger.debug(`[BullMQ-Worker] Lock renovado automaticamente para job ${job.id} na fila ${queueName} (lockDuration: ${Math.round(jobLockDuration / 60000)}min)`);
+                        return true;
                     } catch (renewError) {
-                        // Se job foi concluído ou removido, limpar timer
+                        // Se job foi concluído ou removido, não tentar novamente
                         if (renewError.message?.includes('not found') || 
                             renewError.message?.includes('completed') ||
                             renewError.message?.includes('removed')) {
@@ -64,13 +107,42 @@ function createWorker(queueName, processor, options = {}) {
                                 clearInterval(lockRenewTimer);
                                 lockRenewTimer = null;
                             }
-                            return;
+                            return false;
                         }
-                        // Não é crítico se falhar, apenas logar
-                        logger.debug(`[BullMQ-Worker] Erro ao renovar lock automaticamente (não crítico):`, renewError.message);
+                        
+                        // Registrar métrica de falha de renovação apenas na última tentativa
+                        if (i === retries - 1) {
+                            const metrics = getPrometheusMetrics();
+                            if (metrics && metrics.metrics && metrics.metrics.queueLockRenewalTotal) {
+                                metrics.metrics.queueLockRenewalTotal.inc({ queue_name: queueName, status: 'failed' });
+                            }
+                            logger.debug(`[BullMQ-Worker] Erro ao renovar lock automaticamente após ${retries} tentativas (não crítico):`, renewError.message);
+                        }
+                        
+                        // Se não é último retry, aguardar antes de tentar novamente (backoff exponencial)
+                        if (i < retries - 1) {
+                            await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                        }
                     }
+                }
+                return false;
+            };
+            
+            // Iniciar renovação automática de lock para jobs que podem demorar muito (> 5 minutos)
+            if (job && typeof job.updateProgress === 'function' && jobLockDuration > 300000) {
+                lockRenewTimer = setInterval(async () => {
+                    await renewLockWithRetry();
                 }, lockRenewInterval);
             }
+            
+            // Função para renovação proativa antes de operações longas (exportada para uso no processor)
+            const proactiveRenewLock = async () => {
+                const now = Date.now();
+                // Renovar se passou mais de 30 segundos desde última renovação
+                if (now - lastRenewalTime > 30000) {
+                    await renewLockWithRetry();
+                }
+            };
             
             try {
                 // Log detalhado do início do processamento
@@ -115,7 +187,8 @@ function createWorker(queueName, processor, options = {}) {
                 
                 // Processar job com tratamento de erro robusto
                 try {
-                    const result = await processor(data, job);
+                    // Passar função de renovação proativa para o processor
+                    const result = await processor(data, job, proactiveRenewLock);
                     // Limpar timer de renovação de lock ao concluir
                     if (lockRenewTimer) {
                         clearInterval(lockRenewTimer);
@@ -176,7 +249,7 @@ function createWorker(queueName, processor, options = {}) {
         });
     });
     
-    worker.on('completed', (job, result) => {
+    worker.on('completed', async (job, result) => {
         const processingTime = job.processedOn && job.finishedOn ? job.finishedOn - job.processedOn : undefined;
         logger.info(`[BullMQ] Job ${job.id} completed in queue ${queueName}`, {
             jobId: job.id,
@@ -187,6 +260,48 @@ function createWorker(queueName, processor, options = {}) {
             processingTime: processingTime ? `${processingTime}ms` : undefined,
             result: result
         });
+        
+        // Registrar métricas Prometheus
+        const metrics = getPrometheusMetrics();
+        if (metrics && metrics.metrics) {
+            if (metrics.metrics.workerJobsTotal) {
+                metrics.metrics.workerJobsTotal.inc({ worker: queueName, job_type: job.name || 'unknown', status: 'completed' });
+            }
+            if (processingTime && processingTime > 0 && metrics.metrics.workerJobDuration) {
+                metrics.metrics.workerJobDuration.observe({ worker: queueName, job_type: job.name || 'unknown', status: 'completed' }, processingTime / 1000);
+            }
+            
+            // Registrar razão de utilização do lockDuration
+            if (processingTime && processingTime > 0 && job.data?._calculatedLockDuration) {
+                const utilizationRatio = processingTime / job.data._calculatedLockDuration;
+                if (metrics.metrics.queueJobUtilizationRatio) {
+                    metrics.metrics.queueJobUtilizationRatio.observe({ queue_name: queueName }, utilizationRatio);
+                }
+                
+                // Logar warning se utilização >80%
+                if (utilizationRatio > 0.8) {
+                    logger.warn(`[BullMQ] Job ${job.id} utilizou ${Math.round(utilizationRatio * 100)}% do lockDuration`, {
+                        jobId: job.id,
+                        queueName,
+                        utilizationRatio: `${Math.round(utilizationRatio * 100)}%`,
+                        processingTime: `${Math.round(processingTime / 60000)}min`,
+                        lockDuration: `${Math.round(job.data._calculatedLockDuration / 60000)}min`
+                    });
+                }
+            }
+        }
+        
+        // Atualizar métricas históricas para cálculo adaptativo futuro
+        if (processingTime && processingTime > 0) {
+            try {
+                const queueMetrics = require('./queue-metrics');
+                const characteristics = queueMetrics.extractJobCharacteristics(queueName, job.data || {});
+                await queueMetrics.updateMetrics(queueName, processingTime, characteristics);
+            } catch (error) {
+                // Não crítico se falhar - apenas logar
+                logger.debug(`[BullMQ-Worker] Erro ao atualizar métricas históricas (não crítico):`, error.message);
+            }
+        }
     });
     
     worker.on('failed', (job, err) => {
@@ -222,13 +337,38 @@ function createWorker(queueName, processor, options = {}) {
     worker.on('stalled', (jobId) => {
         // Buscar informações do job para log mais detalhado
         // Usar lockDuration calculado dinamicamente se disponível, senão usar padrão da fila
-        queue.getJob(jobId).then(job => {
+        queue.getJob(jobId).then(async (job) => {
             if (job) {
                 const jobLockDuration = job.data?._calculatedLockDuration || lockDuration || 300000;
                 const jobStalledInterval = job.data?._calculatedStalledInterval || stalledInterval || 300000;
                 const processingTime = job.processedOn ? Date.now() - job.processedOn : null;
                 const lockDurationMinutes = Math.round(jobLockDuration / 60000);
                 const processingTimeMinutes = processingTime ? Math.round(processingTime / 60000) : null;
+                
+                // Logar warning se job demorou >80% do lockDuration calculado
+                if (processingTime && jobLockDuration) {
+                    const utilizationRatio = processingTime / jobLockDuration;
+                    if (utilizationRatio > 0.8) {
+                        logger.warn(`[BullMQ] Job ${jobId} quase stalled (${Math.round(utilizationRatio * 100)}% do lockDuration usado)`, {
+                            jobId,
+                            queueName,
+                            utilizationRatio: `${Math.round(utilizationRatio * 100)}%`,
+                            processingTime: `${processingTimeMinutes}min`,
+                            lockDuration: `${lockDurationMinutes}min`
+                        });
+                    }
+                }
+                
+                // Registrar métricas Prometheus
+                const metrics = getPrometheusMetrics();
+                if (metrics && metrics.metrics) {
+                    if (metrics.metrics.queueJobStalledTotal) {
+                        metrics.metrics.queueJobStalledTotal.inc({ queue_name: queueName });
+                    }
+                    if (processingTime && metrics.metrics.queueJobStalledDuration) {
+                        metrics.metrics.queueJobStalledDuration.observe({ queue_name: queueName }, processingTime / 1000);
+                    }
+                }
                 
                 logger.warn(`[BullMQ] Job ${jobId} stalled in queue ${queueName}`, {
                     jobId,
@@ -266,26 +406,43 @@ function createWorker(queueName, processor, options = {}) {
 
 // Processadores para cada tipo de job
 const processors = {
-    [QUEUE_NAMES.TIMEOUT]: async (data, job) => {
+    [QUEUE_NAMES.TIMEOUT]: async (data, job, proactiveRenewLock = null) => {
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
         await processTimeoutData(data, job);
     },
     
-    [QUEUE_NAMES.DISPARO]: async (data, job) => {
+    [QUEUE_NAMES.DISPARO]: async (data, job, proactiveRenewLock = null) => {
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
         await processDisparoData(data, job);
     },
     
-    [QUEUE_NAMES.DISPARO_BATCH]: async (data, job) => {
+    [QUEUE_NAMES.DISPARO_BATCH]: async (data, job, proactiveRenewLock = null) => {
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
         await processDisparoBatchData(data, job);
     },
     
-    [QUEUE_NAMES.DISPARO_DELAY]: async (data, job) => {
+    [QUEUE_NAMES.DISPARO_DELAY]: async (data, job, proactiveRenewLock = null) => {
         // Processar disparo após delay
         // Buscar dados do fluxo do banco, pois o payload não inclui flow_nodes, flow_edges e start_node_id
         const { history_id, chat_id, bot_id, current_node_id, variables, remaining_actions } = data;
         
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
+        
         // Renovação periódica de lock para delays longos
         let lastLockRenewal = Date.now();
-        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto (reduzido de 5min)
         
         // Função para renovar lock durante processamento
         const renewLockIfNeeded = async () => {
@@ -388,12 +545,16 @@ const processors = {
         }
     },
     
-    [QUEUE_NAMES.VALIDATION_DISPARO]: async (data, job) => {
+    [QUEUE_NAMES.VALIDATION_DISPARO]: async (data, job, proactiveRenewLock = null) => {
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
         // Processar validação e disparo (chama processDisparoBatchData)
         await processDisparoBatchData(data, job);
     },
     
-    [QUEUE_NAMES.SCHEDULED_DISPARO]: async (data, job) => {
+    [QUEUE_NAMES.SCHEDULED_DISPARO]: async (data, job, proactiveRenewLock = null) => {
         // Processar disparo agendado
         // Primeiro, buscar dados do history e preparar batches
         const { history_id } = data;
@@ -828,9 +989,14 @@ const processors = {
         
         logger.info(`[SCHEDULED-DISPARO ${history_id}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
         
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
+        
         // Renovação periódica de lock para preparação de muitos batches
         let lastLockRenewal = Date.now();
-        const LOCK_RENEWAL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+        const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto (reduzido de 5min)
         
         // Função para renovar lock durante preparação de batches
         const renewLockIfNeeded = async () => {
@@ -899,7 +1065,11 @@ const processors = {
         logger.info(`[SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso.`);
     },
     
-    [QUEUE_NAMES.CLEANUP_QRCODES]: async (data) => {
+    [QUEUE_NAMES.CLEANUP_QRCODES]: async (data, job = null, proactiveRenewLock = null) => {
+        // Renovar lock antes de operações longas se função disponível
+        if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
+            await proactiveRenewLock();
+        }
         // Processar limpeza de QR codes
         const { cleanupQRCodesInBatches } = require('../scripts/cleanup-qrcodes-batch');
         return await cleanupQRCodesInBatches();
@@ -912,11 +1082,11 @@ const workers = new Map();
 /**
  * Inicializa todos os workers
  */
-function initializeWorkers() {
+async function initializeWorkers() {
     // Inicializar workers das filas principais
     for (const [queueName, processor] of Object.entries(processors)) {
         if (!workers.has(queueName)) {
-            const { worker, queue } = createWorker(queueName, processor);
+            const { worker, queue } = await createWorker(queueName, processor);
             workers.set(queueName, { worker, queue });
             logger.info(`[BullMQ] Worker initialized for queue: ${queueName}`);
         }
