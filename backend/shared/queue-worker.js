@@ -721,10 +721,10 @@ const processors = {
         // Função para criar batch quando atingir tamanho limite
         const createBatchIfReady = async () => {
             if (contactsForBatch.length >= DISPARO_BATCH_SIZE) {
-                // Renovar lock periodicamente durante criação de batches
-                if (batchIndex > 0 && batchIndex % 10 === 0) {
-                    await renewLockIfNeeded();
-                }
+            // Renovar lock periodicamente durante criação de batches
+            if (batchIndex > 0 && batchIndex % 10 === 0) {
+                await renewLockIfNeeded();
+            }
                 
                 const batchToProcess = contactsForBatch.slice(0, DISPARO_BATCH_SIZE);
                 
@@ -743,33 +743,33 @@ const processors = {
                     };
                 });
                 
-                const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
-                const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
-                
+            const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+            const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
+            
                 const firstContactBotId = preparedBatch[0]?.bot_id;
-                const botToken = botTokenMap.get(firstContactBotId) || '';
-                
-                const batchPayload = {
-                    history_id: history_id,
+            const botToken = botTokenMap.get(firstContactBotId) || '';
+            
+            const batchPayload = {
+                history_id: history_id,
                     contacts: preparedBatch,
-                    flow_nodes: JSON.stringify(flowNodes),
-                    flow_edges: JSON.stringify(flowEdges),
-                    start_node_id: startNodeId,
-                    batch_index: batchIndex,
+                flow_nodes: JSON.stringify(flowNodes),
+                flow_edges: JSON.stringify(flowEdges),
+                start_node_id: startNodeId,
+                batch_index: batchIndex,
                     total_batches: null // Será calculado depois
-                };
-                
-                batchPromises.push(
-                    addJobWithDelay(
-                        QUEUE_NAMES.DISPARO_BATCH,
-                        'process-disparo-batch',
-                        batchPayload,
-                        {
-                            delay: `${batchDelaySeconds}s`,
-                            botToken: botToken
-                        }
-                    )
-                );
+            };
+            
+            batchPromises.push(
+                addJobWithDelay(
+                    QUEUE_NAMES.DISPARO_BATCH,
+                    'process-disparo-batch',
+                    batchPayload,
+                    {
+                        delay: `${batchDelaySeconds}s`,
+                        botToken: botToken
+                    }
+                )
+            );
                 
                 // Remover batch processado do array
                 contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
