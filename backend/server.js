@@ -8945,36 +8945,15 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             return res.status(400).json({ message: 'Nenhuma tag válida encontrada para os bots selecionados.' });
         }
         
-        // Usar função getContactsByTags já simplificada
-        const contacts = await getContactsByTags(validBotIds, sellerId, tagIds, tagFilterMode, excludeChatIds);
+        // 3. Contar contatos (sem carregar em memória) para validação e mensagens
+        // Para agendados: apenas contar. Para instantâneos: usar streaming diretamente
+        const contactsCount = await getContactsCountByTags(validBotIds, sellerId, tagIds, tagFilterMode, excludeChatIds);
         
-        const allContacts = new Map();
-        contacts.forEach(c => {
-            if (!allContacts.has(c.chat_id)) {
-                allContacts.set(c.chat_id, { 
-                    chat_id: c.chat_id,
-                    first_name: c.first_name,
-                    last_name: c.last_name,
-                    username: c.username,
-                    click_id: c.click_id,
-                    bot_id_source: c.bot_id 
-                });
-            }
-        });
-        const uniqueContacts = Array.from(allContacts.values());
-    
-        if (uniqueContacts.length === 0) {
-          return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
+        if (contactsCount === 0) {
+            return res.status(404).json({ message: 'Nenhum contato encontrado para os bots selecionados.' });
         }
     
-            // --- MUDANÇA PRINCIPAL AQUI ---
-            // 4. Calcular o total de trabalhos (1 trabalho por contato - o fluxo completo será processado)
-            const total_jobs_to_queue = uniqueContacts.length;
-            if (total_jobs_to_queue === 0) {
-                return res.status(400).json({ message: 'Nenhum trabalho a ser agendado (0 contatos).' });
-            }
-    
-        // 5. Criar o registro mestre da campanha com os totais corretos
+        // 4. Criar o registro mestre da campanha
         const statusToSet = scheduledTimestamp ? 'SCHEDULED' : 'PENDING';
         // Salvar tagIds e tagFilterMode no flow_steps como metadata (incluindo custom e automáticas)
         const allTagIds = [...(validCustomTagIds || []), ...(validAutomaticTags || [])];
@@ -8996,11 +8975,14 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                    RETURNING id`
         );
         historyId = history.id;
-            // --- FIM DA MUDANÇA ---
         
-        // Se for agendado, criar tarefa única no QStash para processar depois
+        // Se for agendado, criar tarefa única no BullMQ para processar depois
         if (scheduledTimestamp) {
             try {
+                // Pequeno delay para evitar sobrecarga simultânea de conexões ao PostgreSQL
+                // Isso ajuda a prevenir erros de memória compartilhada quando múltiplos agendamentos ocorrem
+                await new Promise(resolve => setTimeout(resolve, 150)); // 150ms de delay
+                
                 // QStash para agendamento único usa 'delay' com formato relativo (ex: "30s", "5m")
                 // Precisamos calcular o delay em segundos a partir do timestamp absoluto
                 const now = Math.floor(Date.now() / 1000); // Unix timestamp atual em segundos
@@ -9020,6 +9002,9 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     }
                 );
                 
+                // Pequeno delay antes da próxima query para evitar sobrecarga simultânea
+                await new Promise(resolve => setTimeout(resolve, 100)); // 100ms de delay
+                
                 // Salvar o scheduled_message_id
                 await sqlWithRetry(
                     sqlTx`UPDATE disparo_history SET scheduled_message_id = ${bullmqResponse.jobId} WHERE id = ${historyId}`
@@ -9029,11 +9014,11 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 // Converter para horário local do Brasil para exibição
                 const displayDate = new Date(scheduledDate.getTime());
                 res.status(202).json({ 
-                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${uniqueContacts.length} contatos serão processados.` 
+                    message: `Disparo "${campaignName}" agendado para ${displayDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })} com sucesso! ${contactsCount} contatos serão processados.` 
                 });
                 return; // Não processar imediatamente
             } catch (qstashError) {
-                console.error("Erro ao agendar disparo no QStash:", qstashError);
+                console.error("Erro ao agendar disparo no BullMQ:", qstashError);
                 console.error("Detalhes do erro:", JSON.stringify(qstashError, null, 2));
                 // Se falhar ao agendar, deletar o registro e retornar erro
                 await sqlWithRetry('DELETE FROM disparo_history WHERE id = $1', [historyId]);
@@ -9041,26 +9026,29 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             }
         }
         
-        // 5. Retornar resposta HTTP imediatamente e processar em background
+        // 5. Retornar resposta HTTP imediatamente e processar em background usando streaming
         res.status(202).json({ 
             message: `Disparo "${campaignName}" iniciado com sucesso! O processo ocorrerá em segundo plano.`,
             historyId: historyId
         });
         
-        // 6. Iniciar disparo diretamente (sem higienização - bloqueados já foram filtrados nas queries)
+        // Atualizar total_jobs e status ANTES de iniciar processamento em background
+        // Isso garante que o frontend veja os valores corretos imediatamente para calcular o progresso
+        if (contactsCount > 0) {
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history 
+                      SET total_jobs = ${contactsCount}, 
+                          status = 'RUNNING', 
+                          current_step = 'sending'
+                      WHERE id = ${historyId}`
+            );
+            console.log(`[DISPARO ${historyId}] Status atualizado para RUNNING com ${contactsCount} contatos antes de iniciar processamento.`);
+        }
+        
+        // 6. Iniciar disparo diretamente usando streaming (sem higienização - bloqueados já foram filtrados nas queries)
         (async () => {
             try {
-                console.log(`[DISPARO ${historyId}] Iniciando disparo direto para ${uniqueContacts.length} contatos...`);
-                
-                if (uniqueContacts.length === 0) {
-                    console.log(`[DISPARO ${historyId}] Nenhum contato encontrado.`);
-                    await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history 
-                              SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
-                              WHERE id = ${historyId}`
-                    );
-                    return;
-                }
+                console.log(`[DISPARO ${historyId}] Iniciando disparo direto usando streaming...`);
                 
                 // Buscar o fluxo de disparo
                 const [disparoFlow] = await sqlWithRetry(
@@ -9100,17 +9088,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     return;
                 }
                 
-                // Atualizar total_sent e total_jobs
-                // IMPORTANTE: total_jobs sempre reflete contatos após aplicar filtros (tags, bloqueados, etc.)
-                // uniqueContacts já está filtrado pelos filtros aplicados antes desta etapa
-                await sqlWithRetry(
-                    sqlTx`UPDATE disparo_history 
-                          SET total_sent = ${uniqueContacts.length}, total_jobs = ${uniqueContacts.length},
-                              status = 'RUNNING', current_step = 'sending'
-                          WHERE id = ${historyId}`
-                );
-                
-                // Buscar bot tokens
+                // Buscar bot tokens uma vez antes do streaming
                 const botChecks = await sqlWithRetry(
                     sqlTx`SELECT id, bot_token FROM telegram_bots 
                           WHERE id = ANY(${validBotIds}) AND seller_id = ${sellerId}`
@@ -9119,154 +9097,210 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 const botTokenMap = new Map();
                 botChecks.forEach(b => botTokenMap.set(b.id, b.bot_token));
                 
-                // Preparar contatos para batch processing
-                const contactsForBatch = uniqueContacts.map(contact => {
-                    const userVariables = {
-                        primeiro_nome: contact.first_name || '',
-                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                    };
+                // Usar streaming para processar contatos em páginas e criar batches conforme chegam
+                const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 200;
+                const contactsForBatch = [];
+                const seenChatIds = new Set(); // Para deduplicação
+                let totalContactsProcessed = 0;
+                let batchIndex = 0;
+                const batchPromises = [];
+                
+                // Função para criar batch quando atingir tamanho limite
+                const createBatchIfReady = async () => {
+                    if (contactsForBatch.length >= DISPARO_BATCH_SIZE) {
+                        const batchToProcess = contactsForBatch.slice(0, DISPARO_BATCH_SIZE);
+                        
+                        // Preparar contatos para batch processing
+                        const preparedBatch = batchToProcess.map(contact => {
+                            const userVariables = {
+                                primeiro_nome: contact.first_name || '',
+                                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                            };
+                            
+                            return {
+                                chat_id: contact.chat_id,
+                                bot_id: contact.bot_id_source || validBotIds[0],
+                                variables_json: JSON.stringify(userVariables)
+                            };
+                        });
+                        
+                        // Validar contatos válidos
+                        const validContacts = preparedBatch.filter(c => c && c.chat_id && c.bot_id);
+                        if (validContacts.length === 0) {
+                            // Remover batch mesmo se não tiver contatos válidos
+                            contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
+                            return;
+                        }
+                        
+                        const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+                        const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
+                        
+                        const firstContactBotId = validContacts[0]?.bot_id;
+                        const botToken = botTokenMap.get(firstContactBotId) || '';
+                        
+                        const batchPayload = {
+                            history_id: historyId,
+                            contacts: validContacts,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            batch_index: batchIndex,
+                            total_batches: null // Será calculado depois
+                        };
+                        
+                        try {
+                            const jobResult = await addJobWithDelay(
+                                QUEUE_NAMES.DISPARO_BATCH,
+                                'process-disparo-batch',
+                                batchPayload,
+                                {
+                                    delay: `${batchDelaySeconds}s`,
+                                    botToken: botToken
+                                }
+                            );
+                            batchPromises.push(Promise.resolve(jobResult));
+                        } catch (jobError) {
+                            console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch ${batchIndex + 1}:`, jobError.message);
+                        }
+                        
+                        // Remover batch processado do array
+                        contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
+                        batchIndex++;
+                    }
+                };
+                
+                // Processar contatos usando streaming
+                const streamStats = await processContactsInStream(
+                    validBotIds,
+                    sellerId,
+                    tagIds || null,
+                    tagFilterMode,
+                    excludeChatIds || null,
+                    async (pageContacts, pageNumber, totalProcessed) => {
+                        // Adicionar apenas contatos únicos desta página
+                        for (const c of pageContacts) {
+                            if (!seenChatIds.has(c.chat_id)) {
+                                seenChatIds.add(c.chat_id);
+                                contactsForBatch.push({
+                                    chat_id: c.chat_id,
+                                    first_name: c.first_name,
+                                    last_name: c.last_name,
+                                    username: c.username,
+                                    click_id: c.click_id,
+                                    bot_id_source: c.bot_id
+                                });
+                            }
+                        }
+                        
+                        // Atualizar totalContactsProcessed com número real de contatos únicos (após deduplicação)
+                        totalContactsProcessed = seenChatIds.size;
+                        
+                        // Criar batches quando atingir tamanho limite
+                        await createBatchIfReady();
+                    }
+                );
+                
+                // Após streaming completo, usar o número real de contatos únicos
+                const finalUniqueContactsCount = seenChatIds.size;
+                
+                // Processar batch final se houver contatos restantes
+                if (contactsForBatch.length > 0) {
+                    const preparedBatch = contactsForBatch.map(contact => {
+                        const userVariables = {
+                            primeiro_nome: contact.first_name || '',
+                            nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                            click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                        };
+                        
+                        return {
+                            chat_id: contact.chat_id,
+                            bot_id: contact.bot_id_source || validBotIds[0],
+                            variables_json: JSON.stringify(userVariables)
+                        };
+                    });
                     
-                    return {
-                        chat_id: contact.chat_id,
-                        bot_id: contact.bot_id_source || validBotIds[0],
-                        variables_json: JSON.stringify(userVariables)
-                    };
-                });
+                    const validContacts = preparedBatch.filter(c => c && c.chat_id && c.bot_id);
+                    if (validContacts.length > 0) {
+                        const SMALL_BATCH_DELAY_SECONDS = 0.01;
+                        const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
+                        
+                        const firstContactBotId = validContacts[0]?.bot_id;
+                        const botToken = botTokenMap.get(firstContactBotId) || '';
+                        
+                        const batchPayload = {
+                            history_id: historyId,
+                            contacts: validContacts,
+                            flow_nodes: JSON.stringify(flowNodes),
+                            flow_edges: JSON.stringify(flowEdges),
+                            start_node_id: startNodeId,
+                            batch_index: batchIndex,
+                            total_batches: batchIndex + 1
+                        };
+                        
+                        try {
+                            const jobResult = await addJobWithDelay(
+                                QUEUE_NAMES.DISPARO_BATCH,
+                                'process-disparo-batch',
+                                batchPayload,
+                                {
+                                    delay: `${batchDelaySeconds}s`,
+                                    botToken: botToken
+                                }
+                            );
+                            batchPromises.push(Promise.resolve(jobResult));
+                        } catch (jobError) {
+                            console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch final:`, jobError.message);
+                        }
+                    }
+                }
                 
-                // Agrupar contatos em batches
-                const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 100; // Aumentado de 50 para 100 para acelerar
-                const DISPARO_BATCH_DELAY_SECONDS = parseFloat(process.env.DISPARO_BATCH_DELAY_SECONDS) || 0.5;
-                const QSTASH_CONCURRENCY = parseInt(process.env.QSTASH_CONCURRENCY) || 5;
-                const QSTASH_RATE_LIMIT_MAX = parseInt(process.env.QSTASH_RATE_LIMIT_MAX) || 10;
+                const totalBatches = batchPromises.length;
                 
-                const batchSize = DISPARO_BATCH_SIZE;
-                const totalBatches = Math.ceil(contactsForBatch.length / batchSize);
-                const qstashPromises = [];
-                
-                console.log(`[DISPARO ${historyId}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
-                
-                // Validar que temos contatos antes de criar batches
-                if (contactsForBatch.length === 0) {
-                    console.error(`[DISPARO ${historyId}] ERRO: Nenhum contato para processar após preparação!`);
+                if (totalBatches === 0) {
+                    console.log(`[DISPARO ${historyId}] Nenhum contato encontrado após streaming.`);
                     await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                        sqlTx`UPDATE disparo_history 
+                              SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
+                              WHERE id = ${historyId}`
                     );
                     return;
                 }
                 
-                for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-                    const batchStart = batchIndex * batchSize;
-                    const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
-                    const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
-                    
-                    // Validar dados antes de criar o job
-                    if (!batchContacts || batchContacts.length === 0) {
-                        console.warn(`[DISPARO ${historyId}] Batch ${batchIndex + 1} está vazio. Pulando criação do job.`);
-                        continue;
-                    }
-                    
-                    // Validar formato dos contatos do batch
-                    const invalidContacts = batchContacts.filter(c => !c || !c.chat_id || !c.bot_id);
-                    if (invalidContacts.length > 0) {
-                        console.warn(`[DISPARO ${historyId}] Batch ${batchIndex + 1} contém ${invalidContacts.length} contatos inválidos que serão ignorados durante o processamento.`);
-                    }
-                    
-                    // Validar se há pelo menos um contato válido
-                    const validContacts = batchContacts.filter(c => c && c.chat_id && c.bot_id);
-                    if (validContacts.length === 0) {
-                        console.error(`[DISPARO ${historyId}] Batch ${batchIndex + 1} não contém nenhum contato válido. Pulando criação do job.`);
-                        continue;
-                    }
-                    
-                    // Validar dados do fluxo
-                    if (!flowNodes || !Array.isArray(flowNodes) || flowNodes.length === 0) {
-                        console.error(`[DISPARO ${historyId}] ERRO: flowNodes inválido ou vazio. Não é possível criar jobs.`);
-                        continue;
-                    }
-                    
-                    if (!flowEdges || !Array.isArray(flowEdges)) {
-                        console.error(`[DISPARO ${historyId}] ERRO: flowEdges inválido. Não é possível criar jobs.`);
-                        continue;
-                    }
-                    
-                    if (!startNodeId) {
-                        console.error(`[DISPARO ${historyId}] ERRO: startNodeId não fornecido. Não é possível criar jobs.`);
-                        continue;
-                    }
-                    
-                    // Delay muito pequeno entre batches (0.01s por batch para evitar sobrecarga inicial)
-                    // Com concorrência alta do BullMQ, não precisamos de delay grande
-                    const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
-                    const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
-                    
-                    // Obter bot_token do primeiro contato válido do batch para rate limiting
-                    const firstValidContact = validContacts[0];
-                    const firstContactBotId = firstValidContact?.bot_id;
-                    const botToken = botTokenMap.get(firstContactBotId) || '';
-                    
-                    if (!botToken && firstContactBotId) {
-                        console.warn(`[DISPARO ${historyId}] AVISO: Bot token não encontrado para bot_id ${firstContactBotId} no batch ${batchIndex + 1}. O token será buscado durante o processamento.`);
-                    }
-                    
-                    // Usar apenas contatos válidos no payload
-                    const batchPayload = {
-                        history_id: historyId,
-                        contacts: validContacts, // Usar apenas contatos válidos
-                        flow_nodes: JSON.stringify(flowNodes),
-                        flow_edges: JSON.stringify(flowEdges),
-                        start_node_id: startNodeId,
-                        batch_index: batchIndex,
-                        total_batches: totalBatches
-                    };
-                    
-                    console.log(`[DISPARO ${historyId}] Criando job para batch ${batchIndex + 1}/${totalBatches} com ${validContacts.length} contatos válidos (${batchContacts.length} total, delay: ${batchDelaySeconds}s)`);
-                    
-                    try {
-                        const jobResult = await addJobWithDelay(
-                            QUEUE_NAMES.DISPARO_BATCH,
-                            'process-disparo-batch',
-                            batchPayload,
-                            {
-                                delay: `${batchDelaySeconds}s`,
-                                botToken: botToken
-                            }
-                        );
-                        
-                        console.log(`[DISPARO ${historyId}] Job criado com sucesso para batch ${batchIndex + 1}:`, jobResult.jobId);
-                        qstashPromises.push(Promise.resolve(jobResult));
-                    } catch (jobError) {
-                        console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch ${batchIndex + 1}:`, {
-                            error: jobError.message,
-                            stack: jobError.stack,
-                            batchIndex,
-                            contactsCount: validContacts.length
-                        });
-                        // Continuar criando outros batches mesmo se um falhar
-                    }
+                // Publicar todos os batches
+                console.log(`[DISPARO ${historyId}] Publicando ${totalBatches} batches no BullMQ...`);
+                const results = await Promise.allSettled(batchPromises);
+                
+                const successful = results.filter(r => r.status === 'fulfilled').length;
+                const failed = results.filter(r => r.status === 'rejected').length;
+                
+                console.log(`[DISPARO ${historyId}] Resultado da publicação: ${successful} sucessos, ${failed} falhas`);
+                
+                if (failed > 0) {
+                    console.error(`[DISPARO ${historyId}] ERRO: ${failed} batches falharam ao ser criados!`, 
+                        results.filter(r => r.status === 'rejected').map(r => r.reason));
                 }
                 
-                if (qstashPromises.length > 0) {
-                    console.log(`[DISPARO ${historyId}] Publicando ${qstashPromises.length} batches no BullMQ...`);
-                    const results = await Promise.allSettled(qstashPromises);
-                    
-                    const successful = results.filter(r => r.status === 'fulfilled').length;
-                    const failed = results.filter(r => r.status === 'rejected').length;
-                    
-                    console.log(`[DISPARO ${historyId}] Resultado da publicação: ${successful} sucessos, ${failed} falhas`);
-                    
-                    if (failed > 0) {
-                        console.error(`[DISPARO ${historyId}] ERRO: ${failed} batches falharam ao ser criados!`, 
-                            results.filter(r => r.status === 'rejected').map(r => r.reason));
-                    }
+                // Atualizar total_jobs com valor real do streaming (já deduplicado)
+                // Usar o número real de contatos únicos após deduplicação (seenChatIds.size)
+                const finalTotalJobs = finalUniqueContactsCount;
+                
+                // Validação: comparar com contagem inicial e logar se houver diferença
+                if (Math.abs(finalTotalJobs - contactsCount) > 0) {
+                    console.warn(`[DISPARO ${historyId}] Diferença entre contagem inicial (${contactsCount}) e contatos únicos processados (${finalTotalJobs}). Usando valor do streaming (mais preciso após deduplicação).`);
                 } else {
-                    console.error(`[DISPARO ${historyId}] ERRO CRÍTICO: Nenhum batch foi criado!`);
-                    await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
-                    );
+                    console.log(`[DISPARO ${historyId}] Contagem inicial (${contactsCount}) confere com contatos únicos processados (${finalTotalJobs}).`);
                 }
                 
-                console.log(`[DISPARO ${historyId}] Disparo processado com sucesso em background. ${qstashPromises.length} batches criados.`);
+                // Atualizar total_jobs e total_sent com valor real do streaming
+                // Status já está como RUNNING desde antes do processamento
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history 
+                          SET total_sent = ${finalTotalJobs}, total_jobs = ${finalTotalJobs}
+                          WHERE id = ${historyId}`
+                );
+                
+                console.log(`[DISPARO ${historyId}] Disparo processado com streaming. ${finalTotalJobs} contatos únicos em ${streamStats.totalPages} páginas, ${totalBatches} batches criados.`);
                 
                 // Limpar Maps temporários para liberar memória
                 if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
@@ -13765,3 +13799,4 @@ process.on('SIGINT', async () => {
 });
 
 module.exports = app;
+module.exports.processContactsInStream = processContactsInStream;

@@ -643,300 +643,7 @@ const processors = {
             }
         }
         
-        // Buscar contatos usando getContactsByTags
-        // Como a função está em server.js, vamos buscar contatos diretamente (simplificado)
-        const MAX_CONTACTS_PER_QUERY = 100000; // Limite alto para não perder contatos
-        
-        let filteredContacts = [];
-        
-        // Se não há filtros de tags, buscar todos os contatos
-        if (!tagIds || !Array.isArray(tagIds) || tagIds.length === 0) {
-            filteredContacts = await sqlWithRetry(
-                sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                    FROM telegram_chats tc
-                    LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                    WHERE tc.bot_id = ANY(${botIds}) 
-                        AND tc.seller_id = ${history.seller_id}
-                        AND tc.chat_id > 0
-                        AND bb.chat_id IS NULL
-                    ORDER BY tc.chat_id, tc.created_at DESC
-                    LIMIT ${MAX_CONTACTS_PER_QUERY}`
-            );
-        } else {
-            // Separar tags custom de automáticas
-            let customTagIds = [];
-            let automaticTagNames = [];
-            tagIds.forEach(tagId => {
-                if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
-                    customTagIds.push(parseInt(tagId));
-                } else if (typeof tagId === 'string') {
-                    automaticTagNames.push(tagId);
-                }
-            });
-            
-            // Validar tags custom
-            let validCustomTagIds = [];
-            if (customTagIds.length > 0) {
-                const validTags = await sqlWithRetry(
-                    sqlTx`SELECT id FROM lead_custom_tags 
-                          WHERE id = ANY(${customTagIds}) 
-                            AND seller_id = ${history.seller_id} 
-                            AND bot_id = ANY(${botIds})`
-                );
-                
-                if (validTags && validTags.length > 0) {
-                    validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
-                }
-            }
-            
-            // Validar tags automáticas
-            const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
-            const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
-            
-            if (!hasAnyTagFilter) {
-                // Se não há tags válidas, retornar todos os contatos
-                filteredContacts = await sqlWithRetry(
-                    sqlTx`SELECT DISTINCT ON (tc.chat_id) tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
-                        FROM telegram_chats tc
-                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                        WHERE tc.bot_id = ANY(${botIds}) 
-                            AND tc.seller_id = ${history.seller_id}
-                            AND tc.chat_id > 0
-                            AND bb.chat_id IS NULL
-                        ORDER BY tc.chat_id, tc.created_at DESC
-                        LIMIT ${MAX_CONTACTS_PER_QUERY}`
-                );
-            } else {
-                // Aplicar filtros de tags (versão simplificada - para versão completa, criar módulo compartilhado)
-                const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
-                const hasPaidTag = validAutomaticTags.includes('Pagante');
-                
-                // Query com filtros de tags
-                if (filterMode === 'include') {
-                    // INCLUDE: contatos devem ter TODAS as tags especificadas
-                    if (validCustomTagIds.length > 0 && hasPaidTag) {
-                        // Contatos com tags custom E pagantes
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            custom_tagged AS (
-                                SELECT DISTINCT lcta.chat_id
-                                FROM lead_custom_tag_assignments lcta
-                                WHERE lcta.bot_id = ANY(${botIds})
-                                    AND lcta.seller_id = ${history.seller_id}
-                                    AND lcta.tag_id = ANY(${validCustomTagIds})
-                                GROUP BY lcta.chat_id
-                                HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
-                            ),
-                            paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${botIds})
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id
-                            INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    } else if (validCustomTagIds.length > 0) {
-                        // Apenas tags custom
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            custom_tagged AS (
-                                SELECT DISTINCT lcta.chat_id
-                                FROM lead_custom_tag_assignments lcta
-                                WHERE lcta.bot_id = ANY(${botIds})
-                                    AND lcta.seller_id = ${history.seller_id}
-                                    AND lcta.tag_id = ANY(${validCustomTagIds})
-                                GROUP BY lcta.chat_id
-                                HAVING COUNT(DISTINCT lcta.tag_id) = ${validCustomTagIds.length}
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    } else if (hasPaidTag) {
-                        // Apenas pagantes
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${botIds})
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    }
-                } else {
-                    // EXCLUDE: contatos NÃO devem ter nenhuma das tags especificadas
-                    if (validCustomTagIds.length > 0 && hasPaidTag) {
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            custom_tagged AS (
-                                SELECT DISTINCT lcta.chat_id
-                                FROM lead_custom_tag_assignments lcta
-                                WHERE lcta.bot_id = ANY(${botIds})
-                                    AND lcta.seller_id = ${history.seller_id}
-                                    AND lcta.tag_id = ANY(${validCustomTagIds})
-                            ),
-                            paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${botIds})
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id
-                            LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id
-                            WHERE ct.chat_id IS NULL AND pc.chat_id IS NULL
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    } else if (validCustomTagIds.length > 0) {
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            custom_tagged AS (
-                                SELECT DISTINCT lcta.chat_id
-                                FROM lead_custom_tag_assignments lcta
-                                WHERE lcta.bot_id = ANY(${botIds})
-                                    AND lcta.seller_id = ${history.seller_id}
-                                    AND lcta.tag_id = ANY(${validCustomTagIds})
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id
-                            WHERE ct.chat_id IS NULL
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    } else if (hasPaidTag) {
-                        filteredContacts = await sqlWithRetry(sqlTx`
-                            WITH base_contacts AS (
-                                SELECT DISTINCT ON (tc.chat_id) 
-                                    tc.chat_id, tc.first_name, tc.last_name, tc.username, tc.click_id, tc.bot_id
-                                FROM telegram_chats tc
-                                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
-                                WHERE tc.bot_id = ANY(${botIds}) 
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id > 0
-                                    AND bb.chat_id IS NULL
-                                ORDER BY tc.chat_id, tc.created_at DESC
-                                LIMIT ${MAX_CONTACTS_PER_QUERY}
-                            ),
-                            paid_contacts AS (
-                                SELECT DISTINCT tc.chat_id
-                                FROM telegram_chats tc
-                                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                                WHERE tc.bot_id = ANY(${botIds})
-                                    AND tc.seller_id = ${history.seller_id}
-                                    AND tc.chat_id IN (SELECT chat_id FROM base_contacts)
-                            )
-                            SELECT bc.chat_id, bc.first_name, bc.last_name, bc.username, bc.click_id, bc.bot_id
-                            FROM base_contacts bc
-                            LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id
-                            WHERE pc.chat_id IS NULL
-                            ORDER BY bc.chat_id
-                            LIMIT ${MAX_CONTACTS_PER_QUERY}
-                        `);
-                    }
-                }
-            }
-        }
-        
-        logger.info(`[SCHEDULED-DISPARO ${history_id}] Filtros aplicados: ${filteredContacts.length} contatos encontrados.`);
-        
-        // Preparar contatos únicos
-        const allContacts = new Map();
-        filteredContacts.forEach(c => {
-            if (!allContacts.has(c.chat_id)) {
-                allContacts.set(c.chat_id, { 
-                    chat_id: c.chat_id,
-                    first_name: c.first_name,
-                    last_name: c.last_name,
-                    username: c.username,
-                    click_id: c.click_id,
-                    bot_id_source: c.bot_id 
-                });
-            }
-        });
-        const uniqueContacts = Array.from(allContacts.values());
-        
-        // Encontrar o trigger (nó inicial do disparo)
+        // Encontrar o trigger (nó inicial do disparo) uma vez antes do streaming
         let startNodeId = null;
         const triggerNode = flowNodes.find(node => node.type === 'trigger');
         
@@ -957,25 +664,7 @@ const processors = {
             throw new Error('Nenhum nó inicial encontrado no fluxo.');
         }
         
-        if (uniqueContacts.length === 0) {
-            logger.info(`[SCHEDULED-DISPARO ${history_id}] Nenhum contato encontrado.`);
-            await sqlWithRetry(
-                sqlTx`UPDATE disparo_history 
-                      SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
-                      WHERE id = ${history_id}`
-            );
-            return;
-        }
-        
-        // Atualizar status para RUNNING e current_step para 'sending'
-        await sqlWithRetry(
-            sqlTx`UPDATE disparo_history 
-                  SET status = 'RUNNING', current_step = 'sending', 
-                      total_sent = ${uniqueContacts.length}, total_jobs = ${uniqueContacts.length}
-                  WHERE id = ${history_id}`
-        );
-        
-        // Buscar bot_tokens antes do loop para usar como chave de rate limiting
+        // Buscar bot_tokens uma vez antes do streaming
         const botTokens = await sqlWithRetry(
             sqlTx`SELECT id, bot_token FROM telegram_bots WHERE id = ANY(${botIds}) AND seller_id = ${history.seller_id}`
         );
@@ -984,39 +673,33 @@ const processors = {
             botTokenMap.set(bot.id, bot.bot_token);
         });
         
-        // Preparar contatos para batch processing
-        const contactsForBatch = uniqueContacts.map(contact => {
-            const userVariables = {
-                primeiro_nome: contact.first_name || '',
-                nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-            };
-            
-            return {
-                chat_id: contact.chat_id,
-                bot_id: contact.bot_id_source,
-                variables_json: JSON.stringify(userVariables)
-            };
-        });
+        // Usar streaming para processar contatos em páginas e criar batches conforme chegam
+        // Isso evita carregar todos os contatos em memória de uma vez
+        const serverModule = require('../server');
+        const processContactsInStream = serverModule.processContactsInStream;
         
-        // Agrupar contatos em batches
+        if (!processContactsInStream) {
+            throw new Error('processContactsInStream não está disponível. Verifique se está exportado corretamente.');
+        }
+        
         const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 200;
-        const batchSize = DISPARO_BATCH_SIZE;
-        const totalBatches = Math.ceil(contactsForBatch.length / batchSize);
+        const contactsForBatch = [];
+        const seenChatIds = new Set(); // Para deduplicação
+        let totalContactsProcessed = 0;
+        let batchIndex = 0;
         const batchPromises = [];
         
-        logger.info(`[SCHEDULED-DISPARO ${history_id}] Processando ${contactsForBatch.length} contatos em ${totalBatches} batches de ${batchSize}`);
+        logger.info(`[SCHEDULED-DISPARO ${history_id}] Iniciando busca de contatos com streaming...`);
         
         // Renovar lock antes de operações longas se função disponível
         if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
             await proactiveRenewLock();
         }
         
-        // Renovação periódica de lock para preparação de muitos batches
+        // Renovação periódica de lock durante streaming
         let lastLockRenewal = Date.now();
-        const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto (reduzido de 5min)
+        const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto
         
-        // Função para renovar lock durante preparação de batches
         const renewLockIfNeeded = async () => {
             const now = Date.now();
             if ((now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS && job && typeof job.updateProgress === 'function') {
@@ -1035,31 +718,125 @@ const processors = {
             }
         };
         
-        for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-            // Renovar lock periodicamente durante criação de batches
-            if (batchIndex > 0 && batchIndex % 10 === 0) {
-                await renewLockIfNeeded();
+        // Função para criar batch quando atingir tamanho limite
+        const createBatchIfReady = async () => {
+            if (contactsForBatch.length >= DISPARO_BATCH_SIZE) {
+                // Renovar lock periodicamente durante criação de batches
+                if (batchIndex > 0 && batchIndex % 10 === 0) {
+                    await renewLockIfNeeded();
+                }
+                
+                const batchToProcess = contactsForBatch.slice(0, DISPARO_BATCH_SIZE);
+                
+                // Preparar contatos para batch processing
+                const preparedBatch = batchToProcess.map(contact => {
+                    const userVariables = {
+                        primeiro_nome: contact.first_name || '',
+                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                    };
+                    
+                    return {
+                        chat_id: contact.chat_id,
+                        bot_id: contact.bot_id_source,
+                        variables_json: JSON.stringify(userVariables)
+                    };
+                });
+                
+                const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+                const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
+                
+                const firstContactBotId = preparedBatch[0]?.bot_id;
+                const botToken = botTokenMap.get(firstContactBotId) || '';
+                
+                const batchPayload = {
+                    history_id: history_id,
+                    contacts: preparedBatch,
+                    flow_nodes: JSON.stringify(flowNodes),
+                    flow_edges: JSON.stringify(flowEdges),
+                    start_node_id: startNodeId,
+                    batch_index: batchIndex,
+                    total_batches: null // Será calculado depois
+                };
+                
+                batchPromises.push(
+                    addJobWithDelay(
+                        QUEUE_NAMES.DISPARO_BATCH,
+                        'process-disparo-batch',
+                        batchPayload,
+                        {
+                            delay: `${batchDelaySeconds}s`,
+                            botToken: botToken
+                        }
+                    )
+                );
+                
+                // Remover batch processado do array
+                contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
+                batchIndex++;
             }
-            const batchStart = batchIndex * batchSize;
-            const batchEnd = Math.min(batchStart + batchSize, contactsForBatch.length);
-            const batchContacts = contactsForBatch.slice(batchStart, batchEnd);
+        };
+        
+        // Processar contatos usando streaming
+        const streamStats = await processContactsInStream(
+            botIds,
+            history.seller_id,
+            tagIds || null,
+            tagFilterMode,
+            null, // Não excluir chats ainda
+            async (pageContacts, pageNumber, totalProcessed) => {
+                // Adicionar apenas contatos únicos desta página
+                for (const c of pageContacts) {
+                    if (!seenChatIds.has(c.chat_id)) {
+                        seenChatIds.add(c.chat_id);
+                        contactsForBatch.push({
+                            chat_id: c.chat_id,
+                            first_name: c.first_name,
+                            last_name: c.last_name,
+                            username: c.username,
+                            click_id: c.click_id,
+                            bot_id_source: c.bot_id
+                        });
+                    }
+                }
+                
+                totalContactsProcessed = totalProcessed;
+                
+                // Criar batches quando atingir tamanho limite
+                await createBatchIfReady();
+            }
+        );
+        
+        // Processar batch final se houver contatos restantes
+        if (contactsForBatch.length > 0) {
+            const preparedBatch = contactsForBatch.map(contact => {
+                const userVariables = {
+                    primeiro_nome: contact.first_name || '',
+                    nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                    click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
+                };
+                
+                return {
+                    chat_id: contact.chat_id,
+                    bot_id: contact.bot_id_source,
+                    variables_json: JSON.stringify(userVariables)
+                };
+            });
             
-            // Delay muito pequeno entre batches (0.01s por batch para evitar sobrecarga inicial)
-            const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
+            const SMALL_BATCH_DELAY_SECONDS = 0.01;
             const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
             
-            // Obter bot_token do primeiro contato do batch para rate limiting
-            const firstContactBotId = batchContacts[0]?.bot_id;
+            const firstContactBotId = preparedBatch[0]?.bot_id;
             const botToken = botTokenMap.get(firstContactBotId) || '';
             
             const batchPayload = {
                 history_id: history_id,
-                contacts: batchContacts,
+                contacts: preparedBatch,
                 flow_nodes: JSON.stringify(flowNodes),
                 flow_edges: JSON.stringify(flowEdges),
                 start_node_id: startNodeId,
                 batch_index: batchIndex,
-                total_batches: totalBatches
+                total_batches: batchIndex + 1
             };
             
             batchPromises.push(
@@ -1075,11 +852,31 @@ const processors = {
             );
         }
         
-        if (batchPromises.length > 0) {
-            logger.info(`[SCHEDULED-DISPARO ${history_id}] Publicando ${batchPromises.length} batches no BullMQ...`);
-            await Promise.all(batchPromises);
+        const totalBatches = batchPromises.length;
+        
+        if (totalBatches === 0) {
+            logger.info(`[SCHEDULED-DISPARO ${history_id}] Nenhum contato encontrado.`);
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history 
+                      SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
+                      WHERE id = ${history_id}`
+            );
+            return;
         }
         
+        // Publicar todos os batches
+        logger.info(`[SCHEDULED-DISPARO ${history_id}] Publicando ${totalBatches} batches no BullMQ...`);
+        await Promise.all(batchPromises);
+        
+        // Atualizar status para RUNNING e current_step para 'sending'
+        await sqlWithRetry(
+            sqlTx`UPDATE disparo_history 
+                  SET status = 'RUNNING', current_step = 'sending', 
+                      total_sent = ${totalContactsProcessed}, total_jobs = ${totalContactsProcessed}
+                  WHERE id = ${history_id}`
+        );
+        
+        logger.info(`[SCHEDULED-DISPARO ${history_id}] Disparo processado com streaming. ${totalContactsProcessed} contatos em ${streamStats.totalPages} páginas, ${totalBatches} batches criados.`);
         logger.info(`[SCHEDULED-DISPARO] Disparo agendado ${history_id} processado com sucesso.`);
     },
     

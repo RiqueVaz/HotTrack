@@ -24,10 +24,10 @@ const resolveSslOption = () => {
 const sqlTx = postgres(process.env.DATABASE_URL, {
     ssl: resolveSslOption(),
     // Pool de conexões configurável via variável de ambiente
-    // Padrão: 10 conexões (suficiente para carga atual)
+    // Padrão reduzido para 5 conexões para evitar esgotamento de memória compartilhada
     // Para alta concorrência, aumentar via PG_POOL_MAX ou PG_MAX_CONNECTIONS
     // Cada conexão consome ~65-70MB de memória quando idle
-    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 10,
+    max: parsePositiveInt(process.env.PG_POOL_MAX || process.env.PG_MAX_CONNECTIONS) || 5,
     
     // Timeout maior para dar tempo ao pgbouncer processar quando há fila
     // Em picos de tráfego, o pgbouncer pode demorar mais para alocar conexões
@@ -94,6 +94,14 @@ async function sqlWithRetry(query, ...args) {
         try {
             return await execute();
         } catch (error) {
+            // Detectar erro de memória compartilhada do PostgreSQL especificamente
+            const isSharedMemoryError = 
+                typeof error.message === 'string' && (
+                    error.message.includes('could not resize shared memory segment') ||
+                    error.message.includes('No space left on device') ||
+                    error.message.includes('shared memory segment')
+                );
+            
             // Detectar CONNECT_TIMEOUT especificamente
             const isConnectTimeout = 
                 error.message?.includes('CONNECT_TIMEOUT') ||
@@ -103,6 +111,7 @@ async function sqlWithRetry(query, ...args) {
                 error.code === 'ECONNREFUSED';
             
             const isRetryable =
+                isSharedMemoryError ||
                 isConnectTimeout ||
                 (typeof error.message === 'string' && (
                     error.message.includes('fetch failed') ||
@@ -117,20 +126,38 @@ async function sqlWithRetry(query, ...args) {
                 ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ESOCKETTIMEDOUT'].includes(error.code);
 
             if (isRetryable && attempt < retries - 1) {
-                // Backoff exponencial com jitter para evitar thundering herd
-                const baseDelay = delay * Math.pow(2, attempt);
-                const jitter = Math.random() * 1000;
-                const backoffDelay = Math.min(baseDelay + jitter, 15000); // Máximo de 15 segundos
-                
-                // Só logar em tentativas críticas para reduzir spam de logs
-                if (isConnectTimeout || attempt >= retries - 2) {
-                    console.warn(`[DB] Tentativa ${attempt + 1}/${retries} falhou (${error.message?.substring(0, 100)}). Tentando novamente em ${Math.round(backoffDelay)}ms...`);
+                // Para erros de memória compartilhada, usar delay maior e mais retries
+                let backoffDelay;
+                if (isSharedMemoryError) {
+                    // Delay maior para erros de memória compartilhada (5-30 segundos)
+                    const baseDelay = 5000; // 5 segundos base
+                    const exponentialDelay = baseDelay * Math.pow(2, attempt);
+                    const jitter = Math.random() * 5000; // Jitter de até 5 segundos
+                    backoffDelay = Math.min(exponentialDelay + jitter, 30000); // Máximo de 30 segundos
+                    
+                    console.warn(`[DB] Erro de memória compartilhada detectado (tentativa ${attempt + 1}/${retries}). Aguardando ${Math.round(backoffDelay / 1000)}s antes de tentar novamente...`);
+                    console.warn(`[DB] Mensagem: ${error.message?.substring(0, 200)}`);
+                } else {
+                    // Backoff exponencial padrão com jitter para outros erros
+                    const baseDelay = delay * Math.pow(2, attempt);
+                    const jitter = Math.random() * 1000;
+                    backoffDelay = Math.min(baseDelay + jitter, 15000); // Máximo de 15 segundos
+                    
+                    // Só logar em tentativas críticas para reduzir spam de logs
+                    if (isConnectTimeout || attempt >= retries - 2) {
+                        console.warn(`[DB] Tentativa ${attempt + 1}/${retries} falhou (${error.message?.substring(0, 100)}). Tentando novamente em ${Math.round(backoffDelay)}ms...`);
+                    }
                 }
                 
                 await new Promise(res => setTimeout(res, backoffDelay));
             } else {
                 // Log detalhado do erro final
-                if (isConnectTimeout) {
+                if (isSharedMemoryError) {
+                    console.error(`[DB] Erro de memória compartilhada após ${retries} tentativas. O PostgreSQL pode estar sobrecarregado ou com limites de memória muito baixos.`);
+                    console.error(`[DB] Erro completo:`, error.message);
+                    console.error(`[DB] Config: max=${sqlTx.options.max}, connect_timeout=${sqlTx.options.connect_timeout}s`);
+                    console.error(`[DB] Sugestão: Reduza PG_POOL_MAX ou aumente os limites de memória compartilhada do PostgreSQL.`);
+                } else if (isConnectTimeout) {
                     console.error(`[DB] CONNECT_TIMEOUT após ${retries} tentativas. Pool pode estar esgotado ou servidor sobrecarregado.`);
                     console.error(`[DB] Erro completo:`, error.message);
                     console.error(`[DB] Config: max=${sqlTx.options.max}, connect_timeout=${sqlTx.options.connect_timeout}s`);
