@@ -116,6 +116,9 @@ const BULLMQ_CONCURRENCY = parseInt(process.env.BULLMQ_CONCURRENCY || process.en
 const BULLMQ_RATE_LIMIT_MAX = parseInt(process.env.BULLMQ_RATE_LIMIT_MAX || process.env.QSTASH_RATE_LIMIT_MAX || '100', 10);
 const BULLMQ_RATE_LIMIT_WINDOW = 1000; // 1 segundo (equivalente ao QStash)
 
+// Limite para cálculo linear de nós (acima disso usa cálculo logarítmico)
+const MAX_NODES_FOR_LINEAR_CALCULATION = 100000; // Limite para cálculo linear
+
 // Nomes das filas
 const QUEUE_NAMES = {
     TIMEOUT: 'timeout-queue',
@@ -459,6 +462,11 @@ async function waitForRateLimit(botToken, maxWaitTime = 5000) {
  * @returns {number} - LockDuration em milissegundos
  */
 function calculateDynamicLockDuration(contactsCount, queueName) {
+    // Validar entrada
+    if (!Number.isFinite(contactsCount) || isNaN(contactsCount) || contactsCount < 0) {
+        contactsCount = 0;
+    }
+    
     // Tempo base por job (5 minutos)
     const BASE_TIME_MS = 5 * 60 * 1000;
     
@@ -470,15 +478,35 @@ function calculateDynamicLockDuration(contactsCount, queueName) {
     // Margem de segurança: 2x o tempo estimado
     const SAFETY_MARGIN = 2;
     
-    // Calcular tempo estimado
-    const estimatedTime = BASE_TIME_MS + (contactsCount * TIME_PER_CONTACT_MS);
-    const lockDuration = estimatedTime * SAFETY_MARGIN;
+    // Para valores muito grandes (> 1.000.000), usar cálculo logarítmico
+    const MAX_CONTACTS_FOR_LINEAR_CALCULATION = 1000000;
+    let estimatedTime;
+    if (contactsCount > MAX_CONTACTS_FOR_LINEAR_CALCULATION) {
+        // Cálculo logarítmico para valores muito grandes
+        estimatedTime = BASE_TIME_MS + (Math.log10(contactsCount) * 60 * 60 * 1000); // log10 * 1 hora
+    } else {
+        // Cálculo linear normal
+        estimatedTime = BASE_TIME_MS + (contactsCount * TIME_PER_CONTACT_MS);
+    }
     
-    // Sem limites fixos - retornar cálculo direto
-    // Apenas garantir mínimo razoável para evitar valores muito baixos
-    const MIN_LOCK_DURATION = 10 * 60 * 1000; // Mínimo absoluto de 10 minutos para qualquer job
+    let lockDuration = estimatedTime * SAFETY_MARGIN;
     
-    return Math.max(MIN_LOCK_DURATION, lockDuration);
+    // Validar resultado e aplicar limites técnicos
+    const limits = getQueueMetricsConstants();
+    
+    if (!Number.isFinite(lockDuration) || isNaN(lockDuration) || lockDuration <= 0) {
+        const logger = require('../logger');
+        logger.warn(`[Queue] LockDuration inválido calculado (${lockDuration}), usando mínimo: ${Math.round(limits.MIN_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = limits.MIN_LOCK_DURATION_MS;
+    } else if (lockDuration > limits.MAX_LOCK_DURATION_MS) {
+        const logger = require('../logger');
+        logger.warn(`[Queue] LockDuration muito grande (${Math.round(lockDuration / 60000)}min para ${contactsCount} contatos), limitando ao máximo técnico: ${Math.round(limits.MAX_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = limits.MAX_LOCK_DURATION_MS;
+    } else if (lockDuration < limits.MIN_LOCK_DURATION_MS) {
+        lockDuration = limits.MIN_LOCK_DURATION_MS;
+    }
+    
+    return Math.ceil(lockDuration);
 }
 
 /**
@@ -488,12 +516,37 @@ function calculateDynamicLockDuration(contactsCount, queueName) {
  * @returns {number} - StalledInterval em milissegundos
  */
 function calculateDynamicStalledInterval(lockDuration) {
+    // Validar lockDuration antes de calcular
+    const limits = getQueueMetricsConstants();
+    if (!Number.isFinite(lockDuration) || isNaN(lockDuration) || lockDuration <= 0) {
+        const logger = require('../logger');
+        logger.warn(`[Queue] LockDuration inválido (${lockDuration}) em calculateDynamicStalledInterval, usando mínimo: ${Math.round(limits.MIN_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = limits.MIN_LOCK_DURATION_MS;
+    } else if (lockDuration > limits.MAX_LOCK_DURATION_MS) {
+        lockDuration = limits.MAX_LOCK_DURATION_MS;
+    }
+    
     const calculated = Math.floor(lockDuration / 3);
     // Sem limites fixos - usar cálculo adaptativo quando possível
-    // Fallback: mínimo 5 minutos ou 15% do lockDuration, máximo 60% do lockDuration
+    // Fallback: mínimo 5 minutos ou 15% do lockDuration, máximo 60% do lockDuration ou limite técnico
     const minStalled = Math.max(5 * 60 * 1000, lockDuration * 0.15);
-    const maxStalled = lockDuration * 0.6;
-    return Math.max(minStalled, Math.min(calculated, maxStalled));
+    const maxStalled = Math.min(lockDuration * 0.6, limits.MAX_STALLED_INTERVAL_MS);
+    
+    let stalledInterval = Math.max(minStalled, Math.min(calculated, maxStalled));
+    
+    // Validar resultado final
+    if (!Number.isFinite(stalledInterval) || isNaN(stalledInterval) || stalledInterval <= 0) {
+        const logger = require('../logger');
+        logger.warn(`[Queue] StalledInterval inválido calculado, usando mínimo: ${Math.round((5 * 60 * 1000) / 60000)}min`);
+        stalledInterval = 5 * 60 * 1000;
+    }
+    
+    // Garantir que stalledInterval sempre seja menor que lockDuration
+    if (stalledInterval >= lockDuration) {
+        stalledInterval = Math.max(minStalled, lockDuration * 0.5);
+    }
+    
+    return Math.ceil(stalledInterval);
 }
 
 // Importar módulo de métricas (carregamento lazy para evitar dependência circular)
@@ -503,6 +556,20 @@ function getQueueMetrics() {
         queueMetrics = require('./queue-metrics');
     }
     return queueMetrics;
+}
+
+// Importar constantes de limites técnicos
+let queueMetricsConstants = null;
+function getQueueMetricsConstants() {
+    if (!queueMetricsConstants) {
+        const metrics = require('./queue-metrics');
+        queueMetricsConstants = {
+            MIN_LOCK_DURATION_MS: metrics.MIN_LOCK_DURATION_MS,
+            MAX_LOCK_DURATION_MS: metrics.MAX_LOCK_DURATION_MS,
+            MAX_STALLED_INTERVAL_MS: metrics.MAX_STALLED_INTERVAL_MS
+        };
+    }
+    return queueMetricsConstants;
 }
 
 /**
@@ -556,9 +623,19 @@ async function getOptimalLockDuration(queueName, jobData) {
                     ? JSON.parse(jobData.flow_nodes) 
                     : jobData.flow_nodes;
                 const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
-                // Estimativa: 1 minuto por nó + base, sem limite máximo fixo
-                const estimatedMinutes = 5 + (nodes.length * 1);
+                // Estimativa: usar cálculo logarítmico para valores muito grandes
+                const estimatedMinutes = nodes.length > MAX_NODES_FOR_LINEAR_CALCULATION
+                    ? 5 + Math.log10(nodes.length) * 60 // Cálculo logarítmico para valores muito grandes
+                    : 5 + (nodes.length * 1); // Cálculo linear normal
                 lockDuration = estimatedMinutes * 60 * 1000 * 2; // 2x margem de segurança
+                
+                // Limitar ao máximo técnico se exceder
+                const limits = getQueueMetricsConstants();
+                if (lockDuration > limits.MAX_LOCK_DURATION_MS) {
+                    const logger = require('../logger');
+                    logger.warn(`[Queue] LockDuration calculado muito grande (${Math.round(lockDuration / 60000)}min para ${nodes.length} nós), limitando ao máximo técnico: ${Math.round(limits.MAX_LOCK_DURATION_MS / 60000)}min`);
+                    lockDuration = limits.MAX_LOCK_DURATION_MS;
+                }
             } catch (e) {
                 // Se erro ao parsear, usar valor padrão conservador
                 lockDuration = 60 * 60 * 1000; // 1 hora padrão
