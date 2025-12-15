@@ -5,6 +5,11 @@ const logger = require('../logger');
 const METRICS_TTL = 30 * 24 * 60 * 60 * 1000; // 30 dias em milissegundos
 const MIN_SAMPLES_FOR_PERCENTILES = 10; // Mínimo de amostras para calcular percentis confiáveis
 
+// Limites técnicos para evitar overflow e valores inválidos
+const MIN_LOCK_DURATION_MS = 10 * 60 * 1000; // Mínimo 10 minutos (já existe em queue.js, mas centralizar)
+const MAX_LOCK_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // Máximo 30 dias (limite técnico razoável)
+const MAX_STALLED_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // Máximo 7 dias para stalledInterval
+
 /**
  * Gera chave Redis para métricas
  * @param {string} queueName - Nome da fila
@@ -255,7 +260,18 @@ async function getAdaptiveLockDuration(queueName, jobData) {
     // Margem de segurança adaptativa: mínimo 1.5x, máximo 3x baseado na variância
     const safetyMargin = Math.min(3, Math.max(1.5, variance * 1.2));
     
-    const lockDuration = baseTime * safetyMargin;
+    let lockDuration = baseTime * safetyMargin;
+    
+    // Validar e proteger contra valores extremos
+    if (!Number.isFinite(lockDuration) || isNaN(lockDuration) || lockDuration <= 0) {
+        logger.warn(`[QueueMetrics] LockDuration inválido calculado (${lockDuration}), usando mínimo: ${Math.round(MIN_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = MIN_LOCK_DURATION_MS;
+    } else if (lockDuration > MAX_LOCK_DURATION_MS) {
+        logger.warn(`[QueueMetrics] LockDuration muito grande (${Math.round(lockDuration / 60000)}min), limitando ao máximo técnico: ${Math.round(MAX_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = MAX_LOCK_DURATION_MS;
+    } else if (lockDuration < MIN_LOCK_DURATION_MS) {
+        lockDuration = MIN_LOCK_DURATION_MS;
+    }
     
     logger.debug(`[QueueMetrics] LockDuration adaptativo calculado: ${Math.round(lockDuration / 60000)}min (base: ${Math.round(baseTime / 60000)}min, margem: ${safetyMargin.toFixed(2)}x, amostras: ${metrics.count})`);
     
@@ -270,15 +286,24 @@ async function getAdaptiveLockDuration(queueName, jobData) {
  * @returns {Promise<number>} - StalledInterval em milissegundos
  */
 async function getAdaptiveStalledInterval(lockDuration, queueName, jobData = {}) {
+    // Validar lockDuration antes de qualquer cálculo
+    if (!Number.isFinite(lockDuration) || isNaN(lockDuration) || lockDuration <= 0) {
+        logger.warn(`[QueueMetrics] LockDuration inválido (${lockDuration}), usando mínimo para stalledInterval: ${Math.round(MIN_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = MIN_LOCK_DURATION_MS;
+    } else if (lockDuration > MAX_LOCK_DURATION_MS) {
+        logger.warn(`[QueueMetrics] LockDuration muito grande (${Math.round(lockDuration / 60000)}min), limitando ao máximo técnico: ${Math.round(MAX_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = MAX_LOCK_DURATION_MS;
+    }
+    
     // Base: 1/3 do lockDuration (padrão conservador)
     let stalledInterval = Math.floor(lockDuration / 3);
     
     // Tentar ajustar baseado em métricas históricas de tempo entre renovações
-    if (jobData) {
+    if (jobData && lockDuration > 0) {
         const characteristics = extractJobCharacteristics(queueName, jobData);
         const metrics = await getMetrics(queueName, characteristics);
         
-        if (metrics && metrics.avg) {
+        if (metrics && metrics.avg && Number.isFinite(metrics.avg) && lockDuration > 0) {
             // Se tempo médio de processamento é conhecido, ajustar stalledInterval
             // Garantir que stalledInterval seja sempre menor que lockDuration com margem
             // Usar mínimo de 20% do lockDuration, máximo de 50%
@@ -287,22 +312,36 @@ async function getAdaptiveStalledInterval(lockDuration, queueName, jobData = {})
             
             // Baseado no tempo médio, ajustar stalledInterval
             // Se tempo médio é baixo comparado ao lockDuration, usar stalledInterval menor
-            const avgRatio = metrics.avg / lockDuration;
-            if (avgRatio < 0.3) {
-                // Processamento rápido, usar stalledInterval menor (mais agressivo)
-                stalledInterval = Math.max(minStalled, lockDuration * 0.25);
-            } else if (avgRatio > 0.7) {
-                // Processamento lento, usar stalledInterval maior (menos agressivo)
-                stalledInterval = Math.min(maxStalled, lockDuration * 0.45);
+            // Proteger contra divisão por zero
+            const avgRatio = lockDuration > 0 ? (metrics.avg / lockDuration) : 0;
+            if (Number.isFinite(avgRatio) && avgRatio > 0) {
+                if (avgRatio < 0.3) {
+                    // Processamento rápido, usar stalledInterval menor (mais agressivo)
+                    stalledInterval = Math.max(minStalled, lockDuration * 0.25);
+                } else if (avgRatio > 0.7) {
+                    // Processamento lento, usar stalledInterval maior (menos agressivo)
+                    stalledInterval = Math.min(maxStalled, lockDuration * 0.45);
+                }
             }
         }
     }
     
     // Garantir limites mínimos e máximos baseados no lockDuration
     const minStalled = Math.max(5 * 60 * 1000, lockDuration * 0.15); // Mínimo 5min ou 15% do lockDuration
-    const maxStalled = lockDuration * 0.6; // Máximo 60% do lockDuration
+    const maxStalled = Math.min(lockDuration * 0.6, MAX_STALLED_INTERVAL_MS); // Máximo 60% do lockDuration ou limite técnico
     
     stalledInterval = Math.max(minStalled, Math.min(stalledInterval, maxStalled));
+    
+    // Garantir que stalledInterval sempre seja menor que lockDuration
+    if (stalledInterval >= lockDuration) {
+        stalledInterval = Math.max(minStalled, lockDuration * 0.5);
+    }
+    
+    // Validar resultado final
+    if (!Number.isFinite(stalledInterval) || isNaN(stalledInterval) || stalledInterval <= 0) {
+        logger.warn(`[QueueMetrics] StalledInterval inválido calculado, usando mínimo: ${Math.round((5 * 60 * 1000) / 60000)}min`);
+        stalledInterval = 5 * 60 * 1000;
+    }
     
     return Math.ceil(stalledInterval);
 }
@@ -313,5 +352,8 @@ module.exports = {
     getAdaptiveLockDuration,
     getAdaptiveStalledInterval,
     extractJobCharacteristics,
-    MIN_SAMPLES_FOR_PERCENTILES
+    MIN_SAMPLES_FOR_PERCENTILES,
+    MIN_LOCK_DURATION_MS,
+    MAX_LOCK_DURATION_MS,
+    MAX_STALLED_INTERVAL_MS
 };
