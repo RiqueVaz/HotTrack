@@ -592,11 +592,13 @@ async function getOptimalLockDuration(queueName, jobData) {
     }
     
     // Tentar usar métricas históricas primeiro (sistema adaptativo)
+    let hasHistoricalMetrics = false;
     try {
         const metrics = getQueueMetrics();
         const adaptiveLockDuration = await metrics.getAdaptiveLockDuration(queueName, jobData);
         
         if (adaptiveLockDuration) {
+            hasHistoricalMetrics = true;
             const adaptiveStalledInterval = await metrics.getAdaptiveStalledInterval(adaptiveLockDuration, queueName, jobData);
             return {
                 lockDuration: adaptiveLockDuration,
@@ -610,6 +612,7 @@ async function getOptimalLockDuration(queueName, jobData) {
     }
     
     // Fallback: Calcular baseado no tipo de fila e dados do job (sem limites fixos)
+    // Usar margem de segurança maior quando não há métricas históricas
     let lockDuration = null;
     
     if (queueName === QUEUE_NAMES.DISPARO_BATCH && jobData.contacts && Array.isArray(jobData.contacts)) {
@@ -627,7 +630,16 @@ async function getOptimalLockDuration(queueName, jobData) {
                 const estimatedMinutes = nodes.length > MAX_NODES_FOR_LINEAR_CALCULATION
                     ? 5 + Math.log10(nodes.length) * 60 // Cálculo logarítmico para valores muito grandes
                     : 5 + (nodes.length * 1); // Cálculo linear normal
-                lockDuration = estimatedMinutes * 60 * 1000 * 2; // 2x margem de segurança
+                
+                // Usar margem maior quando não há métricas históricas (4x) vs quando há métricas (2x)
+                const safetyMargin = hasHistoricalMetrics ? 2 : 4;
+                lockDuration = estimatedMinutes * 60 * 1000 * safetyMargin;
+                
+                // Log informativo quando margem aumentada é aplicada
+                if (!hasHistoricalMetrics) {
+                    const logger = require('../logger');
+                    logger.info(`[Queue] LockDuration calculado para TIMEOUT com margem aumentada (4x) - sem métricas históricas: ${Math.round(lockDuration / 60000)}min para ${nodes.length} nós`);
+                }
                 
                 // Limitar ao máximo técnico se exceder
                 const limits = getQueueMetricsConstants();
@@ -663,9 +675,20 @@ async function getOptimalLockDuration(queueName, jobData) {
                     ? JSON.parse(jobData.flow_nodes) 
                     : jobData.flow_nodes;
                 const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
-                // Estimativa: 1 minuto por nó + base, sem limite máximo fixo
-                const estimatedMinutes = 5 + (nodes.length * 1);
-                lockDuration = estimatedMinutes * 60 * 1000 * 2; // 2x margem de segurança
+                // Estimativa: usar cálculo logarítmico para valores muito grandes
+                const estimatedMinutes = nodes.length > MAX_NODES_FOR_LINEAR_CALCULATION
+                    ? 5 + Math.log10(nodes.length) * 60 // Cálculo logarítmico para valores muito grandes
+                    : 5 + (nodes.length * 1); // Cálculo linear normal
+                
+                // Usar margem maior quando não há métricas históricas (4x) vs quando há métricas (2x)
+                const safetyMargin = hasHistoricalMetrics ? 2 : 4;
+                lockDuration = estimatedMinutes * 60 * 1000 * safetyMargin;
+                
+                // Log informativo quando margem aumentada é aplicada
+                if (!hasHistoricalMetrics) {
+                    const logger = require('../logger');
+                    logger.info(`[Queue] LockDuration calculado para DISPARO com margem aumentada (4x) - sem métricas históricas: ${Math.round(lockDuration / 60000)}min para ${nodes.length} nós`);
+                }
             } catch (e) {
                 lockDuration = 30 * 60 * 1000; // 30 minutos padrão
             }
@@ -679,7 +702,16 @@ async function getOptimalLockDuration(queueName, jobData) {
             if (contactsCount > 0) {
                 // Estimativa: 0.1 segundo por contato + base, sem limite máximo fixo
                 const estimatedSeconds = 60 + (contactsCount * 0.1);
-                lockDuration = estimatedSeconds * 1000 * 2; // 2x margem de segurança
+                
+                // Usar margem maior quando não há métricas históricas (4x) vs quando há métricas (2x)
+                const safetyMargin = hasHistoricalMetrics ? 2 : 4;
+                lockDuration = estimatedSeconds * 1000 * safetyMargin;
+                
+                // Log informativo quando margem aumentada é aplicada
+                if (!hasHistoricalMetrics) {
+                    const logger = require('../logger');
+                    logger.info(`[Queue] LockDuration calculado para VALIDATION_DISPARO com margem aumentada (4x) - sem métricas históricas: ${Math.round(lockDuration / 60000)}min para ${contactsCount} contatos`);
+                }
             } else {
                 lockDuration = 30 * 60 * 1000; // 30 minutos padrão
             }
@@ -693,7 +725,16 @@ async function getOptimalLockDuration(queueName, jobData) {
             if (contactsCount > 0) {
                 // Estimativa: 0.05 segundo por contato + base, sem limite máximo fixo
                 const estimatedSeconds = 30 + (contactsCount * 0.05);
-                lockDuration = estimatedSeconds * 1000 * 2; // 2x margem de segurança
+                
+                // Usar margem maior quando não há métricas históricas (4x) vs quando há métricas (2x)
+                const safetyMargin = hasHistoricalMetrics ? 2 : 4;
+                lockDuration = estimatedSeconds * 1000 * safetyMargin;
+                
+                // Log informativo quando margem aumentada é aplicada
+                if (!hasHistoricalMetrics) {
+                    const logger = require('../logger');
+                    logger.info(`[Queue] LockDuration calculado para SCHEDULED_DISPARO com margem aumentada (4x) - sem métricas históricas: ${Math.round(lockDuration / 60000)}min para ${contactsCount} contatos`);
+                }
             } else {
                 lockDuration = 20 * 60 * 1000; // 20 minutos padrão
             }

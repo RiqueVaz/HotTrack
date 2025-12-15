@@ -36,23 +36,41 @@ async function createWorker(queueName, processor, options = {}) {
     const maxStalledCount = config.maxStalledCount || 2;
     const lockDuration = config.lockDuration; // lockDuration específico da fila (opcional)
     
-    // Calcular stalledInterval dinamicamente baseado em métricas históricas
-    let stalledInterval = config.stalledInterval || 30000; // Fallback padrão
+    // Calcular stalledInterval dinamicamente baseado em lockDuration (sempre, mesmo sem métricas)
+    let stalledInterval = config.stalledInterval || 30000; // Fallback padrão inicial
     try {
         const queueMetrics = require('./queue-metrics');
-        // Buscar métricas gerais da fila para calcular stalledInterval médio
-        const metrics = await queueMetrics.getMetrics(queueName, {});
-        if (metrics && metrics.avg && lockDuration) {
-            // Calcular stalledInterval adaptativo baseado no lockDuration médio histórico
-            const adaptiveStalled = await queueMetrics.getAdaptiveStalledInterval(lockDuration, queueName);
-            if (adaptiveStalled) {
+        // Sempre calcular stalledInterval adaptativo baseado no lockDuration (com ou sem métricas)
+        // getAdaptiveStalledInterval funciona mesmo sem métricas históricas (usa 1/3 do lockDuration como base)
+        if (lockDuration) {
+            const adaptiveStalled = await queueMetrics.getAdaptiveStalledInterval(lockDuration, queueName, {});
+            if (adaptiveStalled && Number.isFinite(adaptiveStalled)) {
                 stalledInterval = adaptiveStalled;
-                logger.debug(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min`);
+                // Verificar se há métricas para log apropriado
+                const metrics = await queueMetrics.getMetrics(queueName, {});
+                const hasMetrics = metrics && metrics.avg;
+                if (hasMetrics) {
+                    logger.info(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min, com métricas históricas)`);
+                } else {
+                    logger.info(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min, sem métricas históricas - usando cálculo base)`);
+                }
+            } else {
+                // Se cálculo retornou inválido, calcular manualmente baseado no lockDuration
+                stalledInterval = Math.max(5 * 60 * 1000, Math.min(Math.floor(lockDuration / 3), lockDuration * 0.6));
+                logger.info(`[BullMQ-Worker] StalledInterval calculado manualmente para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min)`);
             }
+        } else {
+            // Se não tem lockDuration configurado, usar cálculo baseado no stalledInterval padrão
+            logger.debug(`[BullMQ-Worker] Sem lockDuration configurado para ${queueName}, usando stalledInterval padrão: ${Math.round(stalledInterval / 60000)}min`);
         }
     } catch (error) {
-        // Se erro ao calcular, usar valor padrão da configuração
-        logger.debug(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando padrão:`, error.message);
+        // Se erro ao calcular, calcular manualmente baseado no lockDuration
+        if (lockDuration) {
+            stalledInterval = Math.max(5 * 60 * 1000, Math.min(Math.floor(lockDuration / 3), lockDuration * 0.6));
+            logger.warn(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando cálculo manual: ${Math.round(stalledInterval / 60000)}min`, error.message);
+        } else {
+            logger.warn(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando padrão da configuração: ${Math.round(stalledInterval / 60000)}min`, error.message);
+        }
     }
     
     // Criar Queue para obter informações do job quando stalled
