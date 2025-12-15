@@ -9032,6 +9032,19 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
             historyId: historyId
         });
         
+        // Atualizar total_jobs e status ANTES de iniciar processamento em background
+        // Isso garante que o frontend veja os valores corretos imediatamente para calcular o progresso
+        if (contactsCount > 0) {
+            await sqlWithRetry(
+                sqlTx`UPDATE disparo_history 
+                      SET total_jobs = ${contactsCount}, 
+                          status = 'RUNNING', 
+                          current_step = 'sending'
+                      WHERE id = ${historyId}`
+            );
+            console.log(`[DISPARO ${historyId}] Status atualizado para RUNNING com ${contactsCount} contatos antes de iniciar processamento.`);
+        }
+        
         // 6. Iniciar disparo diretamente usando streaming (sem higienização - bloqueados já foram filtrados nas queries)
         (async () => {
             try {
@@ -9180,12 +9193,16 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                             }
                         }
                         
-                        totalContactsProcessed = totalProcessed;
+                        // Atualizar totalContactsProcessed com número real de contatos únicos (após deduplicação)
+                        totalContactsProcessed = seenChatIds.size;
                         
                         // Criar batches quando atingir tamanho limite
                         await createBatchIfReady();
                     }
                 );
+                
+                // Após streaming completo, usar o número real de contatos únicos
+                const finalUniqueContactsCount = seenChatIds.size;
                 
                 // Processar batch final se houver contatos restantes
                 if (contactsForBatch.length > 0) {
@@ -9264,15 +9281,26 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         results.filter(r => r.status === 'rejected').map(r => r.reason));
                 }
                 
-                // Atualizar status para RUNNING e total_jobs
+                // Atualizar total_jobs com valor real do streaming (já deduplicado)
+                // Usar o número real de contatos únicos após deduplicação (seenChatIds.size)
+                const finalTotalJobs = finalUniqueContactsCount;
+                
+                // Validação: comparar com contagem inicial e logar se houver diferença
+                if (Math.abs(finalTotalJobs - contactsCount) > 0) {
+                    console.warn(`[DISPARO ${historyId}] Diferença entre contagem inicial (${contactsCount}) e contatos únicos processados (${finalTotalJobs}). Usando valor do streaming (mais preciso após deduplicação).`);
+                } else {
+                    console.log(`[DISPARO ${historyId}] Contagem inicial (${contactsCount}) confere com contatos únicos processados (${finalTotalJobs}).`);
+                }
+                
+                // Atualizar total_jobs e total_sent com valor real do streaming
+                // Status já está como RUNNING desde antes do processamento
                 await sqlWithRetry(
                     sqlTx`UPDATE disparo_history 
-                          SET total_sent = ${totalContactsProcessed}, total_jobs = ${totalContactsProcessed},
-                              status = 'RUNNING', current_step = 'sending'
+                          SET total_sent = ${finalTotalJobs}, total_jobs = ${finalTotalJobs}
                           WHERE id = ${historyId}`
                 );
                 
-                console.log(`[DISPARO ${historyId}] Disparo processado com streaming. ${totalContactsProcessed} contatos em ${streamStats.totalPages} páginas, ${totalBatches} batches criados.`);
+                console.log(`[DISPARO ${historyId}] Disparo processado com streaming. ${finalTotalJobs} contatos únicos em ${streamStats.totalPages} páginas, ${totalBatches} batches criados.`);
                 
                 // Limpar Maps temporários para liberar memória
                 if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
