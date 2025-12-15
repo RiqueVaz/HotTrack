@@ -13500,7 +13500,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     
     // Inicializar workers BullMQ
     try {
-        initializeWorkers();
+        await initializeWorkers();
         console.log(`✅ Workers BullMQ inicializados com sucesso`);
     } catch (error) {
         console.error(`❌ Erro ao inicializar workers BullMQ:`, error);

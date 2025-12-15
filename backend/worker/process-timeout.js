@@ -2003,7 +2003,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // ==========================================================
     let safetyLock = 0;
     let lastLockRenewal = Date.now();
-    const LOCK_RENEWAL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos - renovação mais frequente
+    const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto - renovação mais frequente (reduzido de 3min)
     // currentFlowId já foi determinado acima
     
     while (currentNodeId && safetyLock < 20) {
@@ -2016,7 +2016,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
         }
 
         // Renovar lock durante processamento de flows longos
-        // Renovar a cada 2 nós processados OU a cada 3 minutos (o que ocorrer primeiro)
+        // Renovar a cada 2 nós processados OU a cada 1 minuto (o que ocorrer primeiro)
         const now = Date.now();
         const shouldRenewByTime = (now - lastLockRenewal) >= LOCK_RENEWAL_INTERVAL_MS;
         const shouldRenewByProgress = safetyLock % 2 === 0; // A cada 2 nós (mais frequente)
@@ -2220,7 +2220,7 @@ async function processTimeoutData(data, job = null) {
         
         // Renovação periódica de lock para evitar jobs stalled em flows longos
         let lastLockRenewal = Date.now();
-        const LOCK_RENEWAL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutos - renovação mais frequente
+        const LOCK_RENEWAL_INTERVAL_MS = 1 * 60 * 1000; // 1 minuto - renovação mais frequente (reduzido de 3min)
         let nodesProcessed = 0;
         
         // Função para renovar lock durante processamento de flows longos
@@ -2247,6 +2247,45 @@ async function processTimeoutData(data, job = null) {
                 }
             }
         };
+        
+        // Renovação durante delays longos (se job está aguardando delay antes de processar)
+        // Detectar se job está em delay: quando não há continue_from_delay mas há remaining_actions com delay
+        let delayRenewTimer = null;
+        if (!continue_from_delay && remaining_actions && job && typeof job.updateProgress === 'function') {
+            try {
+                const remainingActionsJson = typeof remaining_actions === 'string' 
+                    ? JSON.parse(remaining_actions) 
+                    : remaining_actions;
+                // Verificar se há delay nas ações restantes
+                const hasDelay = Array.isArray(remainingActionsJson) && remainingActionsJson.some(action => 
+                    action.type === 'delay' && action.data && action.data.delaySeconds > 60
+                );
+                
+                if (hasDelay) {
+                    // Iniciar renovação periódica durante delay
+                    delayRenewTimer = setInterval(async () => {
+                        try {
+                            await job.updateProgress(1);
+                            lastLockRenewal = Date.now();
+                            console.debug(`[WORKER-TIMEOUT] Lock renovado durante delay para job ${job.id}`);
+                        } catch (renewError) {
+                            if (renewError.message?.includes('not found') || 
+                                renewError.message?.includes('completed') ||
+                                renewError.message?.includes('removed')) {
+                                if (delayRenewTimer) {
+                                    clearInterval(delayRenewTimer);
+                                    delayRenewTimer = null;
+                                }
+                                return;
+                            }
+                            console.debug(`[WORKER-TIMEOUT] Erro ao renovar lock durante delay (não crítico):`, renewError.message);
+                        }
+                    }, LOCK_RENEWAL_INTERVAL_MS);
+                }
+            } catch (e) {
+                // Ignorar erro ao parsear remaining_actions
+            }
+        }
 
         // Validação de dados obrigatórios
         if (!chat_id || !bot_id) {
@@ -2271,6 +2310,11 @@ async function processTimeoutData(data, job = null) {
 
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
+            // Limpar timer de renovação durante delay se ainda estiver ativo
+            if (delayRenewTimer) {
+                clearInterval(delayRenewTimer);
+                delayRenewTimer = null;
+            }
             // Removido log de debug
             return { ignored: true, reason: 'no_user_state' };
         }
@@ -2298,6 +2342,11 @@ async function processTimeoutData(data, job = null) {
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
             if (!currentState.waiting_for_input) {
+                // Limpar timer de renovação durante delay se ainda estiver ativo
+                if (delayRenewTimer) {
+                    clearInterval(delayRenewTimer);
+                    delayRenewTimer = null;
+                }
                 // Removido log de debug
                 return { ignored: true, reason: 'user_already_proceeded' };
             }

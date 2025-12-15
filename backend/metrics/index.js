@@ -105,6 +105,46 @@ if (isEnabled) {
     buckets: [65536, 131072, 262144, 524288, 1048576, 3145728, 5242880, 10485760, 20971520, 52428800],
   });
 
+  metrics.queueJobStalledTotal = new client.Counter({
+    name: 'hottrack_queue_job_stalled_total',
+    help: 'Total de jobs marcados como stalled nas filas BullMQ.',
+    labelNames: ['queue_name'],
+  });
+
+  metrics.queueJobStalledDuration = new client.Histogram({
+    name: 'hottrack_queue_job_stalled_duration_seconds',
+    help: 'Tempo de processamento quando job foi marcado como stalled.',
+    labelNames: ['queue_name'],
+    buckets: [60, 300, 600, 900, 1200, 1800, 2400, 3600, 7200],
+  });
+
+  metrics.queueLockRenewalTotal = new client.Counter({
+    name: 'hottrack_queue_lock_renewal_total',
+    help: 'Total de renovações de lock realizadas.',
+    labelNames: ['queue_name', 'status'],
+  });
+
+  metrics.queueLockRenewalDuration = new client.Histogram({
+    name: 'hottrack_queue_lock_renewal_duration_seconds',
+    help: 'Tempo entre renovações de lock.',
+    labelNames: ['queue_name'],
+    buckets: [30, 60, 90, 120, 180, 240, 300],
+  });
+
+  metrics.queueJobUtilizationRatio = new client.Histogram({
+    name: 'hottrack_queue_job_utilization_ratio',
+    help: 'Razão entre tempo de processamento e lockDuration calculado (0-1).',
+    labelNames: ['queue_name'],
+    buckets: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0],
+  });
+
+  metrics.queueAdaptiveLockDuration = new client.Histogram({
+    name: 'hottrack_queue_adaptive_lock_duration_seconds',
+    help: 'LockDuration calculado adaptativamente baseado em métricas históricas.',
+    labelNames: ['queue_name', 'source'],
+    buckets: [60, 300, 600, 900, 1800, 3600, 7200, 14400, 28800],
+  });
+
   Object.values(metrics).forEach((metric) => register.registerMetric(metric));
 }
 

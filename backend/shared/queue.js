@@ -132,11 +132,11 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_BATCH]: {
         concurrency: 200, // Reduzido de 400 para evitar contenção no Redis/DB
         limiter: undefined, // Remover limiter - rate limiting manual faz o trabalho
-        // stalledInterval, maxStalledCount e lockDuration são configurações do Worker (não podem ser por job)
-        // Valores otimizados: batches muito grandes podem demorar até 1.5h, então lockDuration = 3h (2x margem)
-        stalledInterval: 7200000, // 2 horas - aumentado de 90min para acomodar lockDuration dinâmico de até 8h
+        // stalledInterval será calculado dinamicamente baseado em métricas históricas
+        // Valor padrão usado apenas como fallback se não houver métricas
+        stalledInterval: 7200000, // 2 horas - fallback padrão (será sobrescrito por cálculo adaptativo)
         maxStalledCount: 5, // Reduzido de 10 para evitar reprocessamento excessivo
-        lockDuration: 10800000, // 3 horas - batches muito grandes podem demorar até 1.5h
+        lockDuration: 10800000, // 3 horas - batches muito grandes podem demorar até 1.5h (fallback padrão)
         // attempts padrão (será sobrescrito por job via calculateScalableLimits quando possível)
         attempts: 5, // Padrão (fallback para jobs sem cálculo dinâmico)
         backoff: {
@@ -154,8 +154,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO]: {
         concurrency: 50,
         limiter: undefined,
-        stalledInterval: 1200000, // 20 minutos - aumentado de 7min para acomodar lockDuration dinâmico de até 1h
-        lockDuration: 900000, // 15 minutos - fluxos complexos podem demorar até 7-8 minutos
+        stalledInterval: 1200000, // 20 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
+        lockDuration: 900000, // 15 minutos - fluxos complexos podem demorar até 7-8 minutos (fallback padrão)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -165,8 +165,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.DISPARO_DELAY]: {
         concurrency: 30,
         limiter: { max: 30, duration: 1000 },
-        stalledInterval: 7200000, // 2 horas - verificar stalled a cada 2h
-        lockDuration: 14400000, // 4 horas - delays podem ser muito longos (até 2h de processamento)
+        stalledInterval: 7200000, // 2 horas - fallback padrão (será sobrescrito por cálculo adaptativo)
+        lockDuration: 14400000, // 4 horas - delays podem ser muito longos (até 2h de processamento) (fallback padrão)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -176,9 +176,9 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.VALIDATION_DISPARO]: {
         concurrency: 10,
         limiter: { max: 10, duration: 1000 },
-        stalledInterval: 2700000, // 45 minutos - verificar stalled periodicamente
+        stalledInterval: 2700000, // 45 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         maxStalledCount: 5, // Reduzido para evitar reprocessamento excessivo
-        lockDuration: 5400000, // 1.5 horas - validação pode demorar muito com muitos contatos (até 45min)
+        lockDuration: 5400000, // 1.5 horas - validação pode demorar muito com muitos contatos (até 45min) (fallback padrão)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -188,9 +188,9 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.SCHEDULED_DISPARO]: {
         concurrency: 5,
         limiter: { max: 5, duration: 1000 },
-        stalledInterval: 1800000, // 30 minutos - verificar stalled periodicamente
+        stalledInterval: 1800000, // 30 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         maxStalledCount: 3, // Reduzido para evitar reprocessamento excessivo
-        lockDuration: 3600000, // 1 hora - pode processar muitos contatos e criar muitos batches (até 30min)
+        lockDuration: 3600000, // 1 hora - pode processar muitos contatos e criar muitos batches (até 30min) (fallback padrão)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -200,8 +200,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 100,
         limiter: { max: 100, duration: 1000 },
-        stalledInterval: 3000000, // 50 minutos - aumentado de 20min para acomodar lockDuration dinâmico de até 2h
-        lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (aumentado de 10min)
+        stalledInterval: 3000000, // 50 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
+        lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (fallback padrão)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -211,8 +211,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.CLEANUP_QRCODES]: {
         concurrency: 1, // Baixa concorrência - tarefa de manutenção
         limiter: { max: 1, duration: 1000 },
-        stalledInterval: 1800000, // 30 minutos - verificar stalled periodicamente
-        lockDuration: 3600000, // 1 hora - cleanup pode demorar se houver muitos QR codes (até 30min)
+        stalledInterval: 1800000, // 30 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
+        lockDuration: 3600000, // 1 hora - cleanup pode demorar se houver muitos QR codes (até 30min) (fallback padrão)
         attempts: 2,
         backoff: {
             type: 'fixed',
@@ -474,28 +474,11 @@ function calculateDynamicLockDuration(contactsCount, queueName) {
     const estimatedTime = BASE_TIME_MS + (contactsCount * TIME_PER_CONTACT_MS);
     const lockDuration = estimatedTime * SAFETY_MARGIN;
     
-    // Limites mínimos e máximos por fila
-    let minLockDuration, maxLockDuration;
+    // Sem limites fixos - retornar cálculo direto
+    // Apenas garantir mínimo razoável para evitar valores muito baixos
+    const MIN_LOCK_DURATION = 10 * 60 * 1000; // Mínimo absoluto de 10 minutos para qualquer job
     
-    switch (queueName) {
-        case QUEUE_NAMES.DISPARO_BATCH:
-            minLockDuration = 30 * 60 * 1000; // 30 minutos mínimo
-            maxLockDuration = 8 * 60 * 60 * 1000; // 8 horas máximo
-            break;
-        case QUEUE_NAMES.TIMEOUT:
-            minLockDuration = 30 * 60 * 1000; // 30 minutos mínimo
-            maxLockDuration = 2 * 60 * 60 * 1000; // 2 horas máximo
-            break;
-        case QUEUE_NAMES.DISPARO:
-            minLockDuration = 10 * 60 * 1000; // 10 minutos mínimo
-            maxLockDuration = 1 * 60 * 60 * 1000; // 1 hora máximo
-            break;
-        default:
-            minLockDuration = 10 * 60 * 1000; // 10 minutos mínimo
-            maxLockDuration = 4 * 60 * 60 * 1000; // 4 horas máximo
-    }
-    
-    return Math.max(minLockDuration, Math.min(lockDuration, maxLockDuration));
+    return Math.max(MIN_LOCK_DURATION, lockDuration);
 }
 
 /**
@@ -506,26 +489,60 @@ function calculateDynamicLockDuration(contactsCount, queueName) {
  */
 function calculateDynamicStalledInterval(lockDuration) {
     const calculated = Math.floor(lockDuration / 3);
-    // Mínimo 20 minutos, máximo 2 horas
-    return Math.max(20 * 60 * 1000, Math.min(calculated, 2 * 60 * 60 * 1000));
+    // Sem limites fixos - usar cálculo adaptativo quando possível
+    // Fallback: mínimo 5 minutos ou 15% do lockDuration, máximo 60% do lockDuration
+    const minStalled = Math.max(5 * 60 * 1000, lockDuration * 0.15);
+    const maxStalled = lockDuration * 0.6;
+    return Math.max(minStalled, Math.min(calculated, maxStalled));
+}
+
+// Importar módulo de métricas (carregamento lazy para evitar dependência circular)
+let queueMetrics = null;
+function getQueueMetrics() {
+    if (!queueMetrics) {
+        queueMetrics = require('./queue-metrics');
+    }
+    return queueMetrics;
 }
 
 /**
- * Obtém lockDuration otimizado para um job específico
+ * Obtém lockDuration otimizado para um job específico usando métricas históricas quando disponível
  * @param {string} queueName - Nome da fila
  * @param {object} jobData - Dados do job
- * @returns {object} - Objeto com lockDuration e stalledInterval calculados
+ * @returns {Promise<object|null>} - Objeto com lockDuration e stalledInterval calculados ou null
  */
-function getOptimalLockDuration(queueName, jobData) {
+async function getOptimalLockDuration(queueName, jobData) {
     // Se já foi calculado, usar o valor existente
     if (jobData._calculatedLockDuration) {
+        const metrics = getQueueMetrics();
+        const stalledInterval = jobData._calculatedStalledInterval || 
+            await metrics.getAdaptiveStalledInterval(jobData._calculatedLockDuration, queueName, jobData) ||
+            calculateDynamicStalledInterval(jobData._calculatedLockDuration);
         return {
             lockDuration: jobData._calculatedLockDuration,
-            stalledInterval: jobData._calculatedStalledInterval || calculateDynamicStalledInterval(jobData._calculatedLockDuration)
+            stalledInterval
         };
     }
     
-    // Calcular baseado no tipo de fila e dados do job
+    // Tentar usar métricas históricas primeiro (sistema adaptativo)
+    try {
+        const metrics = getQueueMetrics();
+        const adaptiveLockDuration = await metrics.getAdaptiveLockDuration(queueName, jobData);
+        
+        if (adaptiveLockDuration) {
+            const adaptiveStalledInterval = await metrics.getAdaptiveStalledInterval(adaptiveLockDuration, queueName, jobData);
+            return {
+                lockDuration: adaptiveLockDuration,
+                stalledInterval: adaptiveStalledInterval
+            };
+        }
+    } catch (error) {
+        // Se erro ao consultar métricas, continuar com cálculo estimativo
+        const logger = require('../logger');
+        logger.debug(`[Queue] Erro ao consultar métricas históricas, usando estimativa:`, error.message);
+    }
+    
+    // Fallback: Calcular baseado no tipo de fila e dados do job (sem limites fixos)
     let lockDuration = null;
     
     if (queueName === QUEUE_NAMES.DISPARO_BATCH && jobData.contacts && Array.isArray(jobData.contacts)) {
@@ -539,9 +556,9 @@ function getOptimalLockDuration(queueName, jobData) {
                     ? JSON.parse(jobData.flow_nodes) 
                     : jobData.flow_nodes;
                 const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
-                // Estimativa: 1 minuto por nó + base
+                // Estimativa: 1 minuto por nó + base, sem limite máximo fixo
                 const estimatedMinutes = 5 + (nodes.length * 1);
-                lockDuration = Math.min(estimatedMinutes * 60 * 1000 * 2, 2 * 60 * 60 * 1000); // 2x margem, máximo 2h
+                lockDuration = estimatedMinutes * 60 * 1000 * 2; // 2x margem de segurança
             } catch (e) {
                 // Se erro ao parsear, usar valor padrão conservador
                 lockDuration = 60 * 60 * 1000; // 1 hora padrão
@@ -555,8 +572,8 @@ function getOptimalLockDuration(queueName, jobData) {
         // O delay está em jobData.delay_seconds (convertido em addJobWithDelay)
         const delayMs = jobData.delay_seconds ? jobData.delay_seconds * 1000 : null;
         if (delayMs) {
-            // Lock duration = delay + 2 horas de margem (para processamento após delay)
-            lockDuration = Math.min(delayMs + (2 * 60 * 60 * 1000), 8 * 60 * 60 * 1000); // Máximo 8 horas
+            // Lock duration = delay + 2 horas de margem (para processamento após delay), sem limite máximo fixo
+            lockDuration = delayMs + (2 * 60 * 60 * 1000);
         } else {
             // Se não tem delay, usar valor conservador alto (6 horas)
             lockDuration = 6 * 60 * 60 * 1000;
@@ -569,9 +586,9 @@ function getOptimalLockDuration(queueName, jobData) {
                     ? JSON.parse(jobData.flow_nodes) 
                     : jobData.flow_nodes;
                 const nodes = Array.isArray(flowNodes) ? flowNodes : (flowNodes.nodes || []);
-                // Estimativa: 1 minuto por nó + base
+                // Estimativa: 1 minuto por nó + base, sem limite máximo fixo
                 const estimatedMinutes = 5 + (nodes.length * 1);
-                lockDuration = Math.min(estimatedMinutes * 60 * 1000 * 2, 1 * 60 * 60 * 1000); // 2x margem, máximo 1h
+                lockDuration = estimatedMinutes * 60 * 1000 * 2; // 2x margem de segurança
             } catch (e) {
                 lockDuration = 30 * 60 * 1000; // 30 minutos padrão
             }
@@ -583,9 +600,9 @@ function getOptimalLockDuration(queueName, jobData) {
         if (jobData.total_contacts || jobData.contacts) {
             const contactsCount = jobData.total_contacts || (Array.isArray(jobData.contacts) ? jobData.contacts.length : 0);
             if (contactsCount > 0) {
-                // Estimativa: 0.1 segundo por contato + base
+                // Estimativa: 0.1 segundo por contato + base, sem limite máximo fixo
                 const estimatedSeconds = 60 + (contactsCount * 0.1);
-                lockDuration = Math.min(estimatedSeconds * 1000 * 2, 2 * 60 * 60 * 1000); // 2x margem, máximo 2h
+                lockDuration = estimatedSeconds * 1000 * 2; // 2x margem de segurança
             } else {
                 lockDuration = 30 * 60 * 1000; // 30 minutos padrão
             }
@@ -597,9 +614,9 @@ function getOptimalLockDuration(queueName, jobData) {
         if (jobData.total_contacts || jobData.contacts) {
             const contactsCount = jobData.total_contacts || (Array.isArray(jobData.contacts) ? jobData.contacts.length : 0);
             if (contactsCount > 0) {
-                // Estimativa: 0.05 segundo por contato + base (mais rápido que validação)
+                // Estimativa: 0.05 segundo por contato + base, sem limite máximo fixo
                 const estimatedSeconds = 30 + (contactsCount * 0.05);
-                lockDuration = Math.min(estimatedSeconds * 1000 * 2, 1 * 60 * 60 * 1000); // 2x margem, máximo 1h
+                lockDuration = estimatedSeconds * 1000 * 2; // 2x margem de segurança
             } else {
                 lockDuration = 20 * 60 * 1000; // 20 minutos padrão
             }
@@ -613,7 +630,10 @@ function getOptimalLockDuration(queueName, jobData) {
         return null;
     }
     
-    const stalledInterval = calculateDynamicStalledInterval(lockDuration);
+    // Usar cálculo adaptativo de stalledInterval quando possível
+    const metrics = getQueueMetrics();
+    const stalledInterval = await metrics.getAdaptiveStalledInterval(lockDuration, queueName, jobData) ||
+        calculateDynamicStalledInterval(lockDuration);
     
     return { lockDuration, stalledInterval };
 }
@@ -717,12 +737,26 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
         data.delay_seconds = Math.floor(delayMs / 1000);
     }
     
-    // Calcular lockDuration dinâmico para jobs que precisam
-    const optimalLock = getOptimalLockDuration(queueName, data);
+    // Calcular lockDuration dinâmico para jobs que precisam (agora async)
+    const optimalLock = await getOptimalLockDuration(queueName, data);
     if (optimalLock) {
         // Armazenar valores calculados no job data para o worker usar
         data._calculatedLockDuration = optimalLock.lockDuration;
         data._calculatedStalledInterval = optimalLock.stalledInterval;
+        
+        // Registrar métrica Prometheus do lockDuration calculado
+        try {
+            const metrics = require('../metrics');
+            if (metrics && metrics.metrics && metrics.metrics.queueAdaptiveLockDuration) {
+                const source = optimalLock.source || 'estimated';
+                metrics.metrics.queueAdaptiveLockDuration.observe(
+                    { queue_name: queueName, source },
+                    optimalLock.lockDuration / 1000
+                );
+            }
+        } catch (e) {
+            // Ignorar erro se métricas não disponíveis
+        }
     }
     
     // Configurar rate limiting por bot token se fornecido
