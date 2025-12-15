@@ -10220,16 +10220,23 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
         
         // Adicionar CTE para contatos pagantes se presente
         if (hasPaidTag) {
-        // OTIMIZADO: Usar JOIN direto ao invés de EXISTS com múltiplos JOINs
+            // OTIMIZADO: Usar EXISTS ao invés de JOINs para evitar produto cartesiano e esgotamento de memória
+            // EXISTS para assim que encontra o primeiro match, evitando materializar milhões de linhas
             query += `,
             paid_contacts AS (
-            SELECT DISTINCT bc.chat_id
+                SELECT DISTINCT bc.chat_id
                 FROM base_contacts bc
-            INNER JOIN telegram_chats tc ON tc.chat_id = bc.chat_id 
-                      AND tc.bot_id = ANY($1::int[])
-                      AND tc.seller_id = $2
-            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM telegram_chats tc
+                    INNER JOIN clicks c ON c.click_id = tc.click_id 
+                        AND c.seller_id = tc.seller_id
+                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id 
+                        AND pt.status = 'paid'
+                    WHERE tc.chat_id = bc.chat_id
+                        AND tc.bot_id = ANY($1::int[])
+                        AND tc.seller_id = $2
+                )
             )`;
         }
         
