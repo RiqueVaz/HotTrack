@@ -2425,20 +2425,36 @@ async function processTimeoutData(data, job = null) {
                 let flowIdForProcess = null;
                 
                 // PRIORIDADE 1: Usar flow_nodes do job data (mais confiável, evita buscar do banco)
+                // #region agent log
+                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2428',message:'ANTES verificar flow_nodes',data:{chatId:chat_id,botId:bot_id,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes,flow_nodes_length:typeof flow_nodes === 'string' ? flow_nodes.length : (flow_nodes ? 'not-string' : 'null/undefined'),flow_id:flow_id,currentState_flow_id:currentState?.flow_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                // #endregion
                 if (flow_nodes) {
                     try {
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2430',message:'ENTRANDO no try - flow_nodes existe',data:{chatId:chat_id,botId:bot_id,flow_nodes_type:typeof flow_nodes,willParse:typeof flow_nodes === 'string'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                        // #endregion
                         const flowData = typeof flow_nodes === 'string' ? JSON.parse(flow_nodes) : flow_nodes;
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2431',message:'DEPOIS do parse',data:{chatId:chat_id,botId:bot_id,flowData_type:typeof flowData,has_nodes:'nodes' in flowData,has_edges:'edges' in flowData,nodes_length:Array.isArray(flowData.nodes) ? flowData.nodes.length : 'not-array',edges_length:Array.isArray(flowData.edges) ? flowData.edges.length : 'not-array'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                        // #endregion
                         flowNodes = flowData.nodes || [];
                         flowEdges = flowData.edges || [];
                         // Usar flow_id do job data ou do estado
                         flowIdForProcess = flow_id || currentState?.flow_id || null;
                         
                         // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2422',message:'Usando flow_nodes do job data',data:{chatId:chat_id,botId:bot_id,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,flowIdForProcess,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2442',message:'Usando flow_nodes do job data',data:{chatId:chat_id,botId:bot_id,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,flowIdForProcess,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
                         // #endregion
                     } catch (parseError) {
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2440',message:'ERRO no parse',data:{chatId:chat_id,botId:bot_id,errorMessage:parseError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                        // #endregion
                         console.error(`[WORKER-TIMEOUT] Erro ao parsear flow_nodes do job data:`, parseError.message);
                     }
+                } else {
+                    // #region agent log
+                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2443',message:'flow_nodes é FALSY - não entrou no if',data:{chatId:chat_id,botId:bot_id,flow_nodes_value:flow_nodes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                    // #endregion
                 }
                 
                 // PRIORIDADE 2: Se não tem flow_nodes no job data ou está vazio, buscar do banco usando flow_id
