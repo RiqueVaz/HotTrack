@@ -902,9 +902,21 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
         data._botToken = botToken;
     }
     
+    // #region agent log
+    if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0) {
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue.js:905',message:'Job TIMEOUT criado com delay',data:{queueName,jobId:jobOptions.jobId,delayMs,delayMinutes:Math.round(delayMs/60000),calculatedLockDuration:data._calculatedLockDuration,calculatedStalledInterval:data._calculatedStalledInterval,lockDurationMinutes:data._calculatedLockDuration?Math.round(data._calculatedLockDuration/60000):null,stalledIntervalMinutes:data._calculatedStalledInterval?Math.round(data._calculatedStalledInterval/60000):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+    }
+    // #endregion
+    
     const job = await redisCircuitBreaker.execute(async () => {
         return await queue.add(jobName, data, jobOptions);
     });
+    
+    // #region agent log
+    if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0) {
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue.js:912',message:'Job TIMEOUT adicionado à fila',data:{queueName,jobId:job.id,actualDelayMs:delayMs,createdAt:Date.now()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+    }
+    // #endregion
     
     return {
         jobId: job.id,
