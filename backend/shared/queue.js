@@ -1,5 +1,5 @@
 // Configuração BullMQ e Redis para substituir QStash
-const { Queue, QueueEvents } = require('bullmq');
+const { Queue, QueueEvents, QueueScheduler } = require('bullmq');
 const Redis = require('ioredis');
 
 // Circuit Breaker para Redis
@@ -227,6 +227,7 @@ const QUEUE_CONFIGS = {
 // Cache de queues (singleton)
 const queues = new Map();
 const queueEvents = new Map();
+const queueSchedulers = new Map();
 
 /**
  * Obtém ou cria uma queue BullMQ com configurações otimizadas por fila
@@ -271,6 +272,15 @@ function getQueue(queueName) {
         // Criar QueueEvents para monitoramento
         const events = new QueueEvents(queueName, { connection: redisConnection });
         queueEvents.set(queueName, events);
+        
+        // Criar QueueScheduler para processar jobs delayed
+        // O QueueScheduler é ESSENCIAL para jobs delayed - sem ele, jobs delayed nunca são processados
+        if (!queueSchedulers.has(queueName)) {
+            const scheduler = new QueueScheduler(queueName, { connection: redisConnection });
+            queueSchedulers.set(queueName, scheduler);
+            const logger = require('../logger');
+            logger.info(`[BullMQ] QueueScheduler criado para fila ${queueName}`);
+        }
     }
     
     return queues.get(queueName);
@@ -858,6 +868,18 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     // Calcular lockDuration dinâmico para jobs que precisam (agora async)
     const optimalLock = await getOptimalLockDuration(queueName, data);
     if (optimalLock) {
+        // Para jobs TIMEOUT com delay, garantir que stalledInterval seja maior que o delay
+        // O BullMQ não verifica stalled em jobs delayed, mas garantimos margem de segurança
+        // O lockDuration só conta após o delay expirar (quando o job começa a processar)
+        if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0 && optimalLock.stalledInterval) {
+            // stalledInterval deve ser pelo menos 2x o delay para evitar falsos positivos
+            // Isso garante que não haja problemas se o delay for longo
+            optimalLock.stalledInterval = Math.max(
+                optimalLock.stalledInterval,
+                delayMs * 2 // Pelo menos 2x o delay
+            );
+        }
+        
         // Armazenar valores calculados no job data para o worker usar
         data._calculatedLockDuration = optimalLock.lockDuration;
         data._calculatedStalledInterval = optimalLock.stalledInterval;
@@ -988,6 +1010,9 @@ async function removeJobsByHistoryId(queueName, historyId) {
  * Fecha todas as conexões
  */
 async function closeAll() {
+    for (const scheduler of queueSchedulers.values()) {
+        await scheduler.close();
+    }
     for (const queue of queues.values()) {
         await queue.close();
     }
