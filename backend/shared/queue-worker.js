@@ -439,7 +439,13 @@ const processors = {
         if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
             await proactiveRenewLock();
         }
-        await processTimeoutData(data, job);
+        const result = await processTimeoutData(data, job);
+        
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:442',message:'Worker concluiu processamento de TIMEOUT',data:{jobId:job.id,chatId:data.chat_id,botId:data.bot_id,result,resultType:typeof result},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}));
+        // #endregion
+        
+        return result;
     },
     
     [QUEUE_NAMES.DISPARO]: async (data, job, proactiveRenewLock = null) => {
