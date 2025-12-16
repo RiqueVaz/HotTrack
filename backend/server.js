@@ -10343,23 +10343,18 @@ async function _getContactsPageFromTags(botIds, sellerId, tagIds, tagFilterMode,
         
         // Adicionar CTE para contatos pagantes se presente
         if (hasPaidTag) {
-            // OTIMIZADO: Usar EXISTS ao invés de JOINs para evitar produto cartesiano e esgotamento de memória
-            // EXISTS para assim que encontra o primeiro match, evitando materializar milhões de linhas
+            // OTIMIZADO: Criar paid_contacts diretamente das tabelas relacionadas
+            // ao invés de filtrar base_contacts, evitando iteração desnecessária e reduzindo uso de memória
             query += `,
             paid_contacts AS (
-                SELECT DISTINCT bc.chat_id
-                FROM base_contacts bc
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM telegram_chats tc
-                    INNER JOIN clicks c ON c.click_id = tc.click_id 
-                        AND c.seller_id = tc.seller_id
-                    INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id 
-                        AND pt.status = 'paid'
-                    WHERE tc.chat_id = bc.chat_id
-                        AND tc.bot_id = ANY($1::int[])
-                        AND tc.seller_id = $2
-                )
+                SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                INNER JOIN clicks c ON c.click_id = tc.click_id 
+                    AND c.seller_id = tc.seller_id
+                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id 
+                    AND pt.status = 'paid'
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
             )`;
         }
         
@@ -10672,19 +10667,16 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
     
     // Adicionar CTE para contatos pagantes se presente
     if (hasPaidTag) {
+        // OTIMIZADO: Criar paid_contacts diretamente das tabelas relacionadas
+        // ao invés de filtrar base_contacts, evitando iteração desnecessária e reduzindo uso de memória
         query += `,
         paid_contacts AS (
-            SELECT bc.chat_id
-            FROM base_contacts bc
-            WHERE EXISTS (
-                SELECT 1
-                FROM telegram_chats tc
-                INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
-                INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
-                WHERE tc.chat_id = bc.chat_id
-                  AND tc.bot_id = ANY($1::int[])
-                  AND tc.seller_id = $2
-            )
+            SELECT DISTINCT tc.chat_id
+            FROM telegram_chats tc
+            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+            WHERE tc.bot_id = ANY($1::int[])
+                AND tc.seller_id = $2
         )`;
     }
     
