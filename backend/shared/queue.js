@@ -663,8 +663,30 @@ async function getOptimalLockDuration(queueName, jobData) {
                 lockDuration = 60 * 60 * 1000; // 1 hora padrão
             }
         } else {
-            // Sem informações de flow, usar valor conservador
-            lockDuration = 60 * 60 * 1000; // 1 hora padrão
+            // Sem informações de flow, considerar delay se presente
+            if (jobData._delayMs && jobData._delayMs > 0) {
+                // LockDuration = delay + 1 hora de margem para processamento
+                lockDuration = jobData._delayMs + (60 * 60 * 1000);
+            } else {
+                // Sem delay e sem flow_nodes, usar valor conservador
+                lockDuration = 60 * 60 * 1000; // 1 hora padrão
+            }
+        }
+        
+        // Garantir que lockDuration seja válido
+        if (!lockDuration || !Number.isFinite(lockDuration) || lockDuration <= 0) {
+            // Se cálculo inválido, usar padrão baseado em delay ou 1 hora
+            lockDuration = jobData._delayMs && jobData._delayMs > 0 
+                ? jobData._delayMs + (60 * 60 * 1000)
+                : 60 * 60 * 1000;
+        }
+        
+        // Se tem delay, garantir que lockDuration seja pelo menos delay + margem
+        if (jobData._delayMs && jobData._delayMs > 0) {
+            const minLockDurationForDelay = jobData._delayMs + (60 * 60 * 1000);
+            if (lockDuration < minLockDurationForDelay) {
+                lockDuration = minLockDurationForDelay;
+            }
         }
     } else if (queueName === QUEUE_NAMES.DISPARO_DELAY) {
         // Calcular baseado no delay do job + margem para processamento
@@ -754,14 +776,41 @@ async function getOptimalLockDuration(queueName, jobData) {
     }
     
     // Se não calculou, retornar null para usar valores padrão da fila
-    if (!lockDuration) {
+    if (!lockDuration || !Number.isFinite(lockDuration) || lockDuration <= 0) {
         return null;
+    }
+    
+    // Validação adicional para jobs TIMEOUT com delay
+    if (queueName === QUEUE_NAMES.TIMEOUT && jobData._delayMs && jobData._delayMs > 0) {
+        // Garantir que lockDuration seja pelo menos delay + margem
+        const minLockDuration = jobData._delayMs + (60 * 60 * 1000);
+        if (lockDuration < minLockDuration) {
+            const logger = require('../logger');
+            logger.warn(`[Queue] Ajustando lockDuration para TIMEOUT: ${Math.round(lockDuration/60000)}min -> ${Math.round(minLockDuration/60000)}min (delay: ${Math.round(jobData._delayMs/60000)}min)`);
+            lockDuration = minLockDuration;
+        }
+    }
+    
+    // Limitar ao máximo técnico se exceder
+    const limits = getQueueMetricsConstants();
+    if (lockDuration > limits.MAX_LOCK_DURATION_MS) {
+        const logger = require('../logger');
+        logger.warn(`[Queue] LockDuration muito grande (${Math.round(lockDuration / 60000)}min), limitando ao máximo técnico: ${Math.round(limits.MAX_LOCK_DURATION_MS / 60000)}min`);
+        lockDuration = limits.MAX_LOCK_DURATION_MS;
     }
     
     // Usar cálculo adaptativo de stalledInterval quando possível
     const metrics = getQueueMetrics();
-    const stalledInterval = await metrics.getAdaptiveStalledInterval(lockDuration, queueName, jobData) ||
+    let stalledInterval = await metrics.getAdaptiveStalledInterval(lockDuration, queueName, jobData) ||
         calculateDynamicStalledInterval(lockDuration);
+    
+    // Ajustar stalledInterval para jobs TIMEOUT com delay
+    if (queueName === QUEUE_NAMES.TIMEOUT && jobData._delayMs && jobData._delayMs > 0) {
+        const minStalledInterval = jobData._delayMs * 2;
+        if (stalledInterval < minStalledInterval) {
+            stalledInterval = minStalledInterval;
+        }
+    }
     
     return { lockDuration, stalledInterval };
 }
@@ -865,19 +914,40 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
         data.delay_seconds = Math.floor(delayMs / 1000);
     }
     
+    // Para TIMEOUT, adicionar delay ao jobData temporariamente para cálculo
+    if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0) {
+        data._delayMs = delayMs;
+    }
+    
     // Calcular lockDuration dinâmico para jobs que precisam (agora async)
-    const optimalLock = await getOptimalLockDuration(queueName, data);
+    let optimalLock;
+    try {
+        optimalLock = await getOptimalLockDuration(queueName, data);
+    } catch (error) {
+        const logger = require('../logger');
+        logger.error(`[Queue] Erro ao calcular lockDuration para ${queueName}:`, error);
+        optimalLock = null;
+    }
+    
+    // Remover campo temporário
+    if (data._delayMs !== undefined) {
+        delete data._delayMs;
+    }
+    
     if (optimalLock) {
-        // Para jobs TIMEOUT com delay, garantir que stalledInterval seja maior que o delay
-        // O BullMQ não verifica stalled em jobs delayed, mas garantimos margem de segurança
-        // O lockDuration só conta após o delay expirar (quando o job começa a processar)
-        if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0 && optimalLock.stalledInterval) {
+        // Para jobs TIMEOUT com delay, garantir que lockDuration seja pelo menos delay + margem
+        if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0) {
+            // LockDuration deve ser pelo menos: delay + 1 hora de margem para processamento
+            const minLockDurationForDelay = delayMs + (60 * 60 * 1000);
+            optimalLock.lockDuration = Math.max(optimalLock.lockDuration || 0, minLockDurationForDelay);
+            
             // stalledInterval deve ser pelo menos 2x o delay para evitar falsos positivos
-            // Isso garante que não haja problemas se o delay for longo
-            optimalLock.stalledInterval = Math.max(
-                optimalLock.stalledInterval,
-                delayMs * 2 // Pelo menos 2x o delay
-            );
+            if (optimalLock.stalledInterval) {
+                optimalLock.stalledInterval = Math.max(
+                    optimalLock.stalledInterval,
+                    delayMs * 2 // Pelo menos 2x o delay
+                );
+            }
         }
         
         // Armazenar valores calculados no job data para o worker usar
@@ -896,6 +966,30 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
             }
         } catch (e) {
             // Ignorar erro se métricas não disponíveis
+        }
+    } else {
+        // Fallback: garantir que jobs TIMEOUT sempre tenham lockDuration calculado
+        if (queueName === QUEUE_NAMES.TIMEOUT) {
+            const logger = require('../logger');
+            logger.warn(`[Queue] getOptimalLockDuration retornou null para TIMEOUT, usando fallback baseado em delay: ${delayMs}ms`);
+            
+            // Calcular lockDuration baseado no delay (se houver) + margem, ou usar padrão
+            let fallbackLockDuration;
+            if (delayMs > 0) {
+                // LockDuration = delay + 1 hora de margem para processamento
+                fallbackLockDuration = delayMs + (60 * 60 * 1000);
+            } else {
+                // Sem delay, usar 1 hora padrão
+                fallbackLockDuration = 60 * 60 * 1000;
+            }
+            
+            const fallbackStalledInterval = Math.max(
+                delayMs > 0 ? delayMs * 2 : 30 * 60 * 1000, // 2x delay ou 30min
+                30 * 60 * 1000 // Mínimo 30min
+            );
+            
+            data._calculatedLockDuration = fallbackLockDuration;
+            data._calculatedStalledInterval = fallbackStalledInterval;
         }
     }
     
