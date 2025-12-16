@@ -9131,12 +9131,15 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     const batchIds = contactIds.slice(batchStart, batchEnd);
                     
                     // Buscar dados completos apenas para este batch (query leve com IN)
+                    // IMPORTANTE: Filtrar por bot_id e seller_id para garantir que apenas contatos dos bots selecionados sejam incluídos
                     const batchContacts = await sqlWithRetry(
                         sqlTx`SELECT DISTINCT ON (tc.chat_id) 
                             tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
                         FROM telegram_chats tc
                         LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
                         WHERE tc.chat_id = ANY(${batchIds})
+                            AND tc.bot_id = ANY(${validBotIds})
+                            AND tc.seller_id = ${sellerId}
                             AND bb.chat_id IS NULL
                         ORDER BY tc.chat_id ASC, tc.created_at DESC`
                     );

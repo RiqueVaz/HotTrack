@@ -157,7 +157,7 @@ class ApiRateLimiterBullMQ {
                 concurrency: 2, // Aumentado de 1 para 2 (mais conservador)
                 timeout: 20000,
                 cacheTTL: 60_000,
-                maxRetries: 1,
+                maxRetries: 3, // Aumentado de 1 para 3 para permitir retries após 429
                 circuitBreakerThreshold: 20, // Aumentado de 10 para 20 (mais tolerante a erros)
                 circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
@@ -196,7 +196,7 @@ class ApiRateLimiterBullMQ {
                     attempts: config.maxRetries,
                     backoff: {
                         type: 'exponential',
-                        delay: 2000
+                        delay: provider === 'utmify' ? 5000 : 2000 // 5s para utmify, 2s para outros
                     },
                     removeOnComplete: { age: 3600 }, // 1 hora
                     removeOnFail: { age: 86400 } // 24 horas
