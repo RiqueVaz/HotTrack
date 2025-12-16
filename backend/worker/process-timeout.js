@@ -2308,6 +2308,10 @@ async function processTimeoutData(data, job = null) {
             FROM user_flow_states 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2306',message:'Estado do usuário verificado antes de processar timeout',data:{chatId:chat_id,botId:bot_id,hasState:!!currentState,waitingForInput:currentState?.waiting_for_input,scheduledMessageId:currentState?.scheduled_message_id,continueFromDelay:continue_from_delay,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
+        // #endregion
+
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
             // Limpar timer de renovação durante delay se ainda estiver ativo
@@ -2341,13 +2345,19 @@ async function processTimeoutData(data, job = null) {
         
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
+            // #region agent log
+            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2343',message:'Verificando waiting_for_input antes de processar timeout',data:{chatId:chat_id,botId:bot_id,waitingForInput:currentState.waiting_for_input,willIgnore:!currentState.waiting_for_input,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
+            // #endregion
+            
             if (!currentState.waiting_for_input) {
                 // Limpar timer de renovação durante delay se ainda estiver ativo
                 if (delayRenewTimer) {
                     clearInterval(delayRenewTimer);
                     delayRenewTimer = null;
                 }
-                // Removido log de debug
+                // #region agent log
+                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2351',message:'Timeout ignorado - usuário já respondeu',data:{chatId:chat_id,botId:bot_id,reason:'user_already_proceeded',jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
+                // #endregion
                 return { ignored: true, reason: 'user_already_proceeded' };
             }
 

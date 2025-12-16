@@ -363,6 +363,12 @@ async function createWorker(queueName, processor, options = {}) {
                 const lockDurationMinutes = Math.round(jobLockDuration / 60000);
                 const processingTimeMinutes = processingTime ? Math.round(processingTime / 60000) : null;
                 
+                // #region agent log
+                if (queueName === QUEUE_NAMES.TIMEOUT) {
+                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:355',message:'Job TIMEOUT stalled detectado',data:{jobId,queueName,delay:job.opts.delay,delayMs:job.opts.delay||0,delayMinutes:job.opts.delay?Math.round(job.opts.delay/60000):0,lockDuration:jobLockDuration,lockDurationMinutes,stalledInterval:jobStalledInterval,stalledIntervalMinutes:Math.round(jobStalledInterval/60000),processingTime,processingTimeMinutes,createdAt:job.timestamp,processedOn:job.processedOn,hasDelay:!!job.opts.delay,timeSinceCreated:job.timestamp?Date.now()-job.timestamp:null,timeSinceProcessed:job.processedOn?Date.now()-job.processedOn:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+                }
+                // #endregion
+                
                 // Logar warning se job demorou >80% do lockDuration calculado
                 if (processingTime && jobLockDuration) {
                     const utilizationRatio = processingTime / jobLockDuration;
@@ -425,6 +431,10 @@ async function createWorker(queueName, processor, options = {}) {
 // Processadores para cada tipo de job
 const processors = {
     [QUEUE_NAMES.TIMEOUT]: async (data, job, proactiveRenewLock = null) => {
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:428',message:'Worker iniciando processamento de TIMEOUT',data:{jobId:job.id,chatId:data.chat_id,botId:data.bot_id,targetNodeId:data.target_node_id,processedOn:job.processedOn,delay:job.opts.delay,lockDuration:job.opts.lockDuration,waitingForInput:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}));
+        // #endregion
+        
         // Renovar lock antes de operações longas se função disponível
         if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
             await proactiveRenewLock();
