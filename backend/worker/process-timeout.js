@@ -1906,7 +1906,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
     // Se os dados do fluxo foram fornecidos (ex: forward_flow), usa eles. Caso contrário, busca do banco.
     let nodes, edges;
     let currentFlowId = null; // Armazena o ID do fluxo atual para rastreamento
-    if (flowNodes && flowEdges) {
+    if (flowNodes && flowEdges && Array.isArray(flowNodes) && flowNodes.length > 0 && Array.isArray(flowEdges) && flowEdges.length > 0) {
         // Usa os dados do fluxo fornecido (do forward_flow)
         nodes = flowNodes;
         edges = flowEdges;
