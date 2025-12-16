@@ -1296,7 +1296,7 @@ async function processActions(actions, chatId, botId, botToken, sellerId, variab
                                 continue_from_delay: true, // Flag para indicar que é continuação após delay
                                 remaining_actions: remainingActions.length > 0 ? JSON.stringify(remainingActions) : null,
                                 flow_id: flowId,
-                                flow_nodes: JSON.stringify(flowNodes)
+                                flow_nodes: JSON.stringify({ nodes: resolvedFlowNodes, edges: resolvedFlowEdges })
                             },
                             {
                                 delay: `${delaySeconds}s`,
@@ -2137,7 +2137,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
                             target_node_id: noReplyNodeId, // Pode ser null, e o worker saberá encerrar
                             variables: variables,
                             flow_id: currentFlowId,
-                            flow_nodes: JSON.stringify(nodes)
+                            flow_nodes: JSON.stringify({ nodes, edges })
                         },
                         {
                             delay: `${timeoutMinutes}m`,
