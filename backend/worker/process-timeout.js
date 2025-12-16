@@ -2441,8 +2441,8 @@ async function processTimeoutData(data, job = null) {
                     }
                 }
                 
-                // PRIORIDADE 2: Se não tem flow_nodes no job data, buscar do banco usando flow_id
-                if (!flowNodes && (flow_id || currentState?.flow_id)) {
+                // PRIORIDADE 2: Se não tem flow_nodes no job data ou está vazio, buscar do banco usando flow_id
+                if ((!flowNodes || (Array.isArray(flowNodes) && flowNodes.length === 0)) && (flow_id || currentState?.flow_id)) {
                     const flowIdToUse = flow_id || currentState.flow_id;
                     const [flow] = await sqlWithRetry(sqlTx`
                         SELECT nodes FROM flows WHERE id = ${flowIdToUse}
@@ -2459,8 +2459,8 @@ async function processTimeoutData(data, job = null) {
                     }
                 }
                 
-                // Se ainda não tem flowNodes, processFlow vai buscar do banco (fallback)
-                if (!flowNodes) {
+                // Se ainda não tem flowNodes ou está vazio, processFlow vai buscar do banco (fallback)
+                if (!flowNodes || (Array.isArray(flowNodes) && flowNodes.length === 0)) {
                     // #region agent log
                     console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2453',message:'Nenhum flow_nodes encontrado - processFlow vai buscar do banco',data:{chatId:chat_id,botId:bot_id,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
                     // #endregion
