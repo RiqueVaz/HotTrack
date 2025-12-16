@@ -2343,6 +2343,10 @@ async function processTimeoutData(data, job = null) {
             }
         }
         
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2345',message:'Depois de definir isDisparoTimeout',data:{chatId:chat_id,botId:bot_id,isDisparoTimeout,is_disparo:is_disparo,target_node_id,disparoHistoryId,disparoFlowId,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+        // #endregion
+        
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
             // #region agent log
@@ -2370,11 +2374,18 @@ async function processTimeoutData(data, job = null) {
                 SET waiting_for_input = false, scheduled_message_id = NULL
                 WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
         } else {
-            // Removido log de debug
+            // Removido log of debug
         }
+        
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2379',message:'ANTES verificar se é disparo',data:{chatId:chat_id,botId:bot_id,isDisparoTimeout,is_disparo:is_disparo,target_node_id,willEnterDisparoBlock:isDisparoTimeout && target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+        // #endregion
         
         // Se é disparo, processar usando processDisparoFlow
         if (isDisparoTimeout && target_node_id) {
+            // #region agent log
+            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2385',message:'ENTRANDO no bloco de disparo',data:{chatId:chat_id,botId:bot_id,disparoHistoryId,disparoFlowId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+            // #endregion
             try {
                 if (!disparoFlowId) {
                     throw new Error('disparo_flow_id não encontrado para continuar disparo após timeout.');
@@ -2409,6 +2420,10 @@ async function processTimeoutData(data, job = null) {
                 throw error;
             }
         }
+
+        // #region agent log
+        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2412',message:'ANTES do if(target_node_id) - fluxo normal',data:{chatId:chat_id,botId:bot_id,target_node_id,target_node_id_exists:!!target_node_id,isDisparoTimeout,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes,flow_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
+        // #endregion
 
         // Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
