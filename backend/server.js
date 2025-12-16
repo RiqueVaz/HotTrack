@@ -9028,8 +9028,7 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
         // 6. Iniciar disparo diretamente usando streaming (sem higienização - bloqueados já foram filtrados nas queries)
         (async () => {
             try {
-                console.log(`[DISPARO ${historyId}] Iniciando disparo direto usando streaming...`);
-                console.log(`[DISPARO ${historyId}] Configuração: MAX_CONTACTS_PER_QUERY=${MAX_CONTACTS_PER_QUERY}, PG_POOL_MAX=${sqlTx.options.max}`);
+                console.log(`[DISPARO ${historyId}] Iniciando disparo direto (sem streaming)...`);
                 
                 // Atualizar status para RUNNING no início do processamento em background
                     await sqlWithRetry(
@@ -9086,134 +9085,68 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 const botTokenMap = new Map();
                 botChecks.forEach(b => botTokenMap.set(b.id, b.bot_token));
                 
-                // Usar streaming para processar contatos em páginas e criar batches conforme chegam
+                // Abordagem sem streaming: buscar apenas IDs primeiro, depois processar em batches
                 const DISPARO_BATCH_SIZE = parseInt(process.env.DISPARO_BATCH_SIZE) || 200;
-                const contactsForBatch = [];
-                const seenChatIds = new Set(); // Para deduplicação
-                let totalContactsProcessed = 0;
-                let batchIndex = 0;
-                const batchPromises = [];
                 
-                // Variáveis para rastrear contatos processados mesmo em caso de erro
-                let totalContactsProcessedBeforeError = 0;
-                let hasProcessedAnyContacts = false;
+                console.log(`[DISPARO ${historyId}] Buscando chat_ids únicos filtrados por tags...`);
                 
-                // Função para criar batch quando atingir tamanho limite
-                const createBatchIfReady = async () => {
-                    if (contactsForBatch.length >= DISPARO_BATCH_SIZE) {
-                        const batchToProcess = contactsForBatch.slice(0, DISPARO_BATCH_SIZE);
-                
-                // Preparar contatos para batch processing
-                        const preparedBatch = batchToProcess.map(contact => {
-                    const userVariables = {
-                        primeiro_nome: contact.first_name || '',
-                        nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
-                        click_id: contact.click_id ? contact.click_id.replace('/start ', '') : null
-                    };
-                    
-                    return {
-                        chat_id: contact.chat_id,
-                        bot_id: contact.bot_id_source || validBotIds[0],
-                        variables_json: JSON.stringify(userVariables)
-                    };
-                });
-                
-                        // Validar contatos válidos
-                        const validContacts = preparedBatch.filter(c => c && c.chat_id && c.bot_id);
-                        if (validContacts.length === 0) {
-                            // Remover batch mesmo se não tiver contatos válidos
-                            contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
-                            return;
-                        }
-                        
-                        const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
-                        const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
-                        
-                        const firstContactBotId = validContacts[0]?.bot_id;
-                        const botToken = botTokenMap.get(firstContactBotId) || '';
-                        
-                        const batchPayload = {
-                            history_id: historyId,
-                            contacts: validContacts,
-                            flow_nodes: JSON.stringify(flowNodes),
-                            flow_edges: JSON.stringify(flowEdges),
-                            start_node_id: startNodeId,
-                            batch_index: batchIndex,
-                            total_batches: null // Será calculado depois
-                        };
-                        
-                        try {
-                            const jobResult = await addJobWithDelay(
-                                QUEUE_NAMES.DISPARO_BATCH,
-                                'process-disparo-batch',
-                                batchPayload,
-                                {
-                                    delay: `${batchDelaySeconds}s`,
-                                    botToken: botToken
-                                }
-                            );
-                            batchPromises.push(Promise.resolve(jobResult));
-                        } catch (jobError) {
-                            console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch ${batchIndex + 1}:`, jobError.message);
-                        }
-                        
-                        // Remover batch processado do array
-                        contactsForBatch.splice(0, DISPARO_BATCH_SIZE);
-                        batchIndex++;
-                    }
-                };
-                
-                // Processar contatos usando streaming
-                const streamStats = await processContactsInStream(
+                // Etapa 1: Buscar apenas chat_ids únicos (muito mais leve que buscar objetos completos)
+                const contactIds = await getContactIdsByTags(
                     validBotIds,
                     sellerId,
                     tagIds || null,
                     tagFilterMode,
-                    excludeChatIds || null,
-                    async (pageContacts, pageNumber, totalProcessed) => {
-                        // Adicionar apenas contatos únicos desta página
-                        for (const c of pageContacts) {
-                            if (!seenChatIds.has(c.chat_id)) {
-                                seenChatIds.add(c.chat_id);
-                                contactsForBatch.push({
-                                    chat_id: c.chat_id,
-                                    first_name: c.first_name,
-                                    last_name: c.last_name,
-                                    username: c.username,
-                                    click_id: c.click_id,
-                                    bot_id_source: c.bot_id
-                                });
-                            }
-                        }
-                        
-                        // Marcar que pelo menos uma página foi processada
-                        hasProcessedAnyContacts = true;
-                        totalContactsProcessedBeforeError = seenChatIds.size;
-                        
-                        // Atualizar totalContactsProcessed com número real de contatos únicos (após deduplicação)
-                        totalContactsProcessed = seenChatIds.size;
-                        
-                        // Atualizar total_jobs na primeira página ou periodicamente (a cada 10 páginas)
-                        if (pageNumber === 1 || pageNumber % 10 === 0) {
-                            const estimatedTotal = seenChatIds.size || (pageNumber * MAX_CONTACTS_PER_QUERY);
-                            await sqlWithRetry(
-                                sqlTx`UPDATE disparo_history 
-                                      SET total_jobs = ${estimatedTotal}
-                                      WHERE id = ${historyId}`
-                            );
-                        }
-                        
-                        // Criar batches quando atingir tamanho limite
-                        await createBatchIfReady();
-                    }
+                    excludeChatIds || null
                 );
                 
-                // Após streaming completo, usar o número real de contatos únicos
-                const finalUniqueContactsCount = seenChatIds.size;
+                const finalUniqueContactsCount = contactIds.length;
+                console.log(`[DISPARO ${historyId}] ${finalUniqueContactsCount} chat_ids únicos encontrados.`);
                 
-                // Processar batch final se houver contatos restantes
-                if (contactsForBatch.length > 0) {
-                    const preparedBatch = contactsForBatch.map(contact => {
+                if (finalUniqueContactsCount === 0) {
+                    console.log(`[DISPARO ${historyId}] Nenhum contato encontrado.`);
+                    await sqlWithRetry(
+                        sqlTx`UPDATE disparo_history 
+                              SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
+                              WHERE id = ${historyId}`
+                    );
+                    return;
+                }
+                
+                // Atualizar total_jobs com o número real de contatos
+                await sqlWithRetry(
+                    sqlTx`UPDATE disparo_history 
+                          SET total_jobs = ${finalUniqueContactsCount}
+                          WHERE id = ${historyId}`
+                );
+                
+                // Etapa 2: Processar IDs em batches na aplicação
+                const totalBatches = Math.ceil(contactIds.length / DISPARO_BATCH_SIZE);
+                const batchPromises = [];
+                
+                console.log(`[DISPARO ${historyId}] Processando ${contactIds.length} contatos em ${totalBatches} batches de ${DISPARO_BATCH_SIZE}...`);
+                
+                for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+                    const batchStart = batchIndex * DISPARO_BATCH_SIZE;
+                    const batchEnd = Math.min(batchStart + DISPARO_BATCH_SIZE, contactIds.length);
+                    const batchIds = contactIds.slice(batchStart, batchEnd);
+                    
+                    // Buscar dados completos apenas para este batch (query leve com IN)
+                    const batchContacts = await sqlWithRetry(
+                        sqlTx`SELECT DISTINCT ON (tc.chat_id) 
+                            tc.chat_id, tc.bot_id, tc.first_name, tc.last_name, tc.username, tc.click_id
+                        FROM telegram_chats tc
+                        LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                        WHERE tc.chat_id = ANY(${batchIds})
+                            AND bb.chat_id IS NULL
+                        ORDER BY tc.chat_id ASC, tc.created_at DESC`
+                    );
+                    
+                    if (batchContacts.length === 0) {
+                        continue;
+                    }
+                    
+                    // Preparar contatos para batch processing
+                    const preparedBatch = batchContacts.map(contact => {
                         const userVariables = {
                             primeiro_nome: contact.first_name || '',
                             nome_completo: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
@@ -9222,27 +9155,30 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                         
                         return {
                             chat_id: contact.chat_id,
-                            bot_id: contact.bot_id_source || validBotIds[0],
+                            bot_id: contact.bot_id || validBotIds[0],
                             variables_json: JSON.stringify(userVariables)
                         };
                     });
                     
                     const validContacts = preparedBatch.filter(c => c && c.chat_id && c.bot_id);
-                    if (validContacts.length > 0) {
-                        const SMALL_BATCH_DELAY_SECONDS = 0.01;
+                    if (validContacts.length === 0) {
+                        continue;
+                    }
+                    
+                    const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
                     const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
                     
-                        const firstContactBotId = validContacts[0]?.bot_id;
+                    const firstContactBotId = validContacts[0]?.bot_id;
                     const botToken = botTokenMap.get(firstContactBotId) || '';
                     
                     const batchPayload = {
                         history_id: historyId,
-                            contacts: validContacts,
+                        contacts: validContacts,
                         flow_nodes: JSON.stringify(flowNodes),
                         flow_edges: JSON.stringify(flowEdges),
                         start_node_id: startNodeId,
                         batch_index: batchIndex,
-                            total_batches: batchIndex + 1
+                        total_batches: totalBatches
                     };
                     
                     try {
@@ -9255,17 +9191,16 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                                 botToken: botToken
                             }
                         );
-                            batchPromises.push(Promise.resolve(jobResult));
+                        batchPromises.push(Promise.resolve(jobResult));
                     } catch (jobError) {
-                            console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch final:`, jobError.message);
-                        }
+                        console.error(`[DISPARO ${historyId}] ERRO ao criar job para batch ${batchIndex + 1}:`, jobError.message);
                     }
                 }
                 
-                const totalBatches = batchPromises.length;
+                const totalBatchesCreated = batchPromises.length;
                 
-                if (totalBatches === 0) {
-                    console.log(`[DISPARO ${historyId}] Nenhum contato encontrado após streaming.`);
+                if (totalBatchesCreated === 0) {
+                    console.log(`[DISPARO ${historyId}] Nenhum batch válido criado.`);
                     await sqlWithRetry(
                         sqlTx`UPDATE disparo_history 
                               SET status = 'COMPLETED', current_step = NULL, total_sent = 0, total_jobs = 0
@@ -9275,61 +9210,57 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                 }
                 
                 // Publicar todos os batches
-                console.log(`[DISPARO ${historyId}] Publicando ${totalBatches} batches no BullMQ...`);
+                console.log(`[DISPARO ${historyId}] Publicando ${totalBatchesCreated} batches no BullMQ...`);
                 const results = await Promise.allSettled(batchPromises);
-                    
-                    const successful = results.filter(r => r.status === 'fulfilled').length;
-                    const failed = results.filter(r => r.status === 'rejected').length;
-                    
-                    console.log(`[DISPARO ${historyId}] Resultado da publicação: ${successful} sucessos, ${failed} falhas`);
-                    
-                    if (failed > 0) {
-                        console.error(`[DISPARO ${historyId}] ERRO: ${failed} batches falharam ao ser criados!`, 
-                            results.filter(r => r.status === 'rejected').map(r => r.reason));
-                    }
                 
-                // Atualizar total_jobs com valor real do streaming (já deduplicado)
-                // Usar o número real de contatos únicos após deduplicação (seenChatIds.size)
-                const finalTotalJobs = finalUniqueContactsCount;
+                const successful = results.filter(r => r.status === 'fulfilled').length;
+                const failed = results.filter(r => r.status === 'rejected').length;
                 
-                // Atualizar total_jobs e total_sent com valor real do streaming
+                console.log(`[DISPARO ${historyId}] Resultado da publicação: ${successful} sucessos, ${failed} falhas`);
+                
+                if (failed > 0) {
+                    console.error(`[DISPARO ${historyId}] ERRO: ${failed} batches falharam ao ser criados!`, 
+                        results.filter(r => r.status === 'rejected').map(r => r.reason));
+                }
+                
+                // Atualizar total_jobs e total_sent com valor real
                 // Status já está como RUNNING desde antes do processamento
-                    await sqlWithRetry(
+                await sqlWithRetry(
                     sqlTx`UPDATE disparo_history 
-                          SET total_sent = ${finalTotalJobs}, total_jobs = ${finalTotalJobs}
+                          SET total_sent = ${finalUniqueContactsCount}, total_jobs = ${finalUniqueContactsCount}
                           WHERE id = ${historyId}`
-                    );
+                );
                 
-                console.log(`[DISPARO ${historyId}] Disparo processado com streaming. ${finalTotalJobs} contatos únicos em ${streamStats.totalPages} páginas, ${totalBatches} batches criados.`);
+                console.log(`[DISPARO ${historyId}] Disparo processado. ${finalUniqueContactsCount} contatos únicos, ${totalBatchesCreated} batches criados.`);
                 
                 // Limpar Maps temporários para liberar memória
                 if (typeof botTokenMap !== 'undefined') botTokenMap.clear();
             } catch (bgError) {
                 console.error("Erro no processamento em background do disparo:", bgError);
+                console.error("Stack trace:", bgError.stack);
                 
-                // Se pelo menos alguns contatos foram processados, preservar total_jobs
-                if (hasProcessedAnyContacts && totalContactsProcessedBeforeError > 0) {
-                    try {
+                // Tentar preservar total_jobs se já foi calculado
+                try {
+                    // Verificar se já temos o total de contatos calculado
+                    const [currentHistory] = await sqlWithRetry(
+                        sqlTx`SELECT total_jobs FROM disparo_history WHERE id = ${historyId}`
+                    );
+                    
+                    if (currentHistory && currentHistory.total_jobs > 0) {
                         await sqlWithRetry(
                             sqlTx`UPDATE disparo_history 
                                   SET status = 'FAILED',
-                                      total_jobs = ${totalContactsProcessedBeforeError},
                                       current_step = 'error'
                                   WHERE id = ${historyId}`
                         );
-                        console.log(`[DISPARO ${historyId}] Status atualizado para FAILED com ${totalContactsProcessedBeforeError} contatos processados antes do erro.`);
-                    } catch (updateError) {
-                        console.error("Erro ao atualizar status com total_jobs preservado:", updateError);
+                        console.log(`[DISPARO ${historyId}] Status atualizado para FAILED com ${currentHistory.total_jobs} contatos já calculados.`);
+                    } else {
+                        await sqlWithRetry(
+                            sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
+                        );
                     }
-                } else {
-                    // Se nenhum contato foi processado, atualizar normalmente
-                try {
-                    await sqlWithRetry(
-                        sqlTx`UPDATE disparo_history SET status = 'FAILED' WHERE id = ${historyId}`
-                    );
                 } catch (updateError) {
                     console.error("Erro ao atualizar status para FAILED:", updateError);
-                    }
                 }
             } finally {
                 // Garantir limpeza de Maps mesmo em caso de erro
@@ -10626,6 +10557,217 @@ async function getContactsCountByTags(botIds, sellerId, tagIds = null, tagFilter
     
     const result = await sqlWithRetry(query, params);
     return result && result.length > 0 ? parseInt(result[0].count) || 0 : 0;
+}
+
+/**
+ * Busca apenas chat_ids únicos filtrados por tags (sem streaming)
+ * Muito mais leve que buscar objetos completos
+ * @param {Array} botIds - IDs dos bots
+ * @param {number} sellerId - ID do vendedor
+ * @param {Array} tagIds - IDs das tags (pode incluir números e strings como 'Pagante')
+ * @param {string} tagFilterMode - 'include' ou 'exclude'
+ * @param {Array} excludeChatIds - IDs de chats para excluir (opcional)
+ * @returns {Promise<Array<number>>} Array de chat_ids únicos
+ */
+async function getContactIdsByTags(botIds, sellerId, tagIds = null, tagFilterMode = 'include', excludeChatIds = null) {
+    // Se não há filtros de tags, retornar apenas chat_ids únicos (excluindo bloqueados)
+    if (!tagIds || !Array.isArray(tagIds) || tagIds.length === 0) {
+        let query;
+        if (excludeChatIds && excludeChatIds.length > 0) {
+            query = `SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+                    AND tc.chat_id != ALL($3::bigint[])
+                    AND bb.chat_id IS NULL
+                ORDER BY tc.chat_id ASC`;
+            const result = await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            return result && result.length > 0 ? result.map(r => r.chat_id) : [];
+        } else {
+            query = `SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+                    AND bb.chat_id IS NULL
+                ORDER BY tc.chat_id ASC`;
+            const result = await sqlWithRetry(query, [botIds, sellerId]);
+            return result && result.length > 0 ? result.map(r => r.chat_id) : [];
+        }
+    }
+    
+    // Separar tags custom de automáticas
+    let customTagIds = [];
+    let automaticTagNames = [];
+    tagIds.forEach(tagId => {
+        if (typeof tagId === 'number' || (typeof tagId === 'string' && /^\d+$/.test(tagId))) {
+            customTagIds.push(parseInt(tagId));
+        } else if (typeof tagId === 'string') {
+            automaticTagNames.push(tagId);
+        }
+    });
+    
+    // Validar tags custom
+    let validCustomTagIds = [];
+    if (customTagIds.length > 0) {
+        const validTags = await sqlWithRetry(
+            sqlTx`SELECT id FROM lead_custom_tags 
+                  WHERE id = ANY(${customTagIds}) 
+                    AND seller_id = ${sellerId} 
+                    AND bot_id = ANY(${botIds})`
+        );
+        
+        if (validTags && validTags.length > 0) {
+            validCustomTagIds = Array.isArray(validTags) ? validTags.map(t => t.id) : [validTags.id];
+        }
+    }
+    
+    // Validar tags automáticas
+    const validAutomaticTags = automaticTagNames.filter(name => name === 'Pagante');
+    const hasAnyTagFilter = validCustomTagIds.length > 0 || validAutomaticTags.length > 0;
+    
+    // Se não há tags válidas, retornar apenas chat_ids únicos (excluindo bloqueados)
+    if (!hasAnyTagFilter) {
+        let query;
+        if (excludeChatIds && excludeChatIds.length > 0) {
+            query = `SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+                    AND tc.chat_id != ALL($3::bigint[])
+                    AND bb.chat_id IS NULL
+                ORDER BY tc.chat_id ASC`;
+            const result = await sqlWithRetry(query, [botIds, sellerId, excludeChatIds]);
+            return result && result.length > 0 ? result.map(r => r.chat_id) : [];
+        } else {
+            query = `SELECT DISTINCT tc.chat_id
+                FROM telegram_chats tc
+                LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+                WHERE tc.bot_id = ANY($1::int[])
+                    AND tc.seller_id = $2
+                    AND tc.chat_id > 0
+                    AND bb.chat_id IS NULL
+                ORDER BY tc.chat_id ASC`;
+            const result = await sqlWithRetry(query, [botIds, sellerId]);
+            return result && result.length > 0 ? result.map(r => r.chat_id) : [];
+        }
+    }
+    
+    // Query unificada com filtros de tags - SIMPLIFICADA (retorna apenas chat_ids)
+    // Construir query dinamicamente como string com parâmetros posicionais
+    const filterMode = tagFilterMode === 'exclude' ? 'exclude' : 'include';
+    const hasCustomTags = validCustomTagIds.length > 0;
+    const hasPaidTag = validAutomaticTags.includes('Pagante');
+    
+    // Construir base_contacts CTE
+    let query = `
+        WITH base_contacts AS (
+            SELECT DISTINCT tc.chat_id
+            FROM telegram_chats tc
+            LEFT JOIN bot_blocks bb ON bb.bot_id = tc.bot_id AND bb.chat_id = tc.chat_id
+            WHERE tc.bot_id = ANY($1::int[]) 
+                AND tc.seller_id = $2
+                AND tc.chat_id > 0`;
+    
+    let params = [botIds, sellerId];
+    let paramOffset = 3;
+    
+    // Adicionar filtro de excludeChatIds se presente
+    if (excludeChatIds && excludeChatIds.length > 0) {
+        query += ` AND tc.chat_id != ALL($${paramOffset}::bigint[])`;
+        params.push(excludeChatIds);
+        paramOffset++;
+    }
+    
+    query += ` AND bb.chat_id IS NULL
+        )`;
+    
+    // Adicionar CTE para tags custom se presente
+    if (hasCustomTags) {
+        if (filterMode === 'exclude') {
+            query += `,
+        custom_tagged AS (
+            SELECT DISTINCT lcta.chat_id
+            FROM lead_custom_tag_assignments lcta
+            WHERE lcta.bot_id = ANY($1::int[])
+                AND lcta.seller_id = $2
+                AND lcta.tag_id = ANY($${paramOffset}::int[])
+        )`;
+            params.push(validCustomTagIds);
+            paramOffset++;
+        } else {
+            query += `,
+        custom_tagged AS (
+            SELECT DISTINCT lcta.chat_id
+            FROM lead_custom_tag_assignments lcta
+            WHERE lcta.bot_id = ANY($1::int[])
+                AND lcta.seller_id = $2
+                AND lcta.tag_id = ANY($${paramOffset}::int[])
+            GROUP BY lcta.chat_id
+            HAVING COUNT(DISTINCT lcta.tag_id) = $${paramOffset + 1}
+        )`;
+            params.push(validCustomTagIds, validCustomTagIds.length);
+            paramOffset += 2;
+        }
+    }
+    
+    // Adicionar CTE para contatos pagantes se presente
+    if (hasPaidTag) {
+        query += `,
+        paid_contacts AS (
+            SELECT DISTINCT tc.chat_id
+            FROM telegram_chats tc
+            INNER JOIN clicks c ON c.click_id = tc.click_id AND c.seller_id = tc.seller_id
+            INNER JOIN pix_transactions pt ON pt.click_id_internal = c.id AND pt.status = 'paid'
+            WHERE tc.bot_id = ANY($1::int[])
+                AND tc.seller_id = $2
+        )`;
+    }
+    
+    // Construir SELECT final com JOINs condicionais (retorna apenas chat_id)
+    query += `
+        SELECT DISTINCT bc.chat_id
+        FROM base_contacts bc`;
+    
+    // Adicionar JOINs baseado no modo de filtro
+    if (filterMode === 'exclude') {
+        // Modo EXCLUIR: usar LEFT JOIN + WHERE IS NULL
+        if (hasCustomTags) {
+            query += ` LEFT JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+        }
+        if (hasPaidTag) {
+            query += ` LEFT JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+        }
+        // Construir WHERE com condições de exclusão
+        const excludeConditions = [];
+        if (hasCustomTags) {
+            excludeConditions.push(`ct.chat_id IS NULL`);
+        }
+        if (hasPaidTag) {
+            excludeConditions.push(`pc.chat_id IS NULL`);
+        }
+        if (excludeConditions.length > 0) {
+            query += ` WHERE ${excludeConditions.join(' AND ')}`;
+        }
+    } else {
+        // Modo INCLUIR: usar INNER JOIN
+        if (hasCustomTags) {
+            query += ` INNER JOIN custom_tagged ct ON ct.chat_id = bc.chat_id`;
+        }
+        if (hasPaidTag) {
+            query += ` INNER JOIN paid_contacts pc ON pc.chat_id = bc.chat_id`;
+        }
+    }
+    
+    query += ` ORDER BY bc.chat_id ASC`;
+    
+    const result = await sqlWithRetry(query, params);
+    return result && result.length > 0 ? result.map(r => r.chat_id) : [];
 }
 
 // Função helper para processar batch de contatos com concorrência interna
