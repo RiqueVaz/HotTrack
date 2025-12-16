@@ -96,8 +96,19 @@ function createWorkerForQueue(queueName) {
                         '5'
                     );
                     
+                    // Para utmify, aguardar retry-after antes de falhar
+                    if (provider === 'utmify') {
+                        logger.warn(`[API Rate Limiter Worker] Rate limit 429 para ${provider}. Aguardando ${retryAfter}s antes de falhar.`);
+                        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                        // Após aguardar, lançar erro para que BullMQ faça retry
+                        const rateLimitError = new Error(`Rate limit 429 após aguardar ${retryAfter}s: ${error.message}`);
+                        rateLimitError.status = 429;
+                        rateLimitError.retryAfter = retryAfter;
+                        throw rateLimitError;
+                    }
+                    
                     // Para alguns provedores, não fazer retry (fallback será usado)
-                    if (provider === 'ip-api' || provider === 'ipapi-co' || provider === 'ipgeolocation-io' || provider === 'utmify') {
+                    if (provider === 'ip-api' || provider === 'ipapi-co' || provider === 'ipgeolocation-io') {
                         throw error;
                     }
                     

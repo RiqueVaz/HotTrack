@@ -151,7 +151,16 @@ async function sendEventToUtmify({
         // Removido log de sucesso - não é necessário em produção
 
     } catch (error) {
-        logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+        // 429 não é erro crítico - é rate limit esperado
+        if (error.response?.status === 429 || error.status === 429) {
+            logger.warn(`[Utmify] Rate limit 429 ao enviar evento '${status}'. Evento será reenviado automaticamente.`, {
+                retryAfter: error.response?.headers?.['retry-after'] || error.retryAfter || 'desconhecido',
+                status,
+                orderId: pixData?.provider_transaction_id || `ht_${pixData?.id}`
+            });
+        } else {
+            logger.error(`[Utmify] ERRO CRÍTICO ao enviar evento '${status}':`, error.response?.data || error.message);
+        }
     }
 }
 
