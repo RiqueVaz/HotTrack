@@ -9168,8 +9168,26 @@ app.post('/api/bots/mass-send', authenticateJwt, async (req, res) => {
                     const SMALL_BATCH_DELAY_SECONDS = 0.01; // 10ms por batch
                     const batchDelaySeconds = batchIndex * SMALL_BATCH_DELAY_SECONDS;
                     
-                    const firstContactBotId = validContacts[0]?.bot_id;
-                    const botToken = botTokenMap.get(firstContactBotId) || '';
+                    // Tentar obter botToken de qualquer contato válido do batch
+                    let botToken = '';
+                    for (const contact of validContacts) {
+                        if (contact.bot_id && botTokenMap.has(contact.bot_id)) {
+                            botToken = botTokenMap.get(contact.bot_id);
+                            break;
+                        }
+                    }
+                    
+                    // Fallback: usar o primeiro token disponível do botTokenMap
+                    if (!botToken && botTokenMap.size > 0) {
+                        const firstAvailableToken = botTokenMap.values().next().value;
+                        botToken = firstAvailableToken || '';
+                        console.warn(`[DISPARO ${historyId}] BotToken não encontrado para contatos do batch ${batchIndex + 1}, usando primeiro token disponível.`);
+                    }
+                    
+                    // Se ainda não tiver token, logar erro
+                    if (!botToken) {
+                        console.error(`[DISPARO ${historyId}] ERRO: Nenhum botToken disponível para batch ${batchIndex + 1}. BotIds no batch: ${validContacts.map(c => c.bot_id).join(', ')}. BotIds disponíveis: ${Array.from(botTokenMap.keys()).join(', ')}`);
+                    }
                     
                     const batchPayload = {
                         history_id: historyId,
@@ -9808,8 +9826,10 @@ app.post('/api/bots/contacts-count', authenticateJwt, async (req, res) => {
     }
 
     try {
-        // Usar função helper getContactsCountByTags já simplificada
-        const count = await getContactsCountByTags(botIds, sellerId, tagIds, tagFilterMode, excludeChatIds);
+        // OTIMIZADO: Usar getContactIdsByTags e retornar length
+        // Mais eficiente que getContactsCountByTags com CTEs complexas
+        const contactIds = await getContactIdsByTags(botIds, sellerId, tagIds, tagFilterMode, excludeChatIds);
+        const count = contactIds.length;
         res.status(200).json({ count });
     } catch (error) {
         console.error("Erro ao contar contatos:", error);
