@@ -2215,7 +2215,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 // Permite reutilização em outros contextos (CLI, jobs, filas, etc.)
 async function processTimeoutData(data, job = null) {
     try {
-        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions, is_disparo, history_id, disparo_flow_id } = data;
+        const { chat_id, bot_id, target_node_id, variables, continue_from_delay, remaining_actions, is_disparo, history_id, disparo_flow_id, flow_nodes, flow_id } = data;
         const logPrefix = '[WORKER]';
         
         // Renovação periódica de lock para evitar jobs stalled em flows longos
@@ -2419,21 +2419,51 @@ async function processTimeoutData(data, job = null) {
             const continueFromDelay = continue_from_delay === true;
             const remainingActionsJson = remaining_actions;
                 
-                // Busca o fluxo correto usando flow_id do estado, se disponível
+                // Busca o fluxo correto - PRIORIDADE: usar flow_nodes do job data quando disponível
                 let flowNodes = null;
                 let flowEdges = null;
                 let flowIdForProcess = null;
                 
-                if (currentState.flow_id) {
+                // PRIORIDADE 1: Usar flow_nodes do job data (mais confiável, evita buscar do banco)
+                if (flow_nodes) {
+                    try {
+                        const flowData = typeof flow_nodes === 'string' ? JSON.parse(flow_nodes) : flow_nodes;
+                        flowNodes = flowData.nodes || [];
+                        flowEdges = flowData.edges || [];
+                        // Usar flow_id do job data ou do estado
+                        flowIdForProcess = flow_id || currentState?.flow_id || null;
+                        
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2422',message:'Usando flow_nodes do job data',data:{chatId:chat_id,botId:bot_id,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,flowIdForProcess,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
+                        // #endregion
+                    } catch (parseError) {
+                        console.error(`[WORKER-TIMEOUT] Erro ao parsear flow_nodes do job data:`, parseError.message);
+                    }
+                }
+                
+                // PRIORIDADE 2: Se não tem flow_nodes no job data, buscar do banco usando flow_id
+                if (!flowNodes && (flow_id || currentState?.flow_id)) {
+                    const flowIdToUse = flow_id || currentState.flow_id;
                     const [flow] = await sqlWithRetry(sqlTx`
-                        SELECT nodes FROM flows WHERE id = ${currentState.flow_id}
+                        SELECT nodes FROM flows WHERE id = ${flowIdToUse}
                     `);
                     if (flow && flow.nodes) {
                         const flowData = typeof flow.nodes === 'string' ? JSON.parse(flow.nodes) : flow.nodes;
                         flowNodes = flowData.nodes || [];
                         flowEdges = flowData.edges || [];
-                        flowIdForProcess = currentState.flow_id;
+                        flowIdForProcess = flowIdToUse;
+                        
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2443',message:'Usando flow_nodes do banco de dados',data:{chatId:chat_id,botId:bot_id,flowId:flowIdToUse,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
+                        // #endregion
                     }
+                }
+                
+                // Se ainda não tem flowNodes, processFlow vai buscar do banco (fallback)
+                if (!flowNodes) {
+                    // #region agent log
+                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2453',message:'Nenhum flow_nodes encontrado - processFlow vai buscar do banco',data:{chatId:chat_id,botId:bot_id,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
+                    // #endregion
                 }
                 
                 // Se é continuação após delay e há ações restantes, processar apenas as ações restantes
