@@ -4174,53 +4174,12 @@ app.get('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit) || 1000, 1000); // Máximo 1000 por requisição
         const hasExplicitPagination = req.query.limit !== undefined || req.query.offset !== undefined;
         
-        // Se não há paginação explícita, buscar últimas 1000 mensagens (mais recentes)
-        // Se há paginação explícita, usar offset fornecido
+        // Lógica de paginação:
+        // - Se offset = 0: retornar últimas mensagens (mais recentes) em ordem ASC (mais antigas primeiro)
+        // - Se offset > 0: retornar mensagens antigas a partir do offset em ordem ASC
         let offset = parseInt(req.query.offset) || 0;
-        let orderDirection = 'ASC'; // Padrão: ordem cronológica (mais antigas primeiro)
         
-        if (!hasExplicitPagination) {
-            // Buscar total primeiro para calcular offset das últimas mensagens
-            const [countResult] = await sqlWithRetry(`
-                SELECT COUNT(*) as total 
-                FROM telegram_chats 
-                WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3;`, 
-                [req.params.botId, req.params.chatId, req.user.id]);
-            
-            const total = parseInt(countResult.total);
-            
-            if (total > limit) {
-                // Se há mais mensagens que o limite, buscar as últimas (mais recentes)
-                // Ordenar DESC e pegar as últimas, depois inverter ordem
-                const messagesDesc = await sqlWithRetry(`
-                    SELECT * FROM telegram_chats 
-                    WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
-                    ORDER BY created_at DESC 
-                    LIMIT $4;`, 
-                    [req.params.botId, req.params.chatId, req.user.id, limit]);
-                
-                // Inverter para ordem cronológica (mais antigas primeiro)
-                const messages = messagesDesc.reverse();
-                
-                res.status(200).json({
-                    messages: messages,
-                    has_more: true,
-                    total: total
-                });
-                return;
-            }
-            // Se total <= limit, buscar todas normalmente
-        }
-        
-        // Buscar mensagens com LIMIT para evitar uso excessivo de memória
-        const messages = await sqlWithRetry(`
-            SELECT * FROM telegram_chats 
-            WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
-            ORDER BY created_at ${orderDirection} 
-            LIMIT $4 OFFSET $5;`, 
-            [req.params.botId, req.params.chatId, req.user.id, limit, offset]);
-        
-        // Verificar se há mais mensagens para indicar ao frontend
+        // Buscar total primeiro
         const [countResult] = await sqlWithRetry(`
             SELECT COUNT(*) as total 
             FROM telegram_chats 
@@ -4228,10 +4187,42 @@ app.get('/api/chats/:botId/:chatId', authenticateJwt, async (req, res) => {
             [req.params.botId, req.params.chatId, req.user.id]);
         
         const total = parseInt(countResult.total);
+        
+        let messages = [];
+        
+        if (offset === 0) {
+            // Primeira carga: buscar últimas mensagens (mais recentes)
+            // Ordenar DESC, pegar as últimas, depois inverter para ordem cronológica
+            const messagesDesc = await sqlWithRetry(`
+                SELECT * FROM telegram_chats 
+                WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
+                ORDER BY created_at DESC 
+                LIMIT $4;`, 
+                [req.params.botId, req.params.chatId, req.user.id, limit]);
+            
+            // Inverter para ordem cronológica (mais antigas primeiro)
+            messages = messagesDesc.reverse();
+        } else {
+            // Carregando histórico: buscar mensagens antigas
+            // offset representa quantas mensagens já foram carregadas (das mais recentes)
+            // Continuar usando ORDER BY DESC com OFFSET para pegar as próximas mais antigas
+            const messagesDesc = await sqlWithRetry(`
+                SELECT * FROM telegram_chats 
+                WHERE bot_id = $1 AND chat_id = $2 AND seller_id = $3 
+                ORDER BY created_at DESC 
+                LIMIT $4 OFFSET $5;`, 
+                [req.params.botId, req.params.chatId, req.user.id, limit, offset]);
+            
+            // Inverter para ordem cronológica (mais antigas primeiro)
+            messages = messagesDesc.reverse();
+        }
+        
+        // Verificar se há mais mensagens antigas para carregar
         const has_more = (offset + limit) < total;
         
-        // Manter compatibilidade: se não há paginação explícita e retornou todas as mensagens, retornar array direto
-        if (!hasExplicitPagination && !has_more) {
+        // Sempre retornar objeto com metadata quando há paginação explícita
+        // Se não há paginação explícita e retornou todas as mensagens, retornar array direto (compatibilidade)
+        if (!hasExplicitPagination && !has_more && offset === 0) {
             res.status(200).json(messages);
         } else {
             // Retornar objeto com metadata

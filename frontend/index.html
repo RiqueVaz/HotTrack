@@ -8819,6 +8819,18 @@ function generatePreviewHTML(data) {
         const [selectedFileInfoChat, setSelectedFileInfoChat] = useState(null);
         const [messages, setMessages] = useState([]);
         const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+        
+        // Estados para paginação de leads
+        const [currentPage, setCurrentPage] = useState(1);
+        const [hasMoreLeads, setHasMoreLeads] = useState(false);
+        const [isLoadingLeads, setIsLoadingLeads] = useState(false);
+        const [totalLeads, setTotalLeads] = useState(0);
+        
+        // Estados para paginação de mensagens
+        const [messagesOffset, setMessagesOffset] = useState(0);
+        const [hasMoreMessages, setHasMoreMessages] = useState(false);
+        const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
+        const [totalMessages, setTotalMessages] = useState(0);
         const [newMessage, setNewMessage] = useState('');
         const [searchTerm, setSearchTerm] = useState('');
         
@@ -8920,14 +8932,24 @@ function generatePreviewHTML(data) {
         
         useEffect(() => {
             const chatWindow = chatWindowRef.current;
-            if (!chatWindow) return;
+            if (!chatWindow || !selectedChat) return;
 
-            const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 150;
+            // Só fazer scroll automático se:
+            // 1. Não estiver carregando mensagens antigas
+            // 2. Estiver próximo do final (dentro de 200px)
+            // 3. For uma nova mensagem (não uma recarga completa)
+            const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 200;
+            const wasScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 200;
 
-            if (isScrolledToBottom) {
-                chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+            if (isScrolledToBottom && !isLoadingMoreMessages) {
+                // Pequeno delay para garantir que DOM foi atualizado
+                setTimeout(() => {
+                    if (chatWindow) {
+                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                    }
+                }, 50);
             }
-        }, [messages]);
+        }, [messages, selectedChat, isLoadingMoreMessages]);
         
         useEffect(() => {
             setTagContextMenu(null);
@@ -8965,23 +8987,56 @@ function generatePreviewHTML(data) {
 
         useEffect(() => { fetchTags(); }, [fetchTags]);
 
-        const fetchUsers = useCallback(async () => {
+        const fetchUsers = useCallback(async (page = 1, append = false) => {
             if (!selectedBotId) {
                 setUsers([]);
+                setCurrentPage(1);
+                setHasMoreLeads(false);
                 return;
             }
+            setIsLoadingLeads(true);
             try {
-                const { data } = await api.get(`/api/chats/${selectedBotId}`);
-                const normalized = (data || []).map(lead => ({
+                const { data } = await api.get(`/api/chats/${selectedBotId}`, {
+                    params: { page, limit: 50 }
+                });
+                
+                // Verificar se retornou objeto com paginação ou array direto
+                const responseData = data.users || data;
+                const pagination = data.pagination;
+                
+                const normalized = (responseData || []).map(lead => ({
                     ...lead,
                     custom_tags: Array.isArray(lead.custom_tags) ? lead.custom_tags : [],
                     automatic_tags: Array.isArray(lead.automatic_tags) ? lead.automatic_tags : []
                 }));
-                setUsers(normalized);
+                
+                if (append) {
+                    setUsers(prev => [...prev, ...normalized]);
+                } else {
+                    setUsers(normalized);
+                }
+                
+                if (pagination) {
+                    setTotalLeads(pagination.total || 0);
+                    setHasMoreLeads(page < pagination.totalPages);
+                    setCurrentPage(page);
+                } else {
+                    // Fallback: se não tem paginação, assume que carregou tudo
+                    setHasMoreLeads(false);
+                    setCurrentPage(1);
+                }
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
+            } finally {
+                setIsLoadingLeads(false);
             }
         }, [selectedBotId]);
+        
+        const loadMoreLeads = useCallback(() => {
+            if (!isLoadingLeads && hasMoreLeads) {
+                fetchUsers(currentPage + 1, true);
+            }
+        }, [currentPage, hasMoreLeads, isLoadingLeads, fetchUsers]);
         
         const handleConversationContextMenu = (event, user) => {
             event.preventDefault();
@@ -9099,40 +9154,161 @@ function generatePreviewHTML(data) {
         };
 
         useEffect(() => {
-            if (!selectedBotId) return;
-            fetchUsers();
-            const intervalId = setInterval(fetchUsers, 10000);
+            if (!selectedBotId) {
+                setUsers([]);
+                setCurrentPage(1);
+                setHasMoreLeads(false);
+                return;
+            }
+            // Resetar paginação ao mudar bot
+            setCurrentPage(1);
+            fetchUsers(1, false);
+            // Polling para atualizar lista de leads
+            const intervalId = setInterval(() => {
+                fetchUsers(1, false); // Sempre recarregar primeira página no polling
+            }, 10000);
             return () => clearInterval(intervalId);
         }, [fetchUsers, selectedBotId]);
 
-        const fetchMessages = useCallback(async () => {
+        const fetchMessages = useCallback(async (offset = 0, limit = 50, append = false) => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
+             
+             // Se é primeira carga (offset = 0), resetar estado
+             if (offset === 0) {
+                 setIsLoadingMessages(true);
+                 setMessagesOffset(0);
+                 setHasMoreMessages(false);
+             } else {
+                 setIsLoadingMoreMessages(true);
+             }
+             
              try {
-                 // Só ativar loading se não houver mensagens (primeira carga ou após limpar)
-                 setMessages(prevMessages => {
-                     if (prevMessages.length === 0) {
-                         setIsLoadingMessages(true);
+                 const { data } = await api.get(`/api/chats/${selectedBotId}/${selectedChat.chat_id}`, {
+                     params: { limit, offset }
+                 });
+                 
+                 // Verificar se retornou objeto com paginação ou array direto
+                 const responseMessages = data.messages || data;
+                 
+                 if (append && offset > 0) {
+                     // Carregando mensagens antigas: adicionar no início
+                     setMessages(prevMessages => {
+                         // Evitar duplicatas
+                         const existingIds = new Set(prevMessages.map(m => m.message_id || m.id));
+                         const newMessages = responseMessages.filter(m => !existingIds.has(m.message_id || m.id));
+                         return [...newMessages, ...prevMessages];
+                     });
+                 } else {
+                     // Primeira carga ou recarga: substituir todas
+                     setMessages(responseMessages);
+                     
+                     // Scroll para o final após carregar mensagens iniciais
+                     setTimeout(() => {
+                         if (chatWindowRef.current) {
+                             chatWindowRef.current.scrollTop = chatWindowRef.current.scrollHeight;
+                         }
+                     }, 100);
+                 }
+                 
+                 // Atualizar estado de paginação
+                 if (data.has_more !== undefined) {
+                     setHasMoreMessages(data.has_more);
+                     setTotalMessages(data.total || 0);
+                     // Atualizar offset: se append, incrementar; senão, usar offset atual + quantidade carregada
+                     if (append && offset > 0) {
+                         setMessagesOffset(prev => prev + responseMessages.length);
+                     } else {
+                         setMessagesOffset(responseMessages.length);
                      }
-                     return prevMessages;
-                 });
-                 const { data } = await api.get(`/api/chats/${selectedBotId}/${selectedChat.chat_id}`);
-                 setMessages(prevMessages => {
-                     const newMessages = JSON.stringify(prevMessages) === JSON.stringify(data) ? prevMessages : data;
-                     setIsLoadingMessages(false); // Desativar loading após sucesso
-                     return newMessages;
-                 });
+                 } else {
+                     // Fallback: se não tem paginação, assume que carregou tudo
+                     setHasMoreMessages(false);
+                     setMessagesOffset(responseMessages.length);
+                 }
              } catch (e) {
                  console.error("Erro ao buscar mensagens", e);
-                 setIsLoadingMessages(false); // Desativar loading em caso de erro
+             } finally {
+                 setIsLoadingMessages(false);
+                 setIsLoadingMoreMessages(false);
              }
         }, [selectedBotId, selectedChat?.chat_id]);
+        
+        const loadMoreMessages = useCallback(() => {
+            if (!isLoadingMoreMessages && hasMoreMessages && chatWindowRef.current) {
+                const currentOffset = messagesOffset;
+                fetchMessages(currentOffset, 50, true);
+            }
+        }, [messagesOffset, hasMoreMessages, isLoadingMoreMessages, fetchMessages]);
 
         useEffect(() => {
-            if (!selectedChat) return;
-            fetchMessages(); 
-            const intervalId = setInterval(fetchMessages, 5000);
+            if (!selectedChat) {
+                setMessages([]);
+                setMessagesOffset(0);
+                setHasMoreMessages(false);
+                return;
+            }
+            // Carregar últimas 50 mensagens ao selecionar chat
+            fetchMessages(0, 50, false);
+            
+            // Polling para verificar novas mensagens
+            const intervalId = setInterval(async () => {
+                if (!selectedBotId || !selectedChat?.chat_id || isLoadingMoreMessages) return;
+                
+                try {
+                    // Buscar apenas últimas 10 mensagens para verificar se há novas
+                    const { data } = await api.get(`/api/chats/${selectedBotId}/${selectedChat.chat_id}`, {
+                        params: { limit: 10, offset: 0 }
+                    });
+                    
+                    const responseMessages = data.messages || data;
+                    if (!Array.isArray(responseMessages) || responseMessages.length === 0) return;
+                    
+                    setMessages(prevMessages => {
+                        // Verificar se há mensagens novas (comparar por message_id e created_at)
+                        const existingIds = new Set(prevMessages.map(m => m.message_id || `${m.chat_id}-${m.created_at}`));
+                        const newMessages = responseMessages.filter(m => {
+                            const msgId = m.message_id || `${m.chat_id}-${m.created_at}`;
+                            return !existingIds.has(msgId);
+                        });
+                        
+                        if (newMessages.length === 0) return prevMessages;
+                        
+                        // Adicionar novas mensagens no final e ordenar por created_at
+                        const allMessages = [...prevMessages, ...newMessages];
+                        return allMessages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+                    });
+                } catch (e) {
+                    console.error("Erro ao verificar novas mensagens", e);
+                }
+            }, 5000);
+            
             return () => clearInterval(intervalId);
-        }, [fetchMessages, selectedChat]);
+        }, [selectedChat?.chat_id, selectedBotId, isLoadingMoreMessages]);
+        
+        // Handler de scroll para carregar mensagens antigas
+        useEffect(() => {
+            const chatWindow = chatWindowRef.current;
+            if (!chatWindow || !selectedChat) return;
+            
+            const handleScroll = () => {
+                // Se está próximo do topo (dentro de 200px), carregar mais mensagens
+                if (chatWindow.scrollTop < 200 && hasMoreMessages && !isLoadingMoreMessages) {
+                    const previousScrollHeight = chatWindow.scrollHeight;
+                    loadMoreMessages();
+                    // Manter posição do scroll após carregar
+                    setTimeout(() => {
+                        if (chatWindow) {
+                            const newScrollHeight = chatWindow.scrollHeight;
+                            const scrollDiff = newScrollHeight - previousScrollHeight;
+                            chatWindow.scrollTop = chatWindow.scrollTop + scrollDiff;
+                        }
+                    }, 100);
+                }
+            };
+            
+            chatWindow.addEventListener('scroll', handleScroll);
+            return () => chatWindow.removeEventListener('scroll', handleScroll);
+        }, [selectedChat, hasMoreMessages, isLoadingMoreMessages, loadMoreMessages]);
         
         // Função auxiliar que retorna o nome completo (lógica original)
         const getDisplayName = (u) => { 
@@ -9238,6 +9414,8 @@ function generatePreviewHTML(data) {
     const handleSelectChat = useCallback((user) => {
         if (selectedChat?.chat_id !== user.chat_id) {
             setMessages([]);
+            setMessagesOffset(0);
+            setHasMoreMessages(false);
             setIsLoadingMessages(true); // Ativar loading
             setSelectedChat(user);
             // Fechar drawer de conversas em mobile ao selecionar
@@ -9579,6 +9757,23 @@ function generatePreviewHTML(data) {
                                         </div>
                                     );
                                 })}
+                                {hasMoreLeads && (
+                                    <div style={{padding: '1rem', textAlign: 'center'}}>
+                                        <button 
+                                            className="btn btn-secondary btn-sm" 
+                                            onClick={loadMoreLeads}
+                                            disabled={isLoadingLeads}
+                                        >
+                                            {isLoadingLeads ? 'Carregando...' : 'Carregar mais leads'}
+                                        </button>
+                                    </div>
+                                )}
+                                {isLoadingLeads && filteredUsers.length === 0 && (
+                                    <div style={{padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)'}}>
+                                        <div className="spinner" style={{width: '30px', height: '30px', margin: '0 auto 1rem'}}></div>
+                                        <p>Carregando leads...</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="chat-window">
