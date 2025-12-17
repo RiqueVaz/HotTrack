@@ -13510,6 +13510,159 @@ app.post('/api/diagnostic/clean-old-jobs', authenticateJwt, async (req, res) => 
     }
 });
 
+// Endpoint específico para limpar fila de timeout
+app.post('/api/diagnostic/clean-timeout-queue', authenticateJwt, async (req, res) => {
+    try {
+        const { QUEUE_NAMES, getQueue } = require('./shared/queue');
+        const {
+            action = 'dry-run', // 'clean' ou 'dry-run'
+            cleanFailed = true, // Limpar jobs failed
+            failedOlderThanHours = null, // Se especificado, limpar apenas failed mais antigos que X horas
+            cleanWaitingOlderThanHours = 24, // Limpar jobs waiting mais antigos que X horas (0 = não limpar)
+            cleanDelayedLongerThanDays = 30, // Limpar jobs delayed com delay maior que X dias (0 = não limpar)
+            maxToRemove = 10000 // Limite máximo de jobs a remover por chamada (segurança)
+        } = req.body;
+
+        const isDryRun = action === 'dry-run';
+        const queue = getQueue(QUEUE_NAMES.TIMEOUT);
+        
+        const stats = {
+            found: {
+                failed: 0,
+                waiting: 0,
+                delayed: 0
+            },
+            removed: {
+                failed: 0,
+                waiting: 0,
+                delayed: 0
+            },
+            errors: []
+        };
+
+        // 1. Limpar jobs failed
+        if (cleanFailed) {
+            try {
+                const failedJobs = await queue.getJobs(['failed'], 0, -1);
+                let filteredFailed = failedJobs;
+                
+                // Filtrar por idade se especificado
+                if (failedOlderThanHours !== null && failedOlderThanHours > 0) {
+                    const cutoffTime = Date.now() - (failedOlderThanHours * 60 * 60 * 1000);
+                    filteredFailed = failedJobs.filter(job => {
+                        const jobTime = job.timestamp || job.finishedOn || 0;
+                        return jobTime < cutoffTime;
+                    });
+                }
+                
+                stats.found.failed = filteredFailed.length;
+                
+                if (!isDryRun && filteredFailed.length > 0) {
+                    const jobsToRemove = filteredFailed.slice(0, maxToRemove);
+                    for (const job of jobsToRemove) {
+                        try {
+                            await job.remove();
+                            stats.removed.failed++;
+                        } catch (error) {
+                            stats.errors.push(`Erro ao remover failed job ${job.id}: ${error.message}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                stats.errors.push(`Erro ao processar jobs failed: ${error.message}`);
+            }
+        }
+
+        // 2. Limpar jobs waiting antigos
+        if (cleanWaitingOlderThanHours > 0) {
+            try {
+                const waitingJobs = await queue.getJobs(['waiting'], 0, -1);
+                const cutoffTime = Date.now() - (cleanWaitingOlderThanHours * 60 * 60 * 1000);
+                const filteredWaiting = waitingJobs.filter(job => {
+                    const jobTime = job.timestamp || job.createdOn || 0;
+                    return jobTime < cutoffTime;
+                });
+                
+                stats.found.waiting = filteredWaiting.length;
+                
+                if (!isDryRun && filteredWaiting.length > 0) {
+                    const remainingQuota = maxToRemove - stats.removed.failed;
+                    const jobsToRemove = filteredWaiting.slice(0, Math.min(remainingQuota, filteredWaiting.length));
+                    for (const job of jobsToRemove) {
+                        try {
+                            await job.remove();
+                            stats.removed.waiting++;
+                        } catch (error) {
+                            stats.errors.push(`Erro ao remover waiting job ${job.id}: ${error.message}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                stats.errors.push(`Erro ao processar jobs waiting: ${error.message}`);
+            }
+        }
+
+        // 3. Limpar jobs delayed com delays muito longos
+        if (cleanDelayedLongerThanDays > 0) {
+            try {
+                const delayedJobs = await queue.getJobs(['delayed'], 0, -1);
+                const maxDelayMs = cleanDelayedLongerThanDays * 24 * 60 * 60 * 1000;
+                const filteredDelayed = delayedJobs.filter(job => {
+                    // job.delay está em milissegundos
+                    return job.delay && job.delay > maxDelayMs;
+                });
+                
+                stats.found.delayed = filteredDelayed.length;
+                
+                if (!isDryRun && filteredDelayed.length > 0) {
+                    const remainingQuota = maxToRemove - stats.removed.failed - stats.removed.waiting;
+                    const jobsToRemove = filteredDelayed.slice(0, Math.min(remainingQuota, filteredDelayed.length));
+                    for (const job of jobsToRemove) {
+                        try {
+                            await job.remove();
+                            stats.removed.delayed++;
+                        } catch (error) {
+                            stats.errors.push(`Erro ao remover delayed job ${job.id}: ${error.message}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                stats.errors.push(`Erro ao processar jobs delayed: ${error.message}`);
+            }
+        }
+
+        const totalFound = stats.found.failed + stats.found.waiting + stats.found.delayed;
+        const totalRemoved = stats.removed.failed + stats.removed.waiting + stats.removed.delayed;
+
+        res.status(200).json({
+            success: true,
+            action: isDryRun ? 'dry-run' : 'clean',
+            stats: {
+                ...stats,
+                totalFound,
+                totalRemoved
+            },
+            filters: {
+                cleanFailed,
+                failedOlderThanHours: failedOlderThanHours || 'all',
+                cleanWaitingOlderThanHours,
+                cleanDelayedLongerThanDays,
+                maxToRemove
+            },
+            message: isDryRun 
+                ? `Dry-run: ${totalFound} jobs seriam removidos`
+                : `Limpeza concluída: ${totalRemoved} jobs removidos`,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('[DIAGNOSTIC] Erro ao limpar fila de timeout:', error);
+        res.status(500).json({ 
+            error: 'Erro ao limpar fila de timeout',
+            message: error.message 
+        });
+    }
+});
+
 
 // ==========================================================
 // ROTAS CHECKOUTS HOSPEDADOS E PÁGINAS DE OBRIGADO
