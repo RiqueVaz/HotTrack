@@ -9409,7 +9409,8 @@ function generatePreviewHTML(data) {
             setIsValidating(true);
             try {
                 const { data } = await api.post('/api/bots/validate-contacts', { botId: selectedBotId });
-                setInactiveChatIds(data.inactive_contacts.map(c => c.chat_id));
+                const inactiveContacts = data?.inactive_contacts || [];
+                setInactiveChatIds(Array.isArray(inactiveContacts) ? inactiveContacts.map(c => c.chat_id) : []);
             } catch (error) {
                 console.error("Erro ao validar contatos", error);
                 alert('Não foi possível validar os contatos.');
