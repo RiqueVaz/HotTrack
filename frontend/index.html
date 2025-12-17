@@ -8854,6 +8854,7 @@ function generatePreviewHTML(data) {
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
         const justLoadedOlderMessagesRef = useRef(false);
+        const conversationsListRef = useRef(null);
         const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
         const contextMenuPosition = useMemo(() => {
             if (!tagContextMenu) return null;
@@ -9039,7 +9040,12 @@ function generatePreviewHTML(data) {
             }
         }, [selectedBotId]);
         
-        const loadMoreLeads = useCallback(() => {
+        const loadMoreLeads = useCallback((event) => {
+            // Prevenir chamada automática - só executar se for um clique explícito do usuário
+            // Se não houver evento ou se não for um clique, não executar
+            if (event && event.type && event.type !== 'click') {
+                return;
+            }
             if (!isLoadingLeads && hasMoreLeads) {
                 fetchUsers(currentPage + 1, true);
             }
@@ -9737,7 +9743,7 @@ function generatePreviewHTML(data) {
                                     disabled={isValidating}
                                 />
                             </div>
-                            <div className="conversations-list">
+                            <div className="conversations-list" ref={conversationsListRef}>
                                 {filteredUsers.map(u => {
                                     const formattedTime = formatLastMessageTime(u.last_message_at);
                                     return (
