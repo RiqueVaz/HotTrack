@@ -8947,13 +8947,14 @@ function generatePreviewHTML(data) {
                     if (chatWindow && !isLoadingMoreMessages && !justLoadedOlderMessagesRef.current) {
                         const currentScrollTop = chatWindow.scrollTop;
                         const currentScrollHeight = chatWindow.scrollHeight;
-                        // Só fazer scroll se ainda estiver próximo do final
+                        // Só fazer scroll se ainda estiver próximo do final e não estiver no topo
                         const stillAtBottom = currentScrollHeight - chatWindow.clientHeight <= currentScrollTop + 200;
-                        if (stillAtBottom) {
+                        const isAtTop = currentScrollTop < 200;
+                        if (stillAtBottom && !isAtTop) {
                             chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
                         }
                     }
-                }, 50);
+                }, 100);
             }
         }, [messages, selectedChat, isLoadingMoreMessages]);
         
@@ -9205,10 +9206,10 @@ function generatePreviewHTML(data) {
                         const newMessages = responseMessages.filter(m => !existingIds.has(m.message_id || m.id));
                         return [...newMessages, ...prevMessages];
                     });
-                    // Resetar flag após um tempo para permitir auto-scroll em novas mensagens
+                    // Resetar flag após um tempo maior para permitir auto-scroll em novas mensagens
                     setTimeout(() => {
                         justLoadedOlderMessagesRef.current = false;
-                    }, 500);
+                    }, 2000);
                 } else {
                      // Primeira carga ou recarga: substituir todas
                      setMessages(responseMessages);
@@ -9303,17 +9304,19 @@ function generatePreviewHTML(data) {
             
             const handleScroll = () => {
                 // Se está próximo do topo (dentro de 200px), carregar mais mensagens
-                if (chatWindow.scrollTop < 200 && hasMoreMessages && !isLoadingMoreMessages) {
+                if (chatWindow.scrollTop < 200 && hasMoreMessages && !isLoadingMoreMessages && !justLoadedOlderMessagesRef.current) {
                     const previousScrollHeight = chatWindow.scrollHeight;
+                    const previousScrollTop = chatWindow.scrollTop;
                     loadMoreMessages();
-                    // Manter posição do scroll após carregar
+                    // Manter posição do scroll após carregar mensagens antigas
                     setTimeout(() => {
                         if (chatWindow) {
                             const newScrollHeight = chatWindow.scrollHeight;
                             const scrollDiff = newScrollHeight - previousScrollHeight;
-                            chatWindow.scrollTop = chatWindow.scrollTop + scrollDiff;
+                            // Manter a posição relativa do scroll
+                            chatWindow.scrollTop = previousScrollTop + scrollDiff;
                         }
-                    }, 100);
+                    }, 200);
                 }
             };
             
