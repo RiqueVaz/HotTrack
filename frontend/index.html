@@ -9030,8 +9030,13 @@ function generatePreviewHTML(data) {
                                     automaticTags = JSON.parse(automaticTags);
                                 }
                             } catch (e) {
+                                console.warn(`[LiveChat] Erro ao parsear automatic_tags para lead ${lead.chat_id}:`, e.message);
                                 automaticTags = [];
                             }
+                        } else if (automaticTags != null) {
+                            // Se não for null/undefined mas também não é array nem string, logar
+                            console.warn(`[LiveChat] automatic_tags com tipo inesperado para lead ${lead.chat_id}:`, typeof automaticTags);
+                            automaticTags = [];
                         } else {
                             automaticTags = [];
                         }
@@ -9043,9 +9048,19 @@ function generatePreviewHTML(data) {
                         if (typeof customTags === 'string') {
                             try {
                                 customTags = JSON.parse(customTags);
+                                // Garantir que é um array após parse
+                                if (!Array.isArray(customTags)) {
+                                    console.warn(`[LiveChat] custom_tags parseado não é array para lead ${lead.chat_id}`);
+                                    customTags = [];
+                                }
                             } catch (e) {
+                                console.warn(`[LiveChat] Erro ao parsear custom_tags para lead ${lead.chat_id}:`, e.message);
                                 customTags = [];
                             }
+                        } else if (customTags != null) {
+                            // Se não for null/undefined mas também não é array nem string, logar
+                            console.warn(`[LiveChat] custom_tags com tipo inesperado para lead ${lead.chat_id}:`, typeof customTags);
+                            customTags = [];
                         } else {
                             customTags = [];
                         }
@@ -9075,10 +9090,16 @@ function generatePreviewHTML(data) {
                 }
             } catch (e) {
                 console.error("Erro ao buscar usuários", e);
+                // Em caso de erro, garantir que arrays estão vazios para evitar erros
+                if (!append) {
+                    setUsers([]);
+                    setCurrentPage(1);
+                    setHasMoreLeads(false);
+                }
             } finally {
                 setIsLoadingLeads(false);
             }
-        }, [selectedBotId]);
+        }, [selectedBotId, tagFilters]);
         
         const loadMoreLeads = useCallback((event) => {
             // Prevenir chamada automática - só executar se for um clique explícito do usuário
@@ -9216,7 +9237,7 @@ function generatePreviewHTML(data) {
             // Resetar paginação ao mudar bot
             setCurrentPage(1);
             fetchUsers(1, false);
-            // Polling para atualizar lista de leads
+            // Polling para atualizar lista de leads (respeita filtros atuais)
             const intervalId = setInterval(() => {
                 fetchUsers(1, false); // Sempre recarregar primeira página no polling
             }, 10000);
@@ -9224,12 +9245,17 @@ function generatePreviewHTML(data) {
         }, [fetchUsers, selectedBotId]);
         
         // useEffect separado para recarregar quando filtros de tags mudarem
+        // Não inclui fetchUsers nas dependências para evitar loop, pois fetchUsers já depende de tagFilters
         useEffect(() => {
             if (!selectedBotId) return;
             // Resetar paginação e recarregar quando filtros mudarem
             setCurrentPage(1);
-            fetchUsers(1, false);
-        }, [JSON.stringify(tagFilters), selectedBotId, fetchUsers]);
+            // Usar setTimeout para garantir que fetchUsers está atualizado
+            const timeoutId = setTimeout(() => {
+                fetchUsers(1, false);
+            }, 0);
+            return () => clearTimeout(timeoutId);
+        }, [JSON.stringify(tagFilters), selectedBotId]);
 
         const fetchMessages = useCallback(async (offset = 0, limit = 50, append = false) => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
