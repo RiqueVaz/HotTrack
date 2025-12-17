@@ -132,8 +132,8 @@ class ApiRateLimiterBullMQ {
                 circuitBreakerTimeout: 60000, // Reduzido de 5min para 1min (recupera mais rápido)
                 circuitBreakerSuccessThreshold: 2
             }],
-            ['ipapi-co', {
-                limiter: { max: 1, duration: 2000 }, // 1 req/2s para respeitar limites da API free tier
+            ['ipwhois-app', {
+                limiter: { max: 1, duration: 1000 }, // 1 req/1s - API ilimitada, mas manter conservador
                 concurrency: 1,
                 timeout: 10000,
                 cacheTTL: 24 * 3600_000, // 24 horas
@@ -142,8 +142,8 @@ class ApiRateLimiterBullMQ {
                 circuitBreakerTimeout: 60000,
                 circuitBreakerSuccessThreshold: 2
             }],
-            ['ipgeolocation-io', {
-                limiter: { max: 1, duration: 2000 }, // 1 req/2s para respeitar limites da API free tier
+            ['apip-cc', {
+                limiter: { max: 1, duration: 100 }, // 1 req/100ms (10 req/s) - API permite 50 req/s, mas manter conservador
                 concurrency: 1,
                 timeout: 10000,
                 cacheTTL: 24 * 3600_000, // 24 horas
@@ -776,7 +776,7 @@ class ApiRateLimiterBullMQ {
                 } else {
                     logger.error(`[API Rate Limiter] Erro crítico ao garantir worker para ${queueName} após ${maxRetries} tentativas:`, error.message);
                     // APIs de geolocalização têm sistema de múltiplas APIs como fallback
-                    const geoLocationApis = ['ip-api', 'ipapi-co', 'ipgeolocation-io'];
+                    const geoLocationApis = ['ip-api', 'ipwhois-app', 'apip-cc'];
                     if (geoLocationApis.includes(provider)) {
                         logger.debug(`[API Rate Limiter] Worker indisponível para API de geolocalização ${provider}. Sistema de múltiplas APIs assumirá.`);
                         throw new Error(`Worker não disponível para ${provider}. Sistema de múltiplas APIs assumirá.`);

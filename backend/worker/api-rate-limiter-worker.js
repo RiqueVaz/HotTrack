@@ -23,8 +23,8 @@ const PROVIDER_CONFIGS = {
     'wiinpay': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'paradise': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 10000 },
     'ip-api': { limiter: { max: 1, duration: 1500 }, concurrency: 1, timeout: 10000 }, // 1 req/1.5s, concorrência 1, timeout 10s
-    'ipapi-co': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 }, // 1 req/2s, concorrência 1, timeout 10s
-    'ipgeolocation-io': { limiter: { max: 1, duration: 2000 }, concurrency: 1, timeout: 10000 }, // 1 req/2s, concorrência 1, timeout 10s
+    'ipwhois-app': { limiter: { max: 1, duration: 1000 }, concurrency: 1, timeout: 10000 }, // 1 req/1s - API ilimitada, mas manter conservador
+    'apip-cc': { limiter: { max: 1, duration: 100 }, concurrency: 1, timeout: 10000 }, // 1 req/100ms (10 req/s) - API permite 50 req/s, mas manter conservador
     'utmify': { limiter: { max: 1, duration: 2000 }, concurrency: 2, timeout: 20000 },
     'default': { limiter: { max: 1, duration: 1000 }, concurrency: 1, timeout: 10000 }
 };
@@ -108,7 +108,7 @@ function createWorkerForQueue(queueName) {
                     }
                     
                     // Para alguns provedores, não fazer retry (fallback será usado)
-                    if (provider === 'ip-api' || provider === 'ipapi-co' || provider === 'ipgeolocation-io') {
+                    if (provider === 'ip-api' || provider === 'ipwhois-app' || provider === 'apip-cc') {
                         throw error;
                     }
                     

@@ -6315,17 +6315,20 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                         };
                     }
                     return null;
-                case 'ipapi-co':
-                    // ipapi.co retorna { city: '...', region: '...' }
+                case 'ipwhois-app':
+                    // ipwho.is retorna { success: true, data: { city: '...', region: '...' } }
+                    if (response.success === true && response.data) {
+                        return {
+                            city: response.data.city || null,
+                            state: response.data.region || null
+                        };
+                    }
+                    return null;
+                case 'apip-cc':
+                    // apip.cc retorna { city: '...', region: '...' }
                     return {
                         city: response.city || null,
                         state: response.region || null
-                    };
-                case 'ipgeolocation-io':
-                    // ipgeolocation.io retorna { city: '...', state_prov: '...' }
-                    return {
-                        city: response.city || null,
-                        state: response.state_prov || null
                     };
                 default:
                     return null;
@@ -6342,15 +6345,15 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                     headers: {}
                 },
                 {
-                    name: 'ipapi-co',
-                    provider: 'ipapi-co',
-                    url: `https://ipapi.co/${ip_address}/json/`,
+                    name: 'ipwhois-app',
+                    provider: 'ipwhois-app',
+                    url: `https://ipwho.is/${ip_address}`,
                     headers: {}
                 },
                 {
-                    name: 'ipgeolocation-io',
-                    provider: 'ipgeolocation-io',
-                    url: `https://api.ipgeolocation.io/ipgeo?ip=${ip_address}${process.env.IPGEOLOCATION_API_KEY ? `&apiKey=${process.env.IPGEOLOCATION_API_KEY}` : ''}`,
+                    name: 'apip-cc',
+                    provider: 'apip-cc',
+                    url: `https://apip.cc/api-json/${ip_address}`,
                     headers: {}
                 }
             ];
