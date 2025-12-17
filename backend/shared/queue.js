@@ -220,8 +220,8 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.TIMEOUT]: {
-        concurrency: 100, // Restaurado para 100 (valor original que funcionava)
-        limiter: { max: 100, duration: 1000 }, // Restaurado para corresponder à concorrência
+        concurrency: 500, // Aumentado de 100 para 500 para processar fila grande (69k+ jobs) mais rapidamente
+        limiter: undefined, // Removido limiter - permite processar mais jobs simultaneamente sem limitação de taxa
         stalledInterval: 1200000, // 20 minutos - RESTAURADO valor original que funcionava
         lockDuration: 3600000, // 1 hora - RESTAURADO valor original que funcionava
         attempts: 3,
