@@ -8853,6 +8853,7 @@ function generatePreviewHTML(data) {
         const [showContactDrawer, setShowContactDrawer] = useState(false);
         const chatWindowRef = useRef(null);
         const fileInputRef = useRef(null);
+        const justLoadedOlderMessagesRef = useRef(false);
         const leadForContextMenu = tagContextMenu ? users.find(u => u.chat_id === tagContextMenu.chatId) : null;
         const contextMenuPosition = useMemo(() => {
             if (!tagContextMenu) return null;
