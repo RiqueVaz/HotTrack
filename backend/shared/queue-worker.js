@@ -36,40 +36,22 @@ async function createWorker(queueName, processor, options = {}) {
     const maxStalledCount = config.maxStalledCount || 2;
     const lockDuration = config.lockDuration; // lockDuration específico da fila (opcional)
     
-    // Calcular stalledInterval dinamicamente baseado em lockDuration (sempre, mesmo sem métricas)
-    let stalledInterval = config.stalledInterval || 30000; // Fallback padrão inicial
-    try {
-        const queueMetrics = require('./queue-metrics');
-        // Sempre calcular stalledInterval adaptativo baseado no lockDuration (com ou sem métricas)
-        // getAdaptiveStalledInterval funciona mesmo sem métricas históricas (usa 1/3 do lockDuration como base)
-        if (lockDuration) {
+    // Usar stalledInterval fixo da configuração (revertido sistema dinâmico para TIMEOUT)
+    // Para outras filas, manter cálculo dinâmico se necessário
+    let stalledInterval = config.stalledInterval || 30000; // Usar valor fixo da configuração
+    
+    // Apenas para filas que não são TIMEOUT, tentar cálculo adaptativo (opcional)
+    if (queueName !== QUEUE_NAMES.TIMEOUT && lockDuration) {
+        try {
+            const queueMetrics = require('./queue-metrics');
             const adaptiveStalled = await queueMetrics.getAdaptiveStalledInterval(lockDuration, queueName, {});
             if (adaptiveStalled && Number.isFinite(adaptiveStalled)) {
                 stalledInterval = adaptiveStalled;
-                // Verificar se há métricas para log apropriado
-                const metrics = await queueMetrics.getMetrics(queueName, {});
-                const hasMetrics = metrics && metrics.avg;
-                if (hasMetrics) {
-                    logger.info(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min, com métricas históricas)`);
-                } else {
-                    logger.info(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min, sem métricas históricas - usando cálculo base)`);
-                }
-            } else {
-                // Se cálculo retornou inválido, calcular manualmente baseado no lockDuration
-                stalledInterval = Math.max(5 * 60 * 1000, Math.min(Math.floor(lockDuration / 3), lockDuration * 0.6));
-                logger.info(`[BullMQ-Worker] StalledInterval calculado manualmente para ${queueName}: ${Math.round(stalledInterval / 60000)}min (lockDuration: ${Math.round(lockDuration / 60000)}min)`);
+                logger.info(`[BullMQ-Worker] StalledInterval adaptativo calculado para ${queueName}: ${Math.round(stalledInterval / 60000)}min`);
             }
-        } else {
-            // Se não tem lockDuration configurado, usar cálculo baseado no stalledInterval padrão
-            logger.debug(`[BullMQ-Worker] Sem lockDuration configurado para ${queueName}, usando stalledInterval padrão: ${Math.round(stalledInterval / 60000)}min`);
-        }
-    } catch (error) {
-        // Se erro ao calcular, calcular manualmente baseado no lockDuration
-        if (lockDuration) {
-            stalledInterval = Math.max(5 * 60 * 1000, Math.min(Math.floor(lockDuration / 3), lockDuration * 0.6));
-            logger.warn(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando cálculo manual: ${Math.round(stalledInterval / 60000)}min`, error.message);
-        } else {
-            logger.warn(`[BullMQ-Worker] Erro ao calcular stalledInterval adaptativo para ${queueName}, usando padrão da configuração: ${Math.round(stalledInterval / 60000)}min`, error.message);
+        } catch (error) {
+            // Em caso de erro, usar valor fixo da configuração
+            logger.debug(`[BullMQ-Worker] Usando stalledInterval fixo da configuração para ${queueName}: ${Math.round(stalledInterval / 60000)}min`);
         }
     }
     
@@ -363,12 +345,6 @@ async function createWorker(queueName, processor, options = {}) {
                 const lockDurationMinutes = Math.round(jobLockDuration / 60000);
                 const processingTimeMinutes = processingTime ? Math.round(processingTime / 60000) : null;
                 
-                // #region agent log
-                if (queueName === QUEUE_NAMES.TIMEOUT) {
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:355',message:'Job TIMEOUT stalled detectado',data:{jobId,queueName,delay:job.opts.delay,delayMs:job.opts.delay||0,delayMinutes:job.opts.delay?Math.round(job.opts.delay/60000):0,lockDuration:jobLockDuration,lockDurationMinutes,stalledInterval:jobStalledInterval,stalledIntervalMinutes:Math.round(jobStalledInterval/60000),processingTime,processingTimeMinutes,createdAt:job.timestamp,processedOn:job.processedOn,hasDelay:!!job.opts.delay,timeSinceCreated:job.timestamp?Date.now()-job.timestamp:null,timeSinceProcessed:job.processedOn?Date.now()-job.processedOn:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                }
-                // #endregion
-                
                 // Logar warning se job demorou >80% do lockDuration calculado
                 if (processingTime && jobLockDuration) {
                     const utilizationRatio = processingTime / jobLockDuration;
@@ -431,20 +407,11 @@ async function createWorker(queueName, processor, options = {}) {
 // Processadores para cada tipo de job
 const processors = {
     [QUEUE_NAMES.TIMEOUT]: async (data, job, proactiveRenewLock = null) => {
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:428',message:'Worker iniciando processamento de TIMEOUT',data:{jobId:job.id,chatId:data.chat_id,botId:data.bot_id,targetNodeId:data.target_node_id,processedOn:job.processedOn,delay:job.opts.delay,lockDuration:job.opts.lockDuration,waitingForInput:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}));
-        // #endregion
-        
         // Renovar lock antes de operações longas se função disponível
         if (proactiveRenewLock && typeof proactiveRenewLock === 'function') {
             await proactiveRenewLock();
         }
         const result = await processTimeoutData(data, job);
-        
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'queue-worker.js:442',message:'Worker concluiu processamento de TIMEOUT',data:{jobId:job.id,chatId:data.chat_id,botId:data.bot_id,result,resultType:typeof result},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'}));
-        // #endregion
-        
         return result;
     },
     
