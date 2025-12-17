@@ -203,8 +203,8 @@ const QUEUE_CONFIGS = {
     [QUEUE_NAMES.TIMEOUT]: {
         concurrency: 20, // Reduzido de 100 para 20 para evitar contenção e race conditions sob alta carga
         limiter: { max: 20, duration: 1000 }, // Ajustado para corresponder à concorrência
-        stalledInterval: 3000000, // 50 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
-        lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (fallback padrão)
+        stalledInterval: 14400000, // 4 horas - AUMENTADO de 50min para 4h para acomodar jobs com delays de até 1h sem marcar como stalled prematuramente
+        lockDuration: 86400000, // 24 horas - AUMENTADO de 1h para 24h para acomodar fluxos completos que podem durar até 24h (delays máx 1h + processamento)
         attempts: 3,
         backoff: {
             type: 'exponential',
@@ -652,29 +652,34 @@ async function getOptimalLockDuration(queueName, jobData) {
                     lockDuration = limits.MAX_LOCK_DURATION_MS;
                 }
             } catch (e) {
-                // Se erro ao parsear, usar valor padrão conservador
-                lockDuration = 60 * 60 * 1000; // 1 hora padrão
+                // Se erro ao parsear, usar valor padrão de 24h para fluxos completos
+                lockDuration = 24 * 60 * 60 * 1000; // 24 horas padrão para fluxos que podem durar até 24h
             }
         } else {
             // Sem informações de flow, considerar delay se presente
             if (jobData._delayMs && jobData._delayMs > 0) {
-                // LockDuration = delay + 1 hora de margem para processamento
-                lockDuration = jobData._delayMs + (60 * 60 * 1000);
+                // LockDuration = delay + margem para processamento, mas mínimo 24h para fluxos completos
+                const minLockDurationForDelay = jobData._delayMs + (60 * 60 * 1000);
+                lockDuration = Math.max(minLockDurationForDelay, 24 * 60 * 60 * 1000); // Mínimo 24h
             } else {
-                // Sem delay e sem flow_nodes, usar valor conservador
-                lockDuration = 60 * 60 * 1000; // 1 hora padrão
+                // Sem delay e sem flow_nodes, usar 24 horas padrão para fluxos completos
+                lockDuration = 24 * 60 * 60 * 1000; // 24 horas padrão
             }
         }
         
-        // Garantir que lockDuration seja válido
+        // Garantir que lockDuration seja válido e pelo menos 24h para fluxos completos
         if (!lockDuration || !Number.isFinite(lockDuration) || lockDuration <= 0) {
-            // Se cálculo inválido, usar padrão baseado em delay ou 1 hora
+            // Se cálculo inválido, usar padrão de 24h para fluxos completos
             lockDuration = jobData._delayMs && jobData._delayMs > 0 
-                ? jobData._delayMs + (60 * 60 * 1000)
-                : 60 * 60 * 1000;
+                ? Math.max(jobData._delayMs + (60 * 60 * 1000), 24 * 60 * 60 * 1000)
+                : 24 * 60 * 60 * 1000; // 24 horas padrão
         }
         
-        // Se tem delay, garantir que lockDuration seja pelo menos delay + margem
+        // Garantir que lockDuration seja pelo menos 24h para fluxos que podem durar até 24h
+        const MIN_LOCK_DURATION_FOR_TIMEOUT = 24 * 60 * 60 * 1000; // 24 horas
+        lockDuration = Math.max(lockDuration, MIN_LOCK_DURATION_FOR_TIMEOUT);
+        
+        // Se tem delay, garantir que lockDuration seja pelo menos delay + margem (mas já garantimos 24h mínimo)
         if (jobData._delayMs && jobData._delayMs > 0) {
             const minLockDurationForDelay = jobData._delayMs + (60 * 60 * 1000);
             if (lockDuration < minLockDurationForDelay) {
@@ -928,18 +933,26 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
     }
     
     if (optimalLock) {
-        // Para jobs TIMEOUT com delay, garantir que lockDuration seja pelo menos delay + margem
-        if (queueName === QUEUE_NAMES.TIMEOUT && delayMs > 0) {
-            // LockDuration deve ser pelo menos: delay + 1 hora de margem para processamento
-            const minLockDurationForDelay = delayMs + (60 * 60 * 1000);
-            optimalLock.lockDuration = Math.max(optimalLock.lockDuration || 0, minLockDurationForDelay);
+        // Para jobs TIMEOUT, garantir que lockDuration seja adequado para fluxos de até 24h
+        // Fluxos podem durar até 24h no total e delays podem ser até 1h
+        if (queueName === QUEUE_NAMES.TIMEOUT) {
+            // LockDuration mínimo: 24 horas para acomodar fluxos completos
+            const MIN_LOCK_DURATION_FOR_TIMEOUT = 24 * 60 * 60 * 1000; // 24 horas
+            optimalLock.lockDuration = Math.max(optimalLock.lockDuration || 0, MIN_LOCK_DURATION_FOR_TIMEOUT);
             
-            // stalledInterval deve ser pelo menos 2x o delay para evitar falsos positivos
-            if (optimalLock.stalledInterval) {
-                optimalLock.stalledInterval = Math.max(
-                    optimalLock.stalledInterval,
-                    delayMs * 2 // Pelo menos 2x o delay
-                );
+            // Se tem delay, garantir que lockDuration seja pelo menos delay + margem (mas mínimo já é 24h)
+            if (delayMs > 0) {
+                // LockDuration deve ser pelo menos: delay + margem para processamento (mas já garantimos 24h mínimo)
+                const minLockDurationForDelay = delayMs + (60 * 60 * 1000);
+                optimalLock.lockDuration = Math.max(optimalLock.lockDuration, minLockDurationForDelay);
+                
+                // stalledInterval deve ser pelo menos 1.5x o delay para evitar falsos positivos
+                if (optimalLock.stalledInterval) {
+                    optimalLock.stalledInterval = Math.max(
+                        optimalLock.stalledInterval,
+                        delayMs * 1.5 // Pelo menos 1.5x o delay (delays máx 1h)
+                    );
+                }
             }
         }
         
@@ -966,19 +979,21 @@ async function addJobWithDelay(queueName, jobName, data, options = {}) {
             const logger = require('../logger');
             logger.warn(`[Queue] getOptimalLockDuration retornou null para TIMEOUT, usando fallback baseado em delay: ${delayMs}ms`);
             
-            // Calcular lockDuration baseado no delay (se houver) + margem, ou usar padrão
+            // Calcular lockDuration baseado no delay (se houver) + margem, ou usar padrão de 24h
+            // Fluxos podem durar até 24h no total
             let fallbackLockDuration;
             if (delayMs > 0) {
-                // LockDuration = delay + 1 hora de margem para processamento
-                fallbackLockDuration = delayMs + (60 * 60 * 1000);
+                // LockDuration = delay + margem para processamento, mas mínimo 24h para fluxos completos
+                const minLockDurationForDelay = delayMs + (60 * 60 * 1000);
+                fallbackLockDuration = Math.max(minLockDurationForDelay, 24 * 60 * 60 * 1000); // Mínimo 24h
             } else {
-                // Sem delay, usar 1 hora padrão
-                fallbackLockDuration = 60 * 60 * 1000;
+                // Sem delay, usar 24 horas padrão para acomodar fluxos completos
+                fallbackLockDuration = 24 * 60 * 60 * 1000; // 24 horas
             }
             
             const fallbackStalledInterval = Math.max(
-                delayMs > 0 ? delayMs * 2 : 30 * 60 * 1000, // 2x delay ou 30min
-                30 * 60 * 1000 // Mínimo 30min
+                delayMs > 0 ? delayMs * 1.5 : 4 * 60 * 60 * 1000, // 1.5x delay ou 4h (padrão para fluxos longos)
+                4 * 60 * 60 * 1000 // Mínimo 4h para fluxos que podem durar até 24h
             );
             
             data._calculatedLockDuration = fallbackLockDuration;

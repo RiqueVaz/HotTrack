@@ -295,6 +295,16 @@ async function getAdaptiveStalledInterval(lockDuration, queueName, jobData = {})
         lockDuration = MAX_LOCK_DURATION_MS;
     }
     
+    // CORREÇÃO: Para jobs TIMEOUT com delay, garantir que stalledInterval seja maior que o delay
+    // Delays podem ser até 1 hora, então stalledInterval deve ser pelo menos 1.5x o delay
+    // Isso evita que jobs sejam marcados como stalled antes mesmo de começar a processar
+    let minStalledForDelay = 0;
+    if (queueName === 'timeout-queue' && jobData._delayMs && jobData._delayMs > 0) {
+        // stalledInterval deve ser pelo menos 1.5x o delay para jobs TIMEOUT (delays máx 1h)
+        minStalledForDelay = jobData._delayMs * 1.5;
+        logger.debug(`[QueueMetrics] Job TIMEOUT com delay de ${Math.round(jobData._delayMs / 60000)}min detectado. Mínimo stalledInterval: ${Math.round(minStalledForDelay / 60000)}min`);
+    }
+    
     // Base: 1/3 do lockDuration (padrão conservador)
     let stalledInterval = Math.floor(lockDuration / 3);
     
@@ -327,7 +337,12 @@ async function getAdaptiveStalledInterval(lockDuration, queueName, jobData = {})
     }
     
     // Garantir limites mínimos e máximos baseados no lockDuration
-    const minStalled = Math.max(5 * 60 * 1000, lockDuration * 0.15); // Mínimo 5min ou 15% do lockDuration
+    // CORREÇÃO: Incluir minStalledForDelay no cálculo do mínimo para jobs TIMEOUT com delay
+    const minStalled = Math.max(
+        5 * 60 * 1000, // Mínimo absoluto de 5min
+        lockDuration * 0.15, // Ou 15% do lockDuration
+        minStalledForDelay // Ou mínimo baseado no delay (para jobs TIMEOUT com delay de até 1h)
+    );
     const maxStalled = Math.min(lockDuration * 0.6, MAX_STALLED_INTERVAL_MS); // Máximo 60% do lockDuration ou limite técnico
     
     stalledInterval = Math.max(minStalled, Math.min(stalledInterval, maxStalled));
