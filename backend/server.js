@@ -13213,11 +13213,90 @@ app.get('/api/diagnostic/workers', authenticateJwt, async (req, res) => {
             queueStats = { error: queueError.message };
         }
         
+        // Verificar status dos jobs na fila timeout-queue
+        let timeoutQueueStats = null;
+        try {
+            const timeoutQueue = getQueue(QUEUE_NAMES.TIMEOUT);
+            const [waiting, delayed, active, completed, failed] = await Promise.all([
+                timeoutQueue.getWaitingCount(),
+                timeoutQueue.getDelayedCount(),
+                timeoutQueue.getActiveCount(),
+                timeoutQueue.getCompletedCount(),
+                timeoutQueue.getFailedCount()
+            ]);
+            
+            // Buscar alguns jobs delayed para ver quando ficarão prontos
+            const delayedJobs = await timeoutQueue.getJobs(['delayed'], 0, 20);
+            const delayedJobsInfo = delayedJobs.map(job => ({
+                id: job.id,
+                name: job.name,
+                delay: job.delay,
+                delayUntil: job.delay ? new Date(Date.now() + job.delay).toISOString() : null,
+                data: {
+                    chat_id: job.data.chat_id,
+                    bot_id: job.data.bot_id,
+                    target_node_id: job.data.target_node_id,
+                    continue_from_delay: job.data.continue_from_delay,
+                    is_disparo: job.data.is_disparo,
+                    history_id: job.data.history_id
+                }
+            }));
+            
+            // Buscar alguns jobs waiting (prontos para processar)
+            const waitingJobs = await timeoutQueue.getJobs(['waiting'], 0, 20);
+            const waitingJobsInfo = waitingJobs.map(job => ({
+                id: job.id,
+                name: job.name,
+                timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+                data: {
+                    chat_id: job.data.chat_id,
+                    bot_id: job.data.bot_id,
+                    target_node_id: job.data.target_node_id,
+                    continue_from_delay: job.data.continue_from_delay,
+                    is_disparo: job.data.is_disparo,
+                    history_id: job.data.history_id
+                }
+            }));
+            
+            // Buscar alguns jobs failed para ver os erros
+            const failedJobs = await timeoutQueue.getJobs(['failed'], 0, 20);
+            const failedJobsInfo = failedJobs.map(job => ({
+                id: job.id,
+                name: job.name,
+                failedReason: job.failedReason,
+                attemptsMade: job.attemptsMade,
+                timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+                data: {
+                    chat_id: job.data.chat_id,
+                    bot_id: job.data.bot_id,
+                    target_node_id: job.data.target_node_id,
+                    continue_from_delay: job.data.continue_from_delay,
+                    is_disparo: job.data.is_disparo,
+                    history_id: job.data.history_id
+                }
+            }));
+            
+            timeoutQueueStats = {
+                waiting,
+                delayed,
+                active,
+                completed,
+                failed,
+                delayedJobs: delayedJobsInfo,
+                waitingJobs: waitingJobsInfo,
+                failedJobs: failedJobsInfo
+            };
+        } catch (timeoutQueueError) {
+            logger.error('[DIAGNOSTIC] Erro ao obter estatísticas da fila de timeout:', timeoutQueueError);
+            timeoutQueueStats = { error: timeoutQueueError.message };
+        }
+        
         res.status(200).json({
             workers: workersStatus,
             disparoBatchWorkerRunning,
             stuckDisparos: stuckDisparos || [],
             queueStats,
+            timeoutQueueStats,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
