@@ -273,6 +273,20 @@ class ApiRateLimiterBullMQ {
                     cleanup();
                     const error = new Error(failedReason || 'Job failed');
                     error.jobId = jobId;
+                    
+                    // Tentar extrair informações adicionais da mensagem do erro
+                    // Formato: |ERROR_DATA:{"status":429,"retryAfter":5}|
+                    const errorDataMatch = failedReason?.match(/\|ERROR_DATA:(.+?)\|/);
+                    if (errorDataMatch) {
+                        try {
+                            const errorData = JSON.parse(errorDataMatch[1]);
+                            if (errorData.status) error.status = errorData.status;
+                            if (errorData.retryAfter !== undefined) error.retryAfter = errorData.retryAfter;
+                        } catch (e) {
+                            // Ignorar se não conseguir parsear
+                        }
+                    }
+                    
                     reject(error);
                 }
             };

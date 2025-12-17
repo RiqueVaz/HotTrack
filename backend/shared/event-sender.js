@@ -153,8 +153,26 @@ async function sendEventToUtmify({
     } catch (error) {
         // 429 não é erro crítico - é rate limit esperado
         if (error.response?.status === 429 || error.status === 429) {
+            // Tentar extrair retryAfter de múltiplas fontes
+            let retryAfter = error.response?.headers?.['retry-after'] || 
+                           error.response?.headers?.['Retry-After'] || 
+                           error.retryAfter;
+            
+            // Se ainda não encontrou, tentar extrair da mensagem do erro
+            if (!retryAfter && error.message) {
+                const errorDataMatch = error.message.match(/\|ERROR_DATA:(.+?)\|/);
+                if (errorDataMatch) {
+                    try {
+                        const errorData = JSON.parse(errorDataMatch[1]);
+                        retryAfter = errorData.retryAfter;
+                    } catch (e) {
+                        // Ignorar se não conseguir parsear
+                    }
+                }
+            }
+            
             logger.warn(`[Utmify] Rate limit 429 ao enviar evento '${status}'. Evento será reenviado automaticamente.`, {
-                retryAfter: error.response?.headers?.['retry-after'] || error.retryAfter || 'desconhecido',
+                retryAfter: retryAfter || 'desconhecido',
                 status,
                 orderId: pixData?.provider_transaction_id || `ht_${pixData?.id}`
             });
