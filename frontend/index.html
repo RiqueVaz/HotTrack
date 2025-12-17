@@ -8932,20 +8932,25 @@ function generatePreviewHTML(data) {
         
         useEffect(() => {
             const chatWindow = chatWindowRef.current;
-            if (!chatWindow || !selectedChat) return;
+            if (!chatWindow || !selectedChat || isLoadingMoreMessages || justLoadedOlderMessagesRef.current) return;
 
             // Só fazer scroll automático se:
             // 1. Não estiver carregando mensagens antigas
-            // 2. Estiver próximo do final (dentro de 200px)
-            // 3. For uma nova mensagem (não uma recarga completa)
+            // 2. Não acabou de carregar mensagens antigas
+            // 3. Estiver próximo do final (dentro de 200px)
             const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 200;
-            const wasScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 200;
 
-            if (isScrolledToBottom && !isLoadingMoreMessages) {
+            if (isScrolledToBottom) {
                 // Pequeno delay para garantir que DOM foi atualizado
                 setTimeout(() => {
-                    if (chatWindow) {
-                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                    if (chatWindow && !isLoadingMoreMessages && !justLoadedOlderMessagesRef.current) {
+                        const currentScrollTop = chatWindow.scrollTop;
+                        const currentScrollHeight = chatWindow.scrollHeight;
+                        // Só fazer scroll se ainda estiver próximo do final
+                        const stillAtBottom = currentScrollHeight - chatWindow.clientHeight <= currentScrollTop + 200;
+                        if (stillAtBottom) {
+                            chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                        }
                     }
                 }, 50);
             }
@@ -9190,15 +9195,20 @@ function generatePreviewHTML(data) {
                  // Verificar se retornou objeto com paginação ou array direto
                  const responseMessages = data.messages || data;
                  
-                 if (append && offset > 0) {
-                     // Carregando mensagens antigas: adicionar no início
-                     setMessages(prevMessages => {
-                         // Evitar duplicatas
-                         const existingIds = new Set(prevMessages.map(m => m.message_id || m.id));
-                         const newMessages = responseMessages.filter(m => !existingIds.has(m.message_id || m.id));
-                         return [...newMessages, ...prevMessages];
-                     });
-                 } else {
+                if (append && offset > 0) {
+                    // Carregando mensagens antigas: adicionar no início
+                    justLoadedOlderMessagesRef.current = true;
+                    setMessages(prevMessages => {
+                        // Evitar duplicatas
+                        const existingIds = new Set(prevMessages.map(m => m.message_id || m.id));
+                        const newMessages = responseMessages.filter(m => !existingIds.has(m.message_id || m.id));
+                        return [...newMessages, ...prevMessages];
+                    });
+                    // Resetar flag após um tempo para permitir auto-scroll em novas mensagens
+                    setTimeout(() => {
+                        justLoadedOlderMessagesRef.current = false;
+                    }, 500);
+                } else {
                      // Primeira carga ou recarga: substituir todas
                      setMessages(responseMessages);
                      
