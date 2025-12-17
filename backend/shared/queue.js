@@ -201,8 +201,8 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.TIMEOUT]: {
-        concurrency: 100,
-        limiter: { max: 100, duration: 1000 },
+        concurrency: 20, // Reduzido de 100 para 20 para evitar contenção e race conditions sob alta carga
+        limiter: { max: 20, duration: 1000 }, // Ajustado para corresponder à concorrência
         stalledInterval: 3000000, // 50 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         lockDuration: 3600000, // 1 hora - jobs podem demorar muito em flows complexos (fallback padrão)
         attempts: 3,

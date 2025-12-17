@@ -18,7 +18,7 @@ const telegramRateLimiter = require('../shared/telegram-rate-limiter-bullmq');
 const apiRateLimiterBullMQ = require('../shared/api-rate-limiter-bullmq');
 const dbCache = require('../shared/db-cache');
 const { shouldLogDebug, shouldLogOccasionally } = require('../shared/logger-helper');
-const { addJobWithDelay, removeJob, QUEUE_NAMES } = require('../shared/queue');
+const { addJobWithDelay, removeJob, QUEUE_NAMES, redisConnection } = require('../shared/queue');
 
 const DEFAULT_INVITE_MESSAGE = 'Seu link exclusivo está pronto! Clique no botão abaixo para acessar.';
 const DEFAULT_INVITE_BUTTON_TEXT = 'Acessar convite';
@@ -2302,6 +2302,43 @@ async function processTimeoutData(data, job = null) {
         const botToken = bot.bot_token;
         const sellerId = bot.seller_id;
 
+        // Lock distribuído para evitar race conditions quando múltiplos timeouts são processados simultaneamente
+        // Isso é crítico em produção onde há alta concorrência
+        const lockKey = `timeout:lock:${chat_id}:${bot_id}`;
+        const lockId = `${job?.id || 'unknown'}-${Date.now()}-${Math.random()}`;
+        const lockTTL = 30000; // 30 segundos - tempo máximo para processar timeout
+        
+        let lockAcquired = false;
+        try {
+            // Tentar adquirir lock com timeout de 5 segundos
+            const startTime = Date.now();
+            const maxWaitTime = 5000; // 5 segundos
+            
+            while (!lockAcquired && (Date.now() - startTime) < maxWaitTime) {
+                const result = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
+                if (result === 'OK') {
+                    lockAcquired = true;
+                    // #region agent log
+                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2310',message:'Lock adquirido para processar timeout',data:{chatId:chat_id,botId:bot_id,jobId:job?.id,lockId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
+                    // #endregion
+                    break;
+                } else {
+                    // Aguardar um pouco antes de tentar novamente
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            
+            if (!lockAcquired) {
+                // #region agent log
+                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2320',message:'Não foi possível adquirir lock - outro job está processando',data:{chatId:chat_id,botId:bot_id,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
+                // #endregion
+                return { ignored: true, reason: 'lock_not_acquired', message: 'Outro job está processando este timeout' };
+            }
+        } catch (lockError) {
+            // Se erro ao adquirir lock, logar mas continuar (fail open para não bloquear completamente)
+            console.warn(`${logPrefix} [Timeout] Erro ao adquirir lock distribuído (continuando mesmo assim):`, lockError.message);
+        }
+
         // Verificar estado atual do usuário
         const [currentState] = await sqlWithRetry(sqlTx`
             SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id, variables as state_variables
@@ -2322,6 +2359,7 @@ async function processTimeoutData(data, job = null) {
             // #region agent log
             console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2323',message:'RETORNANDO: no_user_state',data:{chatId:chat_id,botId:bot_id,reason:'no_user_state'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
             // #endregion
+            await releaseLock();
             return { ignored: true, reason: 'no_user_state' };
         }
         
@@ -2367,6 +2405,7 @@ async function processTimeoutData(data, job = null) {
                 // #region agent log
                 console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2361',message:'RETORNANDO: user_already_proceeded',data:{chatId:chat_id,botId:bot_id,reason:'user_already_proceeded'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
                 // #endregion
+                await releaseLock();
                 return { ignored: true, reason: 'user_already_proceeded' };
             }
 
@@ -2421,6 +2460,7 @@ async function processTimeoutData(data, job = null) {
                 // #region agent log
                 console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2420',message:'RETORNANDO: disparo processado',data:{chatId:chat_id,botId:bot_id,is_disparo:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
                 // #endregion
+                await releaseLock();
                 return { processed: true, is_disparo: true };
             } catch (error) {
                 console.error(`${logPrefix} [Timeout] Erro ao processar timeout de disparo:`, error);
@@ -2730,9 +2770,12 @@ async function processTimeoutData(data, job = null) {
                 // #region agent log
                 console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2730',message:'RETORNANDO: no_target_node',data:{chatId:chat_id,botId:bot_id,success:true,flowEnded:true,reason:'no_target_node'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
                 // #endregion
+                await releaseLock();
                 return { success: true, flowEnded: true, reason: 'no_target_node' };
             }
     } catch (error) {
+        // Liberar lock em caso de erro
+        await releaseLock();
         // Tratar especificamente CONNECT_TIMEOUT - re-lançar para tratamento especial no handler
         if (error.message?.includes('CONNECT_TIMEOUT') || error.message?.includes('write CONNECT_TIMEOUT')) {
             console.error(`[WORKER] CONNECT_TIMEOUT ao processar timeout para chat ${chat_id}. Pool pode estar esgotado.`);
