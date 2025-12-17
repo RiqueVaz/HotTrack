@@ -1431,9 +1431,9 @@ const QSTASH_PUBLISH_DELAY = resolvePositiveInt(process.env.QSTASH_PUBLISH_DELAY
 const MAX_CONTACTS_PER_QUERY = resolvePositiveInt(process.env.MAX_CONTACTS_PER_QUERY, 500);
 
 // Limite máximo de mensagens de chat por query para evitar sobrecarga de memória compartilhada
-// Reduzido de 50000 para 20000 para reduzir uso de memória em 60%
+// Reduzido de 20000 para 10000 para reduzir uso de memória em 50% e evitar erros de shared memory
 // Configurável via variável de ambiente MAX_CHATS_PER_QUERY
-const MAX_CHATS_PER_QUERY = resolvePositiveInt(process.env.MAX_CHATS_PER_QUERY, 20000);
+const MAX_CHATS_PER_QUERY = resolvePositiveInt(process.env.MAX_CHATS_PER_QUERY, 10000);
 
 // Limite máximo de batch size para processamento de contatos
 // Configurável via variável de ambiente MAX_BATCH_SIZE (padrão: 1000)
@@ -4007,34 +4007,27 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
         
         // Query SIMPLIFICADA - Reduz complexidade removendo LEFT JOIN LATERAL e CTEs desnecessárias
-        // Estratégia: Primeiro ordenar e limitar chats, depois buscar dados apenas para esses chats
-        // OTIMIZADO: Limite reduzido de 50000 para MAX_CHATS_PER_QUERY (padrão 20000) para reduzir uso de memória compartilhada
+        // Estratégia verdadeiramente escalável: Buscar diretamente os chats únicos usando DISTINCT ON
+        // SEM limite fixo de mensagens - escala para qualquer quantidade de leads
+        // Usa índice idx_telegram_chats_bot_seller_chat_created_optimized_v2 de forma eficiente
+        // A paginação limita o resultado final, não o processamento intermediário
         const users = await sqlWithRetry(`
-            WITH recent_messages AS (
-                -- Passo 0: Limitar mensagens recentes ANTES do DISTINCT ON para reduzir uso de memória
-                -- Reduzido de 50000 para ${MAX_CHATS_PER_QUERY} para reduzir uso de memória compartilhada em 60%
-                -- O erro "could not resize shared memory segment" ocorre quando queries muito grandes
-                -- consomem toda a memória compartilhada disponível do PostgreSQL
-                SELECT chat_id, created_at, message_text, sender_type
-                FROM telegram_chats
-                WHERE bot_id = $1 AND seller_id = $2
-                ORDER BY created_at DESC
-                LIMIT ${MAX_CHATS_PER_QUERY}
-            ),
-            last_chats AS (
-                -- Passo 1: Pegar últimos chat_ids ordenados por última mensagem (agora de conjunto limitado)
+            WITH unique_chats AS (
+                -- Passo 0: Buscar última mensagem de cada chat único (escalável - sem limite fixo)
+                -- DISTINCT ON usa o índice de forma eficiente e não processa todas as mensagens
                 SELECT DISTINCT ON (chat_id)
                     chat_id,
                     created_at as last_message_at,
                     message_text,
                     sender_type
-                FROM recent_messages
+                FROM telegram_chats
+                WHERE bot_id = $1 AND seller_id = $2
                 ORDER BY chat_id, created_at DESC
             ),
             chat_ids_ordered AS (
-                -- Passo 2: Ordenar e limitar apenas os chat_ids já processados
+                -- Passo 1: Ordenar e paginar apenas os chats únicos já identificados
                 SELECT chat_id, last_message_at, message_text, sender_type
-                FROM last_chats
+                FROM unique_chats
                 ORDER BY last_message_at DESC NULLS LAST
                 LIMIT $3 OFFSET $4
             ),
@@ -4080,10 +4073,10 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 LEFT JOIN click_ids ci ON ci.chat_id = cio.chat_id
             ),
             paid_chats AS (
-                -- Passo 6: Verificar chats pagantes (simplificado)
+                -- Passo 6: Verificar chats pagantes (otimizado - usa apenas chat_ids já limitados)
                 SELECT DISTINCT tc.chat_id
                 FROM telegram_chats tc
-                JOIN chat_basic_info cbi ON cbi.chat_id = tc.chat_id
+                JOIN chat_ids_ordered cio ON cio.chat_id = tc.chat_id
                 JOIN clicks c ON c.click_id = tc.click_id
                 JOIN pix_transactions pt ON pt.click_id_internal = c.id
                 WHERE tc.bot_id = $1
@@ -4091,7 +4084,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                   AND pt.status = 'paid'
             ),
             chat_tags AS (
-                -- Passo 7: Tags customizadas (simplificado - sem ORDER BY dentro do json_agg)
+                -- Passo 7: Tags customizadas (otimizado - usa apenas chat_ids já limitados)
                 SELECT
                     lcta.chat_id,
                     COALESCE(
@@ -4101,7 +4094,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                         '[]'::json
                     ) as tags
                 FROM lead_custom_tag_assignments lcta
-                JOIN chat_basic_info cbi ON cbi.chat_id = lcta.chat_id
+                JOIN chat_ids_ordered cio ON cio.chat_id = lcta.chat_id
                 JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
                 WHERE lcta.bot_id = $1
                   AND lcta.seller_id = $2
