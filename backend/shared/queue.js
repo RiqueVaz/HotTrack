@@ -75,6 +75,25 @@ class RedisCircuitBreaker {
 // Instância global do circuit breaker
 const redisCircuitBreaker = new RedisCircuitBreaker();
 
+// Controle de estado dos workers
+let workersReady = false;
+
+/**
+ * Verifica se os workers estão prontos para processar jobs
+ * @returns {boolean} - true se workers estão prontos, false caso contrário
+ */
+function checkWorkersReady() {
+    return workersReady;
+}
+
+/**
+ * Marca workers como prontos ou não prontos
+ * @param {boolean} ready - true para marcar como prontos, false caso contrário
+ */
+function setWorkersReady(ready = true) {
+    workersReady = ready;
+}
+
 // Configuração Redis otimizada
 const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null, // BullMQ requer null para funcionar corretamente
@@ -825,6 +844,24 @@ function calculateScalableLimits(contactsCount) {
 async function addJobWithDelay(queueName, jobName, data, options = {}) {
     const logger = require('../logger');
     
+    // Verificar se workers estão prontos antes de criar jobs
+    if (!checkWorkersReady()) {
+        logger.warn(`[Queue] Workers ainda não estão prontos. Aguardando...`);
+        // Aguardar até 5 segundos para workers ficarem prontos
+        let attempts = 0;
+        while (!checkWorkersReady() && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        
+        if (!checkWorkersReady()) {
+            logger.error(`[Queue] ⚠️ Workers ainda não estão prontos após 5 segundos!`);
+            logger.error(`[Queue] Job será criado mas pode não ser processado imediatamente.`);
+        } else {
+            logger.info(`[Queue] Workers ficaram prontos após ${attempts * 100}ms. Criando job...`);
+        }
+    }
+    
     // Verificar circuit breaker antes de operações Redis
     const circuitState = redisCircuitBreaker.getState();
     if (circuitState.state === 'OPEN') {
@@ -1090,4 +1127,6 @@ module.exports = {
     redisConnection,
     redisCircuitBreaker,
     checkRateLimit, // Exportar para uso no worker como fallback
+    checkWorkersReady,
+    setWorkersReady,
 };
