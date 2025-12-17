@@ -2339,6 +2339,24 @@ async function processTimeoutData(data, job = null) {
             console.warn(`${logPrefix} [Timeout] Erro ao adquirir lock distribuído (continuando mesmo assim):`, lockError.message);
         }
 
+        // Função helper para liberar lock
+        const releaseLock = async () => {
+            if (lockAcquired) {
+                try {
+                    const currentLock = await redisConnection.get(lockKey);
+                    if (currentLock === lockId) {
+                        await redisConnection.del(lockKey);
+                        // #region agent log
+                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:releaseLock',message:'Lock liberado',data:{chatId:chat_id,botId:bot_id,jobId:job?.id,lockId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
+                        // #endregion
+                    }
+                } catch (lockError) {
+                    console.warn(`${logPrefix} [Timeout] Erro ao liberar lock distribuído (não crítico):`, lockError.message);
+                }
+                lockAcquired = false;
+            }
+        };
+
         // Verificar estado atual do usuário
         const [currentState] = await sqlWithRetry(sqlTx`
             SELECT waiting_for_input, scheduled_message_id, current_node_id, flow_id, variables as state_variables
