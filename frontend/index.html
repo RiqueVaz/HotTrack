@@ -9213,7 +9213,7 @@ function generatePreviewHTML(data) {
                 setHasMoreLeads(false);
                 return;
             }
-            // Resetar paginação ao mudar bot ou filtros de tags
+            // Resetar paginação ao mudar bot
             setCurrentPage(1);
             fetchUsers(1, false);
             // Polling para atualizar lista de leads
@@ -9221,7 +9221,15 @@ function generatePreviewHTML(data) {
                 fetchUsers(1, false); // Sempre recarregar primeira página no polling
             }, 10000);
             return () => clearInterval(intervalId);
-        }, [fetchUsers, selectedBotId, tagFilters.join(',')]); // Recarregar quando filtros mudarem
+        }, [fetchUsers, selectedBotId]);
+        
+        // useEffect separado para recarregar quando filtros de tags mudarem
+        useEffect(() => {
+            if (!selectedBotId) return;
+            // Resetar paginação e recarregar quando filtros mudarem
+            setCurrentPage(1);
+            fetchUsers(1, false);
+        }, [JSON.stringify(tagFilters), selectedBotId, fetchUsers]);
 
         const fetchMessages = useCallback(async (offset = 0, limit = 50, append = false) => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
