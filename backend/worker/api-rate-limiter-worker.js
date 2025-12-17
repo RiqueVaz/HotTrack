@@ -101,7 +101,9 @@ function createWorkerForQueue(queueName) {
                         logger.warn(`[API Rate Limiter Worker] Rate limit 429 para ${provider}. Aguardando ${retryAfter}s antes de falhar.`);
                         await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
                         // Após aguardar, lançar erro para que BullMQ faça retry
-                        const rateLimitError = new Error(`Rate limit 429 após aguardar ${retryAfter}s: ${error.message}`);
+                        // Incluir retryAfter na mensagem para preservar após serialização do BullMQ
+                        const errorData = JSON.stringify({ status: 429, retryAfter });
+                        const rateLimitError = new Error(`Rate limit 429 após aguardar ${retryAfter}s: ${error.message} |ERROR_DATA:${errorData}|`);
                         rateLimitError.status = 429;
                         rateLimitError.retryAfter = retryAfter;
                         throw rateLimitError;
@@ -113,7 +115,9 @@ function createWorkerForQueue(queueName) {
                     }
                     
                     // Para outros, lançar erro que será tratado pelo BullMQ retry
-                    const rateLimitError = new Error(`Rate limit 429: ${error.message}`);
+                    // Incluir retryAfter na mensagem para preservar após serialização do BullMQ
+                    const errorData = JSON.stringify({ status: 429, retryAfter });
+                    const rateLimitError = new Error(`Rate limit 429: ${error.message} |ERROR_DATA:${errorData}|`);
                     rateLimitError.status = 429;
                     rateLimitError.retryAfter = retryAfter;
                     throw rateLimitError;
