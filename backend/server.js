@@ -14129,19 +14129,24 @@ app.use((err, req, res, next) => {
     }
 });
 
-// Inicialização do servidor
-app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
-    console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
-    console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-    
-    // Inicializar workers BullMQ
+// Variável para controlar se workers estão prontos
+let workersReady = false;
+let workersInitializationError = null;
+
+// Inicializar workers ANTES de iniciar o servidor
+async function startServer() {
+    // Inicializar workers BullMQ PRIMEIRO
     try {
+        console.log(`[SERVER] Inicializando workers BullMQ...`);
         await initializeWorkers();
+        workersReady = true;
         console.log(`✅ Workers BullMQ inicializados com sucesso`);
     } catch (error) {
-        console.error(`❌ Erro ao inicializar workers BullMQ:`, error);
+        workersInitializationError = error;
+        console.error(`❌ ERRO CRÍTICO ao inicializar workers BullMQ:`, error);
+        console.error(`❌ Stack trace:`, error.stack);
+        // Em produção, pode ser melhor não iniciar o servidor se workers falharem
+        // Mas vamos continuar para não quebrar tudo
     }
     
     // Agendar limpeza de QR codes recorrente
@@ -14151,6 +14156,30 @@ app.listen(PORT, '0.0.0.0', async () => {
     } catch (error) {
         console.error(`❌ Erro ao agendar limpeza de QR codes:`, error);
     }
+    
+    // Só agora iniciar o servidor HTTP
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Servidor HotTrack rodando na porta ${PORT}`);
+        console.log(`📱 API disponível em: http://localhost:${PORT}/api`);
+        console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
+        console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+        
+        if (workersReady) {
+            console.log(`✅ Sistema totalmente inicializado e pronto para receber requisições`);
+        } else {
+            console.error(`⚠️ ATENÇÃO: Servidor iniciado mas workers NÃO estão prontos!`);
+            console.error(`⚠️ Jobs podem não ser processados corretamente!`);
+            if (workersInitializationError) {
+                console.error(`⚠️ Erro de inicialização:`, workersInitializationError.message);
+            }
+        }
+    });
+}
+
+// Iniciar servidor
+startServer().catch(error => {
+    console.error(`❌ ERRO FATAL ao iniciar servidor:`, error);
+    process.exit(1);
 });
 
 // Graceful shutdown

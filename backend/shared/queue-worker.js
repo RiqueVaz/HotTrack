@@ -1,6 +1,6 @@
 // Workers BullMQ para processar jobs das filas
 const { Worker, Queue, RateLimitError } = require('bullmq');
-const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, redisConnection, checkRateLimit, addJobWithDelay } = require('./queue');
+const { QUEUE_NAMES, QUEUE_CONFIGS, BULLMQ_CONCURRENCY, redisConnection, checkRateLimit, addJobWithDelay, setWorkersReady } = require('./queue');
 const { processTimeoutData } = require('../worker/process-timeout');
 const { processDisparoData, processDisparoBatchData } = require('../worker/process-disparo');
 const logger = require('../logger');
@@ -881,12 +881,51 @@ const workers = new Map();
  * Inicializa todos os workers
  */
 async function initializeWorkers() {
+    logger.info(`[BullMQ] ========== Iniciando inicialização dos workers ==========`);
+    
+    // Marcar workers como não prontos no início
+    setWorkersReady(false);
+    
+    // Filas críticas que devem estar prontas
+    const criticalQueues = [QUEUE_NAMES.DISPARO_BATCH, QUEUE_NAMES.TIMEOUT, QUEUE_NAMES.DISPARO];
+    const initializedQueues = [];
+    const failedQueues = [];
+    
     // Inicializar workers das filas principais
     for (const [queueName, processor] of Object.entries(processors)) {
-        if (!workers.has(queueName)) {
-            const { worker, queue } = await createWorker(queueName, processor);
-            workers.set(queueName, { worker, queue });
-            logger.info(`[BullMQ] Worker initialized for queue: ${queueName}`);
+        try {
+            if (!workers.has(queueName)) {
+                logger.info(`[BullMQ] Criando worker para fila: ${queueName}`);
+                const { worker, queue } = await createWorker(queueName, processor);
+                workers.set(queueName, { worker, queue });
+                
+                // Aguardar um pouco para worker inicializar completamente
+                await new Promise(resolve => setTimeout(resolve, 200));
+                
+                // Verificar se worker está realmente rodando
+                const isRunning = worker.isRunning();
+                if (!isRunning) {
+                    logger.error(`[BullMQ] ❌ ERRO: Worker criado mas não está rodando para fila ${queueName}`);
+                    failedQueues.push(queueName);
+                } else {
+                    logger.info(`[BullMQ] ✅ Worker inicializado e rodando para fila: ${queueName} (isRunning: ${isRunning})`);
+                    initializedQueues.push(queueName);
+                }
+            } else {
+                logger.info(`[BullMQ] Worker já existe para fila: ${queueName}`);
+                const workerData = workers.get(queueName);
+                const isRunning = workerData.worker.isRunning();
+                logger.info(`[BullMQ] Status do worker existente para ${queueName}: isRunning=${isRunning}`);
+                if (isRunning) {
+                    initializedQueues.push(queueName);
+                } else {
+                    failedQueues.push(queueName);
+                }
+            }
+        } catch (error) {
+            logger.error(`[BullMQ] ❌ ERRO ao inicializar worker para fila ${queueName}:`, error);
+            logger.error(`[BullMQ] Stack trace:`, error.stack);
+            failedQueues.push(queueName);
         }
     }
     
@@ -902,6 +941,30 @@ async function initializeWorkers() {
     
     // Telegram rate limiter agora usa Redis diretamente (sem fila BullMQ)
     // Não precisa de worker separado
+    
+    // Verificar se todas as filas críticas foram inicializadas com sucesso
+    const allCriticalWorkersReady = criticalQueues.every(q => initializedQueues.includes(q));
+    
+    if (allCriticalWorkersReady) {
+        setWorkersReady(true);
+        logger.info(`[BullMQ] ✅ Workers marcados como PRONTOS`);
+    } else {
+        const criticalFailed = criticalQueues.filter(q => failedQueues.includes(q));
+        logger.error(`[BullMQ] ⚠️ Workers NÃO marcados como prontos devido a falhas críticas`);
+        logger.error(`[BullMQ] Filas críticas que falharam: ${criticalFailed.join(', ')}`);
+    }
+    
+    // Log resumo
+    logger.info(`[BullMQ] ========== Resumo da inicialização ==========`);
+    logger.info(`[BullMQ] ✅ Workers inicializados: ${initializedQueues.length}`);
+    logger.info(`[BullMQ] ❌ Workers que falharam: ${failedQueues.length}`);
+    if (initializedQueues.length > 0) {
+        logger.info(`[BullMQ] Filas inicializadas: ${initializedQueues.join(', ')}`);
+    }
+    if (failedQueues.length > 0) {
+        logger.error(`[BullMQ] ⚠️ Filas que falharam: ${failedQueues.join(', ')}`);
+    }
+    logger.info(`[BullMQ] ========== Finalização da inicialização ==========`);
 }
 
 /**
