@@ -4006,14 +4006,77 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         const offset = usePagination ? (page - 1) * limit : 0;
         const queryLimit = usePagination ? limit : 1000; // Usar limit se paginar, senão 1000
         
+        // Processar filtros de tags (formato: "auto:Pagante,custom:123")
+        const tagFiltersParam = req.query.tagFilters;
+        let hasPaidFilter = false;
+        let customTagIds = [];
+        
+        if (tagFiltersParam) {
+            const filters = tagFiltersParam.split(',');
+            filters.forEach(filter => {
+                if (filter.startsWith('auto:')) {
+                    const tagName = filter.replace('auto:', '');
+                    if (tagName === 'Pagante') {
+                        hasPaidFilter = true;
+                    }
+                } else if (filter.startsWith('custom:')) {
+                    const tagId = parseInt(filter.replace('custom:', ''));
+                    if (!isNaN(tagId)) {
+                        customTagIds.push(tagId);
+                    }
+                }
+            });
+        }
+        
         // Query OTIMIZADA - Reestruturada para paginar chat_ids primeiro, depois buscar dados completos
         // Estratégia: Identificar e paginar apenas os chat_ids únicos ordenados por última mensagem
         // Depois buscar dados completos apenas para os chats paginados (reduz processamento drasticamente)
         // Usa índices de forma eficiente: idx_telegram_chats_bot_seller_chat_created_optimized_v2
-        const users = await sqlWithRetry(`
-            WITH paginated_chat_ids AS (
-                -- ETAPA 1: Identificar e paginar apenas os chat_ids únicos ordenados por última mensagem
-                -- Esta é a única etapa que processa todos os chats, mas apenas para identificar chat_ids
+        // Aplica filtros de tags ANTES da paginação para garantir que todos os resultados filtrados sejam considerados
+        
+        // Construir parâmetros dinâmicos baseados nos filtros
+        const queryParams = [botId, req.user.id];
+        let paramIndex = 3;
+        let filterConditions = '';
+        
+        // Aplicar filtros antes da paginação
+        if (hasPaidFilter || customTagIds.length > 0) {
+            const filterParts = [];
+            
+            if (hasPaidFilter) {
+                // Filtrar apenas chats pagantes
+                filterParts.push(`EXISTS (
+                    SELECT 1
+                    FROM telegram_chats tc2
+                    JOIN clicks c ON c.click_id = tc2.click_id
+                    JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                    WHERE tc2.chat_id = pci.chat_id
+                      AND tc2.bot_id = $1
+                      AND tc2.seller_id = $2
+                      AND tc2.click_id IS NOT NULL
+                      AND pt.status = 'paid'
+                )`);
+            }
+            
+            if (customTagIds.length > 0) {
+                queryParams.push(customTagIds);
+                filterParts.push('EXISTS (\n                    SELECT 1\n                    FROM lead_custom_tag_assignments lcta\n                    WHERE lcta.chat_id = pci.chat_id\n                      AND lcta.bot_id = $1\n                      AND lcta.seller_id = $2\n                      AND lcta.tag_id = ANY($' + paramIndex + ')\n                )');
+                paramIndex++;
+            }
+            
+            if (filterParts.length > 0) {
+                filterConditions = `WHERE ${filterParts.join(' AND ')}`;
+            }
+        }
+        
+        // Adicionar parâmetros de paginação
+        queryParams.push(queryLimit, offset);
+        const limitParam = '$' + paramIndex;
+        const offsetParam = '$' + (paramIndex + 1);
+        
+        const users = await sqlWithRetry(
+            `WITH paginated_chat_ids AS (
+                -- ETAPA 1: Identificar apenas os chat_ids únicos ordenados por última mensagem
                 -- Usa DISTINCT ON com índice para eficiência máxima
                 SELECT DISTINCT ON (chat_id)
                     chat_id,
@@ -4022,13 +4085,19 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 WHERE bot_id = $1 AND seller_id = $2
                 ORDER BY chat_id, created_at DESC
             ),
+            filtered_chat_ids AS (
+                -- ETAPA 1.5: Aplicar filtros de tags ANTES da paginação
+                SELECT chat_id, last_message_at
+                FROM paginated_chat_ids pci
+                ${filterConditions}
+            ),
             ordered_paginated_chats AS (
-                -- ETAPA 2: Ordenar e paginar apenas os chat_ids identificados
+                -- ETAPA 2: Ordenar e paginar apenas os chat_ids filtrados
                 -- LIMIT e OFFSET aplicados aqui - reduz drasticamente processamento posterior
                 SELECT chat_id, last_message_at
-                FROM paginated_chat_ids
+                FROM filtered_chat_ids
                 ORDER BY last_message_at DESC NULLS LAST
-                LIMIT $3 OFFSET $4
+                LIMIT ${limitParam} OFFSET ${offsetParam}
             ),
             last_messages AS (
                 -- ETAPA 3: Buscar última mensagem completa apenas para chats paginados
@@ -4089,6 +4158,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
             paid_chats AS (
                 -- ETAPA 7: Verificar chats pagantes apenas para chats paginados
                 -- Usa EXISTS com índice parcial idx_pix_transactions_click_status_paid_v2 para eficiência
+                -- Verifica se há alguma transação paga associada ao chat_id através do click_id
                 SELECT DISTINCT opc.chat_id
                 FROM ordered_paginated_chats opc
                 WHERE EXISTS (
@@ -4099,6 +4169,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                     WHERE tc.chat_id = opc.chat_id
                       AND tc.bot_id = $1
                       AND tc.seller_id = $2
+                      AND tc.click_id IS NOT NULL
                       AND pt.status = 'paid'
                 )
             ),
@@ -4129,17 +4200,53 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 cbi.message_text,
                 cbi.sender_type as last_sender_type,
                 COALESCE(ct.tags, '[]'::json) AS custom_tags,
-                CASE WHEN pc.chat_id IS NOT NULL THEN ARRAY['Pagante'] ELSE ARRAY[]::TEXT[] END AS automatic_tags
+                CASE 
+                    WHEN pc.chat_id IS NOT NULL THEN array_to_json(ARRAY['Pagante']::TEXT[])
+                    ELSE '[]'::json
+                END AS automatic_tags
             FROM chat_basic_info cbi
             LEFT JOIN paid_chats pc ON pc.chat_id = cbi.chat_id
             LEFT JOIN chat_tags ct ON ct.chat_id = cbi.chat_id
-            ORDER BY cbi.last_message_at DESC NULLS LAST;
-        `, [botId, req.user.id, queryLimit, offset]);
+            ORDER BY cbi.last_message_at DESC NULLS LAST;`,
+            queryParams
+        );
         
         // Retornar formato compatível com frontend (array se não paginar, objeto se paginar)
         if (usePagination) {
             // Buscar total para paginação (query otimizada usando índice)
-            // Usa subquery com DISTINCT ON para eficiência (aproveita índice idx_telegram_chats_bot_seller_chat_created_optimized_v2)
+            // Aplica os mesmos filtros usados na query principal
+            const countParams = [botId, req.user.id];
+            let countParamIndex = 3;
+            let countFilterConditions = '';
+            
+            if (hasPaidFilter || customTagIds.length > 0) {
+                const filterParts = [];
+                
+                if (hasPaidFilter) {
+                    filterParts.push(`EXISTS (
+                        SELECT 1
+                        FROM telegram_chats tc2
+                        JOIN clicks c ON c.click_id = tc2.click_id
+                        JOIN pix_transactions pt ON pt.click_id_internal = c.id
+                        WHERE tc2.chat_id = unique_chats.chat_id
+                          AND tc2.bot_id = $1
+                          AND tc2.seller_id = $2
+                          AND tc2.click_id IS NOT NULL
+                          AND pt.status = 'paid'
+                    )`);
+                }
+                
+                if (customTagIds.length > 0) {
+                    countParams.push(customTagIds);
+                    filterParts.push('EXISTS (\n                        SELECT 1\n                        FROM lead_custom_tag_assignments lcta\n                        WHERE lcta.chat_id = unique_chats.chat_id\n                          AND lcta.bot_id = $1\n                          AND lcta.seller_id = $2\n                          AND lcta.tag_id = ANY($' + countParamIndex + ')\n                    )');
+                    countParamIndex++;
+                }
+                
+                if (filterParts.length > 0) {
+                    countFilterConditions = `WHERE ${filterParts.join(' AND ')}`;
+                }
+            }
+            
             const [countResult] = await sqlWithRetry(`
                 SELECT COUNT(*) as total
                 FROM (
@@ -4148,7 +4255,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                     WHERE bot_id = $1 AND seller_id = $2
                     ORDER BY chat_id, created_at DESC
                 ) unique_chats
-            `, [botId, req.user.id]);
+                ${countFilterConditions}
+            `, countParams);
             
             const total = parseInt(countResult.total);
             

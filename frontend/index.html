@@ -9004,19 +9004,59 @@ function generatePreviewHTML(data) {
             }
             setIsLoadingLeads(true);
             try {
-                const { data } = await api.get(`/api/chats/${selectedBotId}`, {
-                    params: { page, limit: 50 }
-                });
+                // Enviar filtros de tags para o backend aplicar antes da paginação
+                const params = { page, limit: 50 };
+                if (tagFilters.length > 0) {
+                    params.tagFilters = tagFilters.join(',');
+                }
+                
+                const { data } = await api.get(`/api/chats/${selectedBotId}`, { params });
                 
                 // Verificar se retornou objeto com paginação ou array direto
                 const responseData = data.users || data;
                 const pagination = data.pagination;
                 
-                const normalized = (responseData || []).map(lead => ({
-                    ...lead,
-                    custom_tags: Array.isArray(lead.custom_tags) ? lead.custom_tags : [],
-                    automatic_tags: Array.isArray(lead.automatic_tags) ? lead.automatic_tags : []
-                }));
+                const normalized = (responseData || []).map(lead => {
+                    // Garantir que automatic_tags seja sempre um array
+                    let automaticTags = lead.automatic_tags;
+                    if (!Array.isArray(automaticTags)) {
+                        // Se for string (PostgreSQL array como string), tentar parsear
+                        if (typeof automaticTags === 'string') {
+                            try {
+                                // PostgreSQL retorna arrays como "{valor1,valor2}" ou como JSON
+                                if (automaticTags.startsWith('{') && automaticTags.endsWith('}')) {
+                                    automaticTags = automaticTags.slice(1, -1).split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+                                } else {
+                                    automaticTags = JSON.parse(automaticTags);
+                                }
+                            } catch (e) {
+                                automaticTags = [];
+                            }
+                        } else {
+                            automaticTags = [];
+                        }
+                    }
+                    
+                    // Garantir que custom_tags seja sempre um array
+                    let customTags = lead.custom_tags;
+                    if (!Array.isArray(customTags)) {
+                        if (typeof customTags === 'string') {
+                            try {
+                                customTags = JSON.parse(customTags);
+                            } catch (e) {
+                                customTags = [];
+                            }
+                        } else {
+                            customTags = [];
+                        }
+                    }
+                    
+                    return {
+                        ...lead,
+                        custom_tags: customTags,
+                        automatic_tags: automaticTags
+                    };
+                });
                 
                 if (append) {
                     setUsers(prev => [...prev, ...normalized]);
@@ -9173,7 +9213,7 @@ function generatePreviewHTML(data) {
                 setHasMoreLeads(false);
                 return;
             }
-            // Resetar paginação ao mudar bot
+            // Resetar paginação ao mudar bot ou filtros de tags
             setCurrentPage(1);
             fetchUsers(1, false);
             // Polling para atualizar lista de leads
@@ -9181,7 +9221,7 @@ function generatePreviewHTML(data) {
                 fetchUsers(1, false); // Sempre recarregar primeira página no polling
             }, 10000);
             return () => clearInterval(intervalId);
-        }, [fetchUsers, selectedBotId]);
+        }, [fetchUsers, selectedBotId, tagFilters.join(',')]); // Recarregar quando filtros mudarem
 
         const fetchMessages = useCallback(async (offset = 0, limit = 50, append = false) => {
              if (!selectedBotId || !selectedChat?.chat_id) return;
@@ -9373,6 +9413,8 @@ function generatePreviewHTML(data) {
         };
         
         useEffect(() => {
+            // Filtros de tags são aplicados no backend, então não precisamos filtrar aqui
+            // Apenas aplicar filtros locais: busca e showOnlyActive
             const activeUsers = showOnlyActive 
                 ? users.filter(u => !inactiveChatIds.includes(u.chat_id))
                 : users;
@@ -9384,17 +9426,10 @@ function generatePreviewHTML(data) {
                     const firstName = (u.first_name || '').toLowerCase();
                     const leadId = getLeadId(u).toLowerCase();
                     const matchesSearch = !normalizedTerm || firstName.includes(normalizedTerm) || leadId.includes(normalizedTerm);
-                    if (!matchesSearch) return false;
-
-                    if (tagFilters.length === 0) return true;
-                    const leadTagKeys = [
-                        ...(Array.isArray(u.automatic_tags) ? u.automatic_tags.map(name => `auto:${name}`) : []),
-                        ...(Array.isArray(u.custom_tags) ? u.custom_tags.map(tag => `custom:${tag.id}`) : [])
-                    ];
-                    return tagFilters.every(tagKey => leadTagKeys.includes(tagKey));
+                    return matchesSearch;
                 })
             );
-        }, [searchTerm, users, showOnlyActive, inactiveChatIds, tagFilters]);
+        }, [searchTerm, users, showOnlyActive, inactiveChatIds]);
 
         useEffect(() => {
             if (!selectedChat) return;
