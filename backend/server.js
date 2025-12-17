@@ -31,7 +31,7 @@ const { sendEventToUtmify: sendEventToUtmifyShared, sendMetaEvent: sendMetaEvent
 const apiRateLimiterBullMQ = require('./shared/api-rate-limiter-bullmq');
 const dbCache = require('./shared/db-cache');
 const r2Storage = require('./shared/r2-storage');
-const { addJobWithDelay, removeJob, removeJobsByHistoryId, QUEUE_NAMES, scheduleRecurringCleanupQRCodes } = require('./shared/queue');
+const { addJobWithDelay, removeJob, removeJobsByHistoryId, QUEUE_NAMES, scheduleRecurringCleanupQRCodes, redisConnection } = require('./shared/queue');
 const { initializeWorkers, closeAllWorkers } = require('./shared/queue-worker');
 const { metrics } = require('./metrics');
 
@@ -8574,6 +8574,48 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
             if (isDisparo) {
                 logger.debug(`[Webhook] Detectado que é continuação de disparo. History ID: ${parsedVariables._disparo_history_id}`);
                 
+                // Lock distribuído para evitar race condition com timeout job
+                // Usar mesma chave do lock do timeout para garantir exclusão mútua
+                const lockKey = `timeout:lock:${chatId}:${botId}`;
+                const lockId = `webhook-${Date.now()}-${Math.random()}`;
+                const lockTTL = 10000; // 10 segundos - tempo suficiente para processar resposta
+                
+                let lockAcquired = false;
+                try {
+                    // Tentar adquirir lock (timeout curto - se timeout job já está processando, falhar graciosamente)
+                    const result = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
+                    if (result === 'OK') {
+                        lockAcquired = true;
+                        logger.debug(`[Webhook] Lock adquirido para processar resposta do usuário (disparo)`);
+                    } else {
+                        // Timeout job está processando - verificar se ainda deve cancelar
+                        logger.debug(`[Webhook] Lock não adquirido - timeout pode estar processando (disparo)`);
+                    }
+                } catch (lockError) {
+                    logger.warn(`[Webhook] Erro ao adquirir lock distribuído (continuando mesmo assim):`, lockError.message);
+                }
+                
+                // Se adquiriu lock, verificar novamente o estado (double-check pattern)
+                if (lockAcquired) {
+                    const [currentState] = await sqlTx`
+                        SELECT waiting_for_input, scheduled_message_id
+                        FROM user_flow_states 
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                    `;
+                    
+                    // Se não está mais waiting_for_input, timeout já processou - liberar lock e sair
+                    if (!currentState || !currentState.waiting_for_input) {
+                        try {
+                            const currentLock = await redisConnection.get(lockKey);
+                            if (currentLock === lockId) {
+                                await redisConnection.del(lockKey);
+                            }
+                        } catch (e) { /* Ignorar erro */ }
+                        logger.debug(`[Webhook] Estado já foi processado pelo timeout - ignorando resposta (disparo)`);
+                        return;
+                    }
+                }
+                
                 // Cancela o timeout, pois o usuário respondeu.
                 if (userState.scheduled_message_id) {
                     try {
@@ -8589,6 +8631,16 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     UPDATE user_flow_states 
                     SET waiting_for_input = false, scheduled_message_id = NULL
                     WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+                
+                // Liberar lock após atualizar estado
+                if (lockAcquired) {
+                    try {
+                        const currentLock = await redisConnection.get(lockKey);
+                        if (currentLock === lockId) {
+                            await redisConnection.del(lockKey);
+                        }
+                    } catch (e) { /* Ignorar erro */ }
+                }
                 
                 logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
                 
@@ -8640,6 +8692,49 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                 }
             } else {
                 // Fluxo normal (não é disparo)
+                
+                // Lock distribuído para evitar race condition com timeout job
+                // Usar mesma chave do lock do timeout para garantir exclusão mútua
+                const lockKey = `timeout:lock:${chatId}:${botId}`;
+                const lockId = `webhook-${Date.now()}-${Math.random()}`;
+                const lockTTL = 10000; // 10 segundos - tempo suficiente para processar resposta
+                
+                let lockAcquired = false;
+                try {
+                    // Tentar adquirir lock (timeout curto - se timeout job já está processando, falhar graciosamente)
+                    const result = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
+                    if (result === 'OK') {
+                        lockAcquired = true;
+                        logger.debug(`[Webhook] Lock adquirido para processar resposta do usuário`);
+                    } else {
+                        // Timeout job está processando - verificar se ainda deve cancelar
+                        logger.debug(`[Webhook] Lock não adquirido - timeout pode estar processando`);
+                    }
+                } catch (lockError) {
+                    logger.warn(`[Webhook] Erro ao adquirir lock distribuído (continuando mesmo assim):`, lockError.message);
+                }
+                
+                // Se adquiriu lock, verificar novamente o estado (double-check pattern)
+                if (lockAcquired) {
+                    const [currentState] = await sqlTx`
+                        SELECT waiting_for_input, scheduled_message_id
+                        FROM user_flow_states 
+                        WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                    `;
+                    
+                    // Se não está mais waiting_for_input, timeout já processou - liberar lock e sair
+                    if (!currentState || !currentState.waiting_for_input) {
+                        try {
+                            const currentLock = await redisConnection.get(lockKey);
+                            if (currentLock === lockId) {
+                                await redisConnection.del(lockKey);
+                            }
+                        } catch (e) { /* Ignorar erro */ }
+                        logger.debug(`[Webhook] Estado já foi processado pelo timeout - ignorando resposta`);
+                        return;
+                    }
+                }
+                
                 // Cancela o timeout, pois o usuário respondeu.
                 if (userState.scheduled_message_id) {
                      try {
@@ -8659,6 +8754,16 @@ app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req,
                     WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
                 
                 logger.debug(`[Webhook] Estado atualizado: waiting_for_input = false`);
+                
+                // Liberar lock após atualizar estado
+                if (lockAcquired) {
+                    try {
+                        const currentLock = await redisConnection.get(lockKey);
+                        if (currentLock === lockId) {
+                            await redisConnection.del(lockKey);
+                        }
+                    } catch (e) { /* Ignorar erro */ }
+                }
 
                 // Busca o fluxo correto: se houver flow_id no estado, usa esse fluxo específico
                 // Caso contrário, usa o fluxo ativo do bot (comportamento padrão)
