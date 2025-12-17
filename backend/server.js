@@ -4011,7 +4011,12 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         // SEM limite fixo de mensagens - escala para qualquer quantidade de leads
         // Usa índice idx_telegram_chats_bot_seller_chat_created_optimized_v2 de forma eficiente
         // A paginação limita o resultado final, não o processamento intermediário
-        const users = await sqlWithRetry(`
+        // TIMEOUT: 30 segundos para evitar queries bloqueando o pool por muito tempo
+        // Usar transação explícita para permitir SET LOCAL
+        const users = await sqlWithRetry(async () => {
+            return await sqlTx.begin(async sql => {
+                await sql`SET LOCAL statement_timeout = '30s'`;
+                return await sql`
             WITH unique_chats AS (
                 -- Passo 0: Buscar última mensagem de cada chat único (escalável - sem limite fixo)
                 -- DISTINCT ON usa o índice de forma eficiente e não processa todas as mensagens
@@ -4021,7 +4026,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                     message_text,
                     sender_type
                 FROM telegram_chats
-                WHERE bot_id = $1 AND seller_id = $2
+                WHERE bot_id = ${botId} AND seller_id = ${req.user.id}
                 ORDER BY chat_id, created_at DESC
             ),
             chat_ids_ordered AS (
@@ -4029,7 +4034,7 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 SELECT chat_id, last_message_at, message_text, sender_type
                 FROM unique_chats
                 ORDER BY last_message_at DESC NULLS LAST
-                LIMIT $3 OFFSET $4
+                LIMIT ${queryLimit} OFFSET ${offset}
             ),
             user_data AS (
                 -- Passo 3: Dados básicos do usuário (primeiro registro com sender_type='user')
@@ -4052,8 +4057,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                     tc.click_id
                 FROM chat_ids_ordered cio
                 LEFT JOIN telegram_chats tc ON tc.chat_id = cio.chat_id 
-                    AND tc.bot_id = $1 
-                    AND tc.seller_id = $2
+                    AND tc.bot_id = ${botId} 
+                    AND tc.seller_id = ${req.user.id}
                     AND tc.click_id IS NOT NULL
                 ORDER BY cio.chat_id, tc.created_at DESC NULLS LAST
             ),
@@ -4079,8 +4084,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 JOIN chat_ids_ordered cio ON cio.chat_id = tc.chat_id
                 JOIN clicks c ON c.click_id = tc.click_id
                 JOIN pix_transactions pt ON pt.click_id_internal = c.id
-                WHERE tc.bot_id = $1
-                  AND tc.seller_id = $2
+                WHERE tc.bot_id = ${botId}
+                  AND tc.seller_id = ${req.user.id}
                   AND pt.status = 'paid'
             ),
             chat_tags AS (
@@ -4096,8 +4101,8 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
                 FROM lead_custom_tag_assignments lcta
                 JOIN chat_ids_ordered cio ON cio.chat_id = lcta.chat_id
                 JOIN lead_custom_tags lct ON lct.id = lcta.tag_id
-                WHERE lcta.bot_id = $1
-                  AND lcta.seller_id = $2
+                WHERE lcta.bot_id = ${botId}
+                  AND lcta.seller_id = ${req.user.id}
                 GROUP BY lcta.chat_id
             )
             SELECT
@@ -4115,16 +4120,23 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
             LEFT JOIN paid_chats pc ON pc.chat_id = cbi.chat_id
             LEFT JOIN chat_tags ct ON ct.chat_id = cbi.chat_id
             ORDER BY cbi.last_message_at DESC NULLS LAST;
-        `, [botId, req.user.id, queryLimit, offset]);
+                `;
+            });
+        });
         
         // Retornar formato compatível com frontend (array se não paginar, objeto se paginar)
         if (usePagination) {
-            // Buscar total para paginação (query separada e otimizada)
-            const [countResult] = await sqlWithRetry(`
-                SELECT COUNT(DISTINCT chat_id) as total
-                FROM telegram_chats
-                WHERE bot_id = $1 AND seller_id = $2
-            `, [botId, req.user.id]);
+            // Buscar total para paginação (query separada e otimizada com timeout)
+            const [countResult] = await sqlWithRetry(async () => {
+                return await sqlTx.begin(async sql => {
+                    await sql`SET LOCAL statement_timeout = '30s'`;
+                    return await sql`
+                        SELECT COUNT(DISTINCT chat_id) as total
+                        FROM telegram_chats
+                        WHERE bot_id = ${botId} AND seller_id = ${req.user.id}
+                    `;
+                });
+            });
             
             const total = parseInt(countResult.total);
             
@@ -4143,7 +4155,15 @@ app.get('/api/chats/:botId', authenticateJwt, async (req, res) => {
         }
     } catch (error) { 
         console.error('Erro ao buscar usuários do chat:', error);
-        res.status(500).json({ message: 'Erro ao buscar usuários do chat.' }); 
+        // Verificar se foi timeout da query
+        if (error.message?.includes('statement_timeout') || error.message?.includes('canceling statement')) {
+            res.status(504).json({ 
+                message: 'A consulta demorou muito tempo. Tente usar paginação (page e limit) para reduzir o tempo de resposta.',
+                error: 'Query timeout'
+            });
+        } else {
+            res.status(500).json({ message: 'Erro ao buscar usuários do chat.' });
+        }
     }
 });
 
