@@ -2318,9 +2318,6 @@ async function processTimeoutData(data, job = null) {
                 const result = await redisConnection.set(lockKey, lockId, 'PX', lockTTL, 'NX');
                 if (result === 'OK') {
                     lockAcquired = true;
-                    // #region agent log
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2310',message:'Lock adquirido para processar timeout',data:{chatId:chat_id,botId:bot_id,jobId:job?.id,lockId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
-                    // #endregion
                     break;
                 } else {
                     // Aguardar um pouco antes de tentar novamente
@@ -2329,9 +2326,6 @@ async function processTimeoutData(data, job = null) {
             }
             
             if (!lockAcquired) {
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2320',message:'Não foi possível adquirir lock - outro job está processando',data:{chatId:chat_id,botId:bot_id,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
-                // #endregion
                 return { ignored: true, reason: 'lock_not_acquired', message: 'Outro job está processando este timeout' };
             }
         } catch (lockError) {
@@ -2346,9 +2340,6 @@ async function processTimeoutData(data, job = null) {
                     const currentLock = await redisConnection.get(lockKey);
                     if (currentLock === lockId) {
                         await redisConnection.del(lockKey);
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:releaseLock',message:'Lock liberado',data:{chatId:chat_id,botId:bot_id,jobId:job?.id,lockId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'LOCK'}));
-                        // #endregion
                     }
                 } catch (lockError) {
                     console.warn(`${logPrefix} [Timeout] Erro ao liberar lock distribuído (não crítico):`, lockError.message);
@@ -2363,10 +2354,6 @@ async function processTimeoutData(data, job = null) {
             FROM user_flow_states 
             WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
 
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2306',message:'Estado do usuário verificado antes de processar timeout',data:{chatId:chat_id,botId:bot_id,hasState:!!currentState,waitingForInput:currentState?.waiting_for_input,scheduledMessageId:currentState?.scheduled_message_id,continueFromDelay:continue_from_delay,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
-        // #endregion
-
         // Verificações para determinar se este timeout deve ser processado
         if (!currentState) {
             // Limpar timer de renovação durante delay se ainda estiver ativo
@@ -2374,9 +2361,6 @@ async function processTimeoutData(data, job = null) {
                 clearInterval(delayRenewTimer);
                 delayRenewTimer = null;
             }
-            // #region agent log
-            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2323',message:'RETORNANDO: no_user_state',data:{chatId:chat_id,botId:bot_id,reason:'no_user_state'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-            // #endregion
             await releaseLock();
             return { ignored: true, reason: 'no_user_state' };
         }
@@ -2401,28 +2385,14 @@ async function processTimeoutData(data, job = null) {
             }
         }
         
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2345',message:'Depois de definir isDisparoTimeout',data:{chatId:chat_id,botId:bot_id,isDisparoTimeout,is_disparo:is_disparo,target_node_id,disparoHistoryId,disparoFlowId,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-        // #endregion
-        
         // Se é continuação após delay, não verificar waiting_for_input
         if (!continue_from_delay) {
-            // #region agent log
-            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2343',message:'Verificando waiting_for_input antes de processar timeout',data:{chatId:chat_id,botId:bot_id,waitingForInput:currentState.waiting_for_input,willIgnore:!currentState.waiting_for_input,jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
-            // #endregion
-            
             if (!currentState.waiting_for_input) {
                 // Limpar timer de renovação durante delay se ainda estiver ativo
                 if (delayRenewTimer) {
                     clearInterval(delayRenewTimer);
                     delayRenewTimer = null;
                 }
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2351',message:'Timeout ignorado - usuário já respondeu',data:{chatId:chat_id,botId:bot_id,reason:'user_already_proceeded',jobId:job?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'}));
-                // #endregion
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2361',message:'RETORNANDO: user_already_proceeded',data:{chatId:chat_id,botId:bot_id,reason:'user_already_proceeded'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-                // #endregion
                 await releaseLock();
                 return { ignored: true, reason: 'user_already_proceeded' };
             }
@@ -2439,15 +2409,8 @@ async function processTimeoutData(data, job = null) {
             // Removido log of debug
         }
         
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2379',message:'ANTES verificar se é disparo',data:{chatId:chat_id,botId:bot_id,isDisparoTimeout,is_disparo:is_disparo,target_node_id,willEnterDisparoBlock:isDisparoTimeout && target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-        // #endregion
-        
         // Se é disparo, processar usando processDisparoFlow
         if (isDisparoTimeout && target_node_id) {
-            // #region agent log
-            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2385',message:'ENTRANDO no bloco de disparo',data:{chatId:chat_id,botId:bot_id,disparoHistoryId,disparoFlowId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-            // #endregion
             try {
                 if (!disparoFlowId) {
                     throw new Error('disparo_flow_id não encontrado para continuar disparo após timeout.');
@@ -2475,9 +2438,6 @@ async function processTimeoutData(data, job = null) {
                 const { processDisparoFlow } = require('./process-disparo');
                 await processDisparoFlow(chat_id, bot_id, botToken, sellerId, target_node_id, cleanVariables, flowNodes, flowEdges, disparoHistoryId);
                 
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2420',message:'RETORNANDO: disparo processado',data:{chatId:chat_id,botId:bot_id,is_disparo:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-                // #endregion
                 await releaseLock();
                 return { processed: true, is_disparo: true };
             } catch (error) {
@@ -2485,10 +2445,6 @@ async function processTimeoutData(data, job = null) {
                 throw error;
             }
         }
-
-        // #region agent log
-        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2412',message:'ANTES do if(target_node_id) - fluxo normal',data:{chatId:chat_id,botId:bot_id,target_node_id,target_node_id_exists:!!target_node_id,isDisparoTimeout,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes,flow_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-        // #endregion
 
         // Inicia o 'processFlow' a partir do nó de timeout (handle 'b')
         // Se target_node_id for 'null' (porque o handle 'b' não estava conectado),
@@ -2505,36 +2461,16 @@ async function processTimeoutData(data, job = null) {
                 let flowIdForProcess = null;
                 
                 // PRIORIDADE 1: Usar flow_nodes do job data (mais confiável, evita buscar do banco)
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2428',message:'ANTES verificar flow_nodes',data:{chatId:chat_id,botId:bot_id,flow_nodes_exists:!!flow_nodes,flow_nodes_type:typeof flow_nodes,flow_nodes_length:typeof flow_nodes === 'string' ? flow_nodes.length : (flow_nodes ? 'not-string' : 'null/undefined'),flow_id:flow_id,currentState_flow_id:currentState?.flow_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                // #endregion
                 if (flow_nodes) {
                     try {
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2430',message:'ENTRANDO no try - flow_nodes existe',data:{chatId:chat_id,botId:bot_id,flow_nodes_type:typeof flow_nodes,willParse:typeof flow_nodes === 'string'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                        // #endregion
                         const flowData = typeof flow_nodes === 'string' ? JSON.parse(flow_nodes) : flow_nodes;
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2431',message:'DEPOIS do parse',data:{chatId:chat_id,botId:bot_id,flowData_type:typeof flowData,has_nodes:'nodes' in flowData,has_edges:'edges' in flowData,nodes_length:Array.isArray(flowData.nodes) ? flowData.nodes.length : 'not-array',edges_length:Array.isArray(flowData.edges) ? flowData.edges.length : 'not-array'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                        // #endregion
                         flowNodes = flowData.nodes || [];
                         flowEdges = flowData.edges || [];
                         // Usar flow_id do job data ou do estado
                         flowIdForProcess = flow_id || currentState?.flow_id || null;
-                        
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2442',message:'Usando flow_nodes do job data',data:{chatId:chat_id,botId:bot_id,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,flowIdForProcess,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
-                        // #endregion
                     } catch (parseError) {
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2440',message:'ERRO no parse',data:{chatId:chat_id,botId:bot_id,errorMessage:parseError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                        // #endregion
                         console.error(`[WORKER-TIMEOUT] Erro ao parsear flow_nodes do job data:`, parseError.message);
                     }
-                } else {
-                    // #region agent log
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2443',message:'flow_nodes é FALSY - não entrou no if',data:{chatId:chat_id,botId:bot_id,flow_nodes_value:flow_nodes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'}));
-                    // #endregion
                 }
                 
                 // PRIORIDADE 2: Se não tem flow_nodes no job data ou está vazio, buscar do banco usando flow_id
@@ -2548,18 +2484,11 @@ async function processTimeoutData(data, job = null) {
                         flowNodes = flowData.nodes || [];
                         flowEdges = flowData.edges || [];
                         flowIdForProcess = flowIdToUse;
-                        
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2443',message:'Usando flow_nodes do banco de dados',data:{chatId:chat_id,botId:bot_id,flowId:flowIdToUse,flowNodesCount:flowNodes.length,flowEdgesCount:flowEdges.length,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
-                        // #endregion
                     }
                 }
                 
                 // Se ainda não tem flowNodes ou está vazio, processFlow vai buscar do banco (fallback)
                 if (!flowNodes || (Array.isArray(flowNodes) && flowNodes.length === 0)) {
-                    // #region agent log
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2453',message:'Nenhum flow_nodes encontrado - processFlow vai buscar do banco',data:{chatId:chat_id,botId:bot_id,targetNodeId:target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'}));
-                    // #endregion
                 }
                 
                 // Se é continuação após delay e há ações restantes, processar apenas as ações restantes
@@ -2677,9 +2606,6 @@ async function processTimeoutData(data, job = null) {
                             }
                         } else {
                             // Se não é um nó de ação, continuar normalmente
-                            // #region agent log
-                            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2615',message:'ANTES processFlow (continueFromDelay, não é action)',data:{chatId:chat_id,botId:bot_id,target_node_id,flowIdForProcess},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                            // #endregion
                             await processFlow(
                                 chat_id, 
                                 bot_id, 
@@ -2692,16 +2618,10 @@ async function processTimeoutData(data, job = null) {
                                 flowIdForProcess,
                                 renewLockIfNeeded // Passar callback de renovação
                             );
-                            // #region agent log
-                            console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2627',message:'DEPOIS processFlow (continueFromDelay, não é action)',data:{chatId:chat_id,botId:bot_id,target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                            // #endregion
                         }
                     } catch (parseError) {
                         console.error(`${logPrefix} [Timeout] Erro ao processar ações restantes após delay:`, parseError.message);
                         // Fallback: continuar normalmente
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2631',message:'ANTES processFlow (fallback após parseError)',data:{chatId:chat_id,botId:bot_id,target_node_id,flowIdForProcess,parseError:parseError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                        // #endregion
                         await processFlow(
                             chat_id, 
                             bot_id, 
@@ -2714,9 +2634,6 @@ async function processTimeoutData(data, job = null) {
                             flowIdForProcess,
                             renewLockIfNeeded // Passar callback de renovação
                         );
-                        // #region agent log
-                        console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2643',message:'DEPOIS processFlow (fallback após parseError)',data:{chatId:chat_id,botId:bot_id,target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                        // #endregion
                     }
                 } else if (continueFromDelay && !remainingActionsJson) {
                     // Delay foi a última ação do nó - continuar para o próximo nó
@@ -2749,9 +2666,6 @@ async function processTimeoutData(data, job = null) {
                     }
                 } else {
                     // Processamento normal (timeout ou continuação sem ações restantes)
-                    // #region agent log
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2675',message:'ANTES processFlow (processamento normal - timeout)',data:{chatId:chat_id,botId:bot_id,target_node_id,flowIdForProcess},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                    // #endregion
                     await processFlow(
                         chat_id, 
                         bot_id, 
@@ -2764,30 +2678,18 @@ async function processTimeoutData(data, job = null) {
                         flowIdForProcess,
                         renewLockIfNeeded // Passar callback de renovação
                     );
-                    // #region agent log
-                    console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2687',message:'DEPOIS processFlow (processamento normal - timeout)',data:{chatId:chat_id,botId:bot_id,target_node_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROCESSFLOW'}));
-                    // #endregion
                 }
                 // Timeout processado com sucesso
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2689',message:'RETORNANDO: success true',data:{chatId:chat_id,botId:bot_id,success:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-                // #endregion
                 return { success: true };
             } catch (flowError) {
                 // Erro durante processFlow - logar mas não interromper
                 console.error(`[WORKER] Erro durante processFlow para timeout:`, flowError.message);
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2693',message:'RETORNANDO: success true com errors',data:{chatId:chat_id,botId:bot_id,success:true,errors:[flowError.message]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-                // #endregion
                 return { success: true, errors: [flowError.message] };
             }
             } else {
                 // Nenhum nó de destino definido - encerrar fluxo
                 // Removido log de debug
                 await sqlWithRetry(sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chat_id} AND bot_id = ${bot_id}`);
-                // #region agent log
-                console.log('[DEBUG-TIMEOUT]', JSON.stringify({location:'process-timeout.js:2730',message:'RETORNANDO: no_target_node',data:{chatId:chat_id,botId:bot_id,success:true,flowEnded:true,reason:'no_target_node'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'RETURN'}));
-                // #endregion
                 await releaseLock();
                 return { success: true, flowEnded: true, reason: 'no_target_node' };
             }
