@@ -174,7 +174,7 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.DISPARO]: {
-        concurrency: 50,
+        concurrency: 100, // Aumentado de 50 para 100 - dobrar capacidade
         limiter: undefined,
         stalledInterval: 1200000, // 20 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         lockDuration: 900000, // 15 minutos - fluxos complexos podem demorar até 7-8 minutos (fallback padrão)
@@ -185,8 +185,8 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.DISPARO_DELAY]: {
-        concurrency: 30,
-        limiter: { max: 30, duration: 1000 },
+        concurrency: 100, // Aumentado de 30 para 100 - aumentar capacidade
+        limiter: undefined, // Removido limiter - delays já controlam timing
         stalledInterval: 7200000, // 2 horas - fallback padrão (será sobrescrito por cálculo adaptativo)
         lockDuration: 14400000, // 4 horas - delays podem ser muito longos (até 2h de processamento) (fallback padrão)
         attempts: 3,
@@ -196,8 +196,8 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.VALIDATION_DISPARO]: {
-        concurrency: 10,
-        limiter: { max: 10, duration: 1000 },
+        concurrency: 50, // Aumentado de 10 para 50 - aumentar capacidade significativamente
+        limiter: undefined, // Removido limiter - rate limiting manual já existe
         stalledInterval: 2700000, // 45 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         maxStalledCount: 5, // Reduzido para evitar reprocessamento excessivo
         lockDuration: 5400000, // 1.5 horas - validação pode demorar muito com muitos contatos (até 45min) (fallback padrão)
@@ -208,8 +208,8 @@ const QUEUE_CONFIGS = {
         },
     },
     [QUEUE_NAMES.SCHEDULED_DISPARO]: {
-        concurrency: 5,
-        limiter: { max: 5, duration: 1000 },
+        concurrency: 20, // Aumentado de 5 para 20 - aumentar capacidade
+        limiter: undefined, // Removido limiter - jobs pesados mas precisam de mais capacidade
         stalledInterval: 1800000, // 30 minutos - fallback padrão (será sobrescrito por cálculo adaptativo)
         maxStalledCount: 3, // Reduzido para evitar reprocessamento excessivo
         lockDuration: 3600000, // 1 hora - pode processar muitos contatos e criar muitos batches (até 30min) (fallback padrão)
