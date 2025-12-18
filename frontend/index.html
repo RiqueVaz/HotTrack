@@ -12990,6 +12990,7 @@ function FlowEditorPage({
                             className="btn btn-secondary"
                             onClick={() => {
                                 setMediaSelectionCallback(() => handleAudioSelect);
+                                setMediaModalAllowedTypes(['audio']);
                                 setIsMediaModalOpen(true);
                             }}
                         >
@@ -13231,6 +13232,7 @@ function FlowEditorPage({
                                                 className="btn btn-secondary"
                                                 onClick={() => {
                                                     setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'assinatura'));
+                                                    setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
                                                 }}
                                             >
@@ -13537,6 +13539,7 @@ function FlowEditorPage({
                                                 className="btn btn-secondary"
                                                 onClick={() => {
                                                     setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'pacote'));
+                                                    setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
                                                 }}
                                             >
