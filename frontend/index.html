@@ -12798,6 +12798,7 @@ function FlowEditorPage({
 
         const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
         const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [mediaModalAllowedTypes, setMediaModalAllowedTypes] = useState(null);
         const [showAddPlanoAssinatura, setShowAddPlanoAssinatura] = useState(false);
         const [showAddPlanoPacote, setShowAddPlanoPacote] = useState(false);
         const [showAddBotao, setShowAddBotao] = useState(false);
@@ -12874,12 +12875,14 @@ function FlowEditorPage({
             }));
             setIsMediaModalOpen(false);
             setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
         };
 
         const handleAudioSelect = (audioItem) => {
             updateConfig({ audio_file: audioItem });
             setIsMediaModalOpen(false);
             setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
         };
 
         const handleOrderBumpMediaSelect = (mediaItem, tipo) => {
@@ -12890,6 +12893,7 @@ function FlowEditorPage({
             }
             setIsMediaModalOpen(false);
             setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
         };
 
         const handleOrderBumpAudioSelect = (audioItem, tipo) => {
@@ -12900,6 +12904,7 @@ function FlowEditorPage({
             }
             setIsMediaModalOpen(false);
             setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
         };
 
         const renderMidiasAudios = () => (
@@ -14044,6 +14049,7 @@ function FlowEditorPage({
                                             updateNestedConfig('pagamento_pix', { qrcode_media: item });
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
+                                            setMediaModalAllowedTypes(null);
                                         });
                                         setMediaModalAllowedTypes(['image', 'video']);
                                         setIsMediaModalOpen(true);
@@ -14067,6 +14073,7 @@ function FlowEditorPage({
                                             updateNestedConfig('pagamento_pix', { qrcode_voice: item });
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
+                                            setMediaModalAllowedTypes(null);
                                         });
                                         setMediaModalAllowedTypes(['audio']);
                                         setIsMediaModalOpen(true);
@@ -14109,6 +14116,7 @@ function FlowEditorPage({
                         onClose={() => {
                             setIsMediaModalOpen(false);
                             setMediaSelectionCallback(null);
+                            setMediaModalAllowedTypes(null);
                         }}
                         allowedTypes={mediaModalAllowedTypes}
                     />
