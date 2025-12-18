@@ -12680,7 +12680,6 @@ function FlowEditorPage({
 
     function SimpleFlowEditorPage({ flow, onRequestClose }) {
         const [activeTab, setActiveTab] = useState('geral');
-        const [flowName, setFlowName] = useState(flow.name || '');
         const [config, setConfig] = useState(() => {
             if (flow.config) {
                 return {
@@ -12694,15 +12693,10 @@ function FlowEditorPage({
         const [isSaving, setIsSaving] = useState(false);
 
         const handleSave = async () => {
-            if (!flowName.trim()) {
-                alert('Por favor, informe um nome para o fluxo.');
-                return;
-            }
-
             setIsSaving(true);
             try {
                 await api.put(`/api/simple-flows/${flow.id}`, {
-                    name: flowName,
+                    name: flow.name,
                     config: config
                 });
                 App.showToast('Fluxo simples salvo com sucesso!', 'success');
@@ -12716,9 +12710,9 @@ function FlowEditorPage({
         };
 
         return (
-            <div className="flow-editor-page">
+            <div className="flow-editor-page" style={{ backgroundColor: 'var(--bg-primary)' }}>
                 <div className="flow-header">
-                    <h3>Editando Fluxo Simples: {flowName || flow.name}</h3>
+                    <h3>Editando Fluxo Simples: {flow.name}</h3>
                     <div>
                         <button className="btn btn-secondary" onClick={() => onRequestClose && onRequestClose()}>Voltar</button>
                         <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
@@ -12726,19 +12720,12 @@ function FlowEditorPage({
                         </button>
                     </div>
                 </div>
-                <div style={{ padding: '2rem', height: 'calc(100% - 60px)', overflowY: 'auto' }}>
-                    <div className="form-group" style={{ marginBottom: '2rem' }}>
-                        <label htmlFor="flowName">Nome do Fluxo</label>
-                        <input
-                            id="flowName"
-                            type="text"
-                            className="form-input"
-                            value={flowName}
-                            onChange={(e) => setFlowName(e.target.value)}
-                            placeholder="Nome do fluxo simples"
-                        />
-                    </div>
-
+                <div style={{ 
+                    padding: '2rem', 
+                    height: 'calc(100% - 60px)', 
+                    overflowY: 'auto',
+                    backgroundColor: 'var(--bg-primary)'
+                }}>
                     {/* Tabs Navigation */}
                     <div className="tabs-container" style={{ marginBottom: '2rem' }}>
                         <button 
