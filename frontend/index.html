@@ -13209,7 +13209,9 @@ function FlowEditorPage({
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary"
-                                                onClick={() => {
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
                                                     setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'assinatura'));
                                                     setMediaModalAllowedTypes(['image', 'video']);
                                                     setIsMediaModalOpen(true);
@@ -13230,7 +13232,9 @@ function FlowEditorPage({
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary"
-                                                onClick={() => {
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
                                                     setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'assinatura'));
                                                     setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
@@ -13537,7 +13541,9 @@ function FlowEditorPage({
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary"
-                                                onClick={() => {
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
                                                     setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'pacote'));
                                                     setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
@@ -14047,7 +14053,9 @@ function FlowEditorPage({
                                 <button
                                     type="button"
                                     className="btn btn-secondary"
-                                    onClick={() => {
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
                                         setMediaSelectionCallback((item) => {
                                             updateNestedConfig('pagamento_pix', { qrcode_media: item });
                                             setIsMediaModalOpen(false);
@@ -14071,7 +14079,9 @@ function FlowEditorPage({
                                 <button
                                     type="button"
                                     className="btn btn-secondary"
-                                    onClick={() => {
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
                                         setMediaSelectionCallback((item) => {
                                             updateNestedConfig('pagamento_pix', { qrcode_voice: item });
                                             setIsMediaModalOpen(false);
