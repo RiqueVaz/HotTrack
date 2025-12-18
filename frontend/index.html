@@ -12861,9 +12861,73 @@ function FlowEditorPage({
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                     {localConfig.mensagem_inicial.length}/4096
                 </span>
-                <VariableHelper 
-                    variables={['{profile_name}', '{country}', '{state}', '{city}']}
-                />
+                <div style={{marginTop: '0.5rem', marginBottom: '0.5rem'}}>
+                    <label style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', display: 'block'}}>
+                        Adicionar Variável:
+                    </label>
+                    <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                        <button 
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                                const textarea = document.getElementById('mensagem_inicial');
+                                if (textarea) {
+                                    const cursorPos = textarea.selectionStart;
+                                    const textBefore = localConfig.mensagem_inicial.substring(0, cursorPos);
+                                    const textAfter = localConfig.mensagem_inicial.substring(cursorPos);
+                                    updateConfig({ mensagem_inicial: textBefore + '{{primeiro_nome}}' + textAfter });
+                                    setTimeout(() => {
+                                        textarea.focus();
+                                        textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                    }, 0);
+                                }
+                            }}
+                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                        >
+                            + Primeiro Nome
+                        </button>
+                        <button 
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                                const textarea = document.getElementById('mensagem_inicial');
+                                if (textarea) {
+                                    const cursorPos = textarea.selectionStart;
+                                    const textBefore = localConfig.mensagem_inicial.substring(0, cursorPos);
+                                    const textAfter = localConfig.mensagem_inicial.substring(cursorPos);
+                                    updateConfig({ mensagem_inicial: textBefore + '{{nome_completo}}' + textAfter });
+                                    setTimeout(() => {
+                                        textarea.focus();
+                                        textarea.setSelectionRange(cursorPos + 17, cursorPos + 17);
+                                    }, 0);
+                                }
+                            }}
+                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                        >
+                            + Nome Completo
+                        </button>
+                        <button 
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                                const textarea = document.getElementById('mensagem_inicial');
+                                if (textarea) {
+                                    const cursorPos = textarea.selectionStart;
+                                    const textBefore = localConfig.mensagem_inicial.substring(0, cursorPos);
+                                    const textAfter = localConfig.mensagem_inicial.substring(cursorPos);
+                                    updateConfig({ mensagem_inicial: textBefore + '{{cidade}}' + textAfter });
+                                    setTimeout(() => {
+                                        textarea.focus();
+                                        textarea.setSelectionRange(cursorPos + 10, cursorPos + 10);
+                                    }, 0);
+                                }
+                            }}
+                            style={{fontSize: '0.75rem', padding: '0.25rem 0.5rem'}}
+                        >
+                            + Cidade
+                        </button>
+                    </div>
+                </div>
             </div>
         );
 
