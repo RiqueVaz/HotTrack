@@ -3956,8 +3956,10 @@ app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
         if (!flow) return res.status(404).json({ message: 'Fluxo não encontrado.' });
         
         if (isActive) {
-            // Se está ativando, desativa todos os outros fluxos do mesmo bot
+            // Se está ativando, desativa todos os outros fluxos normais do mesmo bot
             await sqlWithRetry('UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
+            // Também desativa todos os fluxos simples do mesmo bot (apenas 1 trigger ativo por bot)
+            await sqlWithRetry('UPDATE simple_flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2', [flow.bot_id, req.user.id]);
         }
         
         // Atualiza o status do fluxo
@@ -4059,6 +4061,8 @@ app.patch('/api/simple-flows/:id/activate', authenticateJwt, async (req, res) =>
         if (isActive) {
             // Se está ativando, desativa todos os outros fluxos simples do mesmo bot
             await sqlWithRetry('UPDATE simple_flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
+            // Também desativa todos os fluxos normais do mesmo bot (apenas 1 trigger ativo por bot)
+            await sqlWithRetry('UPDATE flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2', [flow.bot_id, req.user.id]);
         }
         
         // Atualiza o status do fluxo
