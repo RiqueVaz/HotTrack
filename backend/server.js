@@ -3966,6 +3966,132 @@ app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
         else res.status(404).json({ message: 'Fluxo não encontrado.' });
     } catch (error) { res.status(500).json({ message: 'Erro ao atualizar status do fluxo.' }); }
 });
+// ==================== SIMPLE FLOWS ENDPOINTS ====================
+
+app.get('/api/simple-flows', authenticateJwt, async (req, res) => {
+    try {
+        const flows = await sqlWithRetry('SELECT * FROM simple_flows WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
+        res.status(200).json(flows.map(f => ({ ...f, config: f.config || { geral: {}, upsell: {}, downsell: {} } })));
+    } catch (error) { 
+        console.error('Erro ao buscar fluxos simples:', error);
+        res.status(500).json({ message: 'Erro ao buscar os fluxos simples.' }); 
+    }
+});
+
+app.get('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        const [flow] = await sqlWithRetry('SELECT * FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        res.status(200).json({ ...flow, config: flow.config || { geral: {}, upsell: {}, downsell: {} } });
+    } catch (error) { 
+        console.error('Erro ao buscar fluxo simples:', error);
+        res.status(500).json({ message: 'Erro ao buscar o fluxo simples.' }); 
+    }
+});
+
+app.post('/api/simple-flows', authenticateJwt, async (req, res) => {
+    const { name, botId } = req.body;
+    if (!name || !botId) return res.status(400).json({ message: 'Nome e ID do bot são obrigatórios.' });
+    try {
+        const initialConfig = { geral: {}, upsell: {}, downsell: {} };
+        // Cria o novo fluxo simples como inativo
+        const [newFlow] = await sqlWithRetry(`
+            INSERT INTO simple_flows (seller_id, bot_id, name, config, is_active) 
+            VALUES ($1, $2, $3, $4, FALSE) 
+            RETURNING *;`, 
+            [req.user.id, botId, name, JSON.stringify(initialConfig)]);
+        res.status(201).json({ ...newFlow, config: newFlow.config || initialConfig });
+    } catch (error) { 
+        console.error('Erro ao criar fluxo simples:', error);
+        res.status(500).json({ message: 'Erro ao criar o fluxo simples.' }); 
+    }
+});
+
+app.put('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
+    const { name, config } = req.body;
+    if (!name) return res.status(400).json({ message: 'Nome é obrigatório.' });
+    
+    try {
+        // Busca o fluxo para verificar se existe e pertence ao usuário
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        
+        // Valida e prepara o config
+        let configToSave = config;
+        if (config) {
+            try {
+                // Garante que config seja um objeto válido
+                if (typeof config === 'string') {
+                    configToSave = JSON.parse(config);
+                }
+                // Garante que tenha as 3 abas
+                if (!configToSave.geral) configToSave.geral = {};
+                if (!configToSave.upsell) configToSave.upsell = {};
+                if (!configToSave.downsell) configToSave.downsell = {};
+            } catch (parseError) {
+                return res.status(400).json({ message: 'Config inválido. Deve ser um JSON válido.' });
+            }
+        } else {
+            configToSave = { geral: {}, upsell: {}, downsell: {} };
+        }
+        
+        const [updated] = await sqlWithRetry(
+            'UPDATE simple_flows SET name = $1, config = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', 
+            [name, JSON.stringify(configToSave), req.params.id, req.user.id]
+        );
+        if (updated) res.status(200).json({ ...updated, config: updated.config || configToSave });
+        else res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+    } catch (error) { 
+        console.error('[Simple Flow Save] Error:', error);
+        res.status(500).json({ message: 'Erro ao salvar o fluxo simples.' }); 
+    }
+});
+
+app.patch('/api/simple-flows/:id/activate', authenticateJwt, async (req, res) => {
+    try {
+        const { isActive } = req.body;
+        if (typeof isActive !== 'boolean') return res.status(400).json({ message: 'isActive deve ser um boolean.' });
+        
+        // Busca o fluxo para pegar o bot_id
+        const [flow] = await sqlWithRetry('SELECT bot_id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        
+        if (isActive) {
+            // Se está ativando, desativa todos os outros fluxos simples do mesmo bot
+            await sqlWithRetry('UPDATE simple_flows SET is_active = FALSE WHERE bot_id = $1 AND seller_id = $2 AND id != $3', [flow.bot_id, req.user.id, req.params.id]);
+        }
+        
+        // Atualiza o status do fluxo
+        const [updated] = await sqlWithRetry('UPDATE simple_flows SET is_active = $1 WHERE id = $2 AND seller_id = $3 RETURNING *;', [isActive, req.params.id, req.user.id]);
+        if (updated) res.status(200).json(updated);
+        else res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+    } catch (error) { 
+        console.error('Erro ao atualizar status do fluxo simples:', error);
+        res.status(500).json({ message: 'Erro ao atualizar status do fluxo simples.' }); 
+    }
+});
+
+app.delete('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
+    try {
+        // Primeiro verificar se o fluxo simples existe e pertence ao usuário
+        const [existingFlow] = await sqlWithRetry('SELECT id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        
+        if (!existingFlow) {
+            console.log('Fluxo simples não encontrado ou não pertence ao usuário');
+            return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        }
+        
+        // Se existe, deletar
+        const result = await sqlWithRetry('DELETE FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+
+        res.status(204).send();
+        
+    } catch (error) { 
+        console.error('Erro ao deletar fluxo simples:', error);
+        res.status(500).json({ message: 'Erro ao deletar o fluxo simples.' }); 
+    }
+});
+
 app.delete('/api/flows/:id', authenticateJwt, async (req, res) => {
     try {
 

@@ -5961,6 +5961,7 @@ function generatePreviewHTML(data) {
         contacts: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zm-1.586 3.414a2 2 0 012.828 0L12 11.236V13h2v-2a2 2 0 00-2-2H8.414zM16 6a3 3 0 11-6 0 3 3 0 016 0z" /><path d="M18 9a2 2 0 012 2v2h-2v-2a2 2 0 01-2-2h-2a4 4 0 00-4 4v1a1 1 0 001 1h8a1 1 0 001-1v-1a4 4 0 00-4-4h-2z" /></svg>,
         attach: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a3 3 0 10-6 0v4a1 1 0 102 0V7a1 1 0 112 0v4a3 3 0 11-6 0V7a1 1 0 011-1z" clipRule="evenodd" /></svg>,
         bots: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M11 17a1 1 0 001.447.894l4-2A1 1 0 0017 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 0011 7v10zM4 17a1 1 0 001.447.894l4-2A1 1 0 0010 15V5a1 1 0 00-1.447-.894l-4 2A1 1 0 004 7v10z" /></svg>,
+        'simple-flows': <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" /></svg>,
         flows: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.586 2.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clipRule="evenodd" /><path fillRule="evenodd" d="M3.586 12.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0l-1.5-1.5a2 2 0 112.828-2.828l1.5 1.5z" clipRule="evenodd" /><path fillRule="evenodd" d="M8.586 6.586a2 2 0 10-2.828 2.828l3 3a2 2 0 002.828 0l1.5-1.5a2 2 0 10-2.828-2.828l-1.5 1.5z" clipRule="evenodd" /></svg>,
         chat: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M18 5v8a2 2 0 01-2 2h-5l-5 4v-4H4a2 2 0 01-2-2V5a2 2 0 012-2h12a2 2 0 012 2zM7 8H5v2h2V8zm2 0h2v2H9V8zm6 0h-2v2h2V8z" clipRule="evenodd" /></svg>,
         media: <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" /></svg>,
@@ -5976,6 +5977,7 @@ function generatePreviewHTML(data) {
                 return localStorage.getItem('hotbot-currentPage') || 'bots';
             });
             const [editingFlow, setEditingFlow] = useState(null);
+            const [editingSimpleFlow, setEditingSimpleFlow] = useState(null);
             const [bots, setBots] = useState([]);
             const [importingFlowLink, setImportingFlowLink] = useState(null);
             const [pressels, setPressels] = useState([]);
@@ -6104,7 +6106,10 @@ function generatePreviewHTML(data) {
                 if (currentPage === 'flow-editor' && !editingFlow) {
                     attemptPageChange('flows', { force: true });
                 }
-            }, [attemptPageChange, currentPage, editingFlow]);
+                if (currentPage === 'simple-flow-editor' && !editingSimpleFlow) {
+                    attemptPageChange('simple-flows', { force: true });
+                }
+            }, [attemptPageChange, currentPage, editingFlow, editingSimpleFlow]);
 
             const navigateToFlowEditor = useCallback((flow) => {
                 setShowUnsavedPrompt(false);
@@ -6113,6 +6118,14 @@ function generatePreviewHTML(data) {
                 setEditingFlow(flow);
                 setFlowEditorDirty(false);
                 setCurrentPage('flow-editor');
+            }, []);
+
+            const navigateToSimpleFlowEditor = useCallback((flow) => {
+                setShowUnsavedPrompt(false);
+                setPendingNavigation(null);
+                setIsProcessingNavigation(false);
+                setEditingSimpleFlow(flow);
+                setCurrentPage('simple-flow-editor');
             }, []);
 
             const handleNavigationRequest = useCallback((page) => {
@@ -6132,6 +6145,7 @@ function generatePreviewHTML(data) {
 
             const PageComponent = {
                 bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
+                'simple-flows': <SimpleFlowsListPage bots={bots} onEditFlow={navigateToSimpleFlowEditor} />,
                 flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
                 chat: <LiveChatPage bots={bots} />,
                 media: <MediaLibraryPage />,
@@ -6146,6 +6160,12 @@ function generatePreviewHTML(data) {
                         onDirtyChange={handleFlowEditorDirtyChange}
                         registerSaveHandler={registerFlowEditorSaveHandler}
                         discardChangesToken={discardChangesToken}
+                    />
+                ) : null,
+                'simple-flow-editor': editingSimpleFlow ? (
+                    <SimpleFlowEditorPage
+                        flow={editingSimpleFlow}
+                        onRequestClose={() => attemptPageChange('simple-flows', { onNavigate: () => setEditingSimpleFlow(null) })}
                     />
                 ) : null,
                 'import-flow': (
@@ -6235,6 +6255,7 @@ function generatePreviewHTML(data) {
     function HotBotNav({ currentPage, onNavigate, disabled }) {
         const pages = { 
             bots: { name: 'Bots', icon: Icons.bots },
+            'simple-flows': { name: 'Fluxos Simples', icon: Icons['simple-flows'] },
             flows: { name: 'Fluxos', icon: Icons.flows },
             chat: { name: 'Chat ao Vivo', icon: Icons.chat },
             media: { name: 'Biblioteca', icon: Icons.media },
@@ -6510,6 +6531,95 @@ function generatePreviewHTML(data) {
                     </div>
                 </div>
             </>
+        );
+    }
+
+    function SimpleFlowsListPage({ bots, onEditFlow }) {
+        const [selectedBotId, setSelectedBotId] = useState('');
+        const [flows, setFlows] = useState([]);
+        
+        const fetchFlows = useCallback(async () => {
+            if (!selectedBotId) { setFlows([]); return; }
+            try {
+                const res = await api.get('/api/simple-flows');
+                setFlows(res.data.filter(f => f.bot_id == selectedBotId));
+            } catch (e) { console.error("Erro ao buscar fluxos simples", e); }
+        }, [selectedBotId]);
+        
+        useEffect(() => {
+            if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
+        }, [bots, selectedBotId]);
+
+        useEffect(() => { fetchFlows(); }, [fetchFlows]);
+
+        const handleCreate = async () => {
+            const n = prompt("Nome do novo fluxo simples:");
+            if(n && selectedBotId) {
+                try {
+                    await api.post('/api/simple-flows', { name: n, botId: selectedBotId });
+                    fetchFlows();
+                } catch (e) { alert("Erro ao criar fluxo simples."); }
+            }
+        };
+
+        const handleDelete = async (id) => {
+            if (confirm("Tem certeza que deseja excluir este fluxo simples?")) {
+                try {
+                    await api.delete(`/api/simple-flows/${id}`);
+                    fetchFlows();
+                } catch (e) { alert("Erro ao excluir fluxo simples."); }
+            }
+        };
+
+        const handleToggleActive = async (flowId, currentStatus) => {
+            try {
+                const newStatus = !currentStatus;
+                await api.patch(`/api/simple-flows/${flowId}/activate`, { isActive: newStatus });
+                fetchFlows();
+            } catch (e) { 
+                alert("Erro ao atualizar status do fluxo simples."); 
+            }
+        };
+
+        return (
+            <div style={{padding: '2rem 3rem', height: '100%', overflowY: 'auto'}}>
+                <div className="page-header"><h2>Fluxos Simples</h2><button className="btn btn-primary" onClick={handleCreate} disabled={!selectedBotId}>+ Novo Fluxo Simples</button></div>
+                <div className="form-group" style={{maxWidth: '400px', marginBottom: '2rem'}}><label htmlFor="botSelectSimple">Selecione um Bot</label><select id="botSelectSimple" className="form-select" value={selectedBotId} onChange={e => setSelectedBotId(e.target.value)}><option value="">-- Selecione --</option>{bots.map(b => <option key={b.id} value={b.id}>{b.bot_name}</option>)}</select></div>
+                <div className="grid">
+                    {flows.map(flow => (
+                        <div key={flow.id} className="bot-card">
+                           <div className="bot-card-header"><div className="icon">{Icons['simple-flows']}</div><h3>{flow.name}</h3></div>
+                           <p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem', flexGrow: 1}}>Modificado em: {new Date(flow.updated_at).toLocaleDateString()}</p>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem'}}>
+                                <label style={{display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer'}}>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={!!flow.is_active} 
+                                        onChange={() => handleToggleActive(flow.id, flow.is_active)}
+                                        style={{cursor: 'pointer'}}
+                                    />
+                                    <span style={{color: flow.is_active ? 'var(--brand-primary)' : 'var(--text-secondary)', fontWeight: flow.is_active ? '600' : '400'}}>
+                                        {flow.is_active ? 'Gatilho Ativo' : 'Gatilho Inativo'}
+                                    </span>
+                                </label>
+                            </div>
+                                <div className="bot-card-actions">
+                                <button className="btn btn-primary btn-sm" onClick={async () => {
+                                    try {
+                                        const res = await api.get(`/api/simple-flows/${flow.id}`);
+                                        onEditFlow(res.data);
+                                    } catch (e) {
+                                        console.error("Erro ao carregar fluxo simples:", e);
+                                        alert("Erro ao carregar fluxo simples.");
+                                    }
+                                }}>Editor</button>
+                                <button className="btn btn-danger btn-sm" style={{gridColumn: '1 / -1'}} onClick={() => handleDelete(flow.id)}>Excluir</button>
+                            </div>
+                        </div>
+                    ))}
+                    {flows.length === 0 && selectedBotId && <p style={{color: 'var(--text-secondary)'}}>Nenhum fluxo simples criado para este bot.</p>}
+                </div>
+            </div>
         );
     }
     
@@ -12564,6 +12674,120 @@ function FlowEditorPage({
                     </div>
                 )}
                 {selectedNode && selectedNode.type !== 'trigger' && <EditorPanel selectedNode={selectedNode} setNodes={setNodes} setEdges={setEdges} setSelectedNode={setSelectedNode} availableFlows={availableFlows} openMediaLibrary={openMediaLibrary} presselDomains={presselDomains} thankYouPages={thankYouPages} hostedCheckouts={hostedCheckouts} isDisparoFlow={isDisparoFlow} />}
+            </div>
+        );
+    }
+
+    function SimpleFlowEditorPage({ flow, onRequestClose }) {
+        const [activeTab, setActiveTab] = useState('geral');
+        const [flowName, setFlowName] = useState(flow.name || '');
+        const [config, setConfig] = useState(() => {
+            if (flow.config) {
+                return {
+                    geral: flow.config.geral || {},
+                    upsell: flow.config.upsell || {},
+                    downsell: flow.config.downsell || {}
+                };
+            }
+            return { geral: {}, upsell: {}, downsell: {} };
+        });
+        const [isSaving, setIsSaving] = useState(false);
+
+        const handleSave = async () => {
+            if (!flowName.trim()) {
+                alert('Por favor, informe um nome para o fluxo.');
+                return;
+            }
+
+            setIsSaving(true);
+            try {
+                await api.put(`/api/simple-flows/${flow.id}`, {
+                    name: flowName,
+                    config: config
+                });
+                App.showToast('Fluxo simples salvo com sucesso!', 'success');
+                if (onRequestClose) onRequestClose();
+            } catch (error) {
+                console.error('Erro ao salvar fluxo simples:', error);
+                App.showToast('Erro ao salvar fluxo simples.', 'error');
+            } finally {
+                setIsSaving(false);
+            }
+        };
+
+        return (
+            <div className="flow-editor-page">
+                <div className="flow-header">
+                    <h3>Editando Fluxo Simples: {flowName || flow.name}</h3>
+                    <div>
+                        <button className="btn btn-secondary" onClick={() => onRequestClose && onRequestClose()}>Voltar</button>
+                        <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
+                            {isSaving ? 'Salvando...' : 'Salvar'}
+                        </button>
+                    </div>
+                </div>
+                <div style={{ padding: '2rem', height: 'calc(100% - 60px)', overflowY: 'auto' }}>
+                    <div className="form-group" style={{ marginBottom: '2rem' }}>
+                        <label htmlFor="flowName">Nome do Fluxo</label>
+                        <input
+                            id="flowName"
+                            type="text"
+                            className="form-input"
+                            value={flowName}
+                            onChange={(e) => setFlowName(e.target.value)}
+                            placeholder="Nome do fluxo simples"
+                        />
+                    </div>
+
+                    {/* Tabs Navigation */}
+                    <div className="tabs-container" style={{ marginBottom: '2rem' }}>
+                        <button 
+                            className={activeTab === 'geral' ? 'active' : ''} 
+                            onClick={() => setActiveTab('geral')}
+                        >
+                            Geral
+                        </button>
+                        <button 
+                            className={activeTab === 'upsell' ? 'active' : ''} 
+                            onClick={() => setActiveTab('upsell')}
+                        >
+                            Upsell
+                        </button>
+                        <button 
+                            className={activeTab === 'downsell' ? 'active' : ''} 
+                            onClick={() => setActiveTab('downsell')}
+                        >
+                            Downsell
+                        </button>
+                    </div>
+
+                    {/* Tab Content */}
+                    <div style={{ 
+                        padding: '2rem', 
+                        backgroundColor: 'var(--bg-secondary)', 
+                        borderRadius: '0.75rem',
+                        minHeight: '400px'
+                    }}>
+                        {activeTab === 'geral' && (
+                            <div>
+                                <h3 style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>Configurações Gerais</h3>
+                                <p style={{ color: 'var(--text-secondary)' }}>As configurações desta aba serão implementadas em breve.</p>
+                            </div>
+                        )}
+                        {activeTab === 'upsell' && (
+                            <div>
+                                <h3 style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>Configurações de Upsell</h3>
+                                <p style={{ color: 'var(--text-secondary)' }}>As configurações desta aba serão implementadas em breve.</p>
+                            </div>
+                        )}
+                        {activeTab === 'downsell' && (
+                            <div>
+                                <h3 style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>Configurações de Downsell</h3>
+                                <p style={{ color: 'var(--text-secondary)' }}>As configurações desta aba serão implementadas em breve.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         );
     }
