@@ -13212,7 +13212,8 @@ function FlowEditorPage({
                                                 onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'assinatura'));
+                                                    const callback = (item) => handleOrderBumpMediaSelect(item, 'assinatura');
+                                                    setMediaSelectionCallback(() => callback);
                                                     setMediaModalAllowedTypes(['image', 'video']);
                                                     setIsMediaModalOpen(true);
                                                 }}
@@ -13235,7 +13236,8 @@ function FlowEditorPage({
                                                 onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'assinatura'));
+                                                    const callback = (item) => handleOrderBumpAudioSelect(item, 'assinatura');
+                                                    setMediaSelectionCallback(() => callback);
                                                     setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
                                                 }}
@@ -13520,8 +13522,11 @@ function FlowEditorPage({
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary"
-                                                onClick={() => {
-                                                    setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'pacote'));
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const callback = (item) => handleOrderBumpMediaSelect(item, 'pacote');
+                                                    setMediaSelectionCallback(() => callback);
                                                     setMediaModalAllowedTypes(['image', 'video']);
                                                     setIsMediaModalOpen(true);
                                                 }}
@@ -13544,7 +13549,8 @@ function FlowEditorPage({
                                                 onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'pacote'));
+                                                    const callback = (item) => handleOrderBumpAudioSelect(item, 'pacote');
+                                                    setMediaSelectionCallback(() => callback);
                                                     setMediaModalAllowedTypes(['audio']);
                                                     setIsMediaModalOpen(true);
                                                 }}
@@ -14056,12 +14062,13 @@ function FlowEditorPage({
                                     onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setMediaSelectionCallback((item) => {
+                                        const callback = (item) => {
                                             updateNestedConfig('pagamento_pix', { qrcode_media: item });
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
                                             setMediaModalAllowedTypes(null);
-                                        });
+                                        };
+                                        setMediaSelectionCallback(() => callback);
                                         setMediaModalAllowedTypes(['image', 'video']);
                                         setIsMediaModalOpen(true);
                                     }}
@@ -14082,12 +14089,13 @@ function FlowEditorPage({
                                     onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        setMediaSelectionCallback((item) => {
+                                        const callback = (item) => {
                                             updateNestedConfig('pagamento_pix', { qrcode_voice: item });
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
                                             setMediaModalAllowedTypes(null);
-                                        });
+                                        };
+                                        setMediaSelectionCallback(() => callback);
                                         setMediaModalAllowedTypes(['audio']);
                                         setIsMediaModalOpen(true);
                                     }}
