@@ -14637,6 +14637,323 @@ function FlowEditorPage({
         );
     }
 
+    function SimpleFlowDownsellTab({ config, onConfigChange }) {
+        const [localConfig, setLocalConfig] = useState(() => ({
+            downsell_ativo: config.downsell_ativo || false,
+            mensagens: config.mensagens || []
+        }));
+
+        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [mediaModalAllowedTypes, setMediaModalAllowedTypes] = useState(null);
+
+        // Atualizar config pai quando localConfig mudar
+        const prevConfigRef = useRef(null);
+        useEffect(() => {
+            const configString = JSON.stringify(localConfig);
+            const prevConfigString = prevConfigRef.current;
+            if (configString !== prevConfigString) {
+                prevConfigRef.current = configString;
+                onConfigChange(localConfig);
+            }
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [localConfig]);
+
+        const updateConfig = (updates) => {
+            setLocalConfig(prev => ({ ...prev, ...updates }));
+        };
+
+        const updateMensagem = (index, updates) => {
+            setLocalConfig(prev => {
+                const novasMensagens = [...prev.mensagens];
+                novasMensagens[index] = { ...novasMensagens[index], ...updates };
+                return { ...prev, mensagens: novasMensagens };
+            });
+        };
+
+        const addMensagem = () => {
+            setLocalConfig(prev => ({
+                ...prev,
+                mensagens: [...prev.mensagens, {
+                    texto: '',
+                    tempo_envio: 1200,
+                    desconto: 0,
+                    media: null,
+                    audio: null,
+                    destinatarios: 'novos'
+                }]
+            }));
+        };
+
+        const removeMensagem = (index) => {
+            setLocalConfig(prev => ({
+                ...prev,
+                mensagens: prev.mensagens.filter((_, i) => i !== index)
+            }));
+        };
+
+        const handleMediaSelect = (mediaItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { media: mediaItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const handleAudioSelect = (audioItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { audio: audioItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const tempoEnvioOptions = [
+            { value: 300, label: '5 minutos' },
+            { value: 600, label: '10 minutos' },
+            { value: 900, label: '15 minutos' },
+            { value: 1200, label: '20 minutos' },
+            { value: 1500, label: '25 minutos' },
+            { value: 1800, label: '30 minutos' },
+            { value: 2700, label: '45 minutos' },
+            { value: 3600, label: '1 hora' },
+            { value: 7200, label: '2 horas' },
+            { value: 14400, label: '4 horas' },
+            { value: 21600, label: '6 horas' },
+            { value: 28800, label: '8 horas' },
+            { value: 43200, label: '12 horas' },
+            { value: 64800, label: '18 horas' },
+            { value: 86400, label: '1 dia' },
+            { value: 172800, label: '2 dias' },
+            { value: 259200, label: '3 dias' },
+            { value: 345600, label: '4 dias' },
+            { value: 432000, label: '5 dias' },
+            { value: 604800, label: '7 dias' }
+        ];
+
+        const descontoOptions = [
+            { value: 0, label: 'Sem Desconto' },
+            { value: 5, label: '5%' },
+            { value: 10, label: '10%' },
+            { value: 15, label: '15%' },
+            { value: 20, label: '20%' },
+            { value: 25, label: '25%' },
+            { value: 30, label: '30%' },
+            { value: 35, label: '35%' },
+            { value: 40, label: '40%' },
+            { value: 45, label: '45%' },
+            { value: 50, label: '50%' },
+            { value: 55, label: '55%' },
+            { value: 60, label: '60%' },
+            { value: 65, label: '65%' },
+            { value: 70, label: '70%' },
+            { value: 75, label: '75%' },
+            { value: 80, label: '80%' },
+            { value: 85, label: '85%' },
+            { value: 90, label: '90%' }
+        ];
+
+        const destinatariosOptions = [
+            { value: 'todos', label: 'Usuários - todos os cadastrados' },
+            { value: 'novos', label: 'Usuários novos - que nunca compraram nada' }
+        ];
+
+        return (
+            <div style={{ maxWidth: '1200px' }}>
+                <h2 style={{ marginBottom: '2rem', color: 'var(--text-primary)' }}>Configurações de Downsell</h2>
+                
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontWeight: 'bold' }}>
+                    <span style={{ color: 'var(--warning)' }}>Atenção:</span> Somente membros que derem /start pela primeira vez receberão o downsell normalmente. Isso é feito para evitar envios repetidos e prevenir spam.
+                </p>
+
+                <div style={{ marginBottom: '2rem' }}>
+                    <ToggleSwitch
+                        id="downsell_ativo"
+                        label="Downsell Ativo"
+                        checked={localConfig.downsell_ativo}
+                        onChange={(e) => updateConfig({ downsell_ativo: e.target.checked })}
+                    />
+                </div>
+
+                {localConfig.downsell_ativo && (
+                    <>
+                        {localConfig.mensagens.map((mensagem, index) => (
+                            <div key={index} style={{
+                                padding: '1.5rem',
+                                backgroundColor: 'var(--bg-primary)',
+                                borderRadius: '0.75rem',
+                                marginBottom: '1.5rem',
+                                border: '1px solid var(--border-color)'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                    <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>Mensagem {index + 1}</h3>
+                                    <button
+                                        type="button"
+                                        className="btn btn-danger btn-sm"
+                                        onClick={() => removeMensagem(index)}
+                                    >
+                                        Excluir
+                                    </button>
+                                </div>
+
+                                <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                                    <label>Mensagem:</label>
+                                    <textarea
+                                        className="form-textarea"
+                                        rows={8}
+                                        maxLength={4096}
+                                        value={mensagem.texto}
+                                        onChange={(e) => updateMensagem(index, { texto: e.target.value })}
+                                        placeholder="Exemplo de mensagem de downsell: Não perca essa oportunidade! ⚡ Com 50% de desconto, você pode garantir acesso a conteúdos exclusivos agora mesmo!"
+                                        style={{ width: '100%', minHeight: '150px' }}
+                                    />
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                        {mensagem.texto.length}/4096
+                                    </span>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                    <div className="form-group">
+                                        <label>Tempo de Envio:</label>
+                                        <select
+                                            className="form-select"
+                                            value={mensagem.tempo_envio}
+                                            onChange={(e) => updateMensagem(index, { tempo_envio: parseInt(e.target.value) })}
+                                        >
+                                            {tempoEnvioOptions.map(opt => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Desconto:</label>
+                                        <select
+                                            className="form-select"
+                                            value={mensagem.desconto}
+                                            onChange={(e) => updateMensagem(index, { desconto: parseInt(e.target.value) })}
+                                        >
+                                            {descontoOptions.map(opt => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                    <div className="form-group">
+                                        <label>Mídia (PNG, JPEG, JPG, MP4):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const callback = (item) => handleMediaSelect(item, index);
+                                                    setMediaSelectionCallback(() => callback);
+                                                    setMediaModalAllowedTypes(['image', 'video']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Mídia
+                                            </button>
+                                            {mensagem.media && (
+                                                <>
+                                                    <span style={{ color: 'var(--text-primary)' }}>
+                                                        {mensagem.media.file_name}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => updateMensagem(index, { media: null })}
+                                                    >
+                                                        Remover
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Áudio (OGG):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const callback = (item) => handleAudioSelect(item, index);
+                                                    setMediaSelectionCallback(() => callback);
+                                                    setMediaModalAllowedTypes(['audio']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Áudio
+                                            </button>
+                                            {mensagem.audio && (
+                                                <>
+                                                    <span style={{ color: 'var(--text-primary)' }}>
+                                                        {mensagem.audio.file_name}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => updateMensagem(index, { audio: null })}
+                                                    >
+                                                        Remover
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="form-group">
+                                    <label>Tipo de Destinatários:</label>
+                                    <select
+                                        className="form-select"
+                                        value={mensagem.destinatarios}
+                                        onChange={(e) => updateMensagem(index, { destinatarios: e.target.value })}
+                                    >
+                                        {destinatariosOptions.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        ))}
+
+                        <div style={{ marginBottom: '2rem' }}>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={addMensagem}
+                            >
+                                + Adicionar Nova Mensagem
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {isMediaModalOpen && (
+                    <MediaLibraryModal
+                        onSelect={(item) => {
+                            if (mediaSelectionCallback) {
+                                mediaSelectionCallback(item);
+                            }
+                        }}
+                        onClose={() => {
+                            setIsMediaModalOpen(false);
+                            setMediaSelectionCallback(null);
+                            setMediaModalAllowedTypes(null);
+                        }}
+                        allowedTypes={mediaModalAllowedTypes}
+                    />
+                )}
+            </div>
+        );
+    }
+
     function SimpleFlowEditorPage({ flow, bots, onRequestClose }) {
         const [activeTab, setActiveTab] = useState('geral');
         const [config, setConfig] = useState(() => {
@@ -14741,10 +15058,15 @@ function FlowEditorPage({
                             />
                         )}
                         {activeTab === 'downsell' && (
-                            <div>
-                                <h3 style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>Configurações de Downsell</h3>
-                                <p style={{ color: 'var(--text-secondary)' }}>As configurações desta aba serão implementadas em breve.</p>
-                            </div>
+                            <SimpleFlowDownsellTab 
+                                config={config.downsell || {}}
+                                onConfigChange={(newDownsellConfig) => {
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        downsell: newDownsellConfig
+                                    }));
+                                }}
+                            />
                         )}
                     </div>
                 </div>
