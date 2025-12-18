@@ -14680,7 +14680,14 @@ function FlowEditorPage({
                     desconto: 0,
                     media: null,
                     audio: null,
-                    destinatarios: 'novos'
+                    destinatarios: 'novos',
+                    order_bump_ativo: false,
+                    order_bump_texto: '',
+                    order_bump_btn_aceitar: 'Aceitar',
+                    order_bump_btn_recusar: 'Recusar',
+                    order_bump_nome: '',
+                    order_bump_media: null,
+                    order_bump_voice: null
                 }]
             }));
         };
@@ -14701,6 +14708,20 @@ function FlowEditorPage({
 
         const handleAudioSelect = (audioItem, mensagemIndex) => {
             updateMensagem(mensagemIndex, { audio: audioItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const handleOrderBumpMediaSelect = (mediaItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { order_bump_media: mediaItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const handleOrderBumpAudioSelect = (audioItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { order_bump_voice: audioItem });
             setIsMediaModalOpen(false);
             setMediaSelectionCallback(null);
             setMediaModalAllowedTypes(null);
@@ -14920,6 +14941,133 @@ function FlowEditorPage({
                                         ))}
                                     </select>
                                 </div>
+
+                                <ToggleSwitch
+                                    id={`order_bump_downsell_${index}`}
+                                    label="Ativar Order Bump"
+                                    checked={mensagem.order_bump_ativo || false}
+                                    onChange={(e) => updateMensagem(index, { order_bump_ativo: e.target.checked })}
+                                />
+
+                                {mensagem.order_bump_ativo && (
+                                    <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'var(--bg-secondary)', borderRadius: '0.5rem' }}>
+                                        <div className="form-group">
+                                            <label>Texto Explicativo do Order Bump:</label>
+                                            <textarea
+                                                className="form-textarea"
+                                                rows={6}
+                                                maxLength={4096}
+                                                value={mensagem.order_bump_texto || ''}
+                                                onChange={(e) => updateMensagem(index, { order_bump_texto: e.target.value })}
+                                                placeholder="Digite o texto explicativo do Order Bump aqui..."
+                                            />
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                                {(mensagem.order_bump_texto || '').length}/4096
+                                            </span>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+                                            <div className="form-group">
+                                                <label>Texto Botão Aceitar:</label>
+                                                <input
+                                                    type="text"
+                                                    className="form-input"
+                                                    value={mensagem.order_bump_btn_aceitar || 'Aceitar'}
+                                                    onChange={(e) => updateMensagem(index, { order_bump_btn_aceitar: e.target.value })}
+                                                    placeholder="Aceitar"
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Texto Botão Recusar:</label>
+                                                <input
+                                                    type="text"
+                                                    className="form-input"
+                                                    value={mensagem.order_bump_btn_recusar || 'Recusar'}
+                                                    onChange={(e) => updateMensagem(index, { order_bump_btn_recusar: e.target.value })}
+                                                    placeholder="Recusar"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+                                            <div className="form-group">
+                                                <label>Mídia Order Bump (PNG, JPEG, JPG, MP4):</label>
+                                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            const callback = (item) => handleOrderBumpMediaSelect(item, index);
+                                                            setMediaSelectionCallback(() => callback);
+                                                            setMediaModalAllowedTypes(['image', 'video']);
+                                                            setIsMediaModalOpen(true);
+                                                        }}
+                                                    >
+                                                        Escolher Mídia
+                                                    </button>
+                                                    {mensagem.order_bump_media && (
+                                                        <>
+                                                            <span style={{ color: 'var(--text-primary)' }}>
+                                                                {mensagem.order_bump_media.file_name}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-danger btn-sm"
+                                                                onClick={() => updateMensagem(index, { order_bump_media: null })}
+                                                            >
+                                                                Remover
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Áudio Order Bump (OGG):</label>
+                                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            const callback = (item) => handleOrderBumpAudioSelect(item, index);
+                                                            setMediaSelectionCallback(() => callback);
+                                                            setMediaModalAllowedTypes(['audio']);
+                                                            setIsMediaModalOpen(true);
+                                                        }}
+                                                    >
+                                                        Escolher Áudio
+                                                    </button>
+                                                    {mensagem.order_bump_voice && (
+                                                        <>
+                                                            <span style={{ color: 'var(--text-primary)' }}>
+                                                                {mensagem.order_bump_voice.file_name}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-danger btn-sm"
+                                                                onClick={() => updateMensagem(index, { order_bump_voice: null })}
+                                                            >
+                                                                Remover
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="form-group" style={{ marginTop: '1rem' }}>
+                                            <label>Nome do Order Bump:</label>
+                                            <input
+                                                type="text"
+                                                className="form-input"
+                                                maxLength={100}
+                                                value={mensagem.order_bump_nome || ''}
+                                                onChange={(e) => updateMensagem(index, { order_bump_nome: e.target.value })}
+                                                placeholder="Ex: Pacote Premium Completo"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ))}
 
