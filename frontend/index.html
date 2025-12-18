@@ -14204,6 +14204,439 @@ function FlowEditorPage({
         );
     }
 
+    function SimpleFlowUpsellTab({ config, onConfigChange }) {
+        const [localConfig, setLocalConfig] = useState(() => ({
+            upsell_ativo: config.upsell_ativo || false,
+            mensagens: config.mensagens || []
+        }));
+
+        const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+        const [mediaSelectionCallback, setMediaSelectionCallback] = useState(null);
+        const [mediaModalAllowedTypes, setMediaModalAllowedTypes] = useState(null);
+        const [showAddPlano, setShowAddPlano] = useState({});
+        const [newPlano, setNewPlano] = useState({});
+
+        // Atualizar config pai quando localConfig mudar
+        const prevConfigRef = useRef(null);
+        useEffect(() => {
+            const configString = JSON.stringify(localConfig);
+            const prevConfigString = prevConfigRef.current;
+            if (configString !== prevConfigString) {
+                prevConfigRef.current = configString;
+                onConfigChange(localConfig);
+            }
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [localConfig]);
+
+        const updateConfig = (updates) => {
+            setLocalConfig(prev => ({ ...prev, ...updates }));
+        };
+
+        const updateMensagem = (index, updates) => {
+            setLocalConfig(prev => {
+                const novasMensagens = [...prev.mensagens];
+                novasMensagens[index] = { ...novasMensagens[index], ...updates };
+                return { ...prev, mensagens: novasMensagens };
+            });
+        };
+
+        const addMensagem = () => {
+            setLocalConfig(prev => ({
+                ...prev,
+                mensagens: [...prev.mensagens, {
+                    texto: '',
+                    tempo_envio: 1200,
+                    media: null,
+                    audio: null,
+                    destinatarios: 'todos',
+                    planos: []
+                }]
+            }));
+        };
+
+        const removeMensagem = (index) => {
+            setLocalConfig(prev => ({
+                ...prev,
+                mensagens: prev.mensagens.filter((_, i) => i !== index)
+            }));
+        };
+
+        const addPlano = (mensagemIndex) => {
+            if (!newPlano[mensagemIndex] || !newPlano[mensagemIndex].nome || !newPlano[mensagemIndex].valor) {
+                App.showToast('Preencha nome e valor do plano', 'error');
+                return;
+            }
+            updateMensagem(mensagemIndex, {
+                planos: [...localConfig.mensagens[mensagemIndex].planos, {
+                    nome: newPlano[mensagemIndex].nome,
+                    valor: newPlano[mensagemIndex].valor,
+                    entregavel: newPlano[mensagemIndex].entregavel || ''
+                }]
+            });
+            setNewPlano(prev => ({ ...prev, [mensagemIndex]: { nome: '', valor: '', entregavel: '' } }));
+            setShowAddPlano(prev => ({ ...prev, [mensagemIndex]: false }));
+        };
+
+        const removePlano = (mensagemIndex, planoIndex) => {
+            updateMensagem(mensagemIndex, {
+                planos: localConfig.mensagens[mensagemIndex].planos.filter((_, i) => i !== planoIndex)
+            });
+        };
+
+        const toggleAddPlano = (mensagemIndex) => {
+            setShowAddPlano(prev => ({ ...prev, [mensagemIndex]: !prev[mensagemIndex] }));
+            if (!showAddPlano[mensagemIndex]) {
+                setNewPlano(prev => ({ ...prev, [mensagemIndex]: { nome: '', valor: '', entregavel: '' } }));
+            }
+        };
+
+        const handleMediaSelect = (mediaItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { media: mediaItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const handleAudioSelect = (audioItem, mensagemIndex) => {
+            updateMensagem(mensagemIndex, { audio: audioItem });
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+            setMediaModalAllowedTypes(null);
+        };
+
+        const tempoEnvioOptions = [
+            { value: 0, label: 'Imediato' },
+            { value: 300, label: '5 minutos' },
+            { value: 600, label: '10 minutos' },
+            { value: 900, label: '15 minutos' },
+            { value: 1200, label: '20 minutos' },
+            { value: 1500, label: '25 minutos' },
+            { value: 1800, label: '30 minutos' },
+            { value: 2700, label: '45 minutos' },
+            { value: 3600, label: '1 hora' },
+            { value: 7200, label: '2 horas' },
+            { value: 14400, label: '4 horas' },
+            { value: 21600, label: '6 horas' },
+            { value: 28800, label: '8 horas' },
+            { value: 43200, label: '12 horas' },
+            { value: 64800, label: '18 horas' },
+            { value: 86400, label: '1 dia' },
+            { value: 172800, label: '2 dias' },
+            { value: 259200, label: '3 dias' },
+            { value: 345600, label: '4 dias' },
+            { value: 432000, label: '5 dias' },
+            { value: 604800, label: '7 dias' }
+        ];
+
+        const destinatariosOptions = [
+            { value: 'todos', label: 'Usuários - todos os cadastrados' },
+            { value: 'vips', label: 'Usuários vips - que têm assinatura ativa' },
+            { value: 'downsellers', label: 'Usuários downsell - compraram planos com desconto' },
+            { value: 'usuarios_mailing', label: 'Usuários do mailing - compraram via mailing' },
+            { value: 'usuarios_recorrentes', label: 'Usuários recorrentes - compraram mais de uma vez' },
+            { value: 'usuarios_planos_pacotes', label: 'Usuários de pacotes - compraram planos avulsos' },
+            { value: 'usuarios_order_bump', label: 'Usuários order bump - compraram extras dentro do telegram' },
+            { value: 'usuarios_telegram_premium', label: 'Usuários telegram premium - utilizam telegram premium' }
+        ];
+
+        return (
+            <div style={{ maxWidth: '1200px' }}>
+                <h2 style={{ marginBottom: '2rem', color: 'var(--text-primary)' }}>Configurações de Upsell</h2>
+                
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontWeight: 'bold' }}>
+                    <span style={{ color: 'var(--warning)' }}>Atenção:</span> O upsell é enviado automaticamente após qualquer compra realizada no bot.
+                </p>
+
+                <div style={{ marginBottom: '2rem' }}>
+                    <ToggleSwitch
+                        id="upsell_ativo"
+                        label="Upsell Ativo"
+                        checked={localConfig.upsell_ativo}
+                        onChange={(e) => updateConfig({ upsell_ativo: e.target.checked })}
+                    />
+                </div>
+
+                {localConfig.upsell_ativo && (
+                    <>
+                        {localConfig.mensagens.map((mensagem, index) => (
+                            <div key={index} style={{
+                                padding: '1.5rem',
+                                backgroundColor: 'var(--bg-primary)',
+                                borderRadius: '0.75rem',
+                                marginBottom: '1.5rem',
+                                border: '1px solid var(--border-color)'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                    <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>Mensagem {index + 1}</h3>
+                                    <button
+                                        type="button"
+                                        className="btn btn-danger btn-sm"
+                                        onClick={() => removeMensagem(index)}
+                                    >
+                                        Excluir
+                                    </button>
+                                </div>
+
+                                <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                                    <label>Mensagem:</label>
+                                    <textarea
+                                        className="form-textarea"
+                                        rows={8}
+                                        maxLength={4096}
+                                        value={mensagem.texto}
+                                        onChange={(e) => updateMensagem(index, { texto: e.target.value })}
+                                        placeholder="Exemplo de mensagem de upsell: Aproveite agora para adquirir nosso pacote premium com conteúdos exclusivos!"
+                                        style={{ width: '100%', minHeight: '150px' }}
+                                    />
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                        {mensagem.texto.length}/4096
+                                    </span>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                    <div className="form-group">
+                                        <label>Tempo de Envio:</label>
+                                        <select
+                                            className="form-select"
+                                            value={mensagem.tempo_envio}
+                                            onChange={(e) => updateMensagem(index, { tempo_envio: parseInt(e.target.value) })}
+                                        >
+                                            {tempoEnvioOptions.map(opt => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Tipo de Destinatários:</label>
+                                        <select
+                                            className="form-select"
+                                            value={mensagem.destinatarios}
+                                            onChange={(e) => updateMensagem(index, { destinatarios: e.target.value })}
+                                        >
+                                            {destinatariosOptions.map(opt => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                    <div className="form-group">
+                                        <label>Mídia (PNG, JPEG, JPG, MP4):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const callback = (item) => handleMediaSelect(item, index);
+                                                    setMediaSelectionCallback(() => callback);
+                                                    setMediaModalAllowedTypes(['image', 'video']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Mídia
+                                            </button>
+                                            {mensagem.media && (
+                                                <>
+                                                    <span style={{ color: 'var(--text-primary)' }}>
+                                                        {mensagem.media.file_name}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => updateMensagem(index, { media: null })}
+                                                    >
+                                                        Remover
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="form-group">
+                                        <label>Áudio (OGG):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    const callback = (item) => handleAudioSelect(item, index);
+                                                    setMediaSelectionCallback(() => callback);
+                                                    setMediaModalAllowedTypes(['audio']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Áudio
+                                            </button>
+                                            {mensagem.audio && (
+                                                <>
+                                                    <span style={{ color: 'var(--text-primary)' }}>
+                                                        {mensagem.audio.file_name}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => updateMensagem(index, { audio: null })}
+                                                    >
+                                                        Remover
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: 'var(--bg-secondary)', borderRadius: '0.5rem' }}>
+                                    <h3 style={{ color: 'var(--text-primary)', marginBottom: '1rem' }}>Planos de Upsell</h3>
+                                    
+                                    {!showAddPlano[index] && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={() => toggleAddPlano(index)}
+                                        >
+                                            + Adicionar Novo Plano
+                                        </button>
+                                    )}
+
+                                    {showAddPlano[index] && (
+                                        <div style={{
+                                            padding: '1rem',
+                                            backgroundColor: 'var(--bg-primary)',
+                                            borderRadius: '0.5rem',
+                                            marginTop: '1rem',
+                                            border: '1px solid var(--border-color)'
+                                        }}>
+                                            <div className="form-group">
+                                                <label>Nome do Plano:</label>
+                                                <input
+                                                    type="text"
+                                                    className="form-input"
+                                                    value={newPlano[index]?.nome || ''}
+                                                    onChange={(e) => setNewPlano(prev => ({
+                                                        ...prev,
+                                                        [index]: { ...prev[index], nome: e.target.value }
+                                                    }))}
+                                                    placeholder="Ex: Pacote Premium Completo"
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Valor (R$):</label>
+                                                <input
+                                                    type="text"
+                                                    className="form-input"
+                                                    value={newPlano[index]?.valor || ''}
+                                                    onChange={(e) => setNewPlano(prev => ({
+                                                        ...prev,
+                                                        [index]: { ...prev[index], valor: e.target.value }
+                                                    }))}
+                                                    placeholder="Ex: 19,90"
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Entregáveis:</label>
+                                                <textarea
+                                                    className="form-textarea"
+                                                    rows={6}
+                                                    maxLength={2500}
+                                                    value={newPlano[index]?.entregavel || ''}
+                                                    onChange={(e) => setNewPlano(prev => ({
+                                                        ...prev,
+                                                        [index]: { ...prev[index], entregavel: e.target.value }
+                                                    }))}
+                                                    placeholder="Aqui estarão os entregáveis que seus clientes receberão após o pagamento!"
+                                                />
+                                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                                    {(newPlano[index]?.entregavel || '').length}/2500
+                                                </span>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary"
+                                                    onClick={() => toggleAddPlano(index)}
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary"
+                                                    onClick={() => addPlano(index)}
+                                                >
+                                                    Confirmar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {mensagem.planos && mensagem.planos.length > 0 && (
+                                        <div style={{ marginTop: '1rem' }}>
+                                            {mensagem.planos.map((plano, planoIndex) => (
+                                                <div key={planoIndex} style={{
+                                                    padding: '1rem',
+                                                    backgroundColor: 'var(--bg-primary)',
+                                                    borderRadius: '0.5rem',
+                                                    marginBottom: '0.5rem',
+                                                    border: '1px solid var(--border-color)',
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center'
+                                                }}>
+                                                    <div>
+                                                        <strong style={{ color: 'var(--text-primary)' }}>{plano.nome}</strong>
+                                                        <span style={{ color: 'var(--text-secondary)', marginLeft: '1rem' }}>R$ {plano.valor}</span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => removePlano(index, planoIndex)}
+                                                    >
+                                                        Remover
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+
+                        <div style={{ marginBottom: '2rem' }}>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={addMensagem}
+                            >
+                                + Adicionar Nova Mensagem
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {isMediaModalOpen && (
+                    <MediaLibraryModal
+                        onSelect={(item) => {
+                            if (mediaSelectionCallback) {
+                                mediaSelectionCallback(item);
+                            }
+                        }}
+                        onClose={() => {
+                            setIsMediaModalOpen(false);
+                            setMediaSelectionCallback(null);
+                            setMediaModalAllowedTypes(null);
+                        }}
+                        allowedTypes={mediaModalAllowedTypes}
+                    />
+                )}
+            </div>
+        );
+    }
+
     function SimpleFlowEditorPage({ flow, bots, onRequestClose }) {
         const [activeTab, setActiveTab] = useState('geral');
         const [config, setConfig] = useState(() => {
@@ -14297,10 +14730,15 @@ function FlowEditorPage({
                             />
                         )}
                         {activeTab === 'upsell' && (
-                            <div>
-                                <h3 style={{ marginBottom: '1rem', color: 'var(--text-primary)' }}>Configurações de Upsell</h3>
-                                <p style={{ color: 'var(--text-secondary)' }}>As configurações desta aba serão implementadas em breve.</p>
-                            </div>
+                            <SimpleFlowUpsellTab 
+                                config={config.upsell || {}}
+                                onConfigChange={(newUpsellConfig) => {
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        upsell: newUpsellConfig
+                                    }));
+                                }}
+                            />
                         )}
                         {activeTab === 'downsell' && (
                             <div>
