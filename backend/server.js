@@ -6604,20 +6604,23 @@ app.post('/api/registerClick', rateLimitMiddleware, logApiRequest, async (req, r
                     }
                     return null;
                 case 'ipwhois-app':
-                    // ipwho.is retorna { success: true, data: { city: '...', region: '...' } }
-                    if (response.success === true && response.data) {
+                    // ipwho.is retorna { success: true, city: '...', region: '...' }
+                    if (response.success === true) {
                         return {
-                            city: response.data.city || null,
-                            state: response.data.region || null
+                            city: response.city || null,
+                            state: response.region || null
                         };
                     }
                     return null;
                 case 'apip-cc':
-                    // apip.cc retorna { city: '...', region: '...' }
-                    return {
-                        city: response.city || null,
-                        state: response.region || null
-                    };
+                    // apip.cc retorna { status: 'success', City: '...', RegionName: '...' }
+                    if (response.status === 'success') {
+                        return {
+                            city: response.City || null,
+                            state: response.RegionName || null
+                        };
+                    }
+                    return null;
                 default:
                     return null;
             }
