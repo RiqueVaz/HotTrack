@@ -13520,9 +13520,7 @@ function FlowEditorPage({
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary"
-                                                onClick={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
+                                                onClick={() => {
                                                     setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'pacote'));
                                                     setMediaModalAllowedTypes(['image', 'video']);
                                                     setIsMediaModalOpen(true);
@@ -14121,7 +14119,7 @@ function FlowEditorPage({
                 {renderCTA()}
                 {renderPixConfig()}
                 
-                {isMediaModalOpen && window.ReactDOM.createPortal(
+                {isMediaModalOpen && (
                     <MediaLibraryModal
                         onSelect={(item) => {
                             if (mediaSelectionCallback) {
@@ -14134,8 +14132,7 @@ function FlowEditorPage({
                             setMediaModalAllowedTypes(null);
                         }}
                         allowedTypes={mediaModalAllowedTypes}
-                    />,
-                    document.body
+                    />
                 )}
             </div>
         );
