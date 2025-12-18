@@ -12863,12 +12863,6 @@ function FlowEditorPage({
                 <VariableHelper 
                     variables={['{profile_name}', '{country}', '{state}', '{city}']}
                 />
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                    <span className="copy-variable" data-value="{profile_name}">{'{profile_name}'}</span> → Funciona somente para a mensagem inicial.
-                </p>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                    <span className="copy-variable" data-value="{country}">{'{country}'}</span>, <span className="copy-variable" data-value="{state}">{'{state}'}</span>, <span className="copy-variable" data-value="{city}">{'{city}'}</span> → Para funcionar corretamente, é necessário usar Redirecionadores ou Captação de Leads.
-                </p>
             </div>
         );
 
@@ -12888,6 +12882,26 @@ function FlowEditorPage({
             setMediaSelectionCallback(null);
         };
 
+        const handleOrderBumpMediaSelect = (mediaItem, tipo) => {
+            if (tipo === 'assinatura') {
+                setNewPlanoAssinatura(prev => ({ ...prev, order_bump_media: mediaItem }));
+            } else {
+                setNewPlanoPacote(prev => ({ ...prev, order_bump_media: mediaItem }));
+            }
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+        };
+
+        const handleOrderBumpAudioSelect = (audioItem, tipo) => {
+            if (tipo === 'assinatura') {
+                setNewPlanoAssinatura(prev => ({ ...prev, order_bump_voice: audioItem }));
+            } else {
+                setNewPlanoPacote(prev => ({ ...prev, order_bump_voice: audioItem }));
+            }
+            setIsMediaModalOpen(false);
+            setMediaSelectionCallback(null);
+        };
+
         const renderMidiasAudios = () => (
             <div style={{ marginBottom: '2rem' }}>
                 <div className="form-group" style={{ marginBottom: '1.5rem' }}>
@@ -12898,6 +12912,7 @@ function FlowEditorPage({
                             className="btn btn-secondary"
                             onClick={() => {
                                 setMediaSelectionCallback(() => handleMediaSelect);
+                                setMediaModalAllowedTypes(['image', 'video']);
                                 setIsMediaModalOpen(true);
                             }}
                         >
@@ -13183,6 +13198,49 @@ function FlowEditorPage({
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
                                     <div className="form-group">
+                                        <label>Mídia Order Bump (PNG, JPEG, JPG, MP4):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={() => {
+                                                    setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'assinatura'));
+                                                    setMediaModalAllowedTypes(['image', 'video']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Mídia
+                                            </button>
+                                            {newPlanoAssinatura.order_bump_media && (
+                                                <span style={{ color: 'var(--text-primary)' }}>
+                                                    {newPlanoAssinatura.order_bump_media.file_name}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Áudio Order Bump (OGG):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={() => {
+                                                    setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'assinatura'));
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Áudio
+                                            </button>
+                                            {newPlanoAssinatura.order_bump_voice && (
+                                                <span style={{ color: 'var(--text-primary)' }}>
+                                                    {newPlanoAssinatura.order_bump_voice.file_name}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+                                    <div className="form-group">
                                         <label>Nome do Order Bump:</label>
                                         <input
                                             type="text"
@@ -13442,6 +13500,49 @@ function FlowEditorPage({
                                             onChange={(e) => setNewPlanoPacote(prev => ({ ...prev, order_bump_btn_recusar: e.target.value }))}
                                             placeholder="Recusar"
                                         />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+                                    <div className="form-group">
+                                        <label>Mídia Order Bump (PNG, JPEG, JPG, MP4):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={() => {
+                                                    setMediaSelectionCallback((item) => handleOrderBumpMediaSelect(item, 'pacote'));
+                                                    setMediaModalAllowedTypes(['image', 'video']);
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Mídia
+                                            </button>
+                                            {newPlanoPacote.order_bump_media && (
+                                                <span style={{ color: 'var(--text-primary)' }}>
+                                                    {newPlanoPacote.order_bump_media.file_name}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Áudio Order Bump (OGG):</label>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={() => {
+                                                    setMediaSelectionCallback((item) => handleOrderBumpAudioSelect(item, 'pacote'));
+                                                    setIsMediaModalOpen(true);
+                                                }}
+                                            >
+                                                Escolher Áudio
+                                            </button>
+                                            {newPlanoPacote.order_bump_voice && (
+                                                <span style={{ color: 'var(--text-primary)' }}>
+                                                    {newPlanoPacote.order_bump_voice.file_name}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
@@ -13944,6 +14045,7 @@ function FlowEditorPage({
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
                                         });
+                                        setMediaModalAllowedTypes(['image', 'video']);
                                         setIsMediaModalOpen(true);
                                     }}
                                 >
@@ -13966,6 +14068,7 @@ function FlowEditorPage({
                                             setIsMediaModalOpen(false);
                                             setMediaSelectionCallback(null);
                                         });
+                                        setMediaModalAllowedTypes(['audio']);
                                         setIsMediaModalOpen(true);
                                     }}
                                 >
@@ -14007,7 +14110,7 @@ function FlowEditorPage({
                             setIsMediaModalOpen(false);
                             setMediaSelectionCallback(null);
                         }}
-                        allowedTypes={mediaSelectionCallback === handleAudioSelect ? ['audio'] : ['image', 'video']}
+                        allowedTypes={mediaModalAllowedTypes}
                     />
                 )}
             </div>
