@@ -8412,7 +8412,21 @@ async function sendSimpleFlowMessage(botToken, chatId, text, buttons = [], botId
  * Converte valor monetário de string para centavos
  */
 function parseValueToCents(valueStr) {
-    if (!valueStr || typeof valueStr !== 'string') return 0;
+    if (!valueStr) return 0;
+    
+    // Se já for número, assumir que está em reais e converter para centavos
+    if (typeof valueStr === 'number') {
+        return Math.round(valueStr * 100);
+    }
+    
+    // Se não for string, tentar converter
+    if (typeof valueStr !== 'string') {
+        const numValue = parseFloat(valueStr);
+        if (!isNaN(numValue) && numValue >= 0) {
+            return Math.round(numValue * 100);
+        }
+        return 0;
+    }
     
     // Remove símbolos e espaços, substitui vírgula por ponto
     const cleaned = valueStr.replace(/[R$\s]/g, '').replace(',', '.');
@@ -8892,8 +8906,30 @@ async function handleSimpleFlowCallback(callbackQuery, botId, botToken, sellerId
                     : updatedState.variables;
             }
             
-            const orderBumpValue = variables.order_bump_value || 0;
-            const baseValue = variables.base_value_cents || 0;
+            // Garantir que os valores estão em centavos
+            let orderBumpValue = variables.order_bump_value || 0;
+            let baseValue = variables.base_value_cents || 0;
+            
+            // Se order_bump_value vier como string, tentar converter para centavos
+            if (typeof orderBumpValue === 'string') {
+                orderBumpValue = parseValueToCents(orderBumpValue);
+            }
+            
+            // Se base_value_cents vier como string, tentar converter para centavos
+            if (typeof baseValue === 'string') {
+                baseValue = parseValueToCents(baseValue);
+            }
+            
+            // Garantir que são números inteiros (centavos)
+            orderBumpValue = Math.round(Number(orderBumpValue)) || 0;
+            baseValue = Math.round(Number(baseValue)) || 0;
+            
+            // Validação: valores não podem ser negativos
+            if (orderBumpValue < 0) orderBumpValue = 0;
+            if (baseValue < 0) baseValue = 0;
+            
+            // Log para debug
+            logger.debug(`[Simple Flow Order Bump] Order bump aceito. Valor do plano: ${baseValue} centavos (R$ ${formatValueFromCents(baseValue)}), Valor do order bump: ${orderBumpValue} centavos (R$ ${formatValueFromCents(orderBumpValue)}), Total: ${baseValue + orderBumpValue} centavos (R$ ${formatValueFromCents(baseValue + orderBumpValue)})`);
             
             await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, variables.selected_plano, baseValue, orderBumpValue, variables);
             
@@ -8910,7 +8946,22 @@ async function handleSimpleFlowCallback(callbackQuery, botId, botToken, sellerId
                     : updatedState.variables;
             }
             
-            const baseValue = variables.base_value_cents || 0;
+            // Garantir que o valor base está em centavos
+            let baseValue = variables.base_value_cents || 0;
+            
+            // Se base_value_cents vier como string, tentar converter para centavos
+            if (typeof baseValue === 'string') {
+                baseValue = parseValueToCents(baseValue);
+            }
+            
+            // Garantir que é número inteiro (centavos)
+            baseValue = Math.round(Number(baseValue)) || 0;
+            
+            // Validação: valor não pode ser negativo
+            if (baseValue < 0) baseValue = 0;
+            
+            // Log para debug
+            logger.debug(`[Simple Flow Order Bump] Order bump recusado. Valor do plano: ${baseValue} centavos (R$ ${formatValueFromCents(baseValue)})`);
             
             await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, variables.selected_plano, baseValue, 0, variables);
         }
@@ -8930,9 +8981,21 @@ async function handleSimpleFlowCallback(callbackQuery, botId, botToken, sellerId
  */
 async function generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, plano, baseValueCents, orderBumpCents, variables) {
     try {
-        const totalValueCents = baseValueCents + orderBumpCents;
+        // Garantir que ambos os valores estão em centavos e são números inteiros
+        let baseValue = Math.round(Number(baseValueCents)) || 0;
+        let orderBumpValue = Math.round(Number(orderBumpCents)) || 0;
+        
+        // Validação: valores não podem ser negativos
+        if (baseValue < 0) baseValue = 0;
+        if (orderBumpValue < 0) orderBumpValue = 0;
+        
+        const totalValueCents = baseValue + orderBumpValue;
+        
+        // Log para debug
+        logger.debug(`[Simple Flow PIX] Gerando PIX. Valor do plano: ${baseValue} centavos (R$ ${formatValueFromCents(baseValue)}), Valor do order bump: ${orderBumpValue} centavos (R$ ${formatValueFromCents(orderBumpValue)}), Valor total: ${totalValueCents} centavos (R$ ${formatValueFromCents(totalValueCents)})`);
         
         if (totalValueCents <= 0) {
+            logger.error(`[Simple Flow PIX] Valor inválido para geração do PIX. Base: ${baseValue}, Order Bump: ${orderBumpValue}, Total: ${totalValueCents}`);
             await sendSimpleFlowMessage(botToken, chatId, 'Valor inválido para geração do PIX.', [], botId);
             return;
         }
