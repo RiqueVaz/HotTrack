@@ -13181,6 +13181,12 @@ function FlowEditorPage({
         };
 
         const handleEditPlanoAssinatura = (index) => {
+            // Fechar outros formulários abertos
+            setShowAddPlanoPacote(false);
+            setShowAddBotao(false);
+            setEditingPlanoPacoteIndex(null);
+            setEditingBotaoIndex(null);
+            
             const plano = localConfig.planos_assinaturas[index];
             setNewPlanoAssinatura({
                 nome: plano.nome || '',
@@ -13567,7 +13573,14 @@ function FlowEditorPage({
                         <button
                             type="button"
                             className="btn btn-primary"
-                            onClick={() => setShowAddPlanoPacote(true)}
+                            onClick={() => {
+                                setShowAddPlanoAssinatura(false);
+                                setShowAddBotao(false);
+                                setEditingPlanoAssinaturaIndex(null);
+                                setEditingBotaoIndex(null);
+                                setEditingPlanoPacoteIndex(null);
+                                setShowAddPlanoPacote(true);
+                            }}
                         >
                             + Adicionar Plano
                         </button>
@@ -13850,10 +13863,37 @@ function FlowEditorPage({
                 App.showToast('Preencha texto e link do botão', 'error');
                 return;
             }
-            const botoes = [...localConfig.botoes_personalizados, { ...newBotao, id: Date.now() }];
-            updateConfig({ botoes_personalizados: botoes });
+            
+            if (editingBotaoIndex !== null) {
+                // Atualizar item existente
+                const updated = [...localConfig.botoes_personalizados];
+                updated[editingBotaoIndex] = { ...newBotao, id: updated[editingBotaoIndex].id };
+                updateConfig({ botoes_personalizados: updated });
+                setEditingBotaoIndex(null);
+            } else {
+                // Adicionar novo item
+                const botoes = [...localConfig.botoes_personalizados, { ...newBotao, id: Date.now() }];
+                updateConfig({ botoes_personalizados: botoes });
+            }
+            
             setNewBotao({ texto: '', link: '' });
             setShowAddBotao(false);
+        };
+
+        const handleEditBotao = (index) => {
+            // Fechar outros formulários abertos
+            setShowAddPlanoAssinatura(false);
+            setShowAddPlanoPacote(false);
+            setEditingPlanoAssinaturaIndex(null);
+            setEditingPlanoPacoteIndex(null);
+            
+            const botao = localConfig.botoes_personalizados[index];
+            setNewBotao({
+                texto: botao.texto || '',
+                link: botao.link || ''
+            });
+            setEditingBotaoIndex(index);
+            setShowAddBotao(true);
         };
 
         const renderBotoesPersonalizados = () => (
@@ -13864,7 +13904,14 @@ function FlowEditorPage({
                         <button
                             type="button"
                             className="btn btn-primary"
-                            onClick={() => setShowAddBotao(true)}
+                            onClick={() => {
+                                setShowAddPlanoAssinatura(false);
+                                setShowAddPlanoPacote(false);
+                                setEditingPlanoAssinaturaIndex(null);
+                                setEditingPlanoPacoteIndex(null);
+                                setEditingBotaoIndex(null);
+                                setShowAddBotao(true);
+                            }}
                         >
                             + Adicionar Botão
                         </button>
@@ -13908,14 +13955,15 @@ function FlowEditorPage({
                                 className="btn btn-primary"
                                 onClick={handleAddBotao}
                             >
-                                Confirmar
+                                {editingBotaoIndex !== null ? 'Salvar Alterações' : 'Confirmar'}
                             </button>
                             <button
                                 type="button"
                                 className="btn btn-secondary"
                                 onClick={() => {
-                                    setShowAddBotao(false);
+                                    setEditingBotaoIndex(null);
                                     setNewBotao({ texto: '', link: '' });
+                                    setShowAddBotao(false);
                                 }}
                             >
                                 Cancelar
