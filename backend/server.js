@@ -8457,31 +8457,56 @@ async function processSimpleFlow(chatId, botId, botToken, sellerId, simpleFlowId
             if (mediaTipo === 'agrupadas') {
                 // Enviar todas em uma única mensagem (media group)
                 // Nota: Telegram suporta até 10 mídias por grupo
-                const mediaGroup = mediaFiles.slice(0, 10).map(media => {
-                    const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
-                    return {
-                        type: fileType,
-                        media: media.storage_url || media.file_id,
-                        caption: fileType === 'video' ? '' : undefined
-                    };
-                });
-                
-                if (mediaGroup.length > 0) {
-                    try {
+                // Primeiro, precisamos obter file_ids enviando individualmente (silenciosamente)
+                // ou tentar usar URLs diretamente se forem públicas
+                try {
+                    // Tentar obter file_ids primeiro enviando individualmente para um chat temporário ou usar cache
+                    // Como alternativa mais simples: enviar rapidamente em sequência para parecer agrupado
+                    // Mas a melhor abordagem é tentar usar sendMediaGroup com URLs se forem públicas
+                    const mediaGroup = [];
+                    const mediaToSend = mediaFiles.slice(0, 10);
+                    
+                    // Primeiro, tentar enviar individualmente para obter file_ids (sem mostrar ao usuário)
+                    // Mas isso seria ineficiente. Vamos tentar uma abordagem diferente:
+                    // Enviar usando sendMediaGroup com as URLs do R2 diretamente
+                    // Se falhar, fazer fallback para envio individual
+                    
+                    for (let i = 0; i < mediaToSend.length; i++) {
+                        const media = mediaToSend[i];
+                        const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'photo' : 'video';
+                        const mediaUrl = media.storage_url || media.file_id;
+                        
+                        if (mediaUrl) {
+                            const mediaItem = {
+                                type: fileType,
+                                media: mediaUrl
+                            };
+                            // Apenas a primeira mídia pode ter caption no media group
+                            if (i === 0 && mensagemInicial.trim()) {
+                                mediaItem.caption = mensagemInicial;
+                            }
+                            mediaGroup.push(mediaItem);
+                        }
+                    }
+                    
+                    if (mediaGroup.length > 0) {
+                        // Telegram API espera array diretamente, não string JSON
+                        // O axios vai serializar automaticamente para JSON
                         await sendTelegramRequest(botToken, 'sendMediaGroup', {
                             chat_id: chatId,
-                            media: JSON.stringify(mediaGroup)
+                            media: mediaGroup
                         }, {}, 3, 1500, botId);
-                    } catch (error) {
-                        logger.error(`[Simple Flow] Erro ao enviar media group:`, error);
-                        // Fallback: enviar separadamente
-                        for (const media of mediaFiles) {
-                            try {
-                                const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
-                                await sendMediaFromLibrary(botToken, chatId, media.file_id || media.storage_url, fileType, '', sellerId, botId);
-                            } catch (mediaError) {
-                                logger.error(`[Simple Flow] Erro ao enviar mídia individual:`, mediaError);
-                            }
+                    }
+                } catch (error) {
+                    // Se sendMediaGroup falhar (provavelmente porque URLs não são públicas),
+                    // fazer fallback para envio individual sequencial
+                    logger.warn(`[Simple Flow] Erro ao enviar media group, enviando individualmente:`, error.message);
+                    for (const media of mediaFiles) {
+                        try {
+                            const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+                            await sendMediaFromLibrary(botToken, chatId, media.file_id || media.storage_url, fileType, '', sellerId, botId);
+                        } catch (mediaError) {
+                            logger.error(`[Simple Flow] Erro ao enviar mídia individual:`, mediaError);
                         }
                     }
                 }
