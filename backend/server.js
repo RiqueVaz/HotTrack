@@ -8473,12 +8473,12 @@ async function processSimpleFlow(chatId, botId, botToken, sellerId, simpleFlowId
                     
                     for (let i = 0; i < mediaToSend.length; i++) {
                         const media = mediaToSend[i];
-                        const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'photo' : 'video';
+                        const isImage = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i);
                         const mediaUrl = media.storage_url || media.file_id;
                         
                         if (mediaUrl) {
                             const mediaItem = {
-                                type: fileType,
+                                type: isImage ? 'photo' : 'video',
                                 media: mediaUrl
                             };
                             // Apenas a primeira mídia pode ter caption no media group
@@ -8490,12 +8490,13 @@ async function processSimpleFlow(chatId, botId, botToken, sellerId, simpleFlowId
                     }
                     
                     if (mediaGroup.length > 0) {
-                        // Telegram API espera array diretamente, não string JSON
-                        // O axios vai serializar automaticamente para JSON
-                        await sendTelegramRequest(botToken, 'sendMediaGroup', {
+                        // Telegram API espera array de InputMedia quando enviado via JSON
+                        // O axios vai serializar automaticamente, mas precisamos garantir que seja um array
+                        const payload = {
                             chat_id: chatId,
                             media: mediaGroup
-                        }, {}, 3, 1500, botId);
+                        };
+                        await sendTelegramRequest(botToken, 'sendMediaGroup', payload, {}, 3, 1500, botId);
                     }
                 } catch (error) {
                     // Se sendMediaGroup falhar (provavelmente porque URLs não são públicas),
