@@ -3970,10 +3970,39 @@ app.patch('/api/flows/:id/activate', authenticateJwt, async (req, res) => {
 });
 // ==================== SIMPLE FLOWS ENDPOINTS ====================
 
+/**
+ * Normaliza o config do fluxo simples (garante que seja sempre um objeto)
+ */
+function normalizeSimpleFlowConfig(config) {
+    if (!config) {
+        return { geral: {}, upsell: {}, downsell: {} };
+    }
+    
+    if (typeof config === 'string') {
+        try {
+            config = JSON.parse(config);
+        } catch (e) {
+            console.error('[Simple Flow] Erro ao fazer parse do config:', e);
+            return { geral: {}, upsell: {}, downsell: {} };
+        }
+    }
+    
+    // Garante que tenha as 3 abas
+    if (typeof config !== 'object' || Array.isArray(config)) {
+        return { geral: {}, upsell: {}, downsell: {} };
+    }
+    
+    return {
+        geral: config.geral || {},
+        upsell: config.upsell || {},
+        downsell: config.downsell || {}
+    };
+}
+
 app.get('/api/simple-flows', authenticateJwt, async (req, res) => {
     try {
         const flows = await sqlWithRetry('SELECT * FROM simple_flows WHERE seller_id = $1 ORDER BY created_at DESC', [req.user.id]);
-        res.status(200).json(flows.map(f => ({ ...f, config: f.config || { geral: {}, upsell: {}, downsell: {} } })));
+        res.status(200).json(flows.map(f => ({ ...f, config: normalizeSimpleFlowConfig(f.config) })));
     } catch (error) { 
         console.error('Erro ao buscar fluxos simples:', error);
         res.status(500).json({ message: 'Erro ao buscar os fluxos simples.' }); 
@@ -4002,7 +4031,7 @@ app.post('/api/simple-flows', authenticateJwt, async (req, res) => {
             VALUES ($1, $2, $3, $4, FALSE) 
             RETURNING *;`, 
             [req.user.id, botId, name, JSON.stringify(initialConfig)]);
-        res.status(201).json({ ...newFlow, config: newFlow.config || initialConfig });
+        res.status(201).json({ ...newFlow, config: normalizeSimpleFlowConfig(newFlow.config) });
     } catch (error) { 
         console.error('Erro ao criar fluxo simples:', error);
         res.status(500).json({ message: 'Erro ao criar o fluxo simples.' }); 
@@ -4018,30 +4047,14 @@ app.put('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
         const [flow] = await sqlWithRetry('SELECT bot_id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
         
-        // Valida e prepara o config
-        let configToSave = config;
-        if (config) {
-            try {
-                // Garante que config seja um objeto válido
-                if (typeof config === 'string') {
-                    configToSave = JSON.parse(config);
-                }
-                // Garante que tenha as 3 abas
-                if (!configToSave.geral) configToSave.geral = {};
-                if (!configToSave.upsell) configToSave.upsell = {};
-                if (!configToSave.downsell) configToSave.downsell = {};
-            } catch (parseError) {
-                return res.status(400).json({ message: 'Config inválido. Deve ser um JSON válido.' });
-            }
-        } else {
-            configToSave = { geral: {}, upsell: {}, downsell: {} };
-        }
+        // Valida e prepara o config usando a função helper
+        const configToSave = normalizeSimpleFlowConfig(config);
         
         const [updated] = await sqlWithRetry(
             'UPDATE simple_flows SET name = $1, config = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', 
             [name, JSON.stringify(configToSave), req.params.id, req.user.id]
         );
-        if (updated) res.status(200).json({ ...updated, config: updated.config || configToSave });
+        if (updated) res.status(200).json({ ...updated, config: normalizeSimpleFlowConfig(updated.config) });
         else res.status(404).json({ message: 'Fluxo simples não encontrado.' });
     } catch (error) { 
         console.error('[Simple Flow Save] Error:', error);
@@ -8727,10 +8740,7 @@ async function handleSimpleFlowCallback(callbackQuery, botId, botToken, sellerId
             return;
         }
         
-        const config = typeof simpleFlow.config === 'string' 
-            ? JSON.parse(simpleFlow.config) 
-            : simpleFlow.config;
-        
+        const config = normalizeSimpleFlowConfig(simpleFlow.config);
         const geralConfig = config.geral || {};
         
         // Processar callback específico
@@ -8876,9 +8886,7 @@ async function generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFl
         
         let pixConfig = {};
         if (simpleFlow && simpleFlow.config) {
-            const config = typeof simpleFlow.config === 'string' 
-                ? JSON.parse(simpleFlow.config) 
-                : simpleFlow.config;
+            const config = normalizeSimpleFlowConfig(simpleFlow.config);
             pixConfig = config.geral?.pagamento_pix || {};
         }
         
@@ -9074,9 +9082,7 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
         if (simpleFlow && simpleFlow.config) {
             try {
-                const config = typeof simpleFlow.config === 'string' 
-                    ? JSON.parse(simpleFlow.config) 
-                    : simpleFlow.config;
+                const config = normalizeSimpleFlowConfig(simpleFlow.config);
                 
                 if (config.geral) {
                     // Processar fluxo simples
