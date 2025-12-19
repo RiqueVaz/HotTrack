@@ -4011,11 +4011,26 @@ app.get('/api/simple-flows', authenticateJwt, async (req, res) => {
 
 app.get('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
     try {
-        const [flow] = await sqlWithRetry('SELECT * FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
-        if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
-        res.status(200).json({ ...flow, config: flow.config || { geral: {}, upsell: {}, downsell: {} } });
+        const result = await sqlWithRetry('SELECT * FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
+        
+        if (!result || result.length === 0) {
+            logger.warn(`[Simple Flow GET] Fluxo ${req.params.id} não encontrado para seller ${req.user.id}`);
+            return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        }
+        
+        const flow = result[0];
+        logger.debug(`[Simple Flow GET] Fluxo ${req.params.id} encontrado. Config tipo: ${typeof flow.config}`);
+        
+        const normalizedConfig = normalizeSimpleFlowConfig(flow.config);
+        logger.debug(`[Simple Flow GET] Config normalizado. Geral keys:`, Object.keys(normalizedConfig.geral || {}).length);
+        
+        res.status(200).json({ 
+            ...flow, 
+            config: normalizedConfig
+        });
     } catch (error) { 
-        console.error('Erro ao buscar fluxo simples:', error);
+        logger.error('[Simple Flow GET] Erro ao buscar fluxo simples:', error);
+        logger.error('[Simple Flow GET] Stack:', error.stack);
         res.status(500).json({ message: 'Erro ao buscar o fluxo simples.' }); 
     }
 });

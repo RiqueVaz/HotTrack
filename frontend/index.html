@@ -5978,6 +5978,7 @@ function generatePreviewHTML(data) {
             });
             const [editingFlow, setEditingFlow] = useState(null);
             const [editingSimpleFlow, setEditingSimpleFlow] = useState(null);
+            const [simpleFlowsRefreshKey, setSimpleFlowsRefreshKey] = useState(0);
             const [bots, setBots] = useState([]);
             const [importingFlowLink, setImportingFlowLink] = useState(null);
             const [pressels, setPressels] = useState([]);
@@ -6145,7 +6146,7 @@ function generatePreviewHTML(data) {
 
             const PageComponent = {
                 bots: <BotsPage bots={bots} fetchBots={fetchInitialData} />,
-                'simple-flows': <SimpleFlowsListPage bots={bots} onEditFlow={navigateToSimpleFlowEditor} />,
+                'simple-flows': <SimpleFlowsListPage key={`simple-flows-${simpleFlowsRefreshKey}`} bots={bots} onEditFlow={navigateToSimpleFlowEditor} />,
                 flows: <FlowsListPage bots={bots} onEditFlow={navigateToFlowEditor} />,
                 chat: <LiveChatPage bots={bots} />,
                 media: <MediaLibraryPage />,
@@ -6166,7 +6167,14 @@ function generatePreviewHTML(data) {
                     <SimpleFlowEditorPage
                         flow={editingSimpleFlow}
                         bots={bots}
-                        onRequestClose={() => attemptPageChange('simple-flows', { onNavigate: () => setEditingSimpleFlow(null) })}
+                        onRequestClose={() => {
+                            setEditingSimpleFlow(null);
+                            attemptPageChange('simple-flows');
+                        }}
+                        onFlowUpdated={(updatedFlow) => {
+                            // Atualizar o flow no estado após salvar
+                            setEditingSimpleFlow(updatedFlow);
+                        }}
                     />
                 ) : null,
                 'import-flow': (
@@ -6542,16 +6550,25 @@ function generatePreviewHTML(data) {
         const fetchFlows = useCallback(async () => {
             if (!selectedBotId) { setFlows([]); return; }
             try {
+                console.log('[Simple Flow List] Buscando lista de fluxos...');
                 const res = await api.get('/api/simple-flows');
-                setFlows(res.data.filter(f => f.bot_id == selectedBotId));
-            } catch (e) { console.error("Erro ao buscar fluxos simples", e); }
+                console.log('[Simple Flow List] Resposta recebida:', res.data);
+                const filtered = res.data.filter(f => f.bot_id == selectedBotId);
+                console.log('[Simple Flow List] Fluxos filtrados para bot', selectedBotId, ':', filtered.length);
+                setFlows(filtered);
+            } catch (e) { 
+                console.error("[Simple Flow List] Erro ao buscar fluxos simples", e); 
+            }
         }, [selectedBotId]);
         
         useEffect(() => {
             if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
         }, [bots, selectedBotId]);
 
-        useEffect(() => { fetchFlows(); }, [fetchFlows]);
+        useEffect(() => { 
+            console.log('[Simple Flow List] useEffect executado, carregando lista para bot:', selectedBotId);
+            fetchFlows(); 
+        }, [fetchFlows]);
 
         const handleCreate = async () => {
             const n = prompt("Nome do novo fluxo simples:");
@@ -6607,7 +6624,11 @@ function generatePreviewHTML(data) {
                                 <div className="bot-card-actions">
                                 <button className="btn btn-primary btn-sm" onClick={async () => {
                                     try {
+                                        console.log('[Simple Flow List] Carregando fluxo:', flow.id);
                                         const res = await api.get(`/api/simple-flows/${flow.id}`);
+                                        console.log('[Simple Flow List] Resposta recebida:', res.data);
+                                        console.log('[Simple Flow List] Config recebido:', res.data.config);
+                                        console.log('[Simple Flow List] Geral keys:', Object.keys(res.data.config?.geral || {}));
                                         onEditFlow(res.data);
                                     } catch (e) {
                                         console.error("Erro ao carregar fluxo simples:", e);
@@ -15102,19 +15123,35 @@ function FlowEditorPage({
         );
     }
 
-    function SimpleFlowEditorPage({ flow, bots, onRequestClose }) {
+    function SimpleFlowEditorPage({ flow, bots, onRequestClose, onFlowUpdated }) {
         const [activeTab, setActiveTab] = useState('geral');
-        const [config, setConfig] = useState(() => {
-            if (flow.config) {
-                return {
-                    geral: flow.config.geral || {},
-                    upsell: flow.config.upsell || {},
-                    downsell: flow.config.downsell || {}
-                };
-            }
-            return { geral: {}, upsell: {}, downsell: {} };
-        });
+        
+        // Função helper para normalizar config
+        const normalizeConfig = (flowConfig) => {
+            if (!flowConfig) return { geral: {}, upsell: {}, downsell: {} };
+            return {
+                geral: flowConfig.geral || {},
+                upsell: flowConfig.upsell || {},
+                downsell: flowConfig.downsell || {}
+            };
+        };
+        
+        const [config, setConfig] = useState(() => normalizeConfig(flow?.config));
         const [isSaving, setIsSaving] = useState(false);
+        
+        // Atualizar config quando flow mudar (importante para quando reabre o editor)
+        useEffect(() => {
+            console.log('[Simple Flow Editor] Flow atualizado:', flow);
+            if (flow && flow.config) {
+                const normalized = normalizeConfig(flow.config);
+                console.log('[Simple Flow Editor] Config normalizado:', normalized);
+                console.log('[Simple Flow Editor] Geral keys:', Object.keys(normalized.geral || {}));
+                setConfig(normalized);
+            } else if (flow && !flow.config) {
+                console.log('[Simple Flow Editor] Flow sem config, inicializando vazio');
+                setConfig({ geral: {}, upsell: {}, downsell: {} });
+            }
+        }, [flow]);
 
         const handleSave = async () => {
             setIsSaving(true);
@@ -15129,8 +15166,19 @@ function FlowEditorPage({
                 console.log('[Simple Flow] Resposta do servidor:', response.data);
                 
                 if (response.status === 200 && response.data) {
+                    console.log('[Simple Flow] Salvamento bem-sucedido. Dados atualizados:', response.data);
+                    
+                    // Atualizar o flow com os dados retornados do servidor
+                    if (onFlowUpdated) {
+                        onFlowUpdated(response.data);
+                    }
+                    
                     App.showToast('Fluxo simples salvo com sucesso!', 'success');
-                    if (onRequestClose) onRequestClose();
+                    
+                    // Pequeno delay para garantir que o toast seja exibido
+                    setTimeout(() => {
+                        if (onRequestClose) onRequestClose();
+                    }, 500);
                 } else {
                     throw new Error('Resposta inválida do servidor');
                 }
