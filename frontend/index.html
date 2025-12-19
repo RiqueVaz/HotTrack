@@ -13466,13 +13466,17 @@ function FlowEditorPage({
                                         <td style={{ padding: '0.75rem', color: 'var(--text-primary)' }}>R$ {plano.valor}</td>
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-primary btn-sm"
-                                                    onClick={() => handleEditPlanoAssinatura(index)}
-                                                >
-                                                    Editar
-                                                </button>
+                                                {editingPlanoAssinaturaIndex === index ? (
+                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={() => handleEditPlanoAssinatura(index)}
+                                                    >
+                                                        Editar
+                                                    </button>
+                                                )}
                                                 <button
                                                     type="button"
                                                     className="btn btn-danger btn-sm"
@@ -13480,6 +13484,7 @@ function FlowEditorPage({
                                                         const newPlanos = localConfig.planos_assinaturas.filter((_, i) => i !== index);
                                                         updateConfig({ planos_assinaturas: newPlanos });
                                                     }}
+                                                    disabled={editingPlanoAssinaturaIndex === index}
                                                 >
                                                     Excluir
                                                 </button>
@@ -13827,13 +13832,17 @@ function FlowEditorPage({
                                         </td>
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-primary btn-sm"
-                                                    onClick={() => handleEditPlanoPacote(index)}
-                                                >
-                                                    Editar
-                                                </button>
+                                                {editingPlanoPacoteIndex === index ? (
+                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={() => handleEditPlanoPacote(index)}
+                                                    >
+                                                        Editar
+                                                    </button>
+                                                )}
                                                 <button
                                                     type="button"
                                                     className="btn btn-danger btn-sm"
@@ -13841,6 +13850,7 @@ function FlowEditorPage({
                                                         const newPlanos = localConfig.planos_pacotes.filter((_, i) => i !== index);
                                                         updateConfig({ planos_pacotes: newPlanos });
                                                     }}
+                                                    disabled={editingPlanoPacoteIndex === index}
                                                 >
                                                     Excluir
                                                 </button>
@@ -13995,13 +14005,17 @@ function FlowEditorPage({
                                         </td>
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-primary btn-sm"
-                                                    onClick={() => handleEditBotao(index)}
-                                                >
-                                                    Editar
-                                                </button>
+                                                {editingBotaoIndex === index ? (
+                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={() => handleEditBotao(index)}
+                                                    >
+                                                        Editar
+                                                    </button>
+                                                )}
                                                 <button
                                                     type="button"
                                                     className="btn btn-danger btn-sm"
@@ -14009,6 +14023,7 @@ function FlowEditorPage({
                                                         const newBotoes = localConfig.botoes_personalizados.filter((_, i) => i !== index);
                                                         updateConfig({ botoes_personalizados: newBotoes });
                                                     }}
+                                                    disabled={editingBotaoIndex === index}
                                                 >
                                                     Excluir
                                                 </button>
