@@ -186,6 +186,12 @@ class ApiRateLimiterBullMQ {
      * Obtém ou cria fila para provedor e seller
      */
     _getQueue(provider, sellerId) {
+        // Validar sellerId antes de criar fila
+        if (!sellerId || sellerId === 'undefined' || sellerId === 'null') {
+            logger.warn(`[API Rate Limiter] sellerId inválido (${sellerId}) para provider ${provider}. Usando sellerId padrão 0.`);
+            sellerId = 0; // Usar 0 como fallback para evitar fila com nome inválido
+        }
+        
         const key = `${provider}-${sellerId}`;
         
         if (!this.queues.has(key)) {
@@ -628,6 +634,12 @@ class ApiRateLimiterBullMQ {
         responseTransformer = null,
         priority = 'normal'
     }) {
+        // Validar sellerId no início
+        if (!sellerId || sellerId === 'undefined' || sellerId === 'null') {
+            logger.warn(`[API Rate Limiter] sellerId inválido (${sellerId}) para provider ${provider}. Usando sellerId padrão 0.`);
+            sellerId = 0; // Usar 0 como fallback
+        }
+        
         const config = this._getConfig(provider);
 
         // Verificar Circuit Breaker
