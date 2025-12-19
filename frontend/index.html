@@ -13419,6 +13419,7 @@ function FlowEditorPage({
                                 className="btn btn-secondary"
                                 onClick={() => {
                                     setShowAddPlanoAssinatura(false);
+                                    setEditingPlanoAssinaturaIndex(null);
                                     setNewPlanoAssinatura({
                                         nome: '',
                                         duracao: 'mensal',
@@ -13467,7 +13468,14 @@ function FlowEditorPage({
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                                                 {editingPlanoAssinaturaIndex === index ? (
-                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        disabled
+                                                        style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                                                    >
+                                                        Editando...
+                                                    </button>
                                                 ) : (
                                                     <button
                                                         type="button"
@@ -13833,7 +13841,14 @@ function FlowEditorPage({
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                                                 {editingPlanoPacoteIndex === index ? (
-                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        disabled
+                                                        style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                                                    >
+                                                        Editando...
+                                                    </button>
                                                 ) : (
                                                     <button
                                                         type="button"
@@ -14006,7 +14021,14 @@ function FlowEditorPage({
                                         <td style={{ padding: '0.75rem' }}>
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                                                 {editingBotaoIndex === index ? (
-                                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Editando...</span>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        disabled
+                                                        style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                                                    >
+                                                        Editando...
+                                                    </button>
                                                 ) : (
                                                     <button
                                                         type="button"
