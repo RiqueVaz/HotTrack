@@ -8626,57 +8626,63 @@ async function showSimpleFlowOptions(chatId, botId, botToken, sellerId, simpleFl
  * Mostra order bump quando plano tem order bump ativo
  */
 async function showOrderBump(chatId, botId, botToken, sellerId, orderBumpConfig, baseValueCents, variables) {
-    let orderBumpText = '';
-    
-    if (orderBumpConfig.order_bump_texto) {
-        orderBumpText = replaceVariables(orderBumpConfig.order_bump_texto, variables);
-    }
-    
-    if (orderBumpConfig.order_bump_nome) {
-        orderBumpText += `\n\n<strong>${orderBumpConfig.order_bump_nome}</strong>`;
-    }
-    
-    if (orderBumpConfig.order_bump_valor) {
-        orderBumpText += `\n<strong>R$ ${orderBumpConfig.order_bump_valor}</strong>`;
-    }
-    
-    if (orderBumpConfig.order_bump_entregavel) {
-        orderBumpText += `\n\n${orderBumpConfig.order_bump_entregavel}`;
-    }
-    
-    // Enviar mídia se configurada
-    if (orderBumpConfig.order_bump_media) {
-        try {
-            const fileType = orderBumpConfig.order_bump_media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
-            await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_media.file_id || orderBumpConfig.order_bump_media.storage_url, fileType, '', sellerId, botId);
-        } catch (error) {
-            logger.error(`[Simple Flow] Erro ao enviar mídia do order bump:`, error);
+    try {
+        if (!orderBumpConfig || !orderBumpConfig.order_bump_ativo) {
+            logger.warn(`[Simple Flow] Tentativa de mostrar order bump sem configuração válida`);
+            return;
         }
-    }
-    
-    // Enviar áudio se configurado
-    if (orderBumpConfig.order_bump_voice) {
-        try {
-            await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_voice.file_id || orderBumpConfig.order_bump_voice.storage_url, 'audio', '', sellerId, botId);
-        } catch (error) {
-            logger.error(`[Simple Flow] Erro ao enviar áudio do order bump:`, error);
+        
+        let orderBumpText = '';
+        
+        if (orderBumpConfig.order_bump_texto) {
+            orderBumpText = replaceVariables(orderBumpConfig.order_bump_texto, variables);
         }
-    }
-    
-    // Enviar mensagem com botões Aceitar/Recusar
-    const buttons = [[
-        {
-            text: orderBumpConfig.order_bump_btn_aceitar || 'Aceitar',
-            callback_data: 'simple_flow_order_bump_accept'
-        },
-        {
-            text: orderBumpConfig.order_bump_btn_recusar || 'Recusar',
-            callback_data: 'simple_flow_order_bump_reject'
+        
+        if (orderBumpConfig.order_bump_nome) {
+            orderBumpText += `\n\n<strong>${orderBumpConfig.order_bump_nome}</strong>`;
         }
-    ]];
-    
-    await sendSimpleFlowMessage(botToken, chatId, orderBumpText.trim() || 'Deseja adicionar este item?', buttons, botId);
-    
+        
+        if (orderBumpConfig.order_bump_valor) {
+            orderBumpText += `\n<strong>R$ ${orderBumpConfig.order_bump_valor}</strong>`;
+        }
+        
+        if (orderBumpConfig.order_bump_entregavel) {
+            orderBumpText += `\n\n${orderBumpConfig.order_bump_entregavel}`;
+        }
+        
+        // Enviar mídia se configurada
+        if (orderBumpConfig.order_bump_media) {
+            try {
+                const fileType = orderBumpConfig.order_bump_media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+                await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_media.file_id || orderBumpConfig.order_bump_media.storage_url, fileType, '', sellerId, botId);
+            } catch (error) {
+                logger.error(`[Simple Flow] Erro ao enviar mídia do order bump:`, error);
+            }
+        }
+        
+        // Enviar áudio se configurado
+        if (orderBumpConfig.order_bump_voice) {
+            try {
+                await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_voice.file_id || orderBumpConfig.order_bump_voice.storage_url, 'audio', '', sellerId, botId);
+            } catch (error) {
+                logger.error(`[Simple Flow] Erro ao enviar áudio do order bump:`, error);
+            }
+        }
+        
+        // Enviar mensagem com botões Aceitar/Recusar
+        const buttons = [[
+            {
+                text: orderBumpConfig.order_bump_btn_aceitar || 'Aceitar',
+                callback_data: 'simple_flow_order_bump_accept'
+            },
+            {
+                text: orderBumpConfig.order_bump_btn_recusar || 'Recusar',
+                callback_data: 'simple_flow_order_bump_reject'
+            }
+        ]];
+        
+        await sendSimpleFlowMessage(botToken, chatId, orderBumpText.trim() || 'Deseja adicionar este item?', buttons, botId);
+        
         // Salvar estado aguardando resposta do order bump
         await sqlTx`
             UPDATE user_flow_states
