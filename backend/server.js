@@ -4043,22 +4043,42 @@ app.put('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
     if (!name) return res.status(400).json({ message: 'Nome é obrigatório.' });
     
     try {
+        // Log para debug
+        logger.debug(`[Simple Flow PUT] Salvando fluxo ${req.params.id} para seller ${req.user.id}`);
+        logger.debug(`[Simple Flow PUT] Config recebido:`, config ? JSON.stringify(config).substring(0, 500) : 'null/undefined');
+        
         // Busca o fluxo para verificar se existe e pertence ao usuário
         const [flow] = await sqlWithRetry('SELECT bot_id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
-        if (!flow) return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        if (!flow) {
+            logger.warn(`[Simple Flow PUT] Fluxo ${req.params.id} não encontrado para seller ${req.user.id}`);
+            return res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        }
         
         // Valida e prepara o config usando a função helper
         const configToSave = normalizeSimpleFlowConfig(config);
+        logger.debug(`[Simple Flow PUT] Config normalizado:`, JSON.stringify(configToSave).substring(0, 500));
         
-        const [updated] = await sqlWithRetry(
+        // Executa UPDATE
+        const result = await sqlWithRetry(
             'UPDATE simple_flows SET name = $1, config = $2, updated_at = NOW() WHERE id = $3 AND seller_id = $4 RETURNING *;', 
             [name, JSON.stringify(configToSave), req.params.id, req.user.id]
         );
-        if (updated) res.status(200).json({ ...updated, config: normalizeSimpleFlowConfig(updated.config) });
-        else res.status(404).json({ message: 'Fluxo simples não encontrado.' });
+        
+        // Verifica resultado - sqlWithRetry retorna array
+        if (!result || !Array.isArray(result) || result.length === 0) {
+            logger.error(`[Simple Flow PUT] UPDATE não retornou resultado para fluxo ${req.params.id}. Result:`, result);
+            return res.status(500).json({ message: 'Erro ao salvar: nenhuma linha foi atualizada.' });
+        }
+        
+        const updated = result[0];
+        logger.debug(`[Simple Flow PUT] Fluxo ${req.params.id} salvo com sucesso. Linhas afetadas: ${result.length}`);
+        
+        res.status(200).json({ ...updated, config: normalizeSimpleFlowConfig(updated.config) });
     } catch (error) { 
-        console.error('[Simple Flow Save] Error:', error);
-        res.status(500).json({ message: 'Erro ao salvar o fluxo simples.' }); 
+        logger.error('[Simple Flow PUT] Erro detalhado:', error);
+        logger.error('[Simple Flow PUT] Stack:', error.stack);
+        logger.error('[Simple Flow PUT] Request body:', { name, config: config ? JSON.stringify(config).substring(0, 200) : 'null/undefined' });
+        res.status(500).json({ message: 'Erro ao salvar o fluxo simples.', error: error.message }); 
     }
 });
 

@@ -15119,15 +15119,25 @@ function FlowEditorPage({
         const handleSave = async () => {
             setIsSaving(true);
             try {
-                await api.put(`/api/simple-flows/${flow.id}`, {
+                console.log('[Simple Flow] Salvando fluxo:', { id: flow.id, name: flow.name, config });
+                
+                const response = await api.put(`/api/simple-flows/${flow.id}`, {
                     name: flow.name,
                     config: config
                 });
-                App.showToast('Fluxo simples salvo com sucesso!', 'success');
-                if (onRequestClose) onRequestClose();
+                
+                console.log('[Simple Flow] Resposta do servidor:', response.data);
+                
+                if (response.status === 200 && response.data) {
+                    App.showToast('Fluxo simples salvo com sucesso!', 'success');
+                    if (onRequestClose) onRequestClose();
+                } else {
+                    throw new Error('Resposta inválida do servidor');
+                }
             } catch (error) {
-                console.error('Erro ao salvar fluxo simples:', error);
-                App.showToast('Erro ao salvar fluxo simples.', 'error');
+                console.error('[Simple Flow] Erro ao salvar fluxo simples:', error);
+                console.error('[Simple Flow] Detalhes do erro:', error.response?.data || error.message);
+                App.showToast(error.response?.data?.message || 'Erro ao salvar fluxo simples.', 'error');
             } finally {
                 setIsSaving(false);
             }
