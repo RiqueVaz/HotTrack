@@ -12817,6 +12817,9 @@ function FlowEditorPage({
         const [editingPlanoAssinatura, setEditingPlanoAssinatura] = useState(null);
         const [editingPlanoPacote, setEditingPlanoPacote] = useState(null);
         const [editingBotao, setEditingBotao] = useState(null);
+        const [editingPlanoAssinaturaIndex, setEditingPlanoAssinaturaIndex] = useState(null);
+        const [editingPlanoPacoteIndex, setEditingPlanoPacoteIndex] = useState(null);
+        const [editingBotaoIndex, setEditingBotaoIndex] = useState(null);
 
         // Atualizar config pai quando localConfig mudar
         const prevConfigRef = useRef(null);
@@ -13147,8 +13150,19 @@ function FlowEditorPage({
                 App.showToast('Preencha nome e valor do plano', 'error');
                 return;
             }
-            const planos = [...localConfig.planos_assinaturas, { ...newPlanoAssinatura, id: Date.now() }];
-            updateConfig({ planos_assinaturas: planos });
+            
+            if (editingPlanoAssinaturaIndex !== null) {
+                // Atualizar item existente
+                const updated = [...localConfig.planos_assinaturas];
+                updated[editingPlanoAssinaturaIndex] = { ...newPlanoAssinatura, id: updated[editingPlanoAssinaturaIndex].id };
+                updateConfig({ planos_assinaturas: updated });
+                setEditingPlanoAssinaturaIndex(null);
+            } else {
+                // Adicionar novo item
+                const planos = [...localConfig.planos_assinaturas, { ...newPlanoAssinatura, id: Date.now() }];
+                updateConfig({ planos_assinaturas: planos });
+            }
+            
             setNewPlanoAssinatura({
                 nome: '',
                 duracao: 'mensal',
@@ -13164,6 +13178,26 @@ function FlowEditorPage({
                 order_bump_voice: null
             });
             setShowAddPlanoAssinatura(false);
+        };
+
+        const handleEditPlanoAssinatura = (index) => {
+            const plano = localConfig.planos_assinaturas[index];
+            setNewPlanoAssinatura({
+                nome: plano.nome || '',
+                duracao: plano.duracao || 'mensal',
+                valor: plano.valor || '',
+                order_bump_ativo: plano.order_bump_ativo || false,
+                order_bump_texto: plano.order_bump_texto || '',
+                order_bump_btn_aceitar: plano.order_bump_btn_aceitar || 'Aceitar',
+                order_bump_btn_recusar: plano.order_bump_btn_recusar || 'Recusar',
+                order_bump_nome: plano.order_bump_nome || '',
+                order_bump_valor: plano.order_bump_valor || '',
+                order_bump_entregavel: plano.order_bump_entregavel || '',
+                order_bump_media: plano.order_bump_media || null,
+                order_bump_voice: plano.order_bump_voice || null
+            });
+            setEditingPlanoAssinaturaIndex(index);
+            setShowAddPlanoAssinatura(true);
         };
 
         const renderPlanosAssinaturas = () => (
@@ -13372,7 +13406,7 @@ function FlowEditorPage({
                                 className="btn btn-primary"
                                 onClick={handleAddPlanoAssinatura}
                             >
-                                Confirmar
+                                {editingPlanoAssinaturaIndex !== null ? 'Salvar Alterações' : 'Confirmar'}
                             </button>
                             <button
                                 type="button"
@@ -13425,16 +13459,25 @@ function FlowEditorPage({
                                         </td>
                                         <td style={{ padding: '0.75rem', color: 'var(--text-primary)' }}>R$ {plano.valor}</td>
                                         <td style={{ padding: '0.75rem' }}>
-                                            <button
-                                                type="button"
-                                                className="btn btn-danger btn-sm"
-                                                onClick={() => {
-                                                    const newPlanos = localConfig.planos_assinaturas.filter((_, i) => i !== index);
-                                                    updateConfig({ planos_assinaturas: newPlanos });
-                                                }}
-                                            >
-                                                Excluir
-                                            </button>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() => handleEditPlanoAssinatura(index)}
+                                                >
+                                                    Editar
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-danger btn-sm"
+                                                    onClick={() => {
+                                                        const newPlanos = localConfig.planos_assinaturas.filter((_, i) => i !== index);
+                                                        updateConfig({ planos_assinaturas: newPlanos });
+                                                    }}
+                                                >
+                                                    Excluir
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -13466,8 +13509,19 @@ function FlowEditorPage({
                 App.showToast('Preencha nome, valor e entregáveis do plano', 'error');
                 return;
             }
-            const planos = [...localConfig.planos_pacotes, { ...newPlanoPacote, id: Date.now() }];
-            updateConfig({ planos_pacotes: planos });
+            
+            if (editingPlanoPacoteIndex !== null) {
+                // Atualizar item existente
+                const updated = [...localConfig.planos_pacotes];
+                updated[editingPlanoPacoteIndex] = { ...newPlanoPacote, id: updated[editingPlanoPacoteIndex].id };
+                updateConfig({ planos_pacotes: updated });
+                setEditingPlanoPacoteIndex(null);
+            } else {
+                // Adicionar novo item
+                const planos = [...localConfig.planos_pacotes, { ...newPlanoPacote, id: Date.now() }];
+                updateConfig({ planos_pacotes: planos });
+            }
+            
             setNewPlanoPacote({
                 nome: '',
                 valor: '',
@@ -13483,6 +13537,26 @@ function FlowEditorPage({
                 order_bump_voice: null
             });
             setShowAddPlanoPacote(false);
+        };
+
+        const handleEditPlanoPacote = (index) => {
+            const plano = localConfig.planos_pacotes[index];
+            setNewPlanoPacote({
+                nome: plano.nome || '',
+                valor: plano.valor || '',
+                entregavel: plano.entregavel || '',
+                order_bump_ativo: plano.order_bump_ativo || false,
+                order_bump_texto: plano.order_bump_texto || '',
+                order_bump_btn_aceitar: plano.order_bump_btn_aceitar || 'Aceitar',
+                order_bump_btn_recusar: plano.order_bump_btn_recusar || 'Recusar',
+                order_bump_nome: plano.order_bump_nome || '',
+                order_bump_valor: plano.order_bump_valor || '',
+                order_bump_entregavel: plano.order_bump_entregavel || '',
+                order_bump_media: plano.order_bump_media || null,
+                order_bump_voice: plano.order_bump_voice || null
+            });
+            setEditingPlanoPacoteIndex(index);
+            setShowAddPlanoPacote(true);
         };
 
         const renderPlanosPacotes = () => (
@@ -13685,13 +13759,14 @@ function FlowEditorPage({
                                 className="btn btn-primary"
                                 onClick={handleAddPlanoPacote}
                             >
-                                Confirmar
+                                {editingPlanoPacoteIndex !== null ? 'Salvar Alterações' : 'Confirmar'}
                             </button>
                             <button
                                 type="button"
                                 className="btn btn-secondary"
                                 onClick={() => {
                                     setShowAddPlanoPacote(false);
+                                    setEditingPlanoPacoteIndex(null);
                                     setNewPlanoPacote({
                                         nome: '',
                                         valor: '',
@@ -13738,16 +13813,25 @@ function FlowEditorPage({
                                             {plano.entregavel.substring(0, 50)}...
                                         </td>
                                         <td style={{ padding: '0.75rem' }}>
-                                            <button
-                                                type="button"
-                                                className="btn btn-danger btn-sm"
-                                                onClick={() => {
-                                                    const newPlanos = localConfig.planos_pacotes.filter((_, i) => i !== index);
-                                                    updateConfig({ planos_pacotes: newPlanos });
-                                                }}
-                                            >
-                                                Excluir
-                                            </button>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() => handleEditPlanoPacote(index)}
+                                                >
+                                                    Editar
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-danger btn-sm"
+                                                    onClick={() => {
+                                                        const newPlanos = localConfig.planos_pacotes.filter((_, i) => i !== index);
+                                                        updateConfig({ planos_pacotes: newPlanos });
+                                                    }}
+                                                >
+                                                    Excluir
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -13795,7 +13879,9 @@ function FlowEditorPage({
                         marginBottom: '1.5rem',
                         border: '1px solid var(--border-color)'
                     }}>
-                        <h3 style={{ color: 'var(--text-primary)', marginBottom: '1rem' }}>Novo Botão Personalizado</h3>
+                        <h3 style={{ color: 'var(--text-primary)', marginBottom: '1rem' }}>
+                            {editingBotaoIndex !== null ? 'Editar Botão Personalizado' : 'Novo Botão Personalizado'}
+                        </h3>
                         <div className="form-group">
                             <label>Texto do Botão:</label>
                             <input
@@ -13860,16 +13946,25 @@ function FlowEditorPage({
                                             {botao.link}
                                         </td>
                                         <td style={{ padding: '0.75rem' }}>
-                                            <button
-                                                type="button"
-                                                className="btn btn-danger btn-sm"
-                                                onClick={() => {
-                                                    const newBotoes = localConfig.botoes_personalizados.filter((_, i) => i !== index);
-                                                    updateConfig({ botoes_personalizados: newBotoes });
-                                                }}
-                                            >
-                                                Excluir
-                                            </button>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() => handleEditBotao(index)}
+                                                >
+                                                    Editar
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-danger btn-sm"
+                                                    onClick={() => {
+                                                        const newBotoes = localConfig.botoes_personalizados.filter((_, i) => i !== index);
+                                                        updateConfig({ botoes_personalizados: newBotoes });
+                                                    }}
+                                                >
+                                                    Excluir
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
