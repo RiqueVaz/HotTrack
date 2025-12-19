@@ -6550,14 +6550,10 @@ function generatePreviewHTML(data) {
         const fetchFlows = useCallback(async () => {
             if (!selectedBotId) { setFlows([]); return; }
             try {
-                console.log('[Simple Flow List] Buscando lista de fluxos...');
                 const res = await api.get('/api/simple-flows');
-                console.log('[Simple Flow List] Resposta recebida:', res.data);
-                const filtered = res.data.filter(f => f.bot_id == selectedBotId);
-                console.log('[Simple Flow List] Fluxos filtrados para bot', selectedBotId, ':', filtered.length);
-                setFlows(filtered);
+                setFlows(res.data.filter(f => f.bot_id == selectedBotId));
             } catch (e) { 
-                console.error("[Simple Flow List] Erro ao buscar fluxos simples", e); 
+                console.error("Erro ao buscar fluxos simples", e); 
             }
         }, [selectedBotId]);
         
@@ -6565,10 +6561,7 @@ function generatePreviewHTML(data) {
             if (bots.length > 0 && !selectedBotId) setSelectedBotId(bots[0].id);
         }, [bots, selectedBotId]);
 
-        useEffect(() => { 
-            console.log('[Simple Flow List] useEffect executado, carregando lista para bot:', selectedBotId);
-            fetchFlows(); 
-        }, [fetchFlows]);
+        useEffect(() => { fetchFlows(); }, [fetchFlows]);
 
         const handleCreate = async () => {
             const n = prompt("Nome do novo fluxo simples:");
@@ -6624,11 +6617,7 @@ function generatePreviewHTML(data) {
                                 <div className="bot-card-actions">
                                 <button className="btn btn-primary btn-sm" onClick={async () => {
                                     try {
-                                        console.log('[Simple Flow List] Carregando fluxo:', flow.id);
                                         const res = await api.get(`/api/simple-flows/${flow.id}`);
-                                        console.log('[Simple Flow List] Resposta recebida:', res.data);
-                                        console.log('[Simple Flow List] Config recebido:', res.data.config);
-                                        console.log('[Simple Flow List] Geral keys:', Object.keys(res.data.config?.geral || {}));
                                         onEditFlow(res.data);
                                     } catch (e) {
                                         console.error("Erro ao carregar fluxo simples:", e);
@@ -15141,14 +15130,10 @@ function FlowEditorPage({
         
         // Atualizar config quando flow mudar (importante para quando reabre o editor)
         useEffect(() => {
-            console.log('[Simple Flow Editor] Flow atualizado:', flow);
             if (flow && flow.config) {
                 const normalized = normalizeConfig(flow.config);
-                console.log('[Simple Flow Editor] Config normalizado:', normalized);
-                console.log('[Simple Flow Editor] Geral keys:', Object.keys(normalized.geral || {}));
                 setConfig(normalized);
             } else if (flow && !flow.config) {
-                console.log('[Simple Flow Editor] Flow sem config, inicializando vazio');
                 setConfig({ geral: {}, upsell: {}, downsell: {} });
             }
         }, [flow]);
@@ -15156,18 +15141,12 @@ function FlowEditorPage({
         const handleSave = async () => {
             setIsSaving(true);
             try {
-                console.log('[Simple Flow] Salvando fluxo:', { id: flow.id, name: flow.name, config });
-                
                 const response = await api.put(`/api/simple-flows/${flow.id}`, {
                     name: flow.name,
                     config: config
                 });
                 
-                console.log('[Simple Flow] Resposta do servidor:', response.data);
-                
                 if (response.status === 200 && response.data) {
-                    console.log('[Simple Flow] Salvamento bem-sucedido. Dados atualizados:', response.data);
-                    
                     // Atualizar o flow com os dados retornados do servidor
                     if (onFlowUpdated) {
                         onFlowUpdated(response.data);
@@ -15183,8 +15162,7 @@ function FlowEditorPage({
                     throw new Error('Resposta inválida do servidor');
                 }
             } catch (error) {
-                console.error('[Simple Flow] Erro ao salvar fluxo simples:', error);
-                console.error('[Simple Flow] Detalhes do erro:', error.response?.data || error.message);
+                console.error('Erro ao salvar fluxo simples:', error);
                 App.showToast(error.response?.data?.message || 'Erro ao salvar fluxo simples.', 'error');
             } finally {
                 setIsSaving(false);

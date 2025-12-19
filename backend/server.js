@@ -4019,10 +4019,7 @@ app.get('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
         }
         
         const flow = result[0];
-        logger.debug(`[Simple Flow GET] Fluxo ${req.params.id} encontrado. Config tipo: ${typeof flow.config}`);
-        
         const normalizedConfig = normalizeSimpleFlowConfig(flow.config);
-        logger.debug(`[Simple Flow GET] Config normalizado. Geral keys:`, Object.keys(normalizedConfig.geral || {}).length);
         
         res.status(200).json({ 
             ...flow, 
@@ -4058,10 +4055,6 @@ app.put('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
     if (!name) return res.status(400).json({ message: 'Nome é obrigatório.' });
     
     try {
-        // Log para debug
-        logger.debug(`[Simple Flow PUT] Salvando fluxo ${req.params.id} para seller ${req.user.id}`);
-        logger.debug(`[Simple Flow PUT] Config recebido:`, config ? JSON.stringify(config).substring(0, 500) : 'null/undefined');
-        
         // Busca o fluxo para verificar se existe e pertence ao usuário
         const [flow] = await sqlWithRetry('SELECT bot_id FROM simple_flows WHERE id = $1 AND seller_id = $2', [req.params.id, req.user.id]);
         if (!flow) {
@@ -4086,7 +4079,6 @@ app.put('/api/simple-flows/:id', authenticateJwt, async (req, res) => {
         }
         
         const updated = result[0];
-        logger.debug(`[Simple Flow PUT] Fluxo ${req.params.id} salvo com sucesso. Linhas afetadas: ${result.length}`);
         
         res.status(200).json({ ...updated, config: normalizeSimpleFlowConfig(updated.config) });
     } catch (error) { 
