@@ -8329,6 +8329,638 @@ async function incrementNodeExecutionCount(flowId, nodeId) {
     }
 }
 
+// ==========================================================
+// FUNÇÕES AUXILIARES PARA FLUXO SIMPLES
+// ==========================================================
+
+/**
+ * Substitui variáveis no texto ({{primeiro_nome}}, {{nome_completo}}, {{cidade}})
+ */
+function replaceVariables(text, variables) {
+    if (!text || typeof text !== 'string') return text;
+    
+    return text
+        .replace(/\{\{primeiro_nome\}\}/g, variables.primeiro_nome || '')
+        .replace(/\{\{nome_completo\}\}/g, variables.nome_completo || '')
+        .replace(/\{\{cidade\}\}/g, variables.cidade || '');
+}
+
+/**
+ * Envia mensagem com botões inline do Telegram
+ */
+async function sendSimpleFlowMessage(botToken, chatId, text, buttons = [], botId = null) {
+    const replyMarkup = buttons.length > 0 ? {
+        inline_keyboard: buttons.map(row => 
+            Array.isArray(row) ? row : [row]
+        )
+    } : undefined;
+
+    const payload = {
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'HTML'
+    };
+
+    if (replyMarkup) {
+        payload.reply_markup = replyMarkup;
+    }
+
+    return await sendTelegramRequest(botToken, 'sendMessage', payload, {}, 3, 1500, botId);
+}
+
+/**
+ * Converte valor monetário de string para centavos
+ */
+function parseValueToCents(valueStr) {
+    if (!valueStr || typeof valueStr !== 'string') return 0;
+    
+    // Remove símbolos e espaços, substitui vírgula por ponto
+    const cleaned = valueStr.replace(/[R$\s]/g, '').replace(',', '.');
+    const value = parseFloat(cleaned);
+    
+    if (isNaN(value) || value < 0) return 0;
+    
+    return Math.round(value * 100);
+}
+
+/**
+ * Formata valor em centavos para exibição
+ */
+function formatValueFromCents(cents) {
+    return (cents / 100).toFixed(2).replace('.', ',');
+}
+
+/**
+ * Processa o fluxo simples - Aba Geral
+ */
+async function processSimpleFlow(chatId, botId, botToken, sellerId, simpleFlowId, geralConfig, variables) {
+    try {
+        // Validações iniciais
+        if (!geralConfig) {
+            logger.error(`[Simple Flow] Config geral não encontrada para fluxo ${simpleFlowId}`);
+            return;
+        }
+        
+        // 1. Substituir variáveis na mensagem inicial
+        const mensagemInicial = replaceVariables(geralConfig.mensagem_inicial || '', variables);
+        
+        // 2. Enviar mensagem inicial
+        if (mensagemInicial.trim()) {
+            await sendSimpleFlowMessage(botToken, chatId, mensagemInicial, [], botId);
+        }
+        
+        // 3. Enviar mídias
+        const mediaFiles = geralConfig.media_files || [];
+        if (mediaFiles.length > 0) {
+            const mediaTipo = geralConfig.media_tipo || 'separadas';
+            
+            if (mediaTipo === 'agrupadas') {
+                // Enviar todas em uma única mensagem (media group)
+                // Nota: Telegram suporta até 10 mídias por grupo
+                const mediaGroup = mediaFiles.slice(0, 10).map(media => {
+                    const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+                    return {
+                        type: fileType,
+                        media: media.storage_url || media.file_id,
+                        caption: fileType === 'video' ? '' : undefined
+                    };
+                });
+                
+                if (mediaGroup.length > 0) {
+                    try {
+                        await sendTelegramRequest(botToken, 'sendMediaGroup', {
+                            chat_id: chatId,
+                            media: JSON.stringify(mediaGroup)
+                        }, {}, 3, 1500, botId);
+                    } catch (error) {
+                        logger.error(`[Simple Flow] Erro ao enviar media group:`, error);
+                        // Fallback: enviar separadamente
+                        for (const media of mediaFiles) {
+                            try {
+                                const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+                                await sendMediaFromLibrary(botToken, chatId, media.file_id || media.storage_url, fileType, '', sellerId, botId);
+                            } catch (mediaError) {
+                                logger.error(`[Simple Flow] Erro ao enviar mídia individual:`, mediaError);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Enviar separadamente
+                for (const media of mediaFiles) {
+                    try {
+                        const fileType = media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+                        await sendMediaFromLibrary(botToken, chatId, media.file_id || media.storage_url, fileType, '', sellerId, botId);
+                    } catch (mediaError) {
+                        logger.error(`[Simple Flow] Erro ao enviar mídia:`, mediaError);
+                    }
+                }
+            }
+        }
+        
+        // 4. Enviar áudio se existir
+        if (geralConfig.audio_file) {
+            try {
+                await sendMediaFromLibrary(botToken, chatId, geralConfig.audio_file.file_id || geralConfig.audio_file.storage_url, 'audio', '', sellerId, botId);
+            } catch (audioError) {
+                logger.error(`[Simple Flow] Erro ao enviar áudio:`, audioError);
+            }
+        }
+        
+        // 5. Verificar CTA
+        const cta = geralConfig.cta || {};
+        if (cta.ativo) {
+            // Enviar mensagem CTA com botão inline
+            let ctaText = '';
+            if (cta.texto_antes) {
+                ctaText += replaceVariables(cta.texto_antes, variables) + '\n\n';
+            }
+            ctaText += replaceVariables(cta.texto_depois || '', variables);
+            
+            const ctaButton = [[{
+                text: cta.texto_botao || 'Acessar Agora',
+                callback_data: 'simple_flow_cta'
+            }]];
+            
+            await sendSimpleFlowMessage(botToken, chatId, ctaText.trim() || 'Clique no botão abaixo:', ctaButton, botId);
+            
+            // Salvar estado aguardando CTA
+            await sqlTx`
+                INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, flow_id)
+                VALUES (${chatId}, ${botId}, 'simple_flow_cta', ${JSON.stringify({
+                    ...variables,
+                    simple_flow_id: simpleFlowId,
+                    simple_flow_step: 'cta'
+                })}, false, NULL)
+                ON CONFLICT (chat_id, bot_id)
+                DO UPDATE SET 
+                    current_node_id = 'simple_flow_cta',
+                    variables = ${JSON.stringify({
+                        ...variables,
+                        simple_flow_id: simpleFlowId,
+                        simple_flow_step: 'cta'
+                    })},
+                    waiting_for_input = false
+            `;
+        } else {
+            // Mostrar opções direto
+            await showSimpleFlowOptions(chatId, botId, botToken, sellerId, simpleFlowId, geralConfig, variables);
+        }
+        
+        // Salvar estado geral do fluxo simples (se ainda não foi salvo)
+        const [existingState] = await sqlTx`
+            SELECT current_node_id FROM user_flow_states 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `;
+        
+        if (!existingState) {
+            await sqlTx`
+                INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, flow_id)
+                VALUES (${chatId}, ${botId}, 'simple_flow_geral', ${JSON.stringify({
+                    ...variables,
+                    simple_flow_id: simpleFlowId,
+                    simple_flow_step: 'geral'
+                })}, false, NULL)
+            `;
+        }
+        
+    } catch (error) {
+        logger.error(`[Simple Flow] Erro ao processar fluxo simples:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Mostra opções de planos (assinaturas, pacotes, botões)
+ */
+async function showSimpleFlowOptions(chatId, botId, botToken, sellerId, simpleFlowId, geralConfig, variables) {
+    try {
+        const buttons = [];
+        
+        // Adicionar planos de assinatura
+        const planosAssinaturas = geralConfig.planos_assinaturas || [];
+        planosAssinaturas.forEach((plano, index) => {
+            if (plano && plano.nome && plano.valor) {
+                const buttonText = plano.nome.length > 30 
+                    ? `${plano.nome.substring(0, 27)}... - R$ ${plano.valor}`
+                    : `${plano.nome} - R$ ${plano.valor}`;
+                buttons.push([{
+                    text: buttonText,
+                    callback_data: `simple_flow_plano_assinatura_${index}`
+                }]);
+            }
+        });
+        
+        // Adicionar planos de pacote
+        const planosPacotes = geralConfig.planos_pacotes || [];
+        planosPacotes.forEach((plano, index) => {
+            if (plano && plano.nome && plano.valor) {
+                const buttonText = plano.nome.length > 30 
+                    ? `${plano.nome.substring(0, 27)}... - R$ ${plano.valor}`
+                    : `${plano.nome} - R$ ${plano.valor}`;
+                buttons.push([{
+                    text: buttonText,
+                    callback_data: `simple_flow_plano_pacote_${index}`
+                }]);
+            }
+        });
+        
+        // Adicionar botões personalizados
+        const botoesPersonalizados = geralConfig.botoes_personalizados || [];
+        botoesPersonalizados.forEach((botao, index) => {
+            if (botao && botao.texto && botao.url) {
+                buttons.push([{
+                    text: botao.texto,
+                    url: botao.url
+                }]);
+            }
+        });
+        
+        if (buttons.length === 0) {
+            // Se não há opções, enviar mensagem informativa
+            await sendSimpleFlowMessage(botToken, chatId, 'Nenhuma opção disponível no momento.', [], botId);
+            return;
+        }
+        
+        const optionsText = 'Escolha uma das opções abaixo:';
+        await sendSimpleFlowMessage(botToken, chatId, optionsText, buttons, botId);
+        
+        // Salvar estado
+        await sqlTx`
+            INSERT INTO user_flow_states (chat_id, bot_id, current_node_id, variables, waiting_for_input, flow_id)
+            VALUES (${chatId}, ${botId}, 'simple_flow_options', ${JSON.stringify({
+                ...variables,
+                simple_flow_id: simpleFlowId,
+                simple_flow_step: 'options'
+            })}, false, NULL)
+            ON CONFLICT (chat_id, bot_id)
+            DO UPDATE SET 
+                current_node_id = 'simple_flow_options',
+                variables = ${JSON.stringify({
+                    ...variables,
+                    simple_flow_id: simpleFlowId,
+                    simple_flow_step: 'options'
+                })},
+                waiting_for_input = false
+        `;
+    } catch (error) {
+        logger.error(`[Simple Flow Options] Erro ao mostrar opções:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Mostra order bump quando plano tem order bump ativo
+ */
+async function showOrderBump(chatId, botId, botToken, sellerId, orderBumpConfig, baseValueCents, variables) {
+    let orderBumpText = '';
+    
+    if (orderBumpConfig.order_bump_texto) {
+        orderBumpText = replaceVariables(orderBumpConfig.order_bump_texto, variables);
+    }
+    
+    if (orderBumpConfig.order_bump_nome) {
+        orderBumpText += `\n\n<strong>${orderBumpConfig.order_bump_nome}</strong>`;
+    }
+    
+    if (orderBumpConfig.order_bump_valor) {
+        orderBumpText += `\n<strong>R$ ${orderBumpConfig.order_bump_valor}</strong>`;
+    }
+    
+    if (orderBumpConfig.order_bump_entregavel) {
+        orderBumpText += `\n\n${orderBumpConfig.order_bump_entregavel}`;
+    }
+    
+    // Enviar mídia se configurada
+    if (orderBumpConfig.order_bump_media) {
+        try {
+            const fileType = orderBumpConfig.order_bump_media.file_name?.match(/\.(jpg|jpeg|png|gif)$/i) ? 'image' : 'video';
+            await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_media.file_id || orderBumpConfig.order_bump_media.storage_url, fileType, '', sellerId, botId);
+        } catch (error) {
+            logger.error(`[Simple Flow] Erro ao enviar mídia do order bump:`, error);
+        }
+    }
+    
+    // Enviar áudio se configurado
+    if (orderBumpConfig.order_bump_voice) {
+        try {
+            await sendMediaFromLibrary(botToken, chatId, orderBumpConfig.order_bump_voice.file_id || orderBumpConfig.order_bump_voice.storage_url, 'audio', '', sellerId, botId);
+        } catch (error) {
+            logger.error(`[Simple Flow] Erro ao enviar áudio do order bump:`, error);
+        }
+    }
+    
+    // Enviar mensagem com botões Aceitar/Recusar
+    const buttons = [[
+        {
+            text: orderBumpConfig.order_bump_btn_aceitar || 'Aceitar',
+            callback_data: 'simple_flow_order_bump_accept'
+        },
+        {
+            text: orderBumpConfig.order_bump_btn_recusar || 'Recusar',
+            callback_data: 'simple_flow_order_bump_reject'
+        }
+    ]];
+    
+    await sendSimpleFlowMessage(botToken, chatId, orderBumpText.trim() || 'Deseja adicionar este item?', buttons, botId);
+    
+        // Salvar estado aguardando resposta do order bump
+        await sqlTx`
+            UPDATE user_flow_states
+            SET current_node_id = 'simple_flow_order_bump',
+                variables = ${JSON.stringify({
+                    ...variables,
+                    simple_flow_step: 'order_bump',
+                    order_bump_value: parseValueToCents(orderBumpConfig.order_bump_valor || '0')
+                })},
+                waiting_for_input = false
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `;
+    } catch (error) {
+        logger.error(`[Simple Flow Order Bump] Erro ao mostrar order bump:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Processa callbacks do fluxo simples
+ */
+async function handleSimpleFlowCallback(callbackQuery, botId, botToken, sellerId) {
+    const { id: callbackId, message, data: callbackData, from } = callbackQuery;
+    const chatId = message.chat.id;
+    
+    try {
+        // Responder ao callback imediatamente
+        await sendTelegramRequest(botToken, 'answerCallbackQuery', {
+            callback_query_id: callbackId
+        }, {}, 3, 1500, botId);
+        
+        // Buscar estado atual
+        const [userState] = await sqlTx`
+            SELECT variables FROM user_flow_states 
+            WHERE chat_id = ${chatId} AND bot_id = ${botId}
+        `;
+        
+        if (!userState) {
+            logger.warn(`[Simple Flow Callback] Estado não encontrado para chat ${chatId}`);
+            return;
+        }
+        
+        let variables = typeof userState.variables === 'string' 
+            ? JSON.parse(userState.variables) 
+            : userState.variables;
+        
+        const simpleFlowId = variables.simple_flow_id;
+        if (!simpleFlowId) {
+            logger.warn(`[Simple Flow Callback] simple_flow_id não encontrado nas variáveis`);
+            return;
+        }
+        
+        // Buscar configuração do fluxo simples
+        const [simpleFlow] = await sqlTx`
+            SELECT config FROM simple_flows 
+            WHERE id = ${simpleFlowId} AND seller_id = ${sellerId}
+        `;
+        
+        if (!simpleFlow || !simpleFlow.config) {
+            logger.error(`[Simple Flow Callback] Fluxo simples ${simpleFlowId} não encontrado`);
+            return;
+        }
+        
+        const config = typeof simpleFlow.config === 'string' 
+            ? JSON.parse(simpleFlow.config) 
+            : simpleFlow.config;
+        
+        const geralConfig = config.geral || {};
+        
+        // Processar callback específico
+        if (callbackData === 'simple_flow_cta') {
+            // CTA clicado - mostrar opções
+            await showSimpleFlowOptions(chatId, botId, botToken, sellerId, simpleFlowId, geralConfig, variables);
+            
+        } else if (callbackData.startsWith('simple_flow_plano_assinatura_')) {
+            // Plano de assinatura selecionado
+            const index = parseInt(callbackData.replace('simple_flow_plano_assinatura_', ''), 10);
+            const planos = geralConfig.planos_assinaturas || [];
+            const plano = planos[index];
+            
+            if (!plano) {
+                await sendSimpleFlowMessage(botToken, chatId, 'Plano não encontrado.', [], botId);
+                return;
+            }
+            
+            const baseValueCents = parseValueToCents(plano.valor || '0');
+            
+            // Verificar se tem order bump
+            if (plano.order_bump_ativo && plano.order_bump_nome) {
+                await showOrderBump(chatId, botId, botToken, sellerId, plano, baseValueCents, variables);
+                
+                // Salvar plano selecionado nas variáveis
+                await sqlTx`
+                    UPDATE user_flow_states
+                    SET variables = ${JSON.stringify({
+                        ...variables,
+                        selected_plano: { tipo: 'assinatura', index, ...plano },
+                        base_value_cents: baseValueCents
+                    })}
+                    WHERE chat_id = ${chatId} AND bot_id = ${botId}
+                `;
+            } else {
+                // Sem order bump - gerar PIX direto
+                await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, plano, baseValueCents, 0, variables);
+            }
+            
+        } else if (callbackData.startsWith('simple_flow_plano_pacote_')) {
+            // Plano de pacote selecionado
+            const index = parseInt(callbackData.replace('simple_flow_plano_pacote_', ''), 10);
+            const planos = geralConfig.planos_pacotes || [];
+            
+            if (isNaN(index) || index < 0 || index >= planos.length) {
+                await sendSimpleFlowMessage(botToken, chatId, 'Plano não encontrado.', [], botId);
+                return;
+            }
+            
+            const plano = planos[index];
+            
+            if (!plano || !plano.nome || !plano.valor) {
+                await sendSimpleFlowMessage(botToken, chatId, 'Plano inválido.', [], botId);
+                return;
+            }
+            
+            const baseValueCents = parseValueToCents(plano.valor || '0');
+            
+            // Salvar plano selecionado nas variáveis primeiro
+            const updatedVariables = {
+                ...variables,
+                selected_plano: { tipo: 'pacote', index, ...plano },
+                base_value_cents: baseValueCents
+            };
+            
+            await sqlTx`
+                UPDATE user_flow_states
+                SET variables = ${JSON.stringify(updatedVariables)}
+                WHERE chat_id = ${chatId} AND bot_id = ${botId}
+            `;
+            
+            // Verificar se tem order bump
+            if (plano.order_bump_ativo && plano.order_bump_nome) {
+                await showOrderBump(chatId, botId, botToken, sellerId, plano, baseValueCents, updatedVariables);
+            } else {
+                // Sem order bump - gerar PIX direto
+                await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, plano, baseValueCents, 0, updatedVariables);
+            }
+            
+        } else if (callbackData === 'simple_flow_order_bump_accept') {
+            // Order bump aceito - buscar variáveis atualizadas
+            const [updatedState] = await sqlTx`
+                SELECT variables FROM user_flow_states 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId}
+            `;
+            
+            if (updatedState) {
+                variables = typeof updatedState.variables === 'string' 
+                    ? JSON.parse(updatedState.variables) 
+                    : updatedState.variables;
+            }
+            
+            const orderBumpValue = variables.order_bump_value || 0;
+            const baseValue = variables.base_value_cents || 0;
+            
+            await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, variables.selected_plano, baseValue, orderBumpValue, variables);
+            
+        } else if (callbackData === 'simple_flow_order_bump_reject') {
+            // Order bump recusado - buscar variáveis atualizadas
+            const [updatedState] = await sqlTx`
+                SELECT variables FROM user_flow_states 
+                WHERE chat_id = ${chatId} AND bot_id = ${botId}
+            `;
+            
+            if (updatedState) {
+                variables = typeof updatedState.variables === 'string' 
+                    ? JSON.parse(updatedState.variables) 
+                    : updatedState.variables;
+            }
+            
+            const baseValue = variables.base_value_cents || 0;
+            
+            await generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, variables.selected_plano, baseValue, 0, variables);
+        }
+        
+    } catch (error) {
+        logger.error(`[Simple Flow Callback] Erro ao processar callback:`, error);
+        try {
+            await sendSimpleFlowMessage(botToken, chatId, 'Ocorreu um erro ao processar sua solicitação. Tente novamente.', [], botId);
+        } catch (sendError) {
+            logger.error(`[Simple Flow Callback] Erro ao enviar mensagem de erro:`, sendError);
+        }
+    }
+}
+
+/**
+ * Gera PIX para o fluxo simples
+ */
+async function generateSimpleFlowPix(chatId, botId, botToken, sellerId, simpleFlowId, plano, baseValueCents, orderBumpCents, variables) {
+    try {
+        const totalValueCents = baseValueCents + orderBumpCents;
+        
+        if (totalValueCents <= 0) {
+            await sendSimpleFlowMessage(botToken, chatId, 'Valor inválido para geração do PIX.', [], botId);
+            return;
+        }
+        
+        // Buscar configuração do fluxo simples para obter pixConfig
+        const [simpleFlow] = await sqlTx`
+            SELECT config FROM simple_flows 
+            WHERE id = ${simpleFlowId} AND seller_id = ${sellerId}
+        `;
+        
+        let pixConfig = {};
+        if (simpleFlow && simpleFlow.config) {
+            const config = typeof simpleFlow.config === 'string' 
+                ? JSON.parse(simpleFlow.config) 
+                : simpleFlow.config;
+            pixConfig = config.geral?.pagamento_pix || {};
+        }
+        
+        // Buscar ou criar click_id
+        let clickIdInternal = null;
+        if (variables.click_id) {
+            // Extrair número do click_id (ex: /start lead000123 -> 123)
+            const match = variables.click_id.match(/lead(\d+)/);
+            if (match) {
+                const clickIdNumber = parseInt(match[1], 10);
+                const [click] = await sqlTx`
+                    SELECT id FROM clicks 
+                    WHERE id = ${clickIdNumber} AND seller_id = ${sellerId}
+                    LIMIT 1
+                `;
+                if (click) {
+                    clickIdInternal = click.id;
+                }
+            }
+        }
+        
+        // Se não encontrou click, criar um novo (sem pressel_id)
+        if (!clickIdInternal) {
+            const [newClick] = await sqlTx`
+                INSERT INTO clicks (seller_id, bot_id, ip_address, user_agent)
+                VALUES (${sellerId}, ${botId}, '0.0.0.0', 'Simple Flow')
+                RETURNING id
+            `;
+            clickIdInternal = newClick.id;
+        }
+        
+        // Buscar seller para obter configurações de PIX
+        const seller = await getSellerSettings(sellerId);
+        
+        if (!seller || !seller.api_key) {
+            throw new Error('Seller não encontrado ou sem configuração de API');
+        }
+        
+        // Gerar PIX usando a função global existente
+        const host = process.env.HOTTRACK_API_URL || 'http://localhost:3001';
+        const pixResult = await generatePixWithFallback(
+            seller,
+            totalValueCents,
+            host,
+            seller.api_key,
+            '0.0.0.0',
+            clickIdInternal
+        );
+        
+        if (!pixResult || !pixResult.qr_code_text) {
+            throw new Error('Erro ao gerar PIX');
+        }
+        
+        // Enviar QR code conforme configuração
+        const exibirImagemQrcode = pixConfig.exibir_imagem_qrcode || 'chat';
+        
+        if (exibirImagemQrcode === 'chat') {
+            // Enviar QR code como imagem no chat
+            const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixResult.qr_code_text)}`;
+            
+            await sendTelegramRequest(botToken, 'sendPhoto', {
+                chat_id: chatId,
+                photo: qrCodeUrl,
+                caption: `💰 PIX no valor de R$ ${formatValueFromCents(totalValueCents)}\n\nCódigo PIX:\n<code>${pixResult.qr_code_text}</code>`,
+                parse_mode: 'HTML'
+            }, {}, 3, 1500, botId);
+        } else {
+            // Enviar apenas texto
+            await sendSimpleFlowMessage(botToken, chatId, 
+                `💰 PIX no valor de R$ ${formatValueFromCents(totalValueCents)}\n\nCódigo PIX:\n<code>${pixResult.qr_code_text}</code>`,
+                [], botId);
+        }
+        
+        // Limpar estado do fluxo simples
+        await sqlTx`DELETE FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`;
+        
+    } catch (error) {
+        logger.error(`[Simple Flow PIX] Erro ao gerar PIX:`, error);
+        await sendSimpleFlowMessage(botToken, chatId, 'Erro ao gerar o PIX. Tente novamente mais tarde.', [], botId);
+    }
+}
+
 async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null, initialVariables = {}, flowNodes = null, flowEdges = null, flowId = null) {
     const logPrefix = startNodeId ? '[WORKER]' : '[MAIN]';
     // Removido log de debug - não é necessário em produção
@@ -8433,7 +9065,32 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
             }
         }
     } else {
-        // Busca o fluxo ativo do banco
+        // PRIORIDADE: Verificar se há simple_flow ativo antes de buscar fluxo normal
+        const [simpleFlow] = await sqlTx`
+            SELECT * FROM simple_flows 
+            WHERE bot_id = ${botId} AND is_active = TRUE
+            ORDER BY updated_at DESC LIMIT 1
+        `;
+
+        if (simpleFlow && simpleFlow.config) {
+            try {
+                const config = typeof simpleFlow.config === 'string' 
+                    ? JSON.parse(simpleFlow.config) 
+                    : simpleFlow.config;
+                
+                if (config.geral) {
+                    // Processar fluxo simples
+                    logger.debug(`${logPrefix} [Simple Flow] Fluxo simples ativo detectado. Processando Aba Geral.`);
+                    await processSimpleFlow(chatId, botId, botToken, sellerId, simpleFlow.id, config.geral, variables);
+                    return; // Não processa fluxo normal
+                }
+            } catch (error) {
+                logger.error(`${logPrefix} [Simple Flow] Erro ao processar fluxo simples:`, error);
+                // Continua para fluxo normal em caso de erro
+            }
+        }
+
+        // Busca o fluxo ativo do banco (fluxo normal)
         const [flow] = await sqlTx`
             SELECT * FROM flows 
             WHERE bot_id = ${botId} AND is_active = TRUE
@@ -8753,13 +9410,49 @@ async function processFlow(chatId, botId, botToken, sellerId, startNodeId = null
 
 app.post('/api/webhook/telegram/:botId', webhookRateLimitMiddleware, async (req, res) => {
     const { botId } = req.params;
-    // CORREÇÃO 1: Extrai o objeto 'message' do corpo da requisição logo no início.
-    const { message } = req.body;
+    // CORREÇÃO 1: Extrai o objeto 'message' e 'callback_query' do corpo da requisição logo no início.
+    const { message, callback_query } = req.body;
     
     // Responde imediatamente ao Telegram para evitar timeouts.
     res.sendStatus(200);
 
     try {
+        // PRIORIDADE: Tratar callback_query (botões inline)
+        if (callback_query) {
+            const chatId = callback_query.message?.chat?.id;
+            if (!chatId) {
+                return;
+            }
+            
+            let bot = await getBot(botId, null);
+            if (!bot) {
+                const cacheKey = `bot_full:${botId}`;
+                await dbCache.delete(cacheKey);
+                const botRetry = await sqlTx`SELECT * FROM telegram_bots WHERE id = ${botId}`;
+                
+                if (!botRetry || botRetry.length === 0) {
+                    logger.warn(`[Webhook] Bot ID ${botId} não encontrado para callback.`);
+                    return;
+                }
+                
+                const [foundBot] = botRetry;
+                await dbCache.set(cacheKey, foundBot, 10 * 60 * 1000);
+                bot = foundBot;
+            }
+            
+            const { seller_id: sellerId, bot_token: botToken } = bot;
+            
+            // Verificar se é callback do fluxo simples
+            const callbackData = callback_query.data || '';
+            if (callbackData.startsWith('simple_flow_')) {
+                await handleSimpleFlowCallback(callback_query, botId, botToken, sellerId);
+                return;
+            }
+            
+            // Outros callbacks podem ser tratados aqui no futuro
+            return;
+        }
+        
         // Validação mais robusta da estrutura da mensagem
         if (!message) {
             // Removido log de debug - não é necessário em produção
