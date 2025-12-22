@@ -12269,9 +12269,17 @@ function FlowEditorPage({
             }
             
             if(flow?.bot_id) {
-                api.get('/api/flows')
-                   .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
-                   .catch(console.error);
+                if (isDisparoFlow) {
+                    // Buscar disparo_flows para fluxos de disparo
+                    api.get('/api/disparo-flows')
+                       .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
+                       .catch(console.error);
+                } else {
+                    // Buscar flows normais para fluxos principais
+                    api.get('/api/flows')
+                       .then(res => setAvailableFlows(res.data.filter(f => f.bot_id == flow.bot_id && f.id !== flow.id)))
+                       .catch(console.error);
+                }
             }
             
             // Buscar estatísticas de execução dos nodes (apenas para fluxos normais, não disparos)
@@ -12640,7 +12648,6 @@ function FlowEditorPage({
                             <div className="node-selector-modal-content">
                                 {nodeTypesList.filter(nodeType => {
                                     if (nodeType.category === 'Grupo') return false;
-                                    if (isDisparoFlow && nodeType.type === 'forward_flow') return false;
                                     return true;
                                 }).map(nodeType => (
                                     <button
