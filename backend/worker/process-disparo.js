@@ -571,6 +571,13 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                     try {
                         const actionResult = await processDisparoActions(currentNode.data.actions, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
                         
+                        // Verifica se forward_flow foi executado
+                        if (actionResult === 'flow_forwarded') {
+                            logger.debug(`${logPrefix} [Flow Engine] Fluxo encaminhado. Parando processamento atual.`);
+                            currentNodeId = null;
+                            break;
+                        }
+                        
                         // Se delay foi agendado, parar processamento
                         if (actionResult === 'delay_scheduled') {
                             logger.debug(`${logPrefix} [Flow Engine] Delay agendado. Parando processamento atual.`);
@@ -628,6 +635,13 @@ async function processDisparoFlow(chatId, botId, botToken, sellerId, startNodeId
                 let actionResult;
                 try {
                     actionResult = await processDisparoActions(actionsToExecuteNow, chatId, botId, botToken, sellerId, variables, logPrefix, historyId, currentNodeId);
+                    
+                    // Verifica se forward_flow foi executado
+                    if (actionResult === 'flow_forwarded') {
+                        logger.debug(`${logPrefix} [Flow Engine] Fluxo encaminhado. Parando processamento atual.`);
+                        currentNodeId = null;
+                        break;
+                    }
                     
                     // Se retornou transactionId (string que não é um código de controle), atualizar
                     if (actionResult && actionResult !== 'paid' && actionResult !== 'pending' && actionResult !== 'completed' && actionResult !== 'delay_scheduled') {
@@ -1637,6 +1651,91 @@ async function processDisparoActions(actions, chatId, botId, botToken, sellerId,
                     logger.error(`${logPrefix} [action_check_pix] Erro: ${error.message}`);
                     return 'pending';
                 }
+            } else if (action.type === 'forward_flow') {
+                const targetFlowId = actionData.targetFlowId;
+                if (!targetFlowId) {
+                    logger.error(`${logPrefix} 'forward_flow' action não tem targetFlowId. Action completa:`, JSON.stringify(action, null, 2));
+                    break;
+                }
+
+                // Garante que targetFlowId seja um número para a query SQL
+                const targetFlowIdNum = parseInt(targetFlowId, 10);
+                if (isNaN(targetFlowIdNum)) {
+                    logger.error(`${logPrefix} 'forward_flow' targetFlowId inválido: ${targetFlowId}`);
+                    break;
+                }
+
+                // Cancela qualquer tarefa de timeout pendente antes de encaminhar para o novo fluxo
+                try {
+                    const [stateToCancel] = await sqlWithRetry(sqlTx`SELECT scheduled_message_id FROM user_flow_states WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
+                    if (stateToCancel && stateToCancel.scheduled_message_id) {
+                        try {
+                            await removeJob(QUEUE_NAMES.TIMEOUT, stateToCancel.scheduled_message_id);
+                            logger.debug(`${logPrefix} [Forward Flow] Tarefa de timeout pendente ${stateToCancel.scheduled_message_id} cancelada.`);
+                        } catch (e) {
+                            logger.warn(`${logPrefix} [Forward Flow] Falha ao cancelar job BullMQ ${stateToCancel.scheduled_message_id}:`, e.message);
+                        }
+                    }
+                } catch (e) {
+                    logger.error(`${logPrefix} [Forward Flow] Erro ao verificar tarefas pendentes:`, e.message);
+                }
+
+                // Carrega o fluxo de destino da tabela disparo_flows
+                const [targetFlow] = await sqlWithRetry(sqlTx`SELECT * FROM disparo_flows WHERE id = ${targetFlowIdNum} AND bot_id = ${botId}`);
+                if (!targetFlow || !targetFlow.nodes) {
+                    logger.error(`${logPrefix} Fluxo de disparo de destino ${targetFlowIdNum} não encontrado.`);
+                    break;
+                }
+                const targetFlowData = typeof targetFlow.nodes === 'string' ? JSON.parse(targetFlow.nodes) : targetFlow.nodes;
+                const targetNodes = targetFlowData.nodes || [];
+                const targetEdges = targetFlowData.edges || [];
+                const targetStartNode = targetNodes.find(n => n.type === 'trigger');
+                if (!targetStartNode) {
+                    logger.error(`${logPrefix} Fluxo de disparo de destino ${targetFlowIdNum} não tem nó de 'trigger'.`);
+                    break;
+                }
+                
+                // Encontra o primeiro nó válido (não trigger) após o trigger inicial
+                let nextNodeId = findNextNode(targetStartNode.id, 'a', targetEdges);
+                let attempts = 0;
+                const maxAttempts = 20; // Proteção contra loops infinitos
+                
+                // Limpa o estado atual antes de iniciar o novo fluxo
+                await sqlWithRetry(sqlTx`UPDATE user_flow_states 
+                          SET waiting_for_input = false, scheduled_message_id = NULL 
+                          WHERE chat_id = ${chatId} AND bot_id = ${botId}`);
+                
+                // Pula nós do tipo 'trigger' até encontrar um nó válido
+                while (nextNodeId && attempts < maxAttempts) {
+                    const currentNode = targetNodes.find(n => n.id === nextNodeId);
+                    if (!currentNode) {
+                        logger.error(`${logPrefix} Nó ${nextNodeId} não encontrado no fluxo de disparo de destino.`);
+                        break;
+                    }
+                    
+                    if (currentNode.type !== 'trigger') {
+                        // Encontrou um nó válido (não é trigger)
+                        // Passa os dados do fluxo de destino para o processDisparoFlow recursivo
+                        // Mantém o mesmo historyId para rastreamento
+                        await processDisparoFlow(chatId, botId, botToken, sellerId, nextNodeId, variables, targetNodes, targetEdges, historyId);
+                        break;
+                    }
+                    
+                    // Se for trigger, continua procurando o próximo nó
+                    logger.debug(`${logPrefix} Pulando nó trigger ${nextNodeId}, procurando próximo nó...`);
+                    nextNodeId = findNextNode(nextNodeId, 'a', targetEdges);
+                    attempts++;
+                }
+                
+                if (!nextNodeId || attempts >= maxAttempts) {
+                    if (attempts >= maxAttempts) {
+                        logger.error(`${logPrefix} Limite de tentativas atingido ao procurar nó válido no fluxo de disparo ${targetFlowIdNum}.`);
+                    } else {
+                        logger.debug(`${logPrefix} Fluxo de disparo de destino ${targetFlowIdNum} está vazio (sem nó válido após o trigger).`);
+                    }
+                }
+
+                return 'flow_forwarded'; // Sinaliza para o 'processDisparoFlow' atual PARAR.
             } else {
                 logger.warn(`${logPrefix} [${actionIndex}/${actions.length}] Tipo de ação não reconhecido: ${action.type}. Pulando.`);
             }
